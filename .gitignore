@@ -1,0 +1,32 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# --- Local workspace data (never publish) ---
+inputs/
+outputs/
+.hector-config.json
+.codex
+
+# --- Vendored tool binaries (auto-installed on first run, not committed) ---
+tools/cargo/
+tools/realesrgan-ncnn-vulkan/
+tools/realesrgan-ncnn-vulkan.zip
+tools/_tmp_realesrgan/
+tools/supir/run_supir.sh
+tools/**/__pycache__/
+
+# --- AI model weights (downloaded on first use) ---
+*.onnx
+*.pth
+*.bin
+~/.u2net/
+
+# --- OS / editor ---
+.DS_Store
+*.swp
+.idea/
+.vscode/

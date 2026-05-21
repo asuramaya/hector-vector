@@ -1,0 +1,25 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime deps
+        run: pip install -r requirements.txt
+
+      - name: Check frontend parses
+        run: node --check app.js
+
+      - name: Smoke tests (parse + pixelvec + render)
+        run: python3 tests/test_smoke.py
