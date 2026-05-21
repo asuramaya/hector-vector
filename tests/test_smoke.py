@@ -21,10 +21,10 @@ def check_parses() -> None:
 
 def check_pixelvec() -> None:
     import pixelvec
-    src = ROOT / "examples" / "potion_256.png"   # 256x256 nearest upscale of a 16x16 sprite
+    src = ROOT / "examples" / "fire_h_x11.png"   # 264x330 nearest upscale of a 24x30 sprite
     out = ROOT / "tests" / "_out.svg"
     info = pixelvec.vectorize_pixel_art(src, out, mode="merged")
-    assert info["grid"] == [16, 16], f"expected native grid 16x16, got {info['grid']}"
+    assert info["grid"] == [24, 30], f"expected native grid 24x30, got {info['grid']}"
     assert info["shapes"] > 0, "no shapes emitted"
     svg = out.read_text()
     assert "<svg" in svg and ("<rect" in svg or "<path" in svg), "SVG missing shapes"
@@ -36,10 +36,10 @@ def check_render(svg: Path) -> None:
     import svg_render
     from PIL import Image
     out = ROOT / "tests" / "_out.png"
-    info = svg_render.render_svg(svg, out, scale=4)   # 16 -> 64
+    info = svg_render.render_svg(svg, out, scale=4)   # 24x30 -> 96x120
     assert info["backend"] == "builtin", f"expected builtin backend, got {info['backend']}"
     with Image.open(out) as im:
-        assert im.size == (64, 64), f"expected 64x64 render, got {im.size}"
+        assert im.size == (96, 120), f"expected 96x120 render, got {im.size}"
     print(f"ok: svg_render produced {info['size']} PNG via {info['backend']}")
 
 

@@ -2,7 +2,7 @@
 
 **A self-hosted image studio for the boring-but-essential jobs — upscale, cut out, key, vectorize, and render.** One local web app instead of a dozen sketchy "free online image tool" sites. Nothing is uploaded; everything runs on your machine.
 
-![hector-vector: raster pixel art recovered to an exact vector](docs/demo.png)
+![hector-vector: a soft raster pixel sprite recovered to an exact vector](docs/demo.png)
 
 It is *not* a Photoshop clone. It does a small set of raster ↔ vector pipelines really well:
 
@@ -60,8 +60,8 @@ Heavily *bilinear*-resampled art is genuinely ambiguous; set **Native size (cell
 Try it:
 
 ```bash
-# examples/potion_256.png is a 256×256 nearest upscale of an original 16×16 sprite
-# In the UI: process = "Pixel Art → SVG", drop examples/potion_256.png, Run.
+# examples/fire_h_x11.png is a 264×330 nearest upscale of an original 24×30 sprite
+# In the UI: process = "Pixel Art → SVG", drop examples/fire_h_x11.png, Run.
 # Then click "Export PNG" on the result to render it crisp at 512, 1024, 4096…
 ```
 
