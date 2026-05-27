@@ -1994,6 +1994,53 @@ const editor = {
     this._renderSelection(); this._renderInspector();
     setStatus("Ungrouped.", 1500);
   },
+  // Remove ghost/redundant layers: empty groups, paths/shapes with no drawable
+  // area (a tracing speck or stray "M0 0"), and fully unpainted nodes. Recurses
+  // into groups and unwraps single-child groups. One undo step; no-op if clean.
+  cleanupLayers() {
+    if (!this.stage) return;
+    this.beginCoalesce();
+    let removed = 0, unwrapped = 0;
+    const unpainted = (n) => {
+      const fill = n.getAttribute("fill");
+      const stroke = n.getAttribute("stroke");
+      const sw = parseFloat(n.getAttribute("stroke-width"));
+      const noStroke = !stroke || stroke === "none" || !(sw > 0);
+      return fill === "none" && noStroke;   // fill defaults to black, so only explicit none counts
+    };
+    const degenerate = (n) => {
+      let bb; try { bb = n.getBBox(); } catch { return true; }
+      if (bb.width < 0.5 && bb.height < 0.5) return true;   // no visible area (speck / empty path)
+      return unpainted(n);
+    };
+    const scrub = (parent) => {
+      for (const child of [...parent.children]) {
+        const tag = child.tagName.toLowerCase();
+        if (SKIP_TAGS.has(tag) || child.classList.contains("hv-artboard") || child.classList.contains("hv-overlay")) continue;
+        if (tag === "g") {
+          scrub(child);
+          const kids = [...child.children].filter((k) => !SKIP_TAGS.has(k.tagName.toLowerCase()));
+          if (kids.length === 0) { child.remove(); removed++; }
+          else if (kids.length === 1) {           // unwrap pointless single-child group
+            const k = kids[0];
+            const gt = currentTranslate(child);
+            if (gt.x || gt.y) { const kt = currentTranslate(k); setTranslate(k, kt.x + gt.x, kt.y + gt.y); }
+            if (!k.hasAttribute("data-hv-id") && child.hasAttribute("data-hv-id")) k.setAttribute("data-hv-id", child.getAttribute("data-hv-id"));
+            parent.insertBefore(k, child); child.remove(); unwrapped++;
+          }
+        } else if (degenerate(child)) { child.remove(); removed++; }
+      }
+    };
+    scrub(this.stage);
+    if (!removed && !unwrapped) { this.cancelCoalesce(); setStatus("No ghost layers found.", 2000); return; }
+    this.commitCoalesce();
+    this.selection = new Set([...this.selection].filter((id) => this.nodeById(id)));
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+    const bits = [];
+    if (removed) bits.push(`removed ${removed} ghost layer${removed > 1 ? "s" : ""}`);
+    if (unwrapped) bits.push(`unwrapped ${unwrapped} group${unwrapped > 1 ? "s" : ""}`);
+    setStatus(`Cleaned up — ${bits.join(", ")}.`, 2500);
+  },
   _renderLayers() {
     const list = document.querySelector("#layers-list");
     if (!list) return;
@@ -2508,6 +2555,8 @@ const MENU_ITEMS = {
     return [
       { label: "Group", disabled: sel.length < 2, onClick: () => editor.group() },
       { label: "Ungroup", disabled: !hasGroup, onClick: () => editor.ungroup() },
+      { type: "sep" },
+      { label: "Clean up ghost layers", onClick: () => editor.cleanupLayers() },
     ];
   },
 };

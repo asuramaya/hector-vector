@@ -128,7 +128,12 @@ def main():
         browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
         page = browser.new_page(viewport={"width": 1500, "height": 900})
         page.goto(BASE, wait_until="networkidle")
-        page.wait_for_function("typeof editor!=='undefined' && !!editor.stage", timeout=20000)
+        page.wait_for_function("typeof editor!=='undefined' && typeof mountStageFromText==='function'", timeout=20000)
+        # The live library may auto-load a PNG (no editable stage). Guarantee a stage
+        # so the suite doesn't depend on what's in the outputs dir.
+        page.wait_for_timeout(500)
+        if not page.evaluate("!!editor.stage"):
+            mount_ctl(page)
 
         # ---- A. Save on the auto-loaded (library) document ----
         big_nodes = page.evaluate("editor.stage.querySelectorAll('[data-hv-id]').length")
@@ -625,6 +630,22 @@ def main():
         check("invert-space leaves shape interiors empty (overlap not XOR-filled)",
               not result_inside(page, 30, 30) and not result_inside(page, 80, 80)
               and not result_inside(page, 130, 130))
+
+        # ---- Layers cleanup: drop ghost/empty nodes, keep valid ones ----
+        page.evaluate("""svg => { selectedOutput=null; manualOutputName=null; mountStageFromText(svg,'ghosts.svg'); }""",
+                      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
+                      '<rect data-hv-id="ra" x="20" y="20" width="60" height="60" fill="#36c"/>'
+                      '<path data-hv-id="gp" d="M10 10" fill="#000"/>'
+                      '<rect data-hv-id="zr" x="5" y="5" width="0" height="0" fill="#c33"/>'
+                      '<g data-hv-id="gg"></g></svg>')
+        page.wait_for_function("editor.stage && editor.nodeById('ra')", timeout=8000)
+        page.evaluate("editor.cleanupLayers()"); page.wait_for_timeout(60)
+        kept = page.evaluate("!!editor.nodeById('ra')")
+        gone = page.evaluate("!editor.nodeById('gp') && !editor.nodeById('zr') && !editor.nodeById('gg')")
+        check("cleanup removes ghost layers, keeps valid", kept and gone, f"kept={kept} gone={gone}")
+        # cleanup is undoable
+        page.evaluate("editor.undo()"); page.wait_for_timeout(60)
+        check("layers cleanup is undoable", page.evaluate("editor._artworkNodes().length") == 4)
 
         # serialize cleanliness
         mount_ctl(page)
