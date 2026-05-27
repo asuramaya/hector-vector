@@ -514,7 +514,8 @@ button:disabled {
 .menu-list {
   position: absolute;
   top: calc(100% + 4px);
-  right: 0;
+  left: 0;          /* open rightward from the trigger (keeps left-edge menus in bounds) */
+  right: auto;
   z-index: 40;
   min-width: 190px;
   background: var(--bg);
@@ -526,6 +527,8 @@ button:disabled {
   box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.12);
 }
 .menu-list[hidden] { display: none; }
+/* Right-edge menus (the Layers kebab) open leftward so they stay in bounds. */
+.menu[data-menu="layers"] .menu-list { left: auto; right: 0; }
 /* right-click context menu reuses .menu-list styling but is viewport-positioned */
 .context-menu { position: fixed; top: auto; right: auto; z-index: 1000; max-height: 80vh; overflow-y: auto; }
 

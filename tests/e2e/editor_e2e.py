@@ -386,6 +386,20 @@ def main():
         # object controls (rotate/flip) moved to the toolstrip; nav-only chin
         check("transforms live in the toolstrip", page.evaluate("!!document.querySelector('.toolstrip [data-xform]')"))
         check("bottom chin is navigation-only", page.evaluate("!document.querySelector('.panel-foot [data-xform]')"))
+        # leftover output-variant picker (Upscale/Cutout/SVG/Edited) is gone
+        check("output-variant picker removed", page.evaluate("!document.querySelector('#output-picker')"))
+        # File menu dropdown opens within the viewport (regression: right:0 pushed it off-screen left)
+        page.click('.menu[data-menu="file"] .menu-trigger'); page.wait_for_timeout(60)
+        in_bounds = page.evaluate("""() => {
+            const l=document.querySelector('.menu[data-menu="file"] .menu-list');
+            if(!l || l.hidden) return false;
+            const r=l.getBoundingClientRect();
+            return r.left >= 0 && r.right <= innerWidth + 1 && r.width > 0;
+        }""")
+        check("File menu opens within bounds", in_bounds)
+        check("File menu has Place into canvas", page.evaluate(
+            "[...document.querySelectorAll('.menu[data-menu=\"file\"] .menu-item')].some(b => b.textContent.includes('Place into canvas'))"))
+        page.keyboard.press("Escape")
         # Layers live in the right dock (alongside the inspector), not a left rail
         check("Layers panel is in the right dock", page.evaluate("!!document.querySelector('#rightdock .rail-section.layers #layers-list')"))
         # collapsing the dock must keep the stage wide (regression: it used to fall into
@@ -695,6 +709,30 @@ def main():
         check("merge leaves other colours alone", page.evaluate("!!editor.nodeById('m3')"))
         page.evaluate("editor.undo()"); page.wait_for_timeout(60)
         check("merge is undoable", page.evaluate("editor._artworkNodes().length") == 3)
+
+        # ---- Place / merge a vector INTO the current canvas (not replace) ----
+        page.evaluate("""() => { selectedOutput=null; manualOutputName=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect data-hv-id="a1" x="10" y="10" width="40" height="40" fill="#36c"/></svg>','A.svg'); }""")
+        page.wait_for_function("editor.stage && editor.nodeById('a1')", timeout=8000)
+        # place a larger vector (400x400) — should fit-scale + centre, wrapped as one group
+        n_placed = page.evaluate("""() => editor.placeSvgMarkup(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><circle cx="200" cy="200" r="180" fill="#e33"/><rect x="20" y="20" width="60" height="60" fill="#3a3"/></svg>', 'B.svg')""")
+        page.wait_for_timeout(80)
+        place = page.evaluate("""() => {
+            const tops=editor._artworkNodes();
+            const g=tops.find(x=>x.tagName.toLowerCase()==='g');
+            const bb=g?g.getBBox():null; const vb=editor.stage.viewBox.baseVal;
+            return { keptOriginal: !!editor.nodeById('a1'), tops: tops.length, group: !!g,
+                     children: g?g.children.length:0, selected: [...editor.selection],
+                     noScale: g?!/(scale|matrix)/.test(g.getAttribute('transform')||''):false,
+                     inside: bb? (bb.x>=-1 && bb.y>=-1 && bb.x+bb.width<=vb.width+1 && bb.y+bb.height<=vb.height+1): false };
+        }""")
+        check("place adds (not replaces): original kept", place["keptOriginal"] and place["tops"] == 2, str(place))
+        check("placed art is one group of the source objects", place["group"] and place["children"] == 2 and n_placed == 2)
+        check("placed group is selected", len(place["selected"]) == 1)
+        check("placed art fits inside the artboard, scale baked (translate-only)", place["inside"] and place["noScale"])
+        page.evaluate("editor.undo()"); page.wait_for_timeout(60)
+        check("place is undoable", page.evaluate("!!editor.nodeById('a1') && editor._artworkNodes().length") == 1)
 
         # ---- Artboard navigation: Shift+O selects it, spacebar pans ----
         page.evaluate("editor.selection=new Set(); editor.artboardSelected=false; editor._renderSelection(); if(document.activeElement?.blur) document.activeElement.blur();")

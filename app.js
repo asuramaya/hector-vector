@@ -610,11 +610,10 @@ async function renderPreviews() {
       clearViewport(viewports.output, "Import or open a vector to start.");
     }
     if (outputLabelEl) {
-      outputLabelEl.textContent = selectedOutput ? `Canvas — ${variantLabel(selectedOutput.name)}` : "Canvas";
+      outputLabelEl.textContent = selectedOutput ? `Canvas — ${selectedOutput.name}` : "Canvas";
     }
     editor.sync();
   }
-  renderOutputPicker();
 }
 
 async function uploadFiles(files) {
@@ -1859,6 +1858,54 @@ const editor = {
     this._renderSelection(); this._renderInspector(); this._renderLayers();
     setStatus(`Pasted ${ids.length} object${ids.length > 1 ? "s" : ""}.`, 1200);
   },
+  // Merge another vector's artwork INTO the current canvas (vs Open, which replaces).
+  // The incoming art is scaled to fit (never upscaled past native) and centred in
+  // this artboard, with the fit baked into geometry so everything stays
+  // translate-only, then wrapped in one group → a single movable/ungroupable object.
+  placeSvgMarkup(text, label) {
+    if (!this.stage) { setStatus("Open or create a canvas first, then place into it.", 3500); return 0; }
+    let root;
+    try { root = new DOMParser().parseFromString(text, "image/svg+xml").documentElement; } catch { root = null; }
+    if (!root || root.tagName.toLowerCase() !== "svg") { setStatus("Couldn't read that vector.", 3000); return 0; }
+    const SKIP = new Set(["defs", "metadata", "style", "title", "desc", "symbol"]);
+    const src = [...root.children].filter((c) => {
+      const t = c.tagName.toLowerCase();
+      return !SKIP.has(t) && !c.classList.contains("hv-artboard") && !c.classList.contains("hv-overlay");
+    });
+    if (!src.length) { setStatus("That vector has no artwork to place.", 3000); return 0; }
+    // Source bounds: viewBox, else width/height, else this artboard (no transform).
+    const vbA = this.stage.viewBox.baseVal;
+    const p = (root.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+    let sx = 0, sy = 0, sw = 0, sh = 0;
+    if (p.length === 4 && p[2] > 0) { [sx, sy, sw, sh] = p; }
+    else { sw = parseFloat(root.getAttribute("width")) || 0; sh = parseFloat(root.getAttribute("height")) || 0; }
+    let s = 1, ex = 0, ey = 0;
+    if (sw > 0 && sh > 0 && vbA && vbA.width) {
+      s = Math.min(1, 0.95 * Math.min(vbA.width / sw, vbA.height / sh));
+      ex = vbA.x + (vbA.width - sw * s) / 2 - sx * s;
+      ey = vbA.y + (vbA.height - sh * s) / 2 - sy * s;
+    }
+    const m = { a: s, b: 0, c: 0, d: s, e: ex, f: ey };
+    this.beginCoalesce();
+    const ov = this._overlayEl();
+    const g = document.createElementNS(SVG_NS, "g");
+    const gid = "n" + (++this.idSeq);
+    g.setAttribute("data-hv-id", gid);
+    if (label) g.setAttribute("data-hv-name", "Placed: " + String(label).replace(/\.[^.]+$/, ""));
+    for (const child of src) {
+      const node = document.importNode(child, true);
+      node.querySelectorAll?.("[data-hv-id]").forEach((d) => d.removeAttribute("data-hv-id"));
+      node.setAttribute("data-hv-id", "n" + (++this.idSeq));
+      bakeMatrixInto(node, m, 0, 0);     // fit-scale + centre baked in (stays translate-only)
+      g.appendChild(node);
+    }
+    this.stage.insertBefore(g, ov);
+    this.commitCoalesce();
+    this.selection = new Set([gid]); this.artboardSelected = false;
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+    setStatus(`Placed ${label || "vector"} — ${src.length} object${src.length > 1 ? "s" : ""} (grouped).`, 2800);
+    return src.length;
+  },
   selectAll() {
     if (!this.stage) return;
     const ids = this._artworkNodes().filter((n) => n.getAttribute("data-hv-locked") !== "1").map((n) => n.getAttribute("data-hv-id"));
@@ -2626,12 +2673,17 @@ function bakeMatrixInto(node, m, atx, aty) {
 }
 function transformShapeGeometry(el, tag, f, m) {
   const num = (a) => parseFloat(el.getAttribute(a)) || 0;
+  // Per-axis scale magnitudes. For the 90°-rotate / flip matrices these are 1
+  // (no size change); for the uniform fit-scale used by Place they are the fit
+  // factor — so radii / image dims scale correctly without regressing transforms.
+  const sx = Math.hypot(m.a, m.b), sy = Math.hypot(m.c, m.d);
   if (tag === "rect") {
     const p1 = f(num("x"), num("y")), p2 = f(num("x") + num("width"), num("y") + num("height"));
     el.setAttribute("x", nfmt(Math.min(p1.x, p2.x))); el.setAttribute("y", nfmt(Math.min(p1.y, p2.y)));
     el.setAttribute("width", nfmt(Math.abs(p2.x - p1.x))); el.setAttribute("height", nfmt(Math.abs(p2.y - p1.y)));
   } else if (tag === "circle") {
     const c = f(num("cx"), num("cy")); el.setAttribute("cx", nfmt(c.x)); el.setAttribute("cy", nfmt(c.y));
+    el.setAttribute("r", nfmt(num("r") * sx));   // uniform scale keeps it a circle
   } else if (tag === "ellipse") {
     const c = f(num("cx"), num("cy"));
     const rx = Math.abs(m.a) * num("rx") + Math.abs(m.c) * num("ry"), ry = Math.abs(m.b) * num("rx") + Math.abs(m.d) * num("ry");
@@ -2653,6 +2705,7 @@ function transformShapeGeometry(el, tag, f, m) {
       if (s.c2) s.c2 = f(s.c2.x, s.c2.y);
       if (s.end) s.end = f(s.end.x, s.end.y);
       if (s.t === "A") {
+        s.rx *= sx; s.ry *= sy;                  // scale arc radii (1× for rotate/flip)
         if (swap) { const r = s.rx; s.rx = s.ry; s.ry = r; s.rot = (s.rot + 90) % 360; }
         if (det < 0) { s.sf = s.sf ? 0 : 1; s.rot = (180 - s.rot + 360) % 360; }
       }
@@ -2660,6 +2713,7 @@ function transformShapeGeometry(el, tag, f, m) {
     el.setAttribute("d", serializeSegs(segs));
   } else if (tag === "text" || tag === "image") {
     const p = f(num("x"), num("y")); el.setAttribute("x", nfmt(p.x)); el.setAttribute("y", nfmt(p.y));
+    if (tag === "image") { el.setAttribute("width", nfmt(num("width") * sx)); el.setAttribute("height", nfmt(num("height") * sy)); }
   }
 }
 function ghostBtn(label, onClick) {
@@ -2743,6 +2797,29 @@ function openOpenModal() {
   apply();
 }
 
+async function placeFromUrl(url, name) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    editor.placeSvgMarkup(await res.text(), name);
+  } catch (e) { setStatus(`Place failed: ${e.message}`, 3000); }
+}
+
+// Place / merge another vector into the current canvas (vs Open, which replaces).
+function openPlaceModal() {
+  if (!editor.stage) { setStatus("Open or create a canvas first, then place into it.", 3500); return; }
+  const svgs = outputs.filter((o) => o.kind === "svg");
+  openModal(`Place into canvas — ${svgs.length} vector(s)`);
+  const items = svgs.map((o) => ({ name: o.name, url: o.url, kind: "svg", folder: o.folder, path: o.path, active: false }));
+  const apply = () => {
+    const q = modalSearchEl.value.trim().toLowerCase();
+    const vis = q ? items.filter((i) => i.name.toLowerCase().includes(q)) : items;
+    renderGalleryGrid(vis, (picked) => { closeModal(); placeFromUrl(picked.url, picked.name); });
+  };
+  modalSearchEl.oninput = apply;
+  apply();
+}
+
 async function exportFlow() {
   if (!editor.stage) return;
   if (editor.dirty && selectedOutput) await editor.save();
@@ -2767,6 +2844,7 @@ const MENU_ITEMS = {
       { label: "New blank canvas…", onClick: newBlankDoc },
       { type: "sep" },
       { label: "Open vector…", onClick: openOpenModal },
+      { label: "Place into canvas…", onClick: openPlaceModal },
       { label: "Save (.svg)", onClick: () => editor.save() },
       { type: "sep" },
       { label: "Export PNG…", onClick: exportFlow },
