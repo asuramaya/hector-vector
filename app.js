@@ -2301,52 +2301,57 @@ function marchingSquares(predicate, bbox, res) {
       case 14: add(bottom(), left()); break;
     }
   }
-  return segs.length ? chainSegments(segs, Math.max(0.05, Math.max(dx, dy) * 0.02)) : "";
+  return segs.length ? chainSegments(segs, Math.max(dx, dy) * 0.4) : "";
 }
-// Stitch marching-squares line segments into closed loops by walking shared
-// endpoints (each crossing point is computed identically from both cells, so
-// keys match exactly), then drop collinear vertices so straight runs collapse.
-function chainSegments(segs, eps) {
+// Stitch marching-squares segments into closed loops. The segments are DIRECTED
+// (each case emits them with the filled region on the left), so every crossing
+// point has exactly one out-edge — following them never crosses strands at a
+// junction, and holes come out wound opposite to outer boundaries (correct for
+// nonzero fill). Collinear vertices are dropped so straight runs collapse.
+function chainSegments(segs, tol) {
   const K = (p) => Math.round(p.x * 100) / 100 + "," + Math.round(p.y * 100) / 100;
-  const pts = new Map(), links = new Map();
-  for (const [a, b] of segs) {
-    const ka = K(a), kb = K(b); if (ka === kb) continue;
-    pts.set(ka, a); pts.set(kb, b);
-    if (!links.has(ka)) links.set(ka, []); if (!links.has(kb)) links.set(kb, []);
-    links.get(ka).push(kb); links.get(kb).push(ka);
-  }
-  const seen = new Set(), eKey = (a, b) => (a < b ? a + "|" + b : b + "|" + a);
+  const out = new Map();   // startKey -> { endKey, pt }
+  for (const [a, b] of segs) { const ka = K(a), kb = K(b); if (ka === kb || out.has(ka)) continue; out.set(ka, { endKey: kb, pt: a }); }
+  const used = new Set();
   let d = "";
-  for (const startK of links.keys()) for (const firstNb of links.get(startK)) {
-    if (seen.has(eKey(startK, firstNb))) continue;
-    const loop = [startK]; let prev = startK, cur = firstNb, guard = 0;
-    seen.add(eKey(startK, firstNb));
-    while (guard++ < segs.length * 2 + 10) {
-      loop.push(cur);
-      if (cur === startK) break;
-      const nbs = links.get(cur) || []; let next = null;
-      for (const nb of nbs) if (nb !== prev && !seen.has(eKey(cur, nb))) { next = nb; break; }
-      if (next === null) for (const nb of nbs) if (!seen.has(eKey(cur, nb))) { next = nb; break; }
-      if (next === null) break;
-      seen.add(eKey(cur, next)); prev = cur; cur = next;
+  for (const startKey of out.keys()) {
+    if (used.has(startKey)) continue;
+    const coords = []; let cur = startKey, guard = 0;
+    while (cur && !used.has(cur) && guard++ < out.size + 5) {
+      const e = out.get(cur); if (!e) break;
+      used.add(cur); coords.push(e.pt); cur = e.endKey;
+      if (cur === startKey) break;
     }
-    if (loop.length >= 4 && loop[loop.length - 1] === startK) {
-      const coords = simplifyLoop(loop.slice(0, -1).map((k) => pts.get(k)), eps);
-      if (coords.length >= 3) d += " M" + coords.map((p) => nfmt(p.x) + " " + nfmt(p.y)).join(" L") + " Z";
-    }
+    const simp = simplifyLoop(coords, tol);
+    if (simp.length >= 3) d += " M" + simp.map((p) => nfmt(p.x) + " " + nfmt(p.y)).join(" L") + " Z";
   }
   return d.trim();
 }
-function simplifyLoop(coords, eps) {
+// Douglas-Peucker on a closed loop: collapses straight runs to their endpoints
+// while keeping enough curve points to stay within `tol`. (A per-triple collinear
+// test fails on gentle curves — each step's deviation is sub-tolerance, so the
+// whole arc would wrongly flatten to a chord.) Split at the point farthest from
+// coords[0] so DP gets stable endpoints on the loop.
+function simplifyLoop(coords, tol) {
   const n = coords.length; if (n < 4) return coords;
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    const a = coords[(i - 1 + n) % n], b = coords[i], c = coords[(i + 1) % n];
-    const cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-    const base = Math.hypot(c.x - a.x, c.y - a.y) || 1;
-    if (Math.abs(cross) / base > eps) out.push(b);
-  }
-  return out.length >= 3 ? out : coords;
+  let far = 0, fd = -1;
+  for (let i = 1; i < n; i++) { const d = (coords[i].x - coords[0].x) ** 2 + (coords[i].y - coords[0].y) ** 2; if (d > fd) { fd = d; far = i; } }
+  const r = dpSimplify(coords.slice(0, far + 1), tol).slice(0, -1)
+    .concat(dpSimplify(coords.slice(far).concat([coords[0]]), tol).slice(0, -1));
+  return r.length >= 3 ? r : coords;
+}
+function dpSimplify(pts, tol) {
+  if (pts.length < 3) return pts;
+  const a = pts[0], b = pts[pts.length - 1];
+  let idx = 0, dmax = 0;
+  for (let i = 1; i < pts.length - 1; i++) { const d = pointSegDist(pts[i], a, b); if (d > dmax) { dmax = d; idx = i; } }
+  if (dmax > tol) return dpSimplify(pts.slice(0, idx + 1), tol).slice(0, -1).concat(dpSimplify(pts.slice(idx), tol));
+  return [a, b];
+}
+function pointSegDist(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy);
+  if (L < 1e-9) return Math.hypot(p.x - a.x, p.y - a.y);
+  return Math.abs((p.x - a.x) * dy - (p.y - a.y) * dx) / L;
 }
 function ghostBtn(label, onClick) {
   const b = document.createElement("button"); b.type = "button"; b.className = "ghost-button"; b.textContent = label;

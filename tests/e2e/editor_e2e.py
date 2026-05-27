@@ -562,6 +562,17 @@ def main():
         page.evaluate("editor.undo()"); page.wait_for_timeout(60)
         check("union is undoable (two rects return)", n_nodes(page) == 2)
 
+        # Union of a rect + ellipse must keep the curved bulge (guards the DP
+        # simplifier from flattening a gently-curved arc into a chord)
+        page.evaluate("""svg => { selectedOutput=null; manualOutputName=null; mountStageFromText(svg,'ue.svg'); }""",
+                      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect data-hv-id="ra" x="30" y="40" width="90" height="90" fill="#36c"/><ellipse data-hv-id="eb" cx="130" cy="120" rx="55" ry="45" fill="#e08a2b"/></svg>')
+        page.wait_for_function("editor.stage && editor.nodeById('eb')", timeout=8000)
+        page.evaluate("editor.selection=new Set(['ra','eb']); editor.booleanOp('union');")
+        page.wait_for_timeout(120)
+        check("union keeps the ellipse bulge (curve not flattened)",
+              result_inside(page, 170, 120) and result_inside(page, 50, 60)
+              and not result_inside(page, 10, 10))
+
         mount_bool(page)
         page.evaluate("editor.booleanOp('subtract')"); page.wait_for_timeout(120)
         check("subtract keeps back-only, drops overlap + front",
@@ -575,11 +586,11 @@ def main():
               and not result_inside(page, 130, 130) and n_nodes(page) == 1)
 
         # Non-overlapping shapes → empty intersection leaves the inputs untouched
-        page.evaluate("""() => {
-            const svg='<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 200 200\\"><rect data-hv-id=\\"ra\\" x=\\"10\\" y=\\"10\\" width=\\"40\\" height=\\"40\\" fill=\\"#36c\\"/><rect data-hv-id=\\"rb\\" x=\\"140\\" y=\\"140\\" width=\\"40\\" height=\\"40\\" fill=\\"#c33\\"/></svg>';
-            mountStageFromText(svg,'sep.svg'); editor.selection=new Set(['ra','rb']); }""")
-        page.wait_for_timeout(60)
-        page.evaluate("editor.booleanOp('intersect')"); page.wait_for_timeout(80)
+        page.evaluate("""svg => { selectedOutput=null; manualOutputName=null; mountStageFromText(svg,'sep.svg'); }""",
+                      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect data-hv-id="ra" x="10" y="10" width="40" height="40" fill="#36c"/><rect data-hv-id="rb" x="140" y="140" width="40" height="40" fill="#c33"/></svg>')
+        page.wait_for_function("editor.stage && editor.nodeById('rb')", timeout=8000)
+        page.evaluate("editor.selection=new Set(['ra','rb']); editor.booleanOp('intersect');")
+        page.wait_for_timeout(80)
         check("empty intersection changes nothing", n_nodes(page) == 2)
 
         # Boolean needs 2+ fillable shapes
