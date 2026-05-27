@@ -349,22 +349,29 @@ def main():
             run: [...document.querySelectorAll('.process-controls .primary-button')].some(b => /Run/.test(b.textContent)),
         })""")
         check("Process workspace opens with gallery + jobs + run", ws["open"] and ws["gallery"] and ws["jobs"] and ws["run"], str(ws))
+        # processing defaults to Single
+        mode_default = page.evaluate("document.querySelector('#mode-select').value")
+        check("processing defaults to Single", mode_default == "single", mode_default)
         page.evaluate("closeModal()")
-        # footer Jobs button also opens the workspace (jobs unified there)
-        page.click("#jobs-button"); page.wait_for_timeout(120)
-        check("footer Jobs opens the workspace", page.evaluate("!!document.querySelector('#process-jobs')"))
+        # footer Jobs button removed (redundant with header Process…)
+        check("footer Jobs button removed", page.evaluate("!document.querySelector('#jobs-button')"))
+        # 'q' opens the workspace instead
+        page.keyboard.press("q"); page.wait_for_timeout(120)
+        check("q opens the workspace", page.evaluate("!!document.querySelector('#process-jobs')"))
         page.evaluate("closeModal()")
         # brand removed → header is action-only
         check("brand removed from header", page.evaluate("!document.querySelector('.brand')"))
-        # collapsing the rail must keep the stage wide (regression: it used to fall into
-        # the rail's grid track and collapse to ~0)
+        # Layers live in the right dock (alongside the inspector), not a left rail
+        check("Layers panel is in the right dock", page.evaluate("!!document.querySelector('#rightdock .rail-section.layers #layers-list')"))
+        # collapsing the dock must keep the stage wide (regression: it used to fall into
+        # the dock's grid track and collapse to ~0)
         w_before = page.evaluate("document.querySelector('#output-preview').getBoundingClientRect().width")
         page.click("#rail-toggle"); page.wait_for_timeout(120)
-        rail_hidden = page.evaluate("getComputedStyle(document.querySelector('#rail')).display === 'none'")
+        dock_hidden = page.evaluate("getComputedStyle(document.querySelector('#rightdock')).display === 'none'")
         w_after = page.evaluate("document.querySelector('#output-preview').getBoundingClientRect().width")
-        check("rail collapse hides rail and widens the stage", rail_hidden and w_after >= w_before - 1, f"before={w_before} after={w_after}")
+        check("dock collapse hides dock and widens the stage", dock_hidden and w_after >= w_before - 1, f"before={w_before} after={w_after}")
         page.click("#rail-toggle"); page.wait_for_timeout(120)
-        check("rail re-expands", page.evaluate("getComputedStyle(document.querySelector('#rail')).display !== 'none'"))
+        check("dock re-expands", page.evaluate("getComputedStyle(document.querySelector('#rightdock')).display !== 'none'"))
 
         # ---- G. Phase 3: layers panel ----
         mount_ctl(page)
@@ -421,11 +428,11 @@ def main():
         page.evaluate("editor.setTool('select'); fitVp(viewports.output)")
 
         # collapsed section shrinks to its header (no empty flex gap)
-        page.evaluate("() => { const s = document.querySelector('#rail .rail-section.layers'); if (!s.classList.contains('collapsed')) s.querySelector('.section-head').click(); }")
+        page.evaluate("() => { const s = document.querySelector('#rightdock .rail-section.layers'); if (!s.classList.contains('collapsed')) s.querySelector('.section-head').click(); }")
         page.wait_for_timeout(60)
-        ch = page.evaluate("document.querySelector('#rail .rail-section.layers').offsetHeight")
+        ch = page.evaluate("document.querySelector('#rightdock .rail-section.layers').offsetHeight")
         check("collapsed section shrinks to header", ch < 70, f"height={ch}")
-        page.evaluate("() => { const s = document.querySelector('#rail .rail-section.layers'); if (s.classList.contains('collapsed')) s.querySelector('.section-head').click(); }")
+        page.evaluate("() => { const s = document.querySelector('#rightdock .rail-section.layers'); if (s.classList.contains('collapsed')) s.querySelector('.section-head').click(); }")
 
         # form modal narrow vs gallery modal wide
         page.evaluate("newBlankDoc()"); page.wait_for_timeout(60)

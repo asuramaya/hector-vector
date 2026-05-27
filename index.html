@@ -30,21 +30,6 @@
       </header>
 
       <section class="editor-grid">
-        <aside class="rail" id="rail">
-          <div class="rail-section layers" data-section="layers">
-            <div class="panel-head section-head">
-              <span class="caret">▾</span><span class="sec-label">Layers</span>
-              <div class="panel-actions">
-                <div class="menu" data-menu="layers">
-                  <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false" title="Layer actions">⋯</button>
-                  <div class="menu-list" role="menu" hidden></div>
-                </div>
-              </div>
-            </div>
-            <div id="layers-list" class="layers-list section-body"></div>
-          </div>
-        </aside>
-
         <nav class="toolstrip" role="toolbar" aria-label="Tools">
           <button class="tool-button active" data-tool="select" type="button" title="Select / Move (V)">▣</button>
           <button class="tool-button" data-tool="node" type="button" title="Edit points (A)">✥</button>
@@ -74,9 +59,23 @@
           </div>
         </article>
 
-        <aside class="inspector" id="inspector">
-          <div class="panel-head"><span id="inspector-title">Nothing selected</span></div>
-          <div id="inspector-body" class="inspector-body"></div>
+        <aside class="rightdock" id="rightdock">
+          <div class="inspector" id="inspector">
+            <div class="panel-head"><span id="inspector-title">Nothing selected</span></div>
+            <div id="inspector-body" class="inspector-body"></div>
+          </div>
+          <div class="rail-section layers" data-section="layers">
+            <div class="panel-head section-head">
+              <span class="caret">▾</span><span class="sec-label">Layers</span>
+              <div class="panel-actions">
+                <div class="menu" data-menu="layers">
+                  <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false" title="Layer actions">⋯</button>
+                  <div class="menu-list" role="menu" hidden></div>
+                </div>
+              </div>
+            </div>
+            <div id="layers-list" class="layers-list section-body"></div>
+          </div>
         </aside>
       </section>
 
@@ -100,8 +99,8 @@
           <option value="pipeline" selected>Production SVG</option>
         </select>
         <select id="mode-select">
-          <option value="batch" selected>Batch</option>
-          <option value="single">Single</option>
+          <option value="batch">Batch</option>
+          <option value="single" selected>Single</option>
         </select>
         <label><input id="force-input" type="checkbox" /> Force</label>
         <button id="settings-button" type="button">Settings</button>
@@ -115,11 +114,6 @@
         <div id="status-progress" class="status-progress" hidden>
           <div class="status-progress-track"><div id="status-progress-bar" class="status-progress-bar"></div></div>
           <span id="status-progress-label" class="status-progress-label"></span>
-        </div>
-        <div class="panel-actions">
-          <button id="jobs-button" class="ghost-button" type="button" title="Open the processing workspace (shortcut: q)">
-            Jobs <span id="jobs-count" class="badge" hidden></span>
-          </button>
         </div>
       </footer>
     </main>
