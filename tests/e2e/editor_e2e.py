@@ -673,6 +673,35 @@ def main():
         page.evaluate("editor.undo()"); page.wait_for_timeout(60)
         check("transform is undoable", page.evaluate("editor.stage.getAttribute('viewBox').trim()") == "0 0 300 200")
 
+        # ---- Command layer: clipboard, select-all, nudge, context menu ----
+        mount_ctl(page)
+        page.evaluate("editor.selection=new Set(['r1']); editor.copy(); editor.paste();")
+        check("copy + paste adds a selected object", n_nodes(page) == 4 and page.evaluate("editor.selection.size") == 1)
+        page.evaluate("editor.selectAll()")
+        check("select all selects every artwork node", page.evaluate("editor.selection.size") == n_nodes(page))
+        mount_ctl(page)
+        page.evaluate("editor.selection=new Set(['r1']); editor.nudge(5,-3);")
+        check("nudge moves the selection", "translate" in (page.evaluate("editor.nodeById('r1').getAttribute('transform')") or ""))
+
+        # right-click an object → contextual menu, and it selects the object
+        mount_ctl(page)
+        r = node_rect(page, "r2")
+        page.mouse.click(r["cx"], r["cy"], button="right"); page.wait_for_timeout(80)
+        ctx = page.evaluate("""() => { const m=document.querySelector('.context-menu'); return m
+            ? { n: m.querySelectorAll('.menu-item').length, labels: [...m.querySelectorAll('.menu-label')].map(l=>l.textContent) } : null; }""")
+        check("object context menu opens with actions", ctx and ctx["n"] >= 8 and "Duplicate" in ctx["labels"] and "Flip Horizontal" in ctx["labels"], str(ctx and ctx["n"]))
+        check("right-click selects the object", page.evaluate("editor.selection.has('r2')"))
+        page.keyboard.press("Escape"); page.wait_for_timeout(40)
+        check("Escape closes the context menu", page.evaluate("!document.querySelector('.context-menu')"))
+
+        # right-click empty canvas → artboard menu
+        ab = artboard_rect(page)
+        page.mouse.click(ab["x"] + ab["w"] * 0.04, ab["y"] + ab["h"] * 0.94, button="right"); page.wait_for_timeout(80)
+        ctx2 = page.evaluate("""() => { const m=document.querySelector('.context-menu'); return m
+            ? [...m.querySelectorAll('.menu-label')].map(l=>l.textContent) : null; }""")
+        check("canvas context menu has Select All + Paste", ctx2 and "Select All" in ctx2 and "Paste" in ctx2, str(ctx2))
+        page.keyboard.press("Escape")
+
         # serialize cleanliness
         mount_ctl(page)
         s = page.evaluate("editor.serialize()")

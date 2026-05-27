@@ -841,6 +841,7 @@ function bindViewportDragging(vp) {
   let lastX = 0;
   let lastY = 0;
   vp.el.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;   // right/middle: leave for the context menu (capturing would retarget it)
     if (!vp.el.querySelector(".viewport-content")) return;
     dragging = true;
     lastX = event.clientX;
@@ -1366,6 +1367,7 @@ const editor = {
   // last-used appearance — newly drawn shapes inherit it (updated by applyFill/applyStroke)
   style: { fill: "#808080", stroke: "none", strokeWidth: 0 },
   _pen: null,           // in-progress pen path: { node, pts:[{x,y,out}], closed, dragging }
+  clipboard: [],        // in-app clipboard: serialized node markup
 
   get dirty() { return this.history.length > 0; },
 
@@ -1524,6 +1526,7 @@ const editor = {
   nodeById(id) { return this.stage && this.stage.querySelector(`[data-hv-id="${CSS.escape(id)}"]`); },
   selectedNodes() { return [...this.selection].map((id) => this.nodeById(id)).filter(Boolean); },
   _onPointerDown(e) {
+    if (e.button !== 0) return;   // right/middle clicks are for the context menu, not draw/select
     if (this.tool === "pen") { this._penDown(e); return; }
     if (SHAPE_TOOLS.has(this.tool)) {
       if (e.button !== 0) return;
@@ -1819,6 +1822,46 @@ const editor = {
     this.selection = new Set(ids); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector();
     setStatus(`Duplicated ${ids.length} object${ids.length > 1 ? "s" : ""}.`, 1500);
+  },
+  // ---------- clipboard + selection commands (shared by keymap + context menu) ----------
+  copy() {
+    const nodes = this.selectedNodes(); if (!nodes.length) return false;
+    this.clipboard = nodes.map((n) => { const c = n.cloneNode(true); c.removeAttribute("data-hv-id"); return c.outerHTML; });
+    setStatus(`Copied ${nodes.length} object${nodes.length > 1 ? "s" : ""}.`, 1200);
+    return true;
+  },
+  cut() { if (this.copy()) this.deleteSelection(); },
+  paste() {
+    if (!this.clipboard.length || !this.stage) return;
+    const els = [];
+    for (const markup of this.clipboard) {
+      const doc = new DOMParser().parseFromString(`<svg xmlns="${SVG_NS}">${markup}</svg>`, "image/svg+xml");
+      const src = doc.documentElement && doc.documentElement.firstElementChild;
+      if (src) els.push(document.importNode(src, true));
+    }
+    if (!els.length) return;
+    this.push();
+    const ov = this._overlayEl(); const ids = [];
+    for (const el of els) {
+      const id = "n" + (++this.idSeq); el.setAttribute("data-hv-id", id);
+      const t = currentTranslate(el); setTranslate(el, t.x + 12, t.y + 12);
+      this.stage.insertBefore(el, ov); ids.push(id);
+    }
+    this.selection = new Set(ids); this.artboardSelected = false;
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+    setStatus(`Pasted ${ids.length} object${ids.length > 1 ? "s" : ""}.`, 1200);
+  },
+  selectAll() {
+    if (!this.stage) return;
+    const ids = this._artworkNodes().filter((n) => n.getAttribute("data-hv-locked") !== "1").map((n) => n.getAttribute("data-hv-id"));
+    this.selection = new Set(ids); this.artboardSelected = false;
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+  },
+  nudge(dx, dy) {
+    const nodes = this.selectedNodes(); if (!nodes.length) return;
+    this.push();
+    nodes.forEach((n) => { const t = currentTranslate(n); setTranslate(n, t.x + dx, t.y + dy); });
+    this._renderSelection();
   },
   reorder(mode) {
     const nodes = this.selectedNodes(); if (!nodes.length || !this.stage) return;
@@ -2699,8 +2742,20 @@ document.addEventListener("keydown", (e) => {
   if (mod && (e.key === "g" || e.key === "G")) { e.preventDefault(); if (e.shiftKey) editor.ungroup(); else editor.group(); return; }
   if (mod && e.key === "]") { e.preventDefault(); editor.reorder(e.shiftKey ? "front" : "forward"); return; }
   if (mod && e.key === "[") { e.preventDefault(); editor.reorder(e.shiftKey ? "back" : "backward"); return; }
+  if (mod && (e.key === "c" || e.key === "C")) { e.preventDefault(); editor.copy(); return; }
+  if (mod && (e.key === "x" || e.key === "X")) { e.preventDefault(); editor.cut(); return; }
+  if (mod && (e.key === "v" || e.key === "V")) { e.preventDefault(); editor.paste(); return; }
+  if (mod && (e.key === "a" || e.key === "A")) { e.preventDefault(); editor.selectAll(); return; }
   if (mod) return;
   if (!modalRootEl.hidden) return;
+  if (e.key.startsWith("Arrow")) {       // nudge selection (Shift = ×10)
+    if (!editor.selection.size) return;
+    e.preventDefault();
+    const s = e.shiftKey ? 10 : 1;
+    const d = { ArrowLeft: [-s, 0], ArrowRight: [s, 0], ArrowUp: [0, -s], ArrowDown: [0, s] }[e.key];
+    if (d) editor.nudge(d[0], d[1]);
+    return;
+  }
   if (editor._pen) {     // pen construction owns Enter/Escape while a path is open
     if (e.key === "Enter") { e.preventDefault(); editor._finishPen(true); return; }
     if (e.key === "Escape") { e.preventDefault(); editor._finishPen(false); return; }
@@ -2772,6 +2827,98 @@ document.addEventListener("click", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && openMenuEl) closeMenus();
 });
+
+// ---------- right-click context menu (canvas + objects) ----------
+let ctxMenuEl = null;
+function hideContextMenu() { if (ctxMenuEl) { ctxMenuEl.remove(); ctxMenuEl = null; } }
+function showContextMenu(x, y, items) {
+  hideContextMenu();
+  const menu = document.createElement("div");
+  menu.className = "context-menu menu-list";
+  menu.setAttribute("role", "menu");
+  for (const item of items) {
+    if (item.type === "sep") { const s = document.createElement("div"); s.className = "menu-sep"; menu.appendChild(s); continue; }
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "menu-item"; btn.disabled = !!item.disabled; btn.setAttribute("role", "menuitem");
+    btn.innerHTML = `<span class="menu-check"></span><span class="menu-label"></span>`;
+    btn.querySelector(".menu-label").textContent = item.label;
+    btn.addEventListener("click", () => { hideContextMenu(); try { item.onClick(); } catch (e) { setStatus(e.message || String(e), 3000); } });
+    menu.appendChild(btn);
+  }
+  document.body.appendChild(menu);
+  const r = menu.getBoundingClientRect();
+  menu.style.left = Math.max(2, Math.min(x, window.innerWidth - r.width - 4)) + "px";
+  menu.style.top = Math.max(2, Math.min(y, window.innerHeight - r.height - 4)) + "px";
+  ctxMenuEl = menu;
+}
+function objectMenuItems() {
+  const sel = editor.selectedNodes();
+  const fillable = sel.filter((n) => shapeToAbsPath(n)).length >= 2;
+  const hasGroup = sel.some((n) => n.tagName.toLowerCase() === "g");
+  const items = [
+    { label: "Cut", onClick: () => editor.cut() },
+    { label: "Copy", onClick: () => editor.copy() },
+    { label: "Paste", disabled: !editor.clipboard.length, onClick: () => editor.paste() },
+    { label: "Duplicate", onClick: () => editor.duplicate() },
+    { label: "Delete", onClick: () => editor.deleteSelection() },
+    { type: "sep" },
+    { label: "Bring to Front", onClick: () => editor.reorder("front") },
+    { label: "Bring Forward", onClick: () => editor.reorder("forward") },
+    { label: "Send Backward", onClick: () => editor.reorder("backward") },
+    { label: "Send to Back", onClick: () => editor.reorder("back") },
+    { type: "sep" },
+    { label: "Group", disabled: sel.length < 2, onClick: () => editor.group() },
+    { label: "Ungroup", disabled: !hasGroup, onClick: () => editor.ungroup() },
+  ];
+  if (fillable) items.push({ type: "sep" },
+    { label: "Unite", onClick: () => editor.booleanOp("union") },
+    { label: "Subtract", onClick: () => editor.booleanOp("subtract") },
+    { label: "Intersect", onClick: () => editor.booleanOp("intersect") });
+  items.push({ type: "sep" },
+    { label: "Rotate 90° CW", onClick: () => editor.transform("rotateCW") },
+    { label: "Rotate 90° CCW", onClick: () => editor.transform("rotateCCW") },
+    { label: "Flip Horizontal", onClick: () => editor.transform("flipH") },
+    { label: "Flip Vertical", onClick: () => editor.transform("flipV") });
+  return items;
+}
+function canvasMenuItems() {
+  return [
+    { label: "Paste", disabled: !editor.clipboard.length, onClick: () => editor.paste() },
+    { label: "Select All", onClick: () => editor.selectAll() },
+    { type: "sep" },
+    { label: "Invert space", onClick: () => editor.invertSpace() },
+    { label: "Clean up ghost layers", onClick: () => editor.cleanupLayers() },
+    { type: "sep" },
+    { label: "Rotate artboard 90° CW", onClick: () => editor.transform("rotateCW") },
+    { label: "Rotate artboard 90° CCW", onClick: () => editor.transform("rotateCCW") },
+    { label: "Flip artboard H", onClick: () => editor.transform("flipH") },
+    { label: "Flip artboard V", onClick: () => editor.transform("flipV") },
+  ];
+}
+{
+  const wrap = document.querySelector(".stage-wrap");
+  if (wrap) wrap.addEventListener("contextmenu", (e) => {
+    if (!editor.stage) return;
+    e.preventDefault();
+    let hit = e.target.closest && e.target.closest("[data-hv-id]");
+    if (hit && hit.getAttribute("data-hv-locked") === "1") hit = null;
+    if (hit && editor.stage.contains(hit)) {
+      const id = hit.getAttribute("data-hv-id");
+      if (!editor.selection.has(id)) {
+        editor.selection = new Set([id]); editor.artboardSelected = false;
+        editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
+      }
+      showContextMenu(e.clientX, e.clientY, objectMenuItems());
+    } else {
+      editor.selection = new Set(); editor.artboardSelected = true;
+      editor._renderSelection(); editor._renderInspector();
+      showContextMenu(e.clientX, e.clientY, canvasMenuItems());
+    }
+  });
+}
+document.addEventListener("pointerdown", (e) => { if (ctxMenuEl && !e.target.closest(".context-menu")) hideContextMenu(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideContextMenu(); });
+window.addEventListener("blur", hideContextMenu);
 
 let exportState = { mode: "scale", scale: 16, longest: 1024, width: 0, height: 0, background: "transparent" };
 

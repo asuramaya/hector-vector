@@ -492,6 +492,8 @@ button:disabled {
   box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.12);
 }
 .menu-list[hidden] { display: none; }
+/* right-click context menu reuses .menu-list styling but is viewport-positioned */
+.context-menu { position: fixed; top: auto; right: auto; z-index: 1000; max-height: 80vh; overflow-y: auto; }
 
 .menu-item {
   display: flex;
