@@ -702,6 +702,25 @@ def main():
         check("canvas context menu has Select All + Paste", ctx2 and "Select All" in ctx2 and "Paste" in ctx2, str(ctx2))
         page.keyboard.press("Escape")
 
+        # ---- Process workspace: backends as first-class inline options ----
+        page.evaluate("processSelectEl.value='pipeline';")
+        page.click("#process-button"); page.wait_for_timeout(150)
+        opt_labels = page.evaluate("() => [...document.querySelectorAll('.process-opts .process-opt>span')].map(s=>s.textContent)")
+        check("pipeline surfaces backend options inline", all(x in opt_labels for x in ["Model", "Scale", "Trace", "Curves", "Cutout"]), str(opt_labels))
+        # an inline option drives settings directly
+        page.evaluate("""() => { const s=[...document.querySelectorAll('.process-opts select')].find(x=>x.options[0].value==='spline'); s.value='polygon'; s.dispatchEvent(new Event('change')); }""")
+        check("inline backend option updates settings", page.evaluate("settings.trace_mode") == "polygon")
+        # AI cutout reveals the model picker and re-renders the workspace (not the Settings modal)
+        page.evaluate("settings.cutout_backend='ai'; renderProcessWorkspace();"); page.wait_for_timeout(60)
+        ws_labels = page.evaluate("() => [...document.querySelectorAll('.process-opts .process-opt>span')].map(s=>s.textContent)")
+        check("AI cutout reveals model picker in-place", page.evaluate("!!document.querySelector('.process-workspace')") and "AI model" in ws_labels, str(ws_labels))
+        page.evaluate("settings.cutout_backend='classical';")
+        # switching pipeline narrows the options
+        page.evaluate("processSelectEl.value='upscale'; renderProcessWorkspace();"); page.wait_for_timeout(60)
+        up_labels = page.evaluate("() => [...document.querySelectorAll('.process-opts .process-opt>span')].map(s=>s.textContent)")
+        check("switching pipeline updates the options", up_labels == ["Model", "Scale"], str(up_labels))
+        page.evaluate("closeModal(); processSelectEl.value='pipeline';")
+
         # serialize cleanliness
         mount_ctl(page)
         s = page.evaluate("editor.serialize()")

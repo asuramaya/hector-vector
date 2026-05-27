@@ -693,6 +693,7 @@ const ACTIVE_STATES = new Set(["queued", "running"]);
 let jobsCache = [];
 let jobsModalOpen = false;
 let processModalOpen = false;
+let settingsFormRerender = null;   // where buildSettingsForm re-renders to (Settings modal vs Process workspace)
 
 function jobsForSource(name) {
   if (!name) return [];
@@ -3305,6 +3306,41 @@ const PROCESS_OPTIONS = [
   ["cutout", "Cutout PNG"], ["upscale", "Upscale PNG"], ["chromakey", "Greenscreen Cutout"],
 ];
 
+// The key backend choices for the selected pipeline, surfaced inline (first-class)
+// instead of buried in Advanced. These bind straight to `settings`, so they drive
+// runProcess directly; the pipeline combines several backends, so it shows all of
+// them. Changing one that gates others (cutout backend) re-renders the workspace.
+function processKeyOptions(proc) {
+  const wrap = document.createElement("div"); wrap.className = "process-opts";
+  const add = (label, control) => {
+    const l = document.createElement("label"); l.className = "process-opt";
+    const s = document.createElement("span"); s.textContent = label;
+    l.appendChild(s); l.appendChild(control); wrap.appendChild(l);
+  };
+  if (proc === "upscale" || proc === "pipeline") {
+    add("Model", makeSelect("model", [["realesrgan-x4plus", "ESRGAN x4+ (photo)"], ["realesrnet-x4plus", "ESRNet x4+ (clean)"], ["realesr-animevideov3", "Anime / line-art"]]));
+    add("Scale", makeSelect("scale", [["2", "2×"], ["3", "3×"], ["4", "4×"]]));
+  }
+  if (proc === "vectorize" || proc === "pipeline") {
+    const preset = makeSelect("trace_preset", [["draft", "Draft"], ["balanced", "Balanced"], ["smooth", "Smooth"], ["sharp", "Sharp"], ["custom", "Custom"]]);
+    preset.addEventListener("change", () => { const pre = TRACE_PRESETS[preset.value]; if (pre) { Object.assign(settings, pre); persistSettings(); } });
+    add("Trace", preset);
+    add("Curves", makeSelect("trace_mode", [["spline", "Spline"], ["polygon", "Polygon"], ["pixel", "Pixel"]]));
+  }
+  if (proc === "cutout" || proc === "pipeline") {
+    const backend = makeSelect("cutout_backend", [["classical", "Classical (fast)"], ["ai", "AI (rembg)"]]);
+    backend.addEventListener("change", () => renderProcessWorkspace());
+    add("Cutout", backend);
+    if (settings.cutout_backend === "ai") {
+      add("AI model", makeSelect("cutout_model", [["u2net", "u2net"], ["isnet-general-use", "ISNet"], ["birefnet-general", "BiRefNet"], ["u2netp", "u2netp (fast)"], ["silueta", "silueta"]]));
+    }
+  }
+  if (proc === "pixelvec") {
+    add("Sample", makeSelect("pv_sample", [["mode", "Mode"], ["mean", "Mean"], ["median", "Median"]]));
+  }
+  return wrap;
+}
+
 function openProcessModal(focusJobs = false) {
   processModalOpen = true;
   jobsModalOpen = false;
@@ -3325,7 +3361,7 @@ function renderProcessWorkspace() {
   // --- controls bar ---
   const bar = document.createElement("div");
   bar.className = "process-controls";
-  const procSel = makeSelectRaw(processSelectEl.value, PROCESS_OPTIONS, (v) => { processSelectEl.value = v; processSelectEl.dispatchEvent(new Event("change")); });
+  const procSel = makeSelectRaw(processSelectEl.value, PROCESS_OPTIONS, (v) => { processSelectEl.value = v; processSelectEl.dispatchEvent(new Event("change")); renderProcessWorkspace(); });
   procSel.title = "Pipeline to run";
   const modeSel = makeSelectRaw(modeSelectEl.value, [["batch", "Batch — whole library"], ["single", "Single — selected image"]], (v) => { modeSelectEl.value = v; modeSelectEl.dispatchEvent(new Event("change")); });
   const force = document.createElement("label"); force.className = "process-force";
@@ -3342,10 +3378,14 @@ function renderProcessWorkspace() {
   bar.appendChild(runBtn);
   root.appendChild(bar);
 
+  // --- key backend options for this pipeline, inline (first-class) ---
+  root.appendChild(processKeyOptions(processSelectEl.value));
+
   // --- advanced settings (collapsible, inline so it stays in one place) ---
   const adv = document.createElement("details");
   adv.className = "process-advanced";
   const sum = document.createElement("summary"); sum.textContent = "Advanced settings"; adv.appendChild(sum);
+  settingsFormRerender = renderProcessWorkspace;   // keep changes inside the workspace, not the Settings modal
   adv.appendChild(buildSettingsForm(processSelectEl.value));
   root.appendChild(adv);
 
@@ -3523,6 +3563,7 @@ function sectionTitle(text) {
 function buildSettingsForm(process) {
   const root = document.createElement("div");
   root.className = "form";
+  const rerender = () => (settingsFormRerender || openSettingsModal)();   // host-aware re-render
   if (process === "upscale" || process === "pipeline") {
     root.appendChild(sectionTitle("Upscale model"));
     root.appendChild(fieldRow("Model", makeSelect("model", [
@@ -3550,14 +3591,14 @@ function buildSettingsForm(process) {
         Object.assign(settings, pre);
         persistSettings();
       }
-      openSettingsModal();
+      rerender();
     });
     root.appendChild(fieldRow("Preset", presetSel, "Tunes the sliders below as a group."));
     root.appendChild(fieldRow("Mode", makeSelect("trace_mode", [["spline","Spline (curves)"],["polygon","Polygon"],["pixel","Pixel (no smoothing)"]])));
     const advToggle = document.createElement("input");
     advToggle.type = "checkbox";
     advToggle.checked = !!settings.trace_advanced;
-    advToggle.addEventListener("change", () => { settings.trace_advanced = advToggle.checked; persistSettings(); openSettingsModal(); });
+    advToggle.addEventListener("change", () => { settings.trace_advanced = advToggle.checked; persistSettings(); rerender(); });
     root.appendChild(fieldRow("Show advanced", advToggle, "Show individual VTracer sliders."));
     if (settings.trace_advanced) {
       const onSliderChange = () => { settings.trace_preset = "custom"; persistSettings(); };
@@ -3578,7 +3619,7 @@ function buildSettingsForm(process) {
       ["classical", "Classical (numpy auto-bg, fast)"],
       ["ai", "AI (rembg / BiRefNet)"],
     ]);
-    backendSel.addEventListener("change", () => openSettingsModal());
+    backendSel.addEventListener("change", () => rerender());
     root.appendChild(fieldRow("Backend", backendSel, "AI quality is far higher on complex backgrounds. Requires one-time ~500MB install."));
     if (settings.cutout_backend === "ai") {
       root.appendChild(fieldRow("Model", makeSelect("cutout_model", [
@@ -3668,7 +3709,7 @@ function buildSettingsForm(process) {
   reset.addEventListener("click", () => {
     settings = { ...SETTINGS_DEFAULTS };
     persistSettings();
-    openSettingsModal();
+    rerender();
   });
   actions.appendChild(reset);
   root.appendChild(actions);
@@ -3681,6 +3722,7 @@ function openSettingsModal() {
   openModal(`Settings — ${label}`, true);
   modalSearchEl.hidden = true;
   modalBodyEl.innerHTML = "";
+  settingsFormRerender = openSettingsModal;   // standalone Settings modal re-renders itself
   modalBodyEl.appendChild(buildSettingsForm(proc));
 }
 

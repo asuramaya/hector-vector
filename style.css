@@ -786,6 +786,9 @@ button:disabled {
 .process-controls select { padding: 6px 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: inherit; }
 .process-force { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--muted); }
 .process-controls .primary-button { margin-left: auto; }
+.process-opts { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 2px 0; flex: 0 0 auto; }
+.process-opt { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.process-opt select { padding: 4px 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: inherit; }
 .process-advanced { border: 1px solid var(--line); flex: 0 0 auto; }
 .process-advanced > summary { cursor: pointer; padding: 7px 10px; font-size: 13px; user-select: none; }
 .process-advanced[open] > summary { border-bottom: 1px solid var(--line); }
