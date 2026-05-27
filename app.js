@@ -15,7 +15,7 @@ const jobsButtonEl = document.querySelector("#jobs-button");
 const jobsCountEl = document.querySelector("#jobs-count");
 const forceInputEl = document.querySelector("#force-input");
 const runButtonEl = document.querySelector("#run-button");
-const libraryHeaderEl = document.querySelector(".library .sec-label");
+const libraryHeaderEl = document.querySelector("#library-count");
 const sourcePathEl = document.querySelector("#source-path");
 const sourceEditEl = document.querySelector("#source-edit");
 const sourceResetEl = document.querySelector("#source-reset");
@@ -489,7 +489,7 @@ function updateActionState() {
 
 function updateLibraryHeader() {
   if (!libraryHeaderEl) return;
-  libraryHeaderEl.textContent = workItems.length ? `Library (${workItems.length})` : "Library";
+  libraryHeaderEl.textContent = workItems.length ? ` (${workItems.length})` : "";
 }
 
 const LIBRARY_GROUPS_KEY = "hector-vector:library-groups";
@@ -891,6 +891,34 @@ function beginSourceEdit() {
   sourceEditEl.hidden = true;
   input.focus();
   input.select();
+}
+
+async function setSourceDir(next) {
+  next = (next || "").trim();
+  try {
+    const data = await api("/api/source", "POST", { path: next });
+    setStatus(data.message || "Source updated.", 2500);
+    sourceInfo = data;
+    await refreshAll();
+  } catch (error) { setStatus(error.message, 4000); }
+}
+
+// Change the image source folder (the inline rail editor moved into the header
+// Import ▾ menu, so source-change now opens a small modal).
+function openSourceModal() {
+  openModal("Source folder", true);
+  modalSearchEl.hidden = true;
+  const root = document.createElement("div"); root.className = "form";
+  root.appendChild(sectionTitle("Library source"));
+  const inp = document.createElement("input");
+  inp.type = "text"; inp.value = sourceInfo.source_dir || ""; inp.placeholder = "/absolute/path/to/folder";
+  root.appendChild(fieldRow("Folder", inp, sourceInfo.is_default ? "Currently the default folder." : ""));
+  const actions = document.createElement("div"); actions.className = "form-actions";
+  actions.appendChild(ghostBtn("Set source", async () => { await setSourceDir(inp.value); closeModal(); }));
+  if (!sourceInfo.is_default) actions.appendChild(ghostBtn("Reset to default", async () => { await setSourceDir(""); closeModal(); }));
+  root.appendChild(actions);
+  modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
+  inp.focus();
 }
 
 function openModal(title, narrow = false) {
@@ -2453,6 +2481,13 @@ const MENU_ITEMS = {
     { label: "Cutout PNG", onClick: () => importRun("cutout") },
     { label: "Upscale PNG", onClick: () => importRun("upscale") },
     { label: "Greenscreen Cutout", onClick: () => importRun("chromakey") },
+    { type: "sep" },
+    { type: "toggle", label: "Batch (whole library)", checked: modeSelectEl.value === "batch",
+      onClick: () => { modeSelectEl.value = modeSelectEl.value === "batch" ? "single" : "batch"; modeSelectEl.dispatchEvent(new Event("change")); } },
+    { type: "toggle", label: "Force re-run", checked: forceInputEl.checked,
+      onClick: () => { forceInputEl.checked = !forceInputEl.checked; forceInputEl.dispatchEvent(new Event("change")); } },
+    { label: "Process settings…", onClick: () => settingsButtonEl.click() },
+    { label: "Change source folder…", onClick: openSourceModal },
   ],
   "doc-export": () => [
     { label: "Export PNG…", onClick: exportFlow },
@@ -2461,9 +2496,11 @@ const MENU_ITEMS = {
   "library": () => {
     const item = selectedItem();
     return [
-      { label: "Image info…", onClick: openInfoModal },
-      { label: "Browse…", onClick: openBrowseModal },
+      { label: "Browse images…", onClick: openBrowseModal },
+      { label: "Add images…", onClick: () => fileInputEl.click() },
+      { label: "Image info…", disabled: !selectedName, onClick: openInfoModal },
       { type: "sep" },
+      { label: "Jobs…", onClick: () => openJobsModal() },
       { label: "Clean derivatives", onClick: cleanDerivatives },
       { label: "Remove selected", disabled: !(item && item.removable), onClick: removeSelected },
     ];

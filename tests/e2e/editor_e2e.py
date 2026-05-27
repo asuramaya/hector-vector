@@ -340,18 +340,20 @@ def main():
         page.keyboard.press("Control+z"); page.wait_for_timeout(50)
         check("invert-space is undoable", page.evaluate("editor._artworkNodes().length") == 3)
 
-        # ---- F. Side-panel UX: collapsible sections + library popup menu ----
-        lib_head = "#rail .rail-section.library .section-head"
-        page.click(lib_head); page.wait_for_timeout(60)
-        check("library section collapses", page.evaluate("document.querySelector('#rail .rail-section.library').classList.contains('collapsed')"))
-        page.click(lib_head); page.wait_for_timeout(60)
-        check("library section expands", not page.evaluate("document.querySelector('#rail .rail-section.library').classList.contains('collapsed')"))
-        # library popup menu opens with items (and does NOT collapse the section)
-        page.click("#rail .menu[data-menu='library'] .menu-trigger"); page.wait_for_timeout(80)
-        menu_items = page.evaluate("document.querySelectorAll(\"#rail .menu[data-menu='library'] .menu-item\").length")
-        not_collapsed = not page.evaluate("document.querySelector('#rail .rail-section.library').classList.contains('collapsed')")
-        check("library popup menu opens", menu_items >= 4 and not_collapsed, f"items={menu_items}")
+        # ---- F. Side-panel UX: header Library menu + rail collapse doesn't break the stage ----
+        page.click(".doc-actions .menu[data-menu='library'] .menu-trigger"); page.wait_for_timeout(80)
+        menu_items = page.evaluate("document.querySelectorAll(\".doc-actions .menu[data-menu='library'] .menu-item\").length")
+        check("header Library menu opens with items", menu_items >= 6, f"items={menu_items}")
         page.keyboard.press("Escape")
+        # collapsing the rail must keep the stage wide (regression: it used to fall into
+        # the rail's grid track and collapse to ~0)
+        w_before = page.evaluate("document.querySelector('#output-preview').getBoundingClientRect().width")
+        page.click("#rail-toggle"); page.wait_for_timeout(120)
+        rail_hidden = page.evaluate("getComputedStyle(document.querySelector('#rail')).display === 'none'")
+        w_after = page.evaluate("document.querySelector('#output-preview').getBoundingClientRect().width")
+        check("rail collapse hides rail and widens the stage", rail_hidden and w_after >= w_before - 1, f"before={w_before} after={w_after}")
+        page.click("#rail-toggle"); page.wait_for_timeout(120)
+        check("rail re-expands", page.evaluate("getComputedStyle(document.querySelector('#rail')).display !== 'none'"))
 
         # ---- G. Phase 3: layers panel ----
         mount_ctl(page)

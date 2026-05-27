@@ -240,10 +240,14 @@ button:disabled {
 .editor-grid {
   min-height: 0;
   display: grid;
+  /* rail (Layers) · toolstrip · stage · inspector */
   grid-template-columns: auto auto minmax(0, 1fr) auto;
   gap: 10px;
 }
+/* Collapsing the rail must also drop its grid track, or the stage falls into the
+   rail's `auto` column and the canvas collapses. */
 .app.editor.rail-collapsed .rail { display: none; }
+.app.editor.rail-collapsed .editor-grid { grid-template-columns: auto minmax(0, 1fr) auto; }
 
 .toolstrip {
   border: 1px solid var(--line);
@@ -267,12 +271,13 @@ button:disabled {
 .rail {
   border: 1px solid var(--line);
   background: var(--bg);
-  width: 300px;
+  width: 230px;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
 }
+.menu-count { color: var(--muted); font-size: 11px; margin-left: 2px; }
 .rail-section { border-bottom: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
 .rail-section:last-child { border-bottom: none; }
 .rail-section.library { flex: 1 1 auto; min-height: 140px; }

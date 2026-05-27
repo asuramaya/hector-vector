@@ -23,6 +23,10 @@
             <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false" title="Run an image pipeline onto the canvas">Import ▾</button>
             <div class="menu-list" role="menu" hidden></div>
           </div>
+          <div class="menu" data-menu="library">
+            <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false" title="Image library, add images, jobs">Library<span id="library-count" class="menu-count"></span> ▾</button>
+            <div class="menu-list" role="menu" hidden></div>
+          </div>
           <button id="open-button" class="ghost-button" type="button" title="Open a vector from outputs">Open</button>
           <button id="save-button" class="ghost-button" type="button" title="Save the canvas as .svg">Save</button>
           <div class="menu" data-menu="doc-export">
@@ -37,48 +41,7 @@
       </header>
 
       <section class="editor-grid">
-        <nav class="toolstrip" role="toolbar" aria-label="Tools">
-          <button class="tool-button active" data-tool="select" type="button" title="Select / Move (V)">▣</button>
-          <button class="tool-button" data-tool="node" type="button" title="Edit points (A)">✥</button>
-          <span class="tool-sep" aria-hidden="true"></span>
-          <button class="tool-button" data-tool="pen" type="button" title="Pen — click to add points (P)">✎</button>
-          <button class="tool-button" data-tool="rect" type="button" title="Rectangle (R)">▭</button>
-          <button class="tool-button" data-tool="ellipse" type="button" title="Ellipse (E)">◯</button>
-          <button class="tool-button" data-tool="line" type="button" title="Line (L)">╱</button>
-        </nav>
-
         <aside class="rail" id="rail">
-          <div class="rail-section" data-section="import">
-            <div class="panel-head section-head"><span class="caret">▾</span><span class="sec-label">Import from image</span></div>
-            <div class="rail-body section-body">
-              <div class="source-row">
-                <span class="label source-label">SOURCE</span>
-                <span id="source-path" class="workspace-path" title="Click to change"></span>
-                <button id="source-edit" class="ghost-button" type="button">Change</button>
-                <button id="source-reset" class="ghost-button" type="button" hidden>Default</button>
-              </div>
-              <select id="process-select" title="Process (shortcut: [ / ])">
-                <option value="upscale">Upscale PNG</option>
-                <option value="cutout">Cutout PNG</option>
-                <option value="chromakey">Greenscreen Cutout</option>
-                <option value="vectorize">SVG Trace</option>
-                <option value="pixelvec">Pixel Art → SVG</option>
-                <option value="pipeline" selected>Production SVG</option>
-              </select>
-              <select id="mode-select" title="Batch processes the whole library; Single processes only the selected image">
-                <option value="batch" selected>Batch</option>
-                <option value="single">Single</option>
-              </select>
-              <label id="force-toggle" class="force-toggle" title="Re-run even on inputs that already have output for this process">
-                <input id="force-input" type="checkbox" /> Force
-              </label>
-              <div class="panel-actions">
-                <button id="settings-button" class="ghost-button" type="button" title="Process parameters (shortcut: ,)">Settings</button>
-                <button id="run-button" type="button" title="Run (shortcut: Enter)">Run → canvas</button>
-              </div>
-            </div>
-          </div>
-
           <div class="rail-section layers" data-section="layers">
             <div class="panel-head section-head">
               <span class="caret">▾</span><span class="sec-label">Layers</span>
@@ -91,27 +54,17 @@
             </div>
             <div id="layers-list" class="layers-list section-body"></div>
           </div>
-
-          <div class="rail-section library" data-section="library">
-            <div class="panel-head section-head">
-              <span class="caret">▾</span><span class="sec-label">Library</span>
-              <div class="panel-actions">
-                <div class="menu" data-menu="library">
-                  <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false" title="Library actions">⋯</button>
-                  <div class="menu-list" role="menu" hidden></div>
-                </div>
-              </div>
-            </div>
-            <div id="queue" class="queue section-body"></div>
-          </div>
-
-          <div class="rail-section">
-            <button id="dropzone" class="drop-button" type="button">
-              Add Images
-              <input id="file-input" type="file" accept="image/*" multiple hidden />
-            </button>
-          </div>
         </aside>
+
+        <nav class="toolstrip" role="toolbar" aria-label="Tools">
+          <button class="tool-button active" data-tool="select" type="button" title="Select / Move (V)">▣</button>
+          <button class="tool-button" data-tool="node" type="button" title="Edit points (A)">✥</button>
+          <span class="tool-sep" aria-hidden="true"></span>
+          <button class="tool-button" data-tool="pen" type="button" title="Pen — click to add points (P)">✎</button>
+          <button class="tool-button" data-tool="rect" type="button" title="Rectangle (R)">▭</button>
+          <button class="tool-button" data-tool="ellipse" type="button" title="Ellipse (E)">◯</button>
+          <button class="tool-button" data-tool="line" type="button" title="Line (L)">╱</button>
+        </nav>
 
         <article class="stage-wrap preview-panel">
           <div class="stage-head panel-head">
@@ -137,6 +90,34 @@
           <div id="inspector-body" class="inspector-body"></div>
         </aside>
       </section>
+
+      <!-- Import/library plumbing — kept in the DOM (hidden) so the job-queue and
+           library code keeps its element bindings; the UI now lives in header menus
+           (Import ▾ / Library ▾) and on-demand modals. -->
+      <div id="workspace-plumbing" hidden>
+        <div class="source-row">
+          <span id="source-path"></span>
+          <button id="source-edit" type="button">Change</button>
+          <button id="source-reset" type="button" hidden>Default</button>
+        </div>
+        <select id="process-select">
+          <option value="upscale">Upscale PNG</option>
+          <option value="cutout">Cutout PNG</option>
+          <option value="chromakey">Greenscreen Cutout</option>
+          <option value="vectorize">SVG Trace</option>
+          <option value="pixelvec">Pixel Art → SVG</option>
+          <option value="pipeline" selected>Production SVG</option>
+        </select>
+        <select id="mode-select">
+          <option value="batch" selected>Batch</option>
+          <option value="single">Single</option>
+        </select>
+        <label><input id="force-input" type="checkbox" /> Force</label>
+        <button id="settings-button" type="button">Settings</button>
+        <button id="run-button" type="button">Run</button>
+        <div id="queue"></div>
+        <button id="dropzone" type="button">Add Images<input id="file-input" type="file" accept="image/*" multiple hidden /></button>
+      </div>
 
       <footer class="status-bar">
         <div id="status-text">Ready.</div>
