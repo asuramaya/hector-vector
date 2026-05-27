@@ -1778,31 +1778,103 @@ const editor = {
     this._renderSelection(); this._renderLayers();
   },
   invertSpace() {
-    const nodes = this.selectedNodes().length ? this.selectedNodes() : this._artworkNodes();
+    const sel = this._fillableSelection();
+    const nodes = sel.length ? sel : this._artworkNodes().filter((n) => shapeToAbsPath(n));
     if (!nodes.length || !this.stage) return;
-    this.push();
     const vb = this.stage.viewBox.baseVal;
     const x0 = vb.x, y0 = vb.y, x1 = vb.x + vb.width, y1 = vb.y + vb.height;
-    // outer ring = artboard; inner rings = the graphic; even-odd punches holes
-    let d = `M${nfmt(x0)} ${nfmt(y0)} H${nfmt(x1)} V${nfmt(y1)} H${nfmt(x0)} Z`;
+    const t = this._fillTester(nodes);
+    let d;
+    try {
+      const inArt = (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
+      const pad = Math.max(x1 - x0, y1 - y0) * 0.02 + 1;
+      const bb = { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad };
+      // negative = inside the artboard but outside the union of shapes (overlaps merge,
+      // unlike the old even-odd compound which XOR'd them — that was the Phase-2 caveat)
+      d = marchingSquares((x, y) => inArt(x, y) && !t.inAny(x, y), bb, 160);
+    } finally { t.dispose(); }
     let color = "#000000";
+    for (const n of nodes) { const f = n.getAttribute("fill"); if (f && f !== "none") { color = f; break; } }
+    this._commitBoolean(nodes, d, "nonzero", null, "Inverted space — negative bounded by the artboard.", color);
+  },
+
+  // ---------- boolean ops (Phase 4) ----------
+  // Shapes convertible to a fillable outline (rect/ellipse/circle/poly/path); lines
+  // and groups have no area and are skipped.
+  _fillableSelection() { return this._artworkNodes().filter((n) => this.selection.has(n.getAttribute("data-hv-id")) && shapeToAbsPath(n)); },
+  _nodeBBoxUser(n) {
+    const bb = n.getBBox(), t = currentTranslate(n);
+    return { x0: bb.x + t.x, y0: bb.y + t.y, x1: bb.x + bb.width + t.x, y1: bb.y + bb.height + t.y };
+  },
+  // A reusable inside-test built from temp absolute-path clones of the shapes,
+  // attached to the stage so SVGGeometryElement.isPointInFill works in stage user space.
+  _fillTester(nodes) {
+    const layer = document.createElementNS(SVG_NS, "g");
+    const tps = [];
     for (const n of nodes) {
-      const f = n.getAttribute("fill");
-      if (f && f !== "none" && color === "#000000") color = f;
-      const sp = shapeToAbsPath(n); if (sp) d += " " + sp;
+      const d = shapeToAbsPath(n); if (!d) continue;
+      const p = document.createElementNS(SVG_NS, "path");
+      p.setAttribute("d", d);
+      p.setAttribute("fill-rule", n.getAttribute("fill-rule") || "nonzero");
+      layer.appendChild(p); tps.push(p);
     }
-    const ov = this._overlayEl();
+    this.stage.insertBefore(layer, this._overlayEl());   // synchronous use only — removed before any paint
+    const pt = this.stage.createSVGPoint();
+    return {
+      count: tps.length,
+      inAny: (x, y) => { pt.x = x; pt.y = y; return tps.some((p) => p.isPointInFill(pt)); },
+      inAll: (x, y) => { pt.x = x; pt.y = y; return tps.length > 0 && tps.every((p) => p.isPointInFill(pt)); },
+      dispose: () => layer.remove(),
+    };
+  },
+  booleanOp(op) {
+    if (!this.stage) return;
+    const nodes = this._fillableSelection();
+    if (nodes.length < 2) { setStatus("Select 2 or more filled shapes for a boolean op.", 2800); return; }
+    let d, msg, src;
+    if (op === "union") { d = this._unionPath(nodes); msg = `United ${nodes.length} shapes.`; src = nodes[nodes.length - 1]; }
+    else if (op === "intersect") { d = this._intersectPath(nodes); msg = `Intersection of ${nodes.length} shapes.`; src = nodes[nodes.length - 1]; }
+    else if (op === "subtract") { d = this._subtractPath(nodes[0], nodes.slice(1)); msg = "Subtracted front shapes from the back one."; src = nodes[0]; }
+    else return;
+    this._commitBoolean(nodes, d, "nonzero", src, msg);
+  },
+  _bboxUnion(nodes) {
+    return nodes.map((n) => this._nodeBBoxUser(n)).reduce((a, b) => ({ x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) }));
+  },
+  _pad(bb, f) { const p = Math.max(bb.x1 - bb.x0, bb.y1 - bb.y0) * f + 1; return { x0: bb.x0 - p, y0: bb.y0 - p, x1: bb.x1 + p, y1: bb.y1 + p }; },
+  _unionPath(nodes) {
+    const t = this._fillTester(nodes);
+    try { return marchingSquares((x, y) => t.inAny(x, y), this._pad(this._bboxUnion(nodes), 0.02), 140); }
+    finally { t.dispose(); }
+  },
+  _intersectPath(nodes) {
+    const t = this._fillTester(nodes);
+    try {
+      const bb = nodes.map((n) => this._nodeBBoxUser(n)).reduce((a, b) => ({ x0: Math.max(a.x0, b.x0), y0: Math.max(a.y0, b.y0), x1: Math.min(a.x1, b.x1), y1: Math.min(a.y1, b.y1) }));
+      if (bb.x1 <= bb.x0 || bb.y1 <= bb.y0) return "";
+      return marchingSquares((x, y) => t.inAll(x, y), this._pad(bb, 0.02), 130);
+    } finally { t.dispose(); }
+  },
+  _subtractPath(base, others) {
+    const tB = this._fillTester([base]), tO = this._fillTester(others);
+    try { return marchingSquares((x, y) => tB.inAny(x, y) && !tO.inAny(x, y), this._pad(this._nodeBBoxUser(base), 0.02), 140); }
+    finally { tB.dispose(); tO.dispose(); }
+  },
+  _commitBoolean(nodes, d, fillRule, src, msg, fillOverride) {
+    if (!d) { setStatus("Result is empty — nothing changed.", 2800); return; }
+    this.push();
+    const anchor = nodes[0];   // keep the result where the bottom-most input was
     const path = document.createElementNS(SVG_NS, "path");
-    const id = "n" + (++this.idSeq);
-    path.setAttribute("data-hv-id", id);
+    const id = "n" + (++this.idSeq); path.setAttribute("data-hv-id", id);
     path.setAttribute("d", d);
-    path.setAttribute("fill", color);
-    path.setAttribute("fill-rule", "evenodd");
+    if (fillRule) path.setAttribute("fill-rule", fillRule);
+    path.setAttribute("fill", fillOverride || (src && src.getAttribute("fill")) || "#000000");
+    if (src) ["stroke", "stroke-width", "vector-effect", "stroke-linejoin", "stroke-linecap", "opacity"].forEach((a) => { const v = src.getAttribute(a); if (v) path.setAttribute(a, v); });
+    this.stage.insertBefore(path, anchor);
     nodes.forEach((n) => n.remove());
-    this.stage.insertBefore(path, ov);
     this.selection = new Set([id]); this.artboardSelected = false;
-    this._renderSelection(); this._renderInspector();
-    setStatus("Inverted space — negative bounded by the artboard.", 2500);
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+    setStatus(msg, 2000);
   },
 
   // ---------- layers ----------
@@ -1977,6 +2049,14 @@ const editor = {
     z.appendChild(ghostBtn("Bwd", () => this.reorder("backward")));
     z.appendChild(ghostBtn("Back", () => this.reorder("back")));
     wrap.appendChild(z);
+    if (nodes.filter((n) => shapeToAbsPath(n)).length >= 2) {   // boolean ops need 2+ fillable shapes
+      const lbl = document.createElement("div"); lbl.className = "insp-title"; lbl.textContent = "Combine"; wrap.appendChild(lbl);
+      const bool = document.createElement("div"); bool.className = "insp-actions";
+      bool.appendChild(ghostBtn("Unite", () => this.booleanOp("union")));
+      bool.appendChild(ghostBtn("Subtract", () => this.booleanOp("subtract")));
+      bool.appendChild(ghostBtn("Intersect", () => this.booleanOp("intersect")));
+      wrap.appendChild(bool);
+    }
     return wrap;
   },
   _artboardPanel() {
@@ -2172,6 +2252,101 @@ function penPathD(pts, closed, preview) {
   for (let i = 1; i < all.length; i++) d += seg(all[i - 1], all[i]);
   if (closed && all.length >= 2) { d += seg(all[all.length - 1], all[0]) + " Z"; }
   return d;
+}
+// ---------- boolean ops: contour extraction from a region predicate ----------
+// Booleans (union / subtract / intersect) and invert-space all reduce to "trace
+// the boundary of the region where predicate(x,y) is true". Marching squares over
+// a grid gives the topology; bisecting each crossing edge (predicate is an exact
+// inside-test) snaps the boundary to ~7 bits, so coarse grids still trace smoothly.
+// Robust for any overlap, winding, or shape count — and always yields valid loops.
+function marchingSquares(predicate, bbox, res) {
+  const W = bbox.x1 - bbox.x0, H = bbox.y1 - bbox.y0;
+  if (W <= 0 || H <= 0) return "";
+  const big = Math.max(W, H);
+  const nx = Math.max(2, Math.round(res * W / big));
+  const ny = Math.max(2, Math.round(res * H / big));
+  const dx = W / nx, dy = H / ny;
+  const X = (i) => bbox.x0 + i * dx, Y = (j) => bbox.y0 + j * dy;
+  const grid = [];
+  for (let j = 0; j <= ny; j++) { grid[j] = []; for (let i = 0; i <= nx; i++) grid[j][i] = predicate(X(i), Y(j)); }
+  const bisect = (ax, ay, aIn, bx, by) => {           // boundary between an in/out pair
+    let lo = 0, hi = 1;
+    for (let k = 0; k < 7; k++) { const m = (lo + hi) / 2; if (predicate(ax + (bx - ax) * m, ay + (by - ay) * m) === aIn) lo = m; else hi = m; }
+    const m = (lo + hi) / 2; return { x: ax + (bx - ax) * m, y: ay + (by - ay) * m };
+  };
+  const segs = [], add = (p, q) => segs.push([p, q]);
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const tl = grid[j][i], tr = grid[j][i + 1], br = grid[j + 1][i + 1], bl = grid[j + 1][i];
+    const code = (tl ? 8 : 0) | (tr ? 4 : 0) | (br ? 2 : 0) | (bl ? 1 : 0);
+    if (code === 0 || code === 15) continue;
+    const top = () => bisect(X(i), Y(j), tl, X(i + 1), Y(j));
+    const right = () => bisect(X(i + 1), Y(j), tr, X(i + 1), Y(j + 1));
+    const bottom = () => bisect(X(i + 1), Y(j + 1), br, X(i), Y(j + 1));
+    const left = () => bisect(X(i), Y(j + 1), bl, X(i), Y(j));
+    const center = () => predicate(X(i) + dx / 2, Y(j) + dy / 2);
+    switch (code) {
+      case 1: add(left(), bottom()); break;
+      case 2: add(bottom(), right()); break;
+      case 3: add(left(), right()); break;
+      case 4: add(right(), top()); break;
+      case 5: if (center()) { add(left(), top()); add(right(), bottom()); } else { add(left(), bottom()); add(right(), top()); } break;
+      case 6: add(bottom(), top()); break;
+      case 7: add(left(), top()); break;
+      case 8: add(top(), left()); break;
+      case 9: add(top(), bottom()); break;
+      case 10: if (center()) { add(top(), right()); add(bottom(), left()); } else { add(top(), left()); add(bottom(), right()); } break;
+      case 11: add(top(), right()); break;
+      case 12: add(right(), left()); break;
+      case 13: add(right(), bottom()); break;
+      case 14: add(bottom(), left()); break;
+    }
+  }
+  return segs.length ? chainSegments(segs, Math.max(0.05, Math.max(dx, dy) * 0.02)) : "";
+}
+// Stitch marching-squares line segments into closed loops by walking shared
+// endpoints (each crossing point is computed identically from both cells, so
+// keys match exactly), then drop collinear vertices so straight runs collapse.
+function chainSegments(segs, eps) {
+  const K = (p) => Math.round(p.x * 100) / 100 + "," + Math.round(p.y * 100) / 100;
+  const pts = new Map(), links = new Map();
+  for (const [a, b] of segs) {
+    const ka = K(a), kb = K(b); if (ka === kb) continue;
+    pts.set(ka, a); pts.set(kb, b);
+    if (!links.has(ka)) links.set(ka, []); if (!links.has(kb)) links.set(kb, []);
+    links.get(ka).push(kb); links.get(kb).push(ka);
+  }
+  const seen = new Set(), eKey = (a, b) => (a < b ? a + "|" + b : b + "|" + a);
+  let d = "";
+  for (const startK of links.keys()) for (const firstNb of links.get(startK)) {
+    if (seen.has(eKey(startK, firstNb))) continue;
+    const loop = [startK]; let prev = startK, cur = firstNb, guard = 0;
+    seen.add(eKey(startK, firstNb));
+    while (guard++ < segs.length * 2 + 10) {
+      loop.push(cur);
+      if (cur === startK) break;
+      const nbs = links.get(cur) || []; let next = null;
+      for (const nb of nbs) if (nb !== prev && !seen.has(eKey(cur, nb))) { next = nb; break; }
+      if (next === null) for (const nb of nbs) if (!seen.has(eKey(cur, nb))) { next = nb; break; }
+      if (next === null) break;
+      seen.add(eKey(cur, next)); prev = cur; cur = next;
+    }
+    if (loop.length >= 4 && loop[loop.length - 1] === startK) {
+      const coords = simplifyLoop(loop.slice(0, -1).map((k) => pts.get(k)), eps);
+      if (coords.length >= 3) d += " M" + coords.map((p) => nfmt(p.x) + " " + nfmt(p.y)).join(" L") + " Z";
+    }
+  }
+  return d.trim();
+}
+function simplifyLoop(coords, eps) {
+  const n = coords.length; if (n < 4) return coords;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const a = coords[(i - 1 + n) % n], b = coords[i], c = coords[(i + 1) % n];
+    const cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    const base = Math.hypot(c.x - a.x, c.y - a.y) || 1;
+    if (Math.abs(cross) / base > eps) out.push(b);
+  }
+  return out.length >= 3 ? out : coords;
 }
 function ghostBtn(label, onClick) {
   const b = document.createElement("button"); b.type = "button"; b.className = "ghost-button"; b.textContent = label;

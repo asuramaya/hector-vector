@@ -96,6 +96,24 @@ def pen_click(page, fx, fy, drag=None):
     page.mouse.up()
     page.wait_for_timeout(30)
 
+BOOL_DOC = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <rect data-hv-id="ra" x="20" y="20" width="80" height="80" fill="#3366cc"/>
+  <rect data-hv-id="rb" x="60" y="60" width="80" height="80" fill="#cc3333"/>
+</svg>"""   # A covers 20..100, B covers 60..140 → overlap 60..100 (40x40)
+
+def mount_bool(page, select_both=True):
+    page.evaluate("svg => { selectedOutput=null; manualOutputName=null; mountStageFromText(svg,'bool.svg'); }", BOOL_DOC)
+    page.wait_for_function("editor.stage && editor.nodeById('rb')", timeout=8000)
+    if select_both:
+        page.evaluate("editor.selection = new Set(['ra','rb']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector();")
+    page.wait_for_timeout(60)
+
+def result_inside(page, x, y):
+    return page.evaluate(
+        "([x,y]) => { const id=[...editor.selection][0]; const n=editor.nodeById(id); if(!n) return null;"
+        "const pt=editor.stage.createSVGPoint(); pt.x=x; pt.y=y; return n.isPointInFill(pt); }", [x, y])
+
 def sel_node(page):
     return page.evaluate(
         "() => { const id=[...editor.selection][0]; const n=id&&editor.nodeById(id);"
@@ -306,7 +324,8 @@ def main():
         ids = page.evaluate("editor._artworkNodes().map(n=>n.getAttribute('data-hv-id'))")
         check("bring to front reorders DOM", ids[-1] == "r2", f"order={ids}")
 
-        # invert-space: selecting nothing inverts the whole graphic into one even-odd path
+        # invert-space: selecting nothing inverts the whole graphic into one path
+        # (artboard outline + a hole per shape → ≥4 subpaths)
         mount_ctl(page)
         page.evaluate("editor.selection=new Set(); editor.artboardSelected=false; editor.invertSpace();")
         page.wait_for_timeout(60)
@@ -316,8 +335,8 @@ def main():
             return { n: arts.length, tag: p && p.tagName.toLowerCase(), rule: p && p.getAttribute('fill-rule'),
                      subpaths: p ? (p.getAttribute('d').match(/M/g)||[]).length : 0 };
         }""")
-        check("invert-space makes one even-odd compound path", inv["n"] == 1 and inv["tag"] == "path"
-              and inv["rule"] == "evenodd" and inv["subpaths"] >= 4, str(inv))
+        check("invert-space makes one compound path with holes", inv["n"] == 1 and inv["tag"] == "path"
+              and inv["rule"] == "nonzero" and inv["subpaths"] >= 4, str(inv))
         page.keyboard.press("Control+z"); page.wait_for_timeout(50)
         check("invert-space is undoable", page.evaluate("editor._artworkNodes().length") == 3)
 
@@ -530,6 +549,51 @@ def main():
         check("pen marks render then serialize-strip", has_marks and "hv-pen" not in clean)
         page.keyboard.press("Escape"); page.wait_for_timeout(30)
         check("Escape cancels the pen path", not page.evaluate("!!editor._pen"))
+
+        # ---- Phase 4: boolean ops (point-membership on the result path) ----
+        # A-only=(30,30), B-only=(130,130), overlap=(80,80), outside=(10,10)
+        mount_bool(page)
+        page.evaluate("editor.booleanOp('union')"); page.wait_for_timeout(120)
+        u = sel_node(page)
+        check("union → single path replacing two rects", u and u["tag"] == "path" and n_nodes(page) == 1)
+        check("union covers both rects + overlap, not outside",
+              result_inside(page, 30, 30) and result_inside(page, 130, 130)
+              and result_inside(page, 80, 80) and not result_inside(page, 10, 10))
+        page.evaluate("editor.undo()"); page.wait_for_timeout(60)
+        check("union is undoable (two rects return)", n_nodes(page) == 2)
+
+        mount_bool(page)
+        page.evaluate("editor.booleanOp('subtract')"); page.wait_for_timeout(120)
+        check("subtract keeps back-only, drops overlap + front",
+              result_inside(page, 30, 30) and not result_inside(page, 80, 80)
+              and not result_inside(page, 130, 130))
+
+        mount_bool(page)
+        page.evaluate("editor.booleanOp('intersect')"); page.wait_for_timeout(120)
+        check("intersect keeps only the overlap",
+              result_inside(page, 80, 80) and not result_inside(page, 30, 30)
+              and not result_inside(page, 130, 130) and n_nodes(page) == 1)
+
+        # Non-overlapping shapes → empty intersection leaves the inputs untouched
+        page.evaluate("""() => {
+            const svg='<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 200 200\\"><rect data-hv-id=\\"ra\\" x=\\"10\\" y=\\"10\\" width=\\"40\\" height=\\"40\\" fill=\\"#36c\\"/><rect data-hv-id=\\"rb\\" x=\\"140\\" y=\\"140\\" width=\\"40\\" height=\\"40\\" fill=\\"#c33\\"/></svg>';
+            mountStageFromText(svg,'sep.svg'); editor.selection=new Set(['ra','rb']); }""")
+        page.wait_for_timeout(60)
+        page.evaluate("editor.booleanOp('intersect')"); page.wait_for_timeout(80)
+        check("empty intersection changes nothing", n_nodes(page) == 2)
+
+        # Boolean needs 2+ fillable shapes
+        mount_bool(page, select_both=False)
+        page.evaluate("editor.selection = new Set(['ra']); editor.booleanOp('union')"); page.wait_for_timeout(40)
+        check("single selection: boolean is a no-op", n_nodes(page) == 2)
+
+        # invert-space overlap fix: overlap of two shapes must be a HOLE, not XOR-filled
+        mount_bool(page)
+        page.evaluate("editor.invertSpace()"); page.wait_for_timeout(150)
+        check("invert-space fills the empty artboard area", result_inside(page, 10, 10))
+        check("invert-space leaves shape interiors empty (overlap not XOR-filled)",
+              not result_inside(page, 30, 30) and not result_inside(page, 80, 80)
+              and not result_inside(page, 130, 130))
 
         # serialize cleanliness
         mount_ctl(page)
