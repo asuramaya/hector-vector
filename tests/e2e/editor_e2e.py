@@ -647,6 +647,32 @@ def main():
         page.evaluate("editor.undo()"); page.wait_for_timeout(60)
         check("layers cleanup is undoable", page.evaluate("editor._artworkNodes().length") == 4)
 
+        # ---- Phase 4: contextual transforms (rotate / flip) ----
+        page.evaluate("""svg => { selectedOutput=null; manualOutputName=null; mountStageFromText(svg,'xf.svg'); }""",
+                      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect data-hv-id="rr" x="50" y="50" width="40" height="20" fill="#36c"/></svg>')
+        page.wait_for_function("editor.stage && editor.nodeById('rr')", timeout=8000)
+        page.evaluate("editor.selection=new Set(['rr']); editor.artboardSelected=false; editor.transform('rotateCW');")
+        dims = page.evaluate("() => { const n=editor.nodeById('rr'); return {w:+n.getAttribute('width'), h:+n.getAttribute('height')}; }")
+        check("object rotate 90° swaps width/height", abs(dims["w"] - 20) < 0.6 and abs(dims["h"] - 40) < 0.6, str(dims))
+
+        # whole-artboard flip H mirrors content position; twice = identity
+        mount_ctl(page)
+        x0 = page.evaluate("+editor.nodeById('r1').getAttribute('x')")
+        page.evaluate("editor.selection=new Set(); editor.artboardSelected=true; editor.transform('flipH');")
+        x1 = page.evaluate("+editor.nodeById('r1').getAttribute('x')")
+        page.evaluate("editor.transform('flipH');")
+        x2 = page.evaluate("+editor.nodeById('r1').getAttribute('x')")
+        check("artboard flip H mirrors then restores", abs(x1 - 140) < 1 and abs(x2 - x0) < 1, f"x0={x0} x1={x1} x2={x2}")
+
+        # whole-artboard rotate 90° swaps the artboard dimensions, undoably
+        page.evaluate("""svg => { selectedOutput=null; manualOutputName=null; mountStageFromText(svg,'wide.svg'); }""",
+                      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 200"><rect data-hv-id="ra" x="10" y="10" width="50" height="30" fill="#36c"/></svg>')
+        page.wait_for_function("editor.stage && editor.nodeById('ra')", timeout=8000)
+        page.evaluate("editor.selection=new Set(); editor.artboardSelected=true; editor.transform('rotateCW');")
+        check("artboard rotate 90° swaps dimensions", page.evaluate("editor.stage.getAttribute('viewBox').trim()") == "0 0 200 300")
+        page.evaluate("editor.undo()"); page.wait_for_timeout(60)
+        check("transform is undoable", page.evaluate("editor.stage.getAttribute('viewBox').trim()") == "0 0 300 200")
+
         # serialize cleanliness
         mount_ctl(page)
         s = page.evaluate("editor.serialize()")
