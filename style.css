@@ -312,6 +312,29 @@ button:disabled {
 /* the workspace name duplicated the brand — the source path lives in the rail */
 .brand-sub, .brand-path { display: none; }
 
+/* layers panel */
+.rail-section.layers { flex: 1 1 auto; min-height: 120px; }
+.rail-section.library { flex: 0 0 auto; }
+.rail-section.library .queue { max-height: 200px; }
+.layers-list { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.layer-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 8px; border-bottom: 1px solid var(--line);
+  cursor: pointer; font-size: 13px; background: var(--bg);
+}
+.layer-row:hover { background: #f2f2f2; }
+.layer-row.active { background: #000; color: #fff; }
+.layer-row.dragging { opacity: 0.4; }
+.layer-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layer-btn {
+  flex: 0 0 auto; width: 20px; height: 20px; padding: 0;
+  border: 1px solid transparent; background: transparent; color: inherit;
+  font: inherit; line-height: 1; cursor: pointer; text-align: center;
+}
+.layer-btn:hover { border-color: currentColor; }
+.layer-btn.on { font-weight: 700; }
+.layer-rename { flex: 1 1 auto; min-width: 0; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: inherit; padding: 2px 4px; }
+
 /* collapsible rail sections (accordion) */
 .section-head { cursor: pointer; user-select: none; gap: 8px; }
 .section-head .caret { flex: 0 0 auto; font-size: 10px; color: var(--muted); transition: transform 0.12s; }

@@ -298,6 +298,49 @@ def main():
         check("library popup menu opens", menu_items >= 4 and not_collapsed, f"items={menu_items}")
         page.keyboard.press("Escape")
 
+        # ---- G. Phase 3: layers panel ----
+        mount_ctl(page)
+        page.wait_for_timeout(60)
+        rows = page.evaluate("[...document.querySelectorAll('#layers-list .layer-row')].map(r=>r.dataset.id)")
+        # list is reverse DOM order: top row = frontmost (last artwork child)
+        check("layers list reflects nodes (reverse order)", rows == ["r3", "r2", "r1"], f"rows={rows}")
+
+        # click a layer row selects that node on the canvas
+        page.click("#layers-list .layer-row[data-id='r2']"); page.wait_for_timeout(50)
+        check("clicking a layer row selects it", page.evaluate("[...editor.selection]") == ["r2"])
+
+        # visibility toggle hides the node
+        page.evaluate("editor.setVisibility('r1', false)"); page.wait_for_timeout(40)
+        check("layer visibility hides node", page.evaluate("editor.nodeById('r1').getAttribute('display')") == "none")
+        page.evaluate("editor.setVisibility('r1', true)")
+
+        # locking prevents canvas selection
+        page.evaluate("editor.toggleLock('r3')"); page.wait_for_timeout(40)
+        click_node(page, "r3"); page.wait_for_timeout(50)
+        check("locked node is not selectable on canvas", page.evaluate("!editor.selection.has('r3')"))
+        page.evaluate("editor.toggleLock('r3')")
+
+        # drag-reorder (logic): src lands just in front of target
+        mount_ctl(page)
+        page.evaluate("editor.reorderTo('r1','r3')"); page.wait_for_timeout(40)
+        order = page.evaluate("editor._artworkNodes().map(n=>n.getAttribute('data-hv-id'))")
+        check("reorder places node in front of target", order == ["r2", "r3", "r1"], f"order={order}")
+
+        # rows are draggable
+        check("layer rows are draggable", page.evaluate("document.querySelector('#layers-list .layer-row').draggable") is True)
+
+        # group / ungroup
+        mount_ctl(page)
+        page.evaluate("editor.selection=new Set(['r1','r2']); editor.artboardSelected=false; editor.group();")
+        page.wait_for_timeout(50)
+        g = page.evaluate("""() => { const a = editor._artworkNodes(); const sel=[...editor.selection];
+            return { count: a.length, selTag: sel.length===1 ? editor.nodeById(sel[0]).tagName.toLowerCase() : null }; }""")
+        check("group wraps selection into one <g>", g["count"] == 2 and g["selTag"] == "g", str(g))
+        page.evaluate("editor.ungroup()"); page.wait_for_timeout(50)
+        check("ungroup restores top-level nodes", page.evaluate("editor._artworkNodes().length") == 3)
+        page.keyboard.press("Control+z"); page.wait_for_timeout(40)
+        check("ungroup is undoable", page.evaluate("editor._artworkNodes().length") == 2)
+
         # serialize cleanliness
         mount_ctl(page)
         s = page.evaluate("editor.serialize()")

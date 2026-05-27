@@ -1439,7 +1439,8 @@ const editor = {
   selectedNodes() { return [...this.selection].map((id) => this.nodeById(id)).filter(Boolean); },
   _onPointerDown(e) {
     if (this.tool !== "select") return;
-    const hit = e.target.closest && e.target.closest("[data-hv-id]");
+    let hit = e.target.closest && e.target.closest("[data-hv-id]");
+    if (hit && hit.getAttribute("data-hv-locked") === "1") hit = null;   // locked → not selectable
     if (hit && this.stage.contains(hit)) {
       e.stopPropagation();
       const id = hit.getAttribute("data-hv-id");
@@ -1602,7 +1603,7 @@ const editor = {
     else if (mode === "back") { const first = this._artworkNodes()[0]; for (const n of nodes.slice().reverse()) this.stage.insertBefore(n, first); }
     else if (mode === "forward") { for (const n of nodes.slice().reverse()) { const nx = n.nextElementSibling; if (nx && nx !== ov && nx.hasAttribute("data-hv-id")) this.stage.insertBefore(nx, n); } }
     else if (mode === "backward") { for (const n of nodes) { const pv = n.previousElementSibling; if (pv && pv.hasAttribute("data-hv-id")) this.stage.insertBefore(n, pv); } }
-    this._renderSelection();
+    this._renderSelection(); this._renderLayers();
   },
   invertSpace() {
     const nodes = this.selectedNodes().length ? this.selectedNodes() : this._artworkNodes();
@@ -1632,8 +1633,127 @@ const editor = {
     setStatus("Inverted space — negative bounded by the artboard.", 2500);
   },
 
+  // ---------- layers ----------
+  nodeName(n) {
+    const custom = n.getAttribute("data-hv-name"); if (custom) return custom;
+    const map = { path: "Path", rect: "Rectangle", circle: "Circle", ellipse: "Ellipse", polygon: "Polygon", polyline: "Polyline", line: "Line", g: "Group", image: "Image", text: "Text" };
+    return map[n.tagName.toLowerCase()] || n.tagName.toLowerCase();
+  },
+  setVisibility(id, visible) {
+    const n = this.nodeById(id); if (!n) return;
+    this.push();
+    if (visible) n.removeAttribute("display"); else n.setAttribute("display", "none");
+    this._renderLayers(); this._renderSelection();
+  },
+  toggleLock(id) {
+    const n = this.nodeById(id); if (!n) return;
+    this.push();
+    if (n.getAttribute("data-hv-locked") === "1") n.removeAttribute("data-hv-locked");
+    else { n.setAttribute("data-hv-locked", "1"); this.selection.delete(id); }
+    this._renderSelection(); this._renderInspector();
+  },
+  rename(id, name) {
+    const n = this.nodeById(id); if (!n) return;
+    this.push();
+    if (name) n.setAttribute("data-hv-name", name); else n.removeAttribute("data-hv-name");
+    this._renderLayers();
+  },
+  reorderTo(srcId, tgtId) {
+    const src = this.nodeById(srcId), tgt = this.nodeById(tgtId);
+    if (!src || !tgt || src === tgt) return;
+    this.push();
+    this.stage.insertBefore(src, tgt.nextSibling);   // src lands just in front of tgt
+    this._renderSelection(); this._renderLayers();
+  },
+  group() {
+    const ordered = this._artworkNodes().filter((n) => this.selection.has(n.getAttribute("data-hv-id")));
+    if (ordered.length < 2) { setStatus("Select 2 or more objects to group.", 2500); return; }
+    this.push();
+    const ov = this._overlayEl();
+    const g = document.createElementNS(SVG_NS, "g");
+    const id = "n" + (++this.idSeq); g.setAttribute("data-hv-id", id);
+    const anchor = ordered[ordered.length - 1].nextSibling;
+    ordered.forEach((n) => { n.removeAttribute("data-hv-id"); g.appendChild(n); });
+    this.stage.insertBefore(g, anchor && anchor !== ov ? anchor : ov);
+    this.selection = new Set([id]); this.artboardSelected = false;
+    this._renderSelection(); this._renderInspector();
+    setStatus(`Grouped ${ordered.length} objects.`, 1500);
+  },
+  ungroup() {
+    const groups = this.selectedNodes().filter((n) => n.tagName.toLowerCase() === "g");
+    if (!groups.length) { setStatus("Select a group to ungroup.", 2500); return; }
+    this.push();
+    const ids = [];
+    for (const g of groups) {
+      const gt = currentTranslate(g);
+      for (const k of [...g.children]) {
+        if (gt.x || gt.y) { const kt = currentTranslate(k); setTranslate(k, kt.x + gt.x, kt.y + gt.y); }
+        const id = "n" + (++this.idSeq); k.setAttribute("data-hv-id", id); ids.push(id);
+        this.stage.insertBefore(k, g);
+      }
+      g.remove();
+    }
+    this.selection = new Set(ids); this.artboardSelected = false;
+    this._renderSelection(); this._renderInspector();
+    setStatus("Ungrouped.", 1500);
+  },
+  _renderLayers() {
+    const list = document.querySelector("#layers-list");
+    if (!list) return;
+    list.innerHTML = "";
+    if (!this.stage) return;
+    const nodes = this._artworkNodes().slice().reverse();   // top of list = frontmost
+    for (const n of nodes) {
+      const id = n.getAttribute("data-hv-id");
+      const row = document.createElement("div");
+      row.className = "layer-row" + (this.selection.has(id) ? " active" : "");
+      row.draggable = true; row.dataset.id = id;
+
+      const eye = document.createElement("button");
+      eye.type = "button"; eye.className = "layer-btn";
+      const hidden = n.getAttribute("display") === "none";
+      eye.textContent = hidden ? "○" : "●"; eye.title = hidden ? "Show" : "Hide";
+      eye.addEventListener("click", (e) => { e.stopPropagation(); this.setVisibility(id, hidden); });
+
+      const name = document.createElement("span");
+      name.className = "layer-name"; name.textContent = this.nodeName(n);
+      name.title = "Double-click to rename";
+      name.addEventListener("dblclick", (e) => { e.stopPropagation(); this._renameInline(n, name); });
+
+      const lock = document.createElement("button");
+      lock.type = "button"; lock.className = "layer-btn";
+      const locked = n.getAttribute("data-hv-locked") === "1";
+      lock.textContent = locked ? "L" : "·"; lock.title = locked ? "Unlock" : "Lock"; lock.classList.toggle("on", locked);
+      lock.addEventListener("click", (e) => { e.stopPropagation(); this.toggleLock(id); });
+
+      row.append(eye, name, lock);
+      row.addEventListener("click", () => {
+        if (n.getAttribute("data-hv-locked") === "1") return;
+        this.selection = new Set([id]); this.artboardSelected = false;
+        this._renderSelection(); this._renderInspector();
+      });
+      row.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", id); e.dataTransfer.effectAllowed = "move"; row.classList.add("dragging"); });
+      row.addEventListener("dragend", () => row.classList.remove("dragging"));
+      row.addEventListener("dragover", (e) => { e.preventDefault(); });
+      row.addEventListener("drop", (e) => { e.preventDefault(); const src = e.dataTransfer.getData("text/plain"); if (src && src !== id) this.reorderTo(src, id); });
+      list.appendChild(row);
+    }
+  },
+  _renameInline(node, span) {
+    const input = document.createElement("input");
+    input.type = "text"; input.className = "layer-rename"; input.value = this.nodeName(node);
+    const done = (commit) => {
+      if (commit) this.rename(node.getAttribute("data-hv-id"), input.value.trim());
+      else this._renderLayers();
+    };
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); });
+    input.addEventListener("blur", () => done(true));
+    span.replaceWith(input); input.focus(); input.select();
+  },
+
   // ---------- inspector ----------
   _renderInspector() {
+    this._renderLayers();   // keep the layers panel in sync with structure/selection
     const body = document.querySelector("#inspector-body");
     const title = document.querySelector("#inspector-title");
     if (!body) return;
@@ -1901,6 +2021,14 @@ const MENU_ITEMS = {
       { label: "Remove selected", disabled: !(item && item.removable), onClick: removeSelected },
     ];
   },
+  "layers": () => {
+    const sel = editor.selectedNodes();
+    const hasGroup = sel.some((n) => n.tagName.toLowerCase() === "g");
+    return [
+      { label: "Group", disabled: sel.length < 2, onClick: () => editor.group() },
+      { label: "Ungroup", disabled: !hasGroup, onClick: () => editor.ungroup() },
+    ];
+  },
 };
 
 // ---------- editor wiring: tools, header buttons, rail, keyboard ----------
@@ -1940,6 +2068,7 @@ document.addEventListener("keydown", (e) => {
   if (mod && (e.key === "z" || e.key === "Z")) { e.preventDefault(); if (e.shiftKey) editor.redoAction(); else editor.undo(); return; }
   if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); editor.redoAction(); return; }
   if (mod && (e.key === "d" || e.key === "D")) { e.preventDefault(); editor.duplicate(); return; }
+  if (mod && (e.key === "g" || e.key === "G")) { e.preventDefault(); if (e.shiftKey) editor.ungroup(); else editor.group(); return; }
   if (mod && e.key === "]") { e.preventDefault(); editor.reorder(e.shiftKey ? "front" : "forward"); return; }
   if (mod && e.key === "[") { e.preventDefault(); editor.reorder(e.shiftKey ? "back" : "backward"); return; }
   if (mod) return;
