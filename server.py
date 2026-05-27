@@ -1341,6 +1341,49 @@ def render_output(payload: dict) -> dict:
     }
 
 
+def save_svg(payload: dict) -> dict:
+    """Write an edited SVG (from the in-app editor) next to its source as
+    `{stem}.edited.svg`, confined to the outputs folder."""
+    folder = (payload.get("folder") or "").strip()
+    name = (payload.get("name") or "").strip()
+    svg_text = payload.get("svg")
+    if not folder or not name:
+        raise ValueError("Missing 'folder' + 'name'.")
+    # folder/name come from the client — never let them escape the outputs tree
+    if name != Path(name).name or folder != Path(folder).name:
+        raise ValueError("Folder/name must be plain components (no path separators).")
+    if name.lower().endswith((".png", ".jpg", ".jpeg")) or not name.lower().endswith(".svg"):
+        raise ValueError("Source output must be an .svg file.")
+    if not isinstance(svg_text, str) or "<svg" not in svg_text.lower():
+        raise ValueError("Missing or invalid 'svg' markup.")
+    if len(svg_text) > 16_000_000:
+        raise ValueError("SVG is too large to save (>16 MB).")
+    target_dir = (OUTPUTS_DIR / folder).resolve()
+    try:
+        target_dir.relative_to(OUTPUTS_DIR.resolve())
+    except ValueError:
+        raise ValueError("Folder is outside the outputs directory.")
+    if not target_dir.is_dir():
+        raise ValueError(f"Output folder not found: {folder}")
+    stem = name[:-4]
+    if stem.endswith(".edited"):       # re-saving an edit shouldn't stack suffixes
+        stem = stem[: -len(".edited")]
+    out = (target_dir / f"{stem}.edited.svg").resolve()
+    try:
+        out.relative_to(OUTPUTS_DIR.resolve())
+    except ValueError:
+        raise ValueError("Resolved path is outside the outputs directory.")
+    out.write_text(svg_text, encoding="utf-8")
+    invalidate_outputs_cache()
+    _register_output(out)
+    return {
+        "message": f"Saved {out.name}.",
+        "output": str(out),
+        "folder": folder,
+        "name": out.name,
+    }
+
+
 def derive_mask_from_alpha(cutout_path: Path, mask_path: Path, threshold: int = 128) -> None:
     rgba = Image.open(cutout_path).convert("RGBA")
     alpha = rgba.getchannel("A")
@@ -1955,6 +1998,8 @@ class Handler(SimpleHTTPRequestHandler):
                 result = transform_work_item(payload)
             elif parsed.path == "/api/render":
                 result = render_output(payload)
+            elif parsed.path == "/api/save-svg":
+                result = save_svg(payload)
             elif parsed.path == "/api/reveal":
                 result = reveal_path(payload)
             elif parsed.path == "/api/source":

@@ -8,8 +8,6 @@ const modeSelectEl = document.querySelector("#mode-select");
 const settingsButtonEl = document.querySelector("#settings-button");
 const inputPreviewEl = document.querySelector("#input-preview");
 const outputPreviewEl = document.querySelector("#output-preview");
-const openInputEl = document.querySelector("#open-input");
-const openOutputEl = document.querySelector("#open-output");
 const statusTextEl = document.querySelector("#status-text");
 const removeSelectedEl = document.querySelector("#remove-selected");
 const clearJobsEl = document.querySelector("#clear-jobs");
@@ -17,7 +15,7 @@ const jobsButtonEl = document.querySelector("#jobs-button");
 const jobsCountEl = document.querySelector("#jobs-count");
 const forceInputEl = document.querySelector("#force-input");
 const runButtonEl = document.querySelector("#run-button");
-const libraryHeaderEl = document.querySelector(".library .panel-head > span");
+const libraryHeaderEl = document.querySelector(".library .sec-label");
 const sourcePathEl = document.querySelector("#source-path");
 const sourceEditEl = document.querySelector("#source-edit");
 const sourceResetEl = document.querySelector("#source-reset");
@@ -27,12 +25,6 @@ const cleanDerivativesEl = document.querySelector("#clean-derivatives");
 const infoButtonEl = document.querySelector("#info-button");
 const outputPickerEl = document.querySelector("#output-picker");
 const outputLabelEl = document.querySelector("#output-label");
-const copySvgSourceEl = document.querySelector("#copy-svg-source");
-const exportPngEl = document.querySelector("#export-png");
-const copyOutputFolderEl = document.querySelector("#copy-output-folder");
-const copyInputFolderEl = document.querySelector("#copy-input-folder");
-const revealInputEl = document.querySelector("#reveal-input");
-const revealOutputEl = document.querySelector("#reveal-output");
 const modalRootEl = document.querySelector("#modal-root");
 const modalTitleEl = document.querySelector("#modal-title");
 const modalBodyEl = document.querySelector("#modal-body");
@@ -209,8 +201,8 @@ async function api(url, method = "GET", payload) {
 function stem(name) {
   return name
     .replace(/\.[^.]+$/, "")
-    .replace(/(?:\.cutout|\.chromakey)$/, "")
-    .replace(/@\d+x\d+$/, "");  // group rendered "name@512x512.png" under its source
+    .replace(/@\d+x\d+$/, "")                        // group rendered "name@512x512.png"
+    .replace(/(?:\.cutout|\.chromakey|\.edited)$/, "");  // …and edited SVGs under their source
 }
 
 function jobOutputUrl(job, rel) {
@@ -330,6 +322,7 @@ function preferredOutput(name) {
 function variantLabel(name) {
   const render = name.match(/@(\d+)x(\d+)\.png$/i);
   if (render) return `PNG ${render[1]}×${render[2]}`;
+  if (name.includes(".edited.")) return "Edited";
   if (name.includes(".cutout.")) return "Cutout";
   if (name.includes(".chromakey.")) return "Chromakey";
   if (name.includes(".preview.")) return "Preview";
@@ -338,7 +331,7 @@ function variantLabel(name) {
   return "Upscale";
 }
 
-const VARIANT_ORDER = ["Upscale", "Preview", "Cutout", "Chromakey", "Mask", "SVG"];
+const VARIANT_ORDER = ["Upscale", "Preview", "Cutout", "Chromakey", "Mask", "SVG", "Edited"];
 
 function renderOutputPicker() {
   if (!outputPickerEl) return;
@@ -490,18 +483,8 @@ function clearViewport(vp, text) {
 }
 
 function updateActionState() {
-  const item = selectedItem();
-  if (!item) {
-    removeSelectedEl.disabled = true;
-    removeSelectedEl.textContent = "Remove";
-    removeSelectedEl.title = "Select an image to remove";
-    return;
-  }
-  removeSelectedEl.disabled = !item.removable;
-  removeSelectedEl.textContent = "Remove";
-  removeSelectedEl.title = item.removable
-    ? `Remove ${item.name}`
-    : "Workspace files can't be removed from here";
+  // The Remove action now lives in the Library panel menu; its disabled state
+  // is computed when that menu opens (see MENU_ITEMS["library"]).
 }
 
 function updateLibraryHeader() {
@@ -587,6 +570,7 @@ function renderQueueGroup(label, items, groupKey) {
     button.addEventListener("click", () => {
       if (selectedName !== item.name) manualOutputName = null;
       selectedName = item.name;
+      editor.pinned = false;
       selectedOutput = preferredOutput(selectedName);
       renderQueue();
       renderPreviews();
@@ -607,41 +591,29 @@ async function renderPreviews() {
         clearViewport(viewports.input, error.message);
       }
     }
-    if (viewports.input.url) {
-      openInputEl.href = input.url;
-      openInputEl.style.visibility = "visible";
-    } else {
-      openInputEl.style.visibility = "hidden";
-    }
   } else if (viewports.input.url !== null) {
     clearViewport(viewports.input, "No image selected.");
-    openInputEl.style.visibility = "hidden";
   }
 
-  if (selectedOutput) {
-    if (viewports.output.url !== selectedOutput.url) {
-      try {
-        await mountViewport(viewports.output, selectedOutput.kind, selectedOutput.url, selectedOutput.name, selectedOutput.path);
-      } catch (error) {
-        clearViewport(viewports.output, error.message);
+  // editor.pinned = showing a blank/opened doc that isn't tied to the library;
+  // don't let a library-driven render clobber it.
+  if (!editor.pinned) {
+    if (selectedOutput) {
+      if (viewports.output.url !== selectedOutput.url) {
+        try {
+          await mountViewport(viewports.output, selectedOutput.kind, selectedOutput.url, selectedOutput.name, selectedOutput.path);
+        } catch (error) {
+          clearViewport(viewports.output, error.message);
+        }
       }
+    } else if (viewports.output.url !== null) {
+      clearViewport(viewports.output, "Import or open a vector to start.");
     }
-    if (viewports.output.url) {
-      openOutputEl.href = selectedOutput.url;
-      openOutputEl.style.visibility = "visible";
-    } else {
-      openOutputEl.style.visibility = "hidden";
+    if (outputLabelEl) {
+      outputLabelEl.textContent = selectedOutput ? `Canvas — ${variantLabel(selectedOutput.name)}` : "Canvas";
     }
-  } else if (viewports.output.url !== null) {
-    clearViewport(viewports.output, "Run a process to render output.");
-    openOutputEl.style.visibility = "hidden";
+    editor.sync();
   }
-  if (outputLabelEl) {
-    outputLabelEl.textContent = selectedOutput ? `Output — ${variantLabel(selectedOutput.name)}` : "Output";
-  }
-  const outputIsSvg = !!(viewports.output.kind === "svg" && viewports.output.url);
-  if (copySvgSourceEl) copySvgSourceEl.hidden = !outputIsSvg;
-  if (exportPngEl) exportPngEl.hidden = !(outputIsSvg && selectedOutput);
   renderOutputPicker();
 }
 
@@ -1012,6 +984,7 @@ function openBrowseModal() {
     renderGalleryGrid(visible, (picked) => {
       selectedName = picked.name;
       manualOutputName = null;
+      editor.pinned = false;
       closeModal();
       renderQueue();
       renderPreviews().catch((error) => setStatus(error.message, 2500));
@@ -1021,9 +994,7 @@ function openBrowseModal() {
   applyFilter();
 }
 
-browseButtonEl.addEventListener("click", openBrowseModal);
-
-cleanDerivativesEl.addEventListener("click", async () => {
+async function cleanDerivatives() {
   if (!confirm("Delete all .cutout/.mask/.preview/.chromakey files from the current source folder?")) return;
   try {
     const data = await api("/api/work-items/clean-derivatives", "POST", {});
@@ -1032,7 +1003,7 @@ cleanDerivativesEl.addEventListener("click", async () => {
   } catch (error) {
     setStatus(error.message, 3000);
   }
-});
+}
 
 sourceEditEl.addEventListener("click", beginSourceEdit);
 sourcePathEl.addEventListener("click", beginSourceEdit);
@@ -1047,36 +1018,31 @@ sourceResetEl.addEventListener("click", async () => {
   }
 });
 
-document.querySelector("#copy-input-path").addEventListener("click", async () => {
+// --- File/locate actions (invoked from the panel-head menus) ---
+
+function inputAbs() {
   const item = selectedItem();
-  const abs = item ? absInputPath(item) : viewports.input.path;
-  if (!abs) return;
-  await copyToClipboard(abs);
-});
-
-document.querySelector("#copy-output-path").addEventListener("click", async () => {
-  const abs = selectedOutput ? absOutputPath(selectedOutput) : viewports.output.path;
-  if (!abs) return;
-  await copyToClipboard(abs);
-});
-
-if (copyInputFolderEl) {
-  copyInputFolderEl.addEventListener("click", async () => {
-    const item = selectedItem();
-    const abs = item ? absInputPath(item) : viewports.input.path;
-    const dir = parentDir(abs);
-    if (!dir) return;
-    await copyToClipboard(dir);
-  });
+  return item ? absInputPath(item) : viewports.input.path;
+}
+function outputAbs() {
+  return selectedOutput ? absOutputPath(selectedOutput) : viewports.output.path;
 }
 
-if (copyOutputFolderEl) {
-  copyOutputFolderEl.addEventListener("click", async () => {
-    const abs = selectedOutput ? absOutputPath(selectedOutput) : viewports.output.path;
-    const dir = parentDir(abs);
-    if (!dir) return;
-    await copyToClipboard(dir);
-  });
+async function copyInputPath() {
+  const abs = inputAbs();
+  if (abs) await copyToClipboard(abs);
+}
+async function copyOutputPath() {
+  const abs = outputAbs();
+  if (abs) await copyToClipboard(abs);
+}
+async function copyInputFolder() {
+  const dir = parentDir(inputAbs());
+  if (dir) await copyToClipboard(dir);
+}
+async function copyOutputFolder() {
+  const dir = parentDir(outputAbs());
+  if (dir) await copyToClipboard(dir);
 }
 
 async function revealInFileManager(absPath) {
@@ -1088,35 +1054,959 @@ async function revealInFileManager(absPath) {
     setStatus(`Reveal failed: ${e.message}`, 3000);
   }
 }
+function revealInput() { revealInFileManager(inputAbs()); }
+function revealOutput() { revealInFileManager(outputAbs()); }
+function openInput() { if (viewports.input.url) window.open(viewports.input.url, "_blank", "noopener"); }
+function openOutput() { if (viewports.output.url) window.open(viewports.output.url, "_blank", "noopener"); }
 
-if (revealInputEl) {
-  revealInputEl.addEventListener("click", () => {
-    const item = selectedItem();
-    const abs = item ? absInputPath(item) : viewports.input.path;
-    revealInFileManager(abs);
+async function copySvgSource() {
+  const text = editor.serialize() ||
+    (viewports.output.url ? await (await fetch(viewports.output.url)).text() : "");
+  if (!text) return;
+  await copyToClipboard(text, `SVG (${text.length} chars)`);
+}
+
+// =========================================================================
+// SVG editor — invert / stroke / in-viewport point editing of the output SVG.
+// Operates directly on the live inline <svg> mounted in the output viewport
+// (single source of truth). pristine markup is kept only for Reset.
+// =========================================================================
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const MAX_HANDLES = 1500;
+
+function editorSvgEl() {
+  return outputPreviewEl.querySelector("svg.inline-svg");
+}
+
+// --- colour helpers (canvas normalises any CSS colour to #rrggbb / rgba()) ---
+const _colorCtx = document.createElement("canvas").getContext("2d");
+function normalizeColor(c) {
+  if (c == null) return null;
+  c = String(c).trim();
+  if (!c || c === "none" || c === "transparent" || c === "currentColor" || c.startsWith("url(")) return null;
+  _colorCtx.fillStyle = "#000000"; _colorCtx.fillStyle = c; const a = _colorCtx.fillStyle;
+  _colorCtx.fillStyle = "#ffffff"; _colorCtx.fillStyle = c; const b = _colorCtx.fillStyle;
+  return a === b ? a : null;   // invalid colours don't change the seed → reject
+}
+function invertColor(c) {
+  const norm = normalizeColor(c);
+  if (!norm) return null;
+  if (norm[0] === "#") {
+    const v = parseInt(norm.slice(1), 16);
+    const r = 255 - ((v >> 16) & 255), g = 255 - ((v >> 8) & 255), b = 255 - (v & 255);
+    return "#" + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
+  }
+  const m = norm.match(/rgba?\(([^)]+)\)/i);
+  if (m) {
+    const p = m[1].split(",").map((s) => s.trim());
+    const r = 255 - (+p[0] || 0), g = 255 - (+p[1] || 0), b = 255 - (+p[2] || 0);
+    return p.length > 3 ? `rgba(${r}, ${g}, ${b}, ${p[3]})` : `rgb(${r}, ${g}, ${b})`;
+  }
+  return null;
+}
+
+const COLOR_ATTRS = ["fill", "stroke", "stop-color", "flood-color", "lighting-color"];
+const STYLE_COLOR_PROPS = ["fill", "stroke", "stopColor", "floodColor", "lightingColor"];
+function applyInvert(svg) {                       // involutive: calling twice restores
+  const els = [svg, ...svg.querySelectorAll("*")];
+  for (const el of els) {
+    if (el.closest && el.closest(".hv-handles")) continue;
+    for (const attr of COLOR_ATTRS) {
+      if (el.hasAttribute && el.hasAttribute(attr)) {
+        const inv = invertColor(el.getAttribute(attr));
+        if (inv) el.setAttribute(attr, inv);
+      }
+    }
+    if (el.style) {
+      for (const prop of STYLE_COLOR_PROPS) {
+        const v = el.style[prop];
+        if (v) { const inv = invertColor(v); if (inv) el.style[prop] = inv; }
+      }
+    }
+  }
+}
+
+const STROKE_SHAPES = "path, rect, circle, ellipse, line, polygon, polyline";
+function applyStroke(svg, { color, width }) {
+  svg.querySelectorAll(STROKE_SHAPES).forEach((el) => {
+    if (el.closest(".hv-handles")) return;
+    if (!el.hasAttribute("data-hv-stroke")) {
+      el.setAttribute("data-hv-ostroke", el.getAttribute("stroke") ?? "");
+      el.setAttribute("data-hv-ostroke-w", el.getAttribute("stroke-width") ?? "");
+      el.setAttribute("data-hv-stroke", "1");
+    }
+    el.setAttribute("stroke", color);
+    el.setAttribute("stroke-width", String(width));
+    el.setAttribute("stroke-linejoin", "round");
+    el.setAttribute("stroke-linecap", "round");
+    el.setAttribute("vector-effect", "non-scaling-stroke");
+  });
+}
+function removeStroke(svg) {
+  svg.querySelectorAll("[data-hv-stroke]").forEach((el) => {
+    const os = el.getAttribute("data-hv-ostroke"), ow = el.getAttribute("data-hv-ostroke-w");
+    if (os) el.setAttribute("stroke", os); else el.removeAttribute("stroke");
+    if (ow) el.setAttribute("stroke-width", ow); else el.removeAttribute("stroke-width");
+    ["vector-effect", "stroke-linejoin", "stroke-linecap", "data-hv-stroke", "data-hv-ostroke", "data-hv-ostroke-w"]
+      .forEach((a) => el.removeAttribute(a));
   });
 }
 
-if (revealOutputEl) {
-  revealOutputEl.addEventListener("click", () => {
-    const abs = selectedOutput ? absOutputPath(selectedOutput) : viewports.output.path;
-    revealInFileManager(abs);
-  });
+// --- path d parsing → absolute, normalised to M/L/C/Q/A/Z ---
+function parsePath(d) {
+  const re = /([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?)/g;
+  const toks = []; let mm;
+  while ((mm = re.exec(d))) toks.push(mm[1] || mm[2]);
+  let i = 0; const num = () => parseFloat(toks[i++]);
+  const segs = []; let cx = 0, cy = 0, sx = 0, sy = 0, prevCtrl = null, cmd = "", last = "";
+  while (i < toks.length) {
+    if (/[a-zA-Z]/.test(toks[i])) cmd = toks[i++];
+    const rel = cmd === cmd.toLowerCase(), C = cmd.toUpperCase();
+    if (C === "M") {
+      let x = num(), y = num(); if (rel) { x += cx; y += cy; }
+      cx = x; cy = y; sx = x; sy = y; segs.push({ t: "M", end: { x, y } });
+      last = "M"; prevCtrl = null; cmd = rel ? "l" : "L";
+    } else if (C === "L") {
+      let x = num(), y = num(); if (rel) { x += cx; y += cy; }
+      cx = x; cy = y; segs.push({ t: "L", end: { x, y } }); last = "L"; prevCtrl = null;
+    } else if (C === "H") {
+      let x = num(); if (rel) x += cx; cx = x; segs.push({ t: "L", end: { x, y: cy } }); last = "L"; prevCtrl = null;
+    } else if (C === "V") {
+      let y = num(); if (rel) y += cy; cy = y; segs.push({ t: "L", end: { x: cx, y } }); last = "L"; prevCtrl = null;
+    } else if (C === "C") {
+      let x1 = num(), y1 = num(), x2 = num(), y2 = num(), x = num(), y = num();
+      if (rel) { x1 += cx; y1 += cy; x2 += cx; y2 += cy; x += cx; y += cy; }
+      segs.push({ t: "C", c1: { x: x1, y: y1 }, c2: { x: x2, y: y2 }, end: { x, y } });
+      prevCtrl = { x: x2, y: y2 }; cx = x; cy = y; last = "C";
+    } else if (C === "S") {
+      let x2 = num(), y2 = num(), x = num(), y = num();
+      if (rel) { x2 += cx; y2 += cy; x += cx; y += cy; }
+      const refl = (last === "C" || last === "S") && prevCtrl ? { x: 2 * cx - prevCtrl.x, y: 2 * cy - prevCtrl.y } : { x: cx, y: cy };
+      segs.push({ t: "C", c1: refl, c2: { x: x2, y: y2 }, end: { x, y } });
+      prevCtrl = { x: x2, y: y2 }; cx = x; cy = y; last = "S";
+    } else if (C === "Q") {
+      let x1 = num(), y1 = num(), x = num(), y = num();
+      if (rel) { x1 += cx; y1 += cy; x += cx; y += cy; }
+      segs.push({ t: "Q", c1: { x: x1, y: y1 }, end: { x, y } });
+      prevCtrl = { x: x1, y: y1 }; cx = x; cy = y; last = "Q";
+    } else if (C === "T") {
+      let x = num(), y = num(); if (rel) { x += cx; y += cy; }
+      const refl = (last === "Q" || last === "T") && prevCtrl ? { x: 2 * cx - prevCtrl.x, y: 2 * cy - prevCtrl.y } : { x: cx, y: cy };
+      segs.push({ t: "Q", c1: refl, end: { x, y } });
+      prevCtrl = refl; cx = x; cy = y; last = "T";
+    } else if (C === "A") {
+      let rx = num(), ry = num(), rot = num(), laf = num(), sf = num(), x = num(), y = num();
+      if (rel) { x += cx; y += cy; }
+      segs.push({ t: "A", rx, ry, rot, laf, sf, end: { x, y } });
+      cx = x; cy = y; last = "A"; prevCtrl = null;
+    } else if (C === "Z") {
+      segs.push({ t: "Z" }); cx = sx; cy = sy; last = "Z"; prevCtrl = null;
+    } else { i++; }
+  }
+  return segs;
+}
+function nfmt(v) { return (Math.round(v * 1000) / 1000).toString(); }
+function serializeSegs(segs) {
+  return segs.map((s) => {
+    if (s.t === "M") return `M${nfmt(s.end.x)} ${nfmt(s.end.y)}`;
+    if (s.t === "L") return `L${nfmt(s.end.x)} ${nfmt(s.end.y)}`;
+    if (s.t === "C") return `C${nfmt(s.c1.x)} ${nfmt(s.c1.y)} ${nfmt(s.c2.x)} ${nfmt(s.c2.y)} ${nfmt(s.end.x)} ${nfmt(s.end.y)}`;
+    if (s.t === "Q") return `Q${nfmt(s.c1.x)} ${nfmt(s.c1.y)} ${nfmt(s.end.x)} ${nfmt(s.end.y)}`;
+    if (s.t === "A") return `A${nfmt(s.rx)} ${nfmt(s.ry)} ${nfmt(s.rot)} ${s.laf} ${s.sf} ${nfmt(s.end.x)} ${nfmt(s.end.y)}`;
+    if (s.t === "Z") return "Z";
+    return "";
+  }).join(" ");
 }
 
-if (copySvgSourceEl) {
-  copySvgSourceEl.addEventListener("click", async () => {
-    if (!viewports.output.url || viewports.output.kind !== "svg") return;
-    try {
-      const res = await fetch(viewports.output.url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const text = await res.text();
-      await copyToClipboard(text, `SVG (${text.length} chars)`);
-    } catch (e) {
-      setStatus(`Copy SVG failed: ${e.message}`, 3000);
+// Gather draggable anchors across the SVG's shapes. Each anchor knows its
+// current position and how to write a new position back to the element.
+function collectAnchors(svg) {
+  const out = [];
+  const skip = (el) => el.closest(".hv-handles") || el.closest(".hv-overlay") || el.classList.contains("hv-artboard");
+  svg.querySelectorAll("path").forEach((el) => {
+    if (skip(el)) return;
+    const segs = parsePath(el.getAttribute("d") || "");
+    el._hvSegs = segs;
+    segs.forEach((s) => {
+      if (!s.end) return;
+      out.push({ x: s.end.x, y: s.end.y, set: (nx, ny) => { s.end.x = nx; s.end.y = ny; el.setAttribute("d", serializeSegs(el._hvSegs)); } });
+    });
+  });
+  svg.querySelectorAll("rect").forEach((el) => {
+    if (skip(el)) return;
+    const get = () => ({ x: +el.getAttribute("x") || 0, y: +el.getAttribute("y") || 0, w: +el.getAttribute("width") || 0, h: +el.getAttribute("height") || 0 });
+    const corner = (xMin, yMin) => {
+      const r = get();
+      return {
+        x: xMin ? r.x : r.x + r.w, y: yMin ? r.y : r.y + r.h,
+        set: (nx, ny) => {
+          const c = get();
+          const ox = xMin ? c.x + c.w : c.x, oy = yMin ? c.y + c.h : c.y;
+          const x0 = Math.min(nx, ox), x1 = Math.max(nx, ox), y0 = Math.min(ny, oy), y1 = Math.max(ny, oy);
+          el.setAttribute("x", nfmt(x0)); el.setAttribute("y", nfmt(y0));
+          el.setAttribute("width", nfmt(x1 - x0)); el.setAttribute("height", nfmt(y1 - y0));
+        },
+      };
+    };
+    out.push(corner(true, true), corner(false, true), corner(true, false), corner(false, false));
+  });
+  svg.querySelectorAll("polygon, polyline").forEach((el) => {
+    if (skip(el)) return;
+    const pts = (el.getAttribute("points") || "").trim().split(/[\s,]+/).map(Number).filter((v) => !Number.isNaN(v));
+    el._hvPts = pts;
+    for (let k = 0; k + 1 < pts.length; k += 2) {
+      const idx = k;
+      out.push({ x: pts[idx], y: pts[idx + 1], set: (nx, ny) => { el._hvPts[idx] = nx; el._hvPts[idx + 1] = ny; el.setAttribute("points", el._hvPts.map(nfmt).join(" ")); } });
     }
   });
+  svg.querySelectorAll("circle, ellipse").forEach((el) => {
+    if (skip(el)) return;
+    out.push({ x: +el.getAttribute("cx") || 0, y: +el.getAttribute("cy") || 0, set: (nx, ny) => { el.setAttribute("cx", nfmt(nx)); el.setAttribute("cy", nfmt(ny)); } });
+  });
+  svg.querySelectorAll("line").forEach((el) => {
+    if (skip(el)) return;
+    out.push({ x: +el.getAttribute("x1") || 0, y: +el.getAttribute("y1") || 0, set: (nx, ny) => { el.setAttribute("x1", nfmt(nx)); el.setAttribute("y1", nfmt(ny)); } });
+    out.push({ x: +el.getAttribute("x2") || 0, y: +el.getAttribute("y2") || 0, set: (nx, ny) => { el.setAttribute("x2", nfmt(nx)); el.setAttribute("y2", nfmt(ny)); } });
+  });
+  return out;
 }
+
+// =========================================================================
+// Vector editor — the document IS the live stage <svg> (single source of
+// truth). Undo/redo via markup snapshots; selection by data-hv-id. Replaces
+// the v0 global invert/stroke/point-edit toggles with a selection model.
+// =========================================================================
+
+const SKIP_TAGS = new Set(["defs", "style", "title", "metadata", "desc"]);
+
+function toHexColor(c) {
+  const n = normalizeColor(c);
+  if (!n) return null;
+  if (n[0] === "#") return n;
+  const m = n.match(/rgba?\(([^)]+)\)/i);
+  if (!m) return null;
+  const [r, g, b] = m[1].split(",").map((s) => parseInt(s, 10) || 0);
+  return "#" + [r, g, b].map((v) => (v & 255).toString(16).padStart(2, "0")).join("");
+}
+function currentTranslate(n) {
+  const m = /translate\(\s*([-\d.]+)[ ,]+([-\d.]+)/.exec(n.getAttribute("transform") || "");
+  return m ? { x: parseFloat(m[1]), y: parseFloat(m[2]) } : { x: 0, y: 0 };
+}
+function setTranslate(n, x, y) { n.setAttribute("transform", `translate(${nfmt(x)} ${nfmt(y)})`); }
+
+const editor = {
+  stage: null,
+  selection: new Set(),
+  artboardSelected: false,
+  tool: "select",
+  history: [],
+  redo: [],
+  idSeq: 0,
+  pinned: false,        // true when showing a blank/opened doc (skip library remount)
+  _strokeWidthInput: null,
+
+  get dirty() { return this.history.length > 0; },
+
+  // ---------- lifecycle ----------
+  sync() {
+    const el = editorSvgEl();
+    if (el === this.stage) return;
+    if (!el) { this.stage = null; this._renderInspector(); this._updateButtons(); return; }
+    this.adopt(el);
+  },
+  adopt(svgEl) {
+    this.selection = new Set();
+    this.artboardSelected = false;
+    this.history = [];
+    this.redo = [];
+    this._install(svgEl);
+    this._renderSelection();
+    this._renderInspector();
+    this._updateButtons();
+  },
+  _install(svgEl) {
+    this.stage = svgEl;
+    this._ensureStructure(svgEl);
+    svgEl.classList.add("hv-pickable");
+    if (!svgEl._hvBound) {
+      svgEl.addEventListener("pointerdown", (e) => this._onPointerDown(e));
+      svgEl._hvBound = true;
+    }
+  },
+  _ensureStructure(svg) {
+    let vb = svg.viewBox && svg.viewBox.baseVal;
+    if (!vb || !vb.width) {
+      const w = parseFloat(svg.getAttribute("width")) || 100;
+      const h = parseFloat(svg.getAttribute("height")) || 100;
+      svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+      vb = svg.viewBox.baseVal;
+    }
+    let ab = svg.querySelector("rect.hv-artboard");
+    if (!ab) {
+      ab = document.createElementNS(SVG_NS, "rect");
+      ab.setAttribute("class", "hv-artboard");
+      ab.setAttribute("fill", "none");
+      svg.insertBefore(ab, svg.firstChild);
+    }
+    ab.setAttribute("x", nfmt(vb.x)); ab.setAttribute("y", nfmt(vb.y));
+    ab.setAttribute("width", nfmt(vb.width)); ab.setAttribute("height", nfmt(vb.height));
+    let max = 0;
+    svg.querySelectorAll("[data-hv-id]").forEach((n) => {
+      const m = +(/\d+/.exec(n.getAttribute("data-hv-id")) || [0])[0];
+      if (m > max) max = m;
+    });
+    this.idSeq = max;
+    for (const child of Array.from(svg.children)) {
+      const tag = child.tagName.toLowerCase();
+      if (SKIP_TAGS.has(tag)) continue;
+      if (child.classList.contains("hv-artboard") || child.classList.contains("hv-overlay")) continue;
+      if (!child.hasAttribute("data-hv-id")) child.setAttribute("data-hv-id", "n" + (++this.idSeq));
+    }
+    let ov = svg.querySelector("g.hv-overlay");
+    if (!ov) { ov = document.createElementNS(SVG_NS, "g"); ov.setAttribute("class", "hv-overlay"); }
+    svg.appendChild(ov);   // keep overlay last
+  },
+  _overlayEl() { return this.stage && this.stage.querySelector("g.hv-overlay"); },
+  artboardEl() { return this.stage && this.stage.querySelector("rect.hv-artboard"); },
+
+  // ---------- serialization ----------
+  _historyMarkup() {
+    const c = this.stage.cloneNode(true);
+    c.querySelectorAll("g.hv-overlay").forEach((g) => g.remove());
+    c.classList.remove("hv-pickable");
+    return c.outerHTML;
+  },
+  serialize() {
+    if (!this.stage) return "";
+    const c = this.stage.cloneNode(true);
+    c.querySelectorAll("g.hv-overlay").forEach((g) => g.remove());
+    c.classList.remove("hv-pickable");
+    c.querySelectorAll("[data-hv-id]").forEach((n) => n.removeAttribute("data-hv-id"));
+    const ab = c.querySelector("rect.hv-artboard");
+    if (ab) {
+      const f = ab.getAttribute("fill");
+      if (!f || f === "none") ab.remove();      // drop the invisible artboard from saved output
+      else ab.removeAttribute("class");
+    }
+    return c.outerHTML;
+  },
+
+  // ---------- history ----------
+  push() {
+    if (!this.stage) return;
+    this.commitCoalesce();                 // flush any in-progress live edit first
+    this.history.push(this._state());
+    if (this.history.length > 100) this.history.shift();
+    this.redo = [];
+    this._updateButtons();
+  },
+  // A run of continuous live edits (dragging a colour picker, typing a number)
+  // collapses into ONE undo entry: snapshot once on begin, push it on commit.
+  beginCoalesce() { if (!this._coalescing) { this._coalesceState = this._state(); this._coalescing = true; } },
+  commitCoalesce() {
+    if (!this._coalescing) return;
+    this.history.push(this._coalesceState);
+    if (this.history.length > 100) this.history.shift();
+    this.redo = []; this._coalescing = false; this._coalesceState = null;
+    this._updateButtons();
+  },
+  _state() { return { svg: this._historyMarkup(), sel: [...this.selection], ab: this.artboardSelected }; },
+  undo() { this.commitCoalesce(); if (!this.history.length) return; this.redo.push(this._state()); this._restore(this.history.pop()); },
+  redoAction() { this.commitCoalesce(); if (!this.redo.length) return; this.history.push(this._state()); this._restore(this.redo.pop()); },
+  _restore(state) {
+    const host = this.stage.parentElement; if (!host) return;
+    const doc = new DOMParser().parseFromString(state.svg, "image/svg+xml");
+    const fresh = document.importNode(doc.documentElement, true);
+    fresh.classList.add("inline-svg");
+    host.replaceChild(fresh, this.stage);
+    this._install(fresh);
+    this.selection = new Set(state.sel.filter((id) => this.nodeById(id)));
+    this.artboardSelected = !!state.ab;
+    this._renderSelection();
+    this._renderInspector();
+    this._updateButtons();
+    measureFit(viewports.output);
+  },
+  _updateButtons() {
+    const u = document.querySelector("#undo-button"), r = document.querySelector("#redo-button");
+    if (u) u.disabled = !this.history.length;
+    if (r) r.disabled = !this.redo.length;
+  },
+
+  // ---------- selection ----------
+  nodeById(id) { return this.stage && this.stage.querySelector(`[data-hv-id="${CSS.escape(id)}"]`); },
+  selectedNodes() { return [...this.selection].map((id) => this.nodeById(id)).filter(Boolean); },
+  _onPointerDown(e) {
+    if (this.tool !== "select") return;
+    const hit = e.target.closest && e.target.closest("[data-hv-id]");
+    if (hit && this.stage.contains(hit)) {
+      e.stopPropagation();
+      const id = hit.getAttribute("data-hv-id");
+      if (e.shiftKey) { this.selection.has(id) ? this.selection.delete(id) : this.selection.add(id); }
+      else if (!this.selection.has(id)) { this.selection = new Set([id]); }
+      this.artboardSelected = false;
+      this._renderSelection(); this._renderInspector();
+      if (this.selection.size) this._beginMove(e);
+    } else {
+      this.selection = new Set();      // empty space → select the artboard, let the frame pan
+      this.artboardSelected = true;
+      this._renderSelection(); this._renderInspector();
+    }
+  },
+  _beginMove(startEvent) {
+    const nodes = this.selectedNodes(); if (!nodes.length) return;
+    const inv = () => this.stage.getScreenCTM().inverse();
+    const start = new DOMPoint(startEvent.clientX, startEvent.clientY).matrixTransform(inv());
+    const bases = nodes.map((n) => currentTranslate(n));
+    let pushed = false;
+    const move = (ev) => {
+      const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
+      const dx = p.x - start.x, dy = p.y - start.y;
+      if (!pushed && (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01)) { this.push(); pushed = true; }
+      nodes.forEach((n, i) => setTranslate(n, bases[i].x + dx, bases[i].y + dy));
+      this._renderSelection();
+    };
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  },
+  deleteSelection() {
+    const nodes = this.selectedNodes(); if (!nodes.length) return;
+    this.push();
+    nodes.forEach((n) => n.remove());
+    this.selection = new Set();
+    this._renderSelection(); this._renderInspector();
+  },
+  _renderSelection() {
+    const ov = this._overlayEl(); if (!ov) return;
+    ov.innerHTML = "";
+    const targets = this.artboardSelected
+      ? [this.artboardEl()].filter(Boolean)
+      : this.selectedNodes();
+    const ctm = this.stage.getScreenCTM();
+    if (ctm) {
+      const inv = ctm.inverse();
+      for (const n of targets) {
+        let r; try { r = n.getBoundingClientRect(); } catch { continue; }
+        if (!r.width && !r.height) continue;
+        const a = new DOMPoint(r.left, r.top).matrixTransform(inv);
+        const b = new DOMPoint(r.right, r.bottom).matrixTransform(inv);
+        const box = document.createElementNS(SVG_NS, "rect");
+        box.setAttribute("class", "hv-sel-box");
+        box.setAttribute("x", nfmt(Math.min(a.x, b.x))); box.setAttribute("y", nfmt(Math.min(a.y, b.y)));
+        box.setAttribute("width", nfmt(Math.abs(b.x - a.x))); box.setAttribute("height", nfmt(Math.abs(b.y - a.y)));
+        ov.appendChild(box);
+      }
+    }
+    if (this.tool === "node") this.mountNodeHandles();
+  },
+
+  // ---------- tools ----------
+  setTool(t) {
+    if (t !== "select" && t !== "node") return;
+    this.tool = t;
+    document.querySelectorAll(".tool-button").forEach((b) => b.classList.toggle("active", b.dataset.tool === t));
+    if (t === "node") this.mountNodeHandles(); else this.unmountNodeHandles();
+    setStatus(t === "node" ? "Node tool — drag anchors. (V = select)" : "Select tool. (A = nodes)", 1500);
+  },
+  unmountNodeHandles() { const ov = this._overlayEl(); if (ov) ov.querySelectorAll(".hv-handles").forEach((g) => g.remove()); },
+  mountNodeHandles() {
+    this.unmountNodeHandles();
+    const ov = this._overlayEl(); if (!ov || !this.stage) return;
+    const anchors = collectAnchors(this.stage);
+    if (!anchors.length) return;
+    if (anchors.length > MAX_HANDLES) { setStatus(`Too many anchors (${anchors.length}) to edit. Works best on traced paths.`, 4000); return; }
+    const vb = this.stage.viewBox.baseVal;
+    const r = Math.max(0.6, Math.hypot(vb.width, vb.height) / 180);
+    const g = document.createElementNS(SVG_NS, "g");
+    g.setAttribute("class", "hv-handles");
+    for (const a of anchors) {
+      const c = document.createElementNS(SVG_NS, "circle");
+      c.setAttribute("class", "hv-handle");
+      c.setAttribute("cx", a.x); c.setAttribute("cy", a.y); c.setAttribute("r", r);
+      this._bindNodeHandle(c, a);
+      g.appendChild(c);
+    }
+    ov.appendChild(g);
+  },
+  _bindNodeHandle(c, a) {
+    c.addEventListener("pointerdown", (e) => {
+      e.stopPropagation(); e.preventDefault();
+      c.setPointerCapture(e.pointerId); c.classList.add("dragging");
+      let pushed = false;
+      const move = (ev) => {
+        const m = this.stage.getScreenCTM(); if (!m) return;
+        if (!pushed) { this.push(); pushed = true; }
+        const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
+        c.setAttribute("cx", p.x); c.setAttribute("cy", p.y);
+        a.set(p.x, p.y);
+      };
+      const up = () => {
+        try { c.releasePointerCapture(e.pointerId); } catch {}
+        c.classList.remove("dragging");
+        c.removeEventListener("pointermove", move); c.removeEventListener("pointerup", up);
+        this.mountNodeHandles();
+      };
+      c.addEventListener("pointermove", move);
+      c.addEventListener("pointerup", up);
+    });
+  },
+
+  // ---------- property edits — apply* do NOT push; wrap with beginCoalesce/commitCoalesce ----------
+  _eachSel(fn) { this.selectedNodes().forEach(fn); this._renderSelection(); },
+  applyFill(color) { this._eachSel((n) => n.setAttribute("fill", color || "none")); },
+  applyStroke(color, width) {
+    this._eachSel((n) => {
+      if (width > 0) {
+        n.setAttribute("stroke", color); n.setAttribute("stroke-width", nfmt(width));
+        n.setAttribute("vector-effect", "non-scaling-stroke");
+        n.setAttribute("stroke-linejoin", "round"); n.setAttribute("stroke-linecap", "round");
+      } else {
+        ["stroke", "stroke-width", "vector-effect", "stroke-linejoin", "stroke-linecap"].forEach((x) => n.removeAttribute(x));
+      }
+    });
+  },
+  applyOpacity(v) { this._eachSel((n) => { if (v >= 1) n.removeAttribute("opacity"); else n.setAttribute("opacity", nfmt(v)); }); },
+  applyArtboardBg(color) { const ab = this.artboardEl(); if (ab) ab.setAttribute("fill", color || "none"); },
+  applyArtboardSize(w, h) {
+    const ab = this.artboardEl(); if (!ab || !this.stage) return;
+    this.stage.setAttribute("viewBox", `0 0 ${nfmt(w)} ${nfmt(h)}`);
+    this.stage.setAttribute("width", nfmt(w)); this.stage.setAttribute("height", nfmt(h));
+    ab.setAttribute("x", 0); ab.setAttribute("y", 0); ab.setAttribute("width", nfmt(w)); ab.setAttribute("height", nfmt(h));
+    this._renderSelection(); measureFit(viewports.output);
+  },
+
+  // ---------- Phase 2 object ops (each is one undo step) ----------
+  _artworkNodes() { return [...this.stage.children].filter((c) => c.hasAttribute && c.hasAttribute("data-hv-id")); },
+  duplicate() {
+    const nodes = this.selectedNodes(); if (!nodes.length) return;
+    this.push();
+    const ov = this._overlayEl(); const ids = [];
+    for (const n of nodes) {
+      const c = n.cloneNode(true);
+      const id = "n" + (++this.idSeq); c.setAttribute("data-hv-id", id);
+      const t = currentTranslate(c); setTranslate(c, t.x + 12, t.y + 12);
+      this.stage.insertBefore(c, ov);
+      ids.push(id);
+    }
+    this.selection = new Set(ids); this.artboardSelected = false;
+    this._renderSelection(); this._renderInspector();
+    setStatus(`Duplicated ${ids.length} object${ids.length > 1 ? "s" : ""}.`, 1500);
+  },
+  reorder(mode) {
+    const nodes = this.selectedNodes(); if (!nodes.length || !this.stage) return;
+    this.push();
+    const ov = this._overlayEl();
+    if (mode === "front") { for (const n of nodes) this.stage.insertBefore(n, ov); }
+    else if (mode === "back") { const first = this._artworkNodes()[0]; for (const n of nodes.slice().reverse()) this.stage.insertBefore(n, first); }
+    else if (mode === "forward") { for (const n of nodes.slice().reverse()) { const nx = n.nextElementSibling; if (nx && nx !== ov && nx.hasAttribute("data-hv-id")) this.stage.insertBefore(nx, n); } }
+    else if (mode === "backward") { for (const n of nodes) { const pv = n.previousElementSibling; if (pv && pv.hasAttribute("data-hv-id")) this.stage.insertBefore(n, pv); } }
+    this._renderSelection();
+  },
+  invertSpace() {
+    const nodes = this.selectedNodes().length ? this.selectedNodes() : this._artworkNodes();
+    if (!nodes.length || !this.stage) return;
+    this.push();
+    const vb = this.stage.viewBox.baseVal;
+    const x0 = vb.x, y0 = vb.y, x1 = vb.x + vb.width, y1 = vb.y + vb.height;
+    // outer ring = artboard; inner rings = the graphic; even-odd punches holes
+    let d = `M${nfmt(x0)} ${nfmt(y0)} H${nfmt(x1)} V${nfmt(y1)} H${nfmt(x0)} Z`;
+    let color = "#000000";
+    for (const n of nodes) {
+      const f = n.getAttribute("fill");
+      if (f && f !== "none" && color === "#000000") color = f;
+      const sp = shapeToAbsPath(n); if (sp) d += " " + sp;
+    }
+    const ov = this._overlayEl();
+    const path = document.createElementNS(SVG_NS, "path");
+    const id = "n" + (++this.idSeq);
+    path.setAttribute("data-hv-id", id);
+    path.setAttribute("d", d);
+    path.setAttribute("fill", color);
+    path.setAttribute("fill-rule", "evenodd");
+    nodes.forEach((n) => n.remove());
+    this.stage.insertBefore(path, ov);
+    this.selection = new Set([id]); this.artboardSelected = false;
+    this._renderSelection(); this._renderInspector();
+    setStatus("Inverted space — negative bounded by the artboard.", 2500);
+  },
+
+  // ---------- inspector ----------
+  _renderInspector() {
+    const body = document.querySelector("#inspector-body");
+    const title = document.querySelector("#inspector-title");
+    if (!body) return;
+    body.innerHTML = "";
+    if (!this.stage) { if (title) title.textContent = "No canvas"; body.innerHTML = `<div class="insp-empty">Import or open a vector.</div>`; return; }
+    if (this.artboardSelected) { if (title) title.textContent = "Artboard"; body.appendChild(this._artboardPanel()); return; }
+    const nodes = this.selectedNodes();
+    if (!nodes.length) { if (title) title.textContent = "Nothing selected"; body.innerHTML = `<div class="insp-empty">Click a shape to select it, or click empty canvas for the artboard.</div>`; return; }
+    if (title) title.textContent = nodes.length === 1 ? "Object" : `${nodes.length} objects`;
+    body.appendChild(this._objectPanel(nodes));
+  },
+  _objectPanel(nodes) {
+    const first = nodes[0];
+    const wrap = document.createElement("div");
+    const commit = () => this.commitCoalesce();
+    const fillHex = toHexColor(first.getAttribute("fill")) || "#000000";
+    const fillNone = first.getAttribute("fill") === "none";
+    wrap.appendChild(inspGroup("Fill", [
+      colorRow("Colour", fillHex, (v) => { this.beginCoalesce(); this.applyFill(v); }, commit),
+      checkRow("No fill", fillNone, (on) => { this.push(); this.applyFill(on ? null : (toHexColor(first.getAttribute("fill")) || "#000000")); }),
+    ]));
+    const strokeHex = toHexColor(first.getAttribute("stroke")) || "#000000";
+    const strokeW = parseFloat(first.getAttribute("stroke-width")) || 0;
+    this._strokeWidthInput = null;
+    const curW = () => Math.max(parseFloat(this._strokeWidthInput && this._strokeWidthInput.value) || strokeW || 1, 0.01);
+    const curC = () => toHexColor(first.getAttribute("stroke")) || strokeHex;
+    wrap.appendChild(inspGroup("Stroke", [
+      colorRow("Colour", strokeHex, (v) => { this.beginCoalesce(); this.applyStroke(v, curW()); }, commit),
+      numRow("Width", strokeW, 0, 0.5, (v) => { this.beginCoalesce(); this.applyStroke(curC(), v); }, (inp) => { this._strokeWidthInput = inp; }, commit),
+    ]));
+    const op = first.hasAttribute("opacity") ? parseFloat(first.getAttribute("opacity")) : 1;
+    wrap.appendChild(inspGroup("Opacity", [
+      numRow("Alpha", op, 0, 0.05, (v) => { this.beginCoalesce(); this.applyOpacity(Math.max(0, Math.min(1, v))); }, null, commit),
+    ]));
+    const act = document.createElement("div"); act.className = "insp-actions";
+    act.appendChild(ghostBtn("Duplicate", () => this.duplicate()));
+    act.appendChild(ghostBtn("Invert space", () => this.invertSpace()));
+    act.appendChild(ghostBtn("Delete", () => this.deleteSelection()));
+    wrap.appendChild(act);
+    const z = document.createElement("div"); z.className = "insp-actions";
+    z.appendChild(ghostBtn("Front", () => this.reorder("front")));
+    z.appendChild(ghostBtn("Fwd", () => this.reorder("forward")));
+    z.appendChild(ghostBtn("Bwd", () => this.reorder("backward")));
+    z.appendChild(ghostBtn("Back", () => this.reorder("back")));
+    wrap.appendChild(z);
+    return wrap;
+  },
+  _artboardPanel() {
+    const ab = this.artboardEl();
+    const vb = this.stage.viewBox.baseVal;
+    const wrap = document.createElement("div");
+    const commit = () => this.commitCoalesce();
+    const bgHex = toHexColor(ab.getAttribute("fill")) || "#ffffff";
+    const bgNone = !ab.getAttribute("fill") || ab.getAttribute("fill") === "none";
+    let wInp, hInp;
+    const liveSize = () => { this.beginCoalesce(); this.applyArtboardSize(parseFloat(wInp.value) || vb.width, parseFloat(hInp.value) || vb.height); };
+    wrap.appendChild(inspGroup("Size", [
+      numRow("Width", Math.round(vb.width), 1, 1, liveSize, (i) => { wInp = i; }, commit),
+      numRow("Height", Math.round(vb.height), 1, 1, liveSize, (i) => { hInp = i; }, commit),
+    ]));
+    wrap.appendChild(inspGroup("Background", [
+      colorRow("Colour", bgHex, (v) => { this.beginCoalesce(); this.applyArtboardBg(v); }, commit),
+      checkRow("Transparent", bgNone, (on) => { this.push(); this.applyArtboardBg(on ? null : (toHexColor(ab.getAttribute("fill")) || "#ffffff")); }),
+    ]));
+    return wrap;
+  },
+
+  // ---------- save ----------
+  async save() {
+    if (!this.stage) return;
+    if (!selectedOutput) { setStatus("Save needs an imported or opened document for now.", 3500); return; }
+    const svgText = this.serialize(); if (!svgText) return;
+    try {
+      const data = await api("/api/save-svg", "POST", { folder: selectedOutput.folder, name: selectedOutput.name, svg: svgText });
+      manualOutputName = data.name;
+      this.pinned = false;
+      await refreshAll();
+      setStatus(data.message || "Saved.", 2500);
+    } catch (e) { setStatus(`Save failed: ${e.message}`, 4000); }
+  },
+};
+
+// ---------- inspector control builders ----------
+function inspGroup(title, rows) {
+  const g = document.createElement("div"); g.className = "insp-group";
+  const t = document.createElement("div"); t.className = "insp-title"; t.textContent = title; g.appendChild(t);
+  rows.forEach((r) => g.appendChild(r));
+  return g;
+}
+function inspRow(label, control) {
+  const row = document.createElement("div"); row.className = "insp-row";
+  const s = document.createElement("span"); s.textContent = label;
+  row.appendChild(s); row.appendChild(control); return row;
+}
+function colorRow(label, value, onLive, onCommit) {
+  const inp = document.createElement("input"); inp.type = "color"; inp.value = value || "#000000";
+  inp.addEventListener("input", () => onLive(inp.value));
+  inp.addEventListener("change", () => { onLive(inp.value); if (onCommit) onCommit(); });
+  return inspRow(label, inp);
+}
+function numRow(label, value, min, step, onLive, capture, onCommit) {
+  const inp = document.createElement("input"); inp.type = "number"; inp.value = String(value);
+  if (min != null) inp.min = String(min);
+  inp.step = String(step);
+  inp.addEventListener("input", () => { if (inp.value !== "") onLive(parseFloat(inp.value)); });
+  inp.addEventListener("change", () => { if (inp.value !== "") onLive(parseFloat(inp.value)); if (onCommit) onCommit(); });
+  if (capture) capture(inp);
+  return inspRow(label, inp);
+}
+function checkRow(label, checked, onChange) {
+  const inp = document.createElement("input"); inp.type = "checkbox"; inp.checked = checked;
+  inp.addEventListener("change", () => onChange(inp.checked));
+  return inspRow(label, inp);
+}
+
+// Convert a shape element to an absolute path `d` (baking in any translate),
+// used to build the even-odd compound for invert-space.
+function shapeToAbsPath(el) {
+  const t = currentTranslate(el);
+  const off = (x, y) => `${nfmt(x + t.x)} ${nfmt(y + t.y)}`;
+  const num = (a) => parseFloat(el.getAttribute(a)) || 0;
+  const tag = el.tagName.toLowerCase();
+  if (tag === "path") {
+    const segs = parsePath(el.getAttribute("d") || "");
+    if (t.x || t.y) segs.forEach((s) => {
+      if (s.end) { s.end.x += t.x; s.end.y += t.y; }
+      if (s.c1) { s.c1.x += t.x; s.c1.y += t.y; }
+      if (s.c2) { s.c2.x += t.x; s.c2.y += t.y; }
+    });
+    return serializeSegs(segs);
+  }
+  if (tag === "rect") {
+    const x = num("x"), y = num("y"), w = num("width"), h = num("height");
+    return `M${off(x, y)} L${off(x + w, y)} L${off(x + w, y + h)} L${off(x, y + h)} Z`;
+  }
+  if (tag === "polygon" || tag === "polyline") {
+    const pts = (el.getAttribute("points") || "").trim().split(/[\s,]+/).map(Number);
+    if (pts.length < 4) return "";
+    let s = `M${off(pts[0], pts[1])}`;
+    for (let i = 2; i + 1 < pts.length; i += 2) s += ` L${off(pts[i], pts[i + 1])}`;
+    return s + " Z";
+  }
+  if (tag === "circle") {
+    const cx = num("cx"), cy = num("cy"), r = num("r");
+    return `M${off(cx - r, cy)} A${nfmt(r)} ${nfmt(r)} 0 1 0 ${off(cx + r, cy)} A${nfmt(r)} ${nfmt(r)} 0 1 0 ${off(cx - r, cy)} Z`;
+  }
+  if (tag === "ellipse") {
+    const cx = num("cx"), cy = num("cy"), rx = num("rx"), ry = num("ry");
+    return `M${off(cx - rx, cy)} A${nfmt(rx)} ${nfmt(ry)} 0 1 0 ${off(cx + rx, cy)} A${nfmt(rx)} ${nfmt(ry)} 0 1 0 ${off(cx - rx, cy)} Z`;
+  }
+  return "";
+}
+function ghostBtn(label, onClick) {
+  const b = document.createElement("button"); b.type = "button"; b.className = "ghost-button"; b.textContent = label;
+  b.addEventListener("click", onClick); return b;
+}
+
+// ---------- document menu actions ----------
+function mountStageFromText(text, name) {
+  const vp = viewports.output;
+  vp.url = "mem:" + name; vp.name = name; vp.kind = "svg"; vp.path = null;
+  vp.el.className = "preview-frame";
+  vp.el.innerHTML = `<div class="checker viewport-shell"><div class="viewport-content svg-host"></div></div>`;
+  applyBgMode("output");
+  const host = vp.el.querySelector(".svg-host");
+  const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+  const svg = document.importNode(doc.documentElement, true);
+  const vbAttr = svg.getAttribute("viewBox");
+  if (vbAttr) { const p = vbAttr.trim().split(/[\s,]+/).map(Number); if (p.length === 4) { svg.setAttribute("width", p[2]); svg.setAttribute("height", p[3]); } }
+  svg.classList.add("inline-svg");
+  host.appendChild(svg);
+  editor.pinned = true;
+  if (outputLabelEl) outputLabelEl.textContent = `Canvas — ${name}`;
+  requestAnimationFrame(() => { measureFit(vp); editor.sync(); });
+}
+
+function importRun(process) {
+  processSelectEl.value = process;
+  processSelectEl.dispatchEvent(new Event("change"));
+  runProcess();
+}
+
+function newBlankDoc() {
+  openModal("New canvas");
+  modalSearchEl.hidden = true;
+  const root = document.createElement("div"); root.className = "form";
+  root.appendChild(sectionTitle("Artboard size"));
+  const wInp = makeNumberRaw(512, () => {});
+  const hInp = makeNumberRaw(512, () => {});
+  root.appendChild(fieldRow("Width", wInp));
+  root.appendChild(fieldRow("Height", hInp));
+  const actions = document.createElement("div"); actions.className = "form-actions";
+  actions.appendChild(ghostBtn("Create", () => {
+    const W = Math.max(1, parseInt(wInp.value, 10) || 512), H = Math.max(1, parseInt(hInp.value, 10) || 512);
+    closeModal();
+    selectedOutput = null; manualOutputName = null;
+    const txt = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"><rect class="hv-artboard" x="0" y="0" width="${W}" height="${H}" fill="#ffffff"/></svg>`;
+    mountStageFromText(txt, `untitled-${W}x${H}.svg`);
+    setStatus(`New ${W}×${H} canvas.`, 2000);
+  }));
+  root.appendChild(actions);
+  modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
+}
+
+async function loadSvgToStage(url, name) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    selectedOutput = null; manualOutputName = null;
+    mountStageFromText(text, name);
+    setStatus(`Opened ${name}.`, 2000);
+  } catch (e) { setStatus(`Open failed: ${e.message}`, 3000); }
+}
+
+function openOpenModal() {
+  const svgs = outputs.filter((o) => o.kind === "svg");
+  openModal(`Open — ${svgs.length} vector(s)`);
+  const items = svgs.map((o) => ({ name: o.name, url: o.url, kind: "svg", folder: o.folder, path: o.path, active: false }));
+  const apply = () => {
+    const q = modalSearchEl.value.trim().toLowerCase();
+    const vis = q ? items.filter((i) => i.name.toLowerCase().includes(q)) : items;
+    renderGalleryGrid(vis, (picked) => {
+      closeModal();
+      const wi = workItems.find((w) => stem(w.name) === stem(picked.name));
+      if (wi) { editor.pinned = false; selectedName = wi.name; manualOutputName = picked.name; renderQueue(); refreshAll(); }
+      else { loadSvgToStage(picked.url, picked.name); }
+    });
+  };
+  modalSearchEl.oninput = apply;
+  apply();
+}
+
+async function exportFlow() {
+  if (!editor.stage) return;
+  if (editor.dirty && selectedOutput) await editor.save();
+  if (!selectedOutput) { setStatus("Export needs a saved document — use Save first.", 3500); return; }
+  openExportModal();
+}
+
+const MENU_ITEMS = {
+  "doc-new": () => [
+    { label: "Blank canvas…", onClick: newBlankDoc },
+  ],
+  "doc-import": () => [
+    { label: "Production SVG", onClick: () => importRun("pipeline") },
+    { label: "SVG Trace", onClick: () => importRun("vectorize") },
+    { label: "Pixel Art → SVG", onClick: () => importRun("pixelvec") },
+    { type: "sep" },
+    { label: "Cutout PNG", onClick: () => importRun("cutout") },
+    { label: "Upscale PNG", onClick: () => importRun("upscale") },
+    { label: "Greenscreen Cutout", onClick: () => importRun("chromakey") },
+  ],
+  "doc-export": () => [
+    { label: "Export PNG…", onClick: exportFlow },
+    { label: "Copy SVG markup", onClick: copySvgSource },
+  ],
+  "library": () => {
+    const item = selectedItem();
+    return [
+      { label: "Image info…", onClick: openInfoModal },
+      { label: "Browse…", onClick: openBrowseModal },
+      { type: "sep" },
+      { label: "Clean derivatives", onClick: cleanDerivatives },
+      { label: "Remove selected", disabled: !(item && item.removable), onClick: removeSelected },
+    ];
+  },
+};
+
+// ---------- editor wiring: tools, header buttons, rail, keyboard ----------
+document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("click", () => editor.setTool(b.dataset.tool)));
+{
+  const openBtn = document.querySelector("#open-button"); if (openBtn) openBtn.addEventListener("click", openOpenModal);
+  const saveBtn = document.querySelector("#save-button"); if (saveBtn) saveBtn.addEventListener("click", () => editor.save());
+  const undoBtn = document.querySelector("#undo-button"); if (undoBtn) undoBtn.addEventListener("click", () => editor.undo());
+  const redoBtn = document.querySelector("#redo-button"); if (redoBtn) redoBtn.addEventListener("click", () => editor.redoAction());
+  const railToggle = document.querySelector("#rail-toggle");
+  const RAIL_KEY = "hector-vector:rail-collapsed";
+  const appEl = document.querySelector(".app.editor");
+  if (appEl && localStorage.getItem(RAIL_KEY) === "1") appEl.classList.add("rail-collapsed");
+  if (railToggle && appEl) {
+    railToggle.addEventListener("click", () => {
+      const c = appEl.classList.toggle("rail-collapsed");
+      try { localStorage.setItem(RAIL_KEY, c ? "1" : "0"); } catch {}
+      requestAnimationFrame(() => measureFit(viewports.output));
+    });
+  }
+  // Collapsible rail sections (Photopea/Illustrator-style accordion), persisted.
+  document.querySelectorAll(".rail-section[data-section] .section-head").forEach((head) => {
+    const section = head.closest(".rail-section");
+    const key = "hv-sec-" + section.dataset.section;
+    if (localStorage.getItem(key) === "1") section.classList.add("collapsed");
+    head.addEventListener("click", (e) => {
+      if (e.target.closest(".panel-actions")) return;   // kebab/menu clicks don't collapse
+      const c = section.classList.toggle("collapsed");
+      try { localStorage.setItem(key, c ? "1" : "0"); } catch {}
+    });
+  });
+}
+document.addEventListener("keydown", (e) => {
+  const tag = (e.target && e.target.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select" || (e.target && e.target.isContentEditable)) return;
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && (e.key === "z" || e.key === "Z")) { e.preventDefault(); if (e.shiftKey) editor.redoAction(); else editor.undo(); return; }
+  if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); editor.redoAction(); return; }
+  if (mod && (e.key === "d" || e.key === "D")) { e.preventDefault(); editor.duplicate(); return; }
+  if (mod && e.key === "]") { e.preventDefault(); editor.reorder(e.shiftKey ? "front" : "forward"); return; }
+  if (mod && e.key === "[") { e.preventDefault(); editor.reorder(e.shiftKey ? "back" : "backward"); return; }
+  if (mod) return;
+  if (!modalRootEl.hidden) return;
+  if (e.key === "Delete" || e.key === "Backspace") { if (editor.selection.size) { e.preventDefault(); editor.deleteSelection(); } return; }
+  if (e.key === "v" || e.key === "V") { editor.setTool("select"); return; }
+  if (e.key === "a" || e.key === "A") { editor.setTool("node"); return; }
+  if (e.key === "Escape" && editor.stage) { editor.selection = new Set(); editor.artboardSelected = false; editor._renderSelection(); editor._renderInspector(); }
+});
+
+
+let openMenuEl = null;
+function closeMenus() {
+  if (!openMenuEl) return;
+  const list = openMenuEl.querySelector(".menu-list");
+  const trigger = openMenuEl.querySelector(".menu-trigger");
+  if (list) list.hidden = true;
+  if (trigger) trigger.setAttribute("aria-expanded", "false");
+  openMenuEl.classList.remove("open");
+  openMenuEl = null;
+}
+function openMenu(menuEl) {
+  closeMenus();
+  const itemsFn = MENU_ITEMS[menuEl.dataset.menu];
+  const list = menuEl.querySelector(".menu-list");
+  if (!itemsFn || !list) return;
+  list.innerHTML = "";
+  for (const item of itemsFn()) {
+    if (item.type === "sep") { const sep = document.createElement("div"); sep.className = "menu-sep"; list.appendChild(sep); continue; }
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "menu-item" + (item.type === "toggle" ? " menu-toggle" : "") + (item.checked ? " checked" : "");
+    btn.disabled = !!item.disabled;
+    btn.setAttribute("role", "menuitem");
+    btn.innerHTML = `<span class="menu-check">${item.checked ? "✓" : ""}</span><span class="menu-label"></span>`;
+    btn.querySelector(".menu-label").textContent = item.label;
+    btn.addEventListener("click", async () => {
+      closeMenus();
+      try { await item.onClick(); } catch (e) { setStatus(e.message || String(e), 3000); }
+    });
+    list.appendChild(btn);
+  }
+  list.hidden = false;
+  const trigger = menuEl.querySelector(".menu-trigger");
+  if (trigger) trigger.setAttribute("aria-expanded", "true");
+  menuEl.classList.add("open");
+  openMenuEl = menuEl;
+}
+function setMenuHidden(name, hidden) {
+  const el = document.querySelector(`.menu[data-menu="${name}"]`);
+  if (!el) return;
+  el.hidden = !!hidden;
+  if (hidden && openMenuEl === el) closeMenus();
+}
+document.querySelectorAll(".menu .menu-trigger").forEach((trigger) => {
+  trigger.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const menuEl = trigger.closest(".menu");
+    if (openMenuEl === menuEl) closeMenus(); else openMenu(menuEl);
+  });
+});
+document.addEventListener("click", (event) => {
+  if (openMenuEl && !event.target.closest(".menu")) closeMenus();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && openMenuEl) closeMenus();
+});
 
 let exportState = { mode: "scale", scale: 16, longest: 1024, width: 0, height: 0, background: "transparent" };
 
@@ -1235,8 +2125,6 @@ async function openExportModal() {
   modalBodyEl.appendChild(root);
 }
 
-if (exportPngEl) exportPngEl.addEventListener("click", openExportModal);
-
 dropzoneEl.addEventListener("click", () => fileInputEl.click());
 
 let dragDepth = 0;
@@ -1323,7 +2211,7 @@ async function runProcess() {
 }
 runButtonEl.addEventListener("click", runProcess);
 
-removeSelectedEl.addEventListener("click", async () => {
+async function removeSelected() {
   if (!selectedName) return;
   try {
     const data = await api("/api/work-items/remove", "POST", { name: selectedName });
@@ -1338,7 +2226,7 @@ removeSelectedEl.addEventListener("click", async () => {
   } catch (error) {
     setStatus(error.message, 3000);
   }
-});
+}
 
 clearJobsEl.addEventListener("click", async () => {
   try {
@@ -1946,18 +2834,16 @@ function openShortcutsModal() {
 }
 
 settingsButtonEl.addEventListener("click", openSettingsModal);
-infoButtonEl.addEventListener("click", openInfoModal);
 shortcutButtonEl.addEventListener("click", openShortcutsModal);
 
-let focusedVp = "input";
+let focusedVp = "output";
 function focusViewport(name) {
   focusedVp = name;
   for (const [n, vp] of Object.entries(viewports)) {
     vp.el.parentElement?.classList.toggle("panel-focused", n === name);
   }
 }
-focusViewport("input");
-inputPreviewEl.addEventListener("pointerdown", () => focusViewport("input"));
+focusViewport("output");
 outputPreviewEl.addEventListener("pointerdown", () => focusViewport("output"));
 
 function zoomVp(vp, factor) {
@@ -1994,6 +2880,7 @@ function moveLibrary(delta) {
   if (list[j].name === selectedName) return;
   selectedName = list[j].name;
   manualOutputName = null;
+  editor.pinned = false;
   renderQueue();
   renderPreviews().catch((error) => setStatus(error.message, 2500));
   const active = queueEl.querySelector(".queue-item.active");
@@ -2078,8 +2965,9 @@ function schedulePoll() {
         );
         renderQueue();
         if (touchesSelection) {
-          // Force fresh mount so the new artifact shows up automatically.
+          // Force fresh mount so the new artifact lands on the canvas automatically.
           manualOutputName = null;
+          editor.pinned = false;
           if (viewports.output) {
             viewports.output.url = null;
             viewports.output.path = null;

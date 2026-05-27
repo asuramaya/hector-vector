@@ -7,95 +7,102 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <main class="app">
-      <header class="topbar">
-        <div class="topbar-info">
-          <div class="label">IMAGE WORKSPACE</div>
-          <h1 id="workspace-title">Workspace</h1>
-          <div class="source-row">
-            <span class="label source-label">SOURCE</span>
-            <span id="source-path" class="workspace-path" title="Click to change"></span>
-            <button id="source-edit" class="ghost-button" type="button">Change</button>
-            <button id="source-reset" class="ghost-button" type="button" hidden>Default</button>
-          </div>
-          <div id="workspace-path" class="workspace-path"></div>
+    <main class="app editor">
+      <header class="topbar editor-bar">
+        <div class="brand">
+          <span class="brand-name">hector-vector</span>
+          <span id="workspace-title" class="brand-sub"></span>
+          <span id="workspace-path" class="brand-path" hidden></span>
         </div>
-        <button id="dropzone" class="drop-button" type="button">
-          Add Images
-          <input id="file-input" type="file" accept="image/*" multiple hidden />
-        </button>
+        <div class="doc-actions panel-actions">
+          <div class="menu" data-menu="doc-new">
+            <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">New ▾</button>
+            <div class="menu-list" role="menu" hidden></div>
+          </div>
+          <div class="menu" data-menu="doc-import">
+            <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false" title="Run an image pipeline onto the canvas">Import ▾</button>
+            <div class="menu-list" role="menu" hidden></div>
+          </div>
+          <button id="open-button" class="ghost-button" type="button" title="Open a vector from outputs">Open</button>
+          <button id="save-button" class="ghost-button" type="button" title="Save the canvas as .svg">Save</button>
+          <div class="menu" data-menu="doc-export">
+            <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">Export ▾</button>
+            <div class="menu-list" role="menu" hidden></div>
+          </div>
+          <span class="bar-sep"></span>
+          <button id="undo-button" class="ghost-button" type="button" title="Undo (Ctrl/Cmd+Z)" disabled>↶ Undo</button>
+          <button id="redo-button" class="ghost-button" type="button" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>↷ Redo</button>
+          <button id="rail-toggle" class="ghost-button" type="button" title="Collapse the side panel">⊟</button>
+        </div>
       </header>
 
-      <section class="control-bar">
-        <select id="process-select" title="Process (shortcut: [ / ])">
-          <option value="upscale">Upscale PNG</option>
-          <option value="cutout">Cutout PNG</option>
-          <option value="chromakey">Greenscreen Cutout</option>
-          <option value="vectorize">SVG Trace</option>
-          <option value="pixelvec">Pixel Art → SVG</option>
-          <option value="pipeline" selected>Production SVG</option>
-        </select>
-        <select id="mode-select" title="Batch processes the whole library; Single processes only the selected image">
-          <option value="batch" selected>Batch</option>
-          <option value="single">Single</option>
-        </select>
-        <label id="force-toggle" class="force-toggle" title="Re-run even on inputs that already have output for this process">
-          <input id="force-input" type="checkbox" /> Force
-        </label>
-        <button id="settings-button" class="ghost-button" type="button" title="Process parameters (shortcut: ,)">Settings</button>
-        <button id="run-button" type="button" title="Run (shortcut: Enter)">Run</button>
-      </section>
+      <section class="editor-grid">
+        <nav class="toolstrip" role="toolbar" aria-label="Tools">
+          <button class="tool-button active" data-tool="select" type="button" title="Select / Move (V)">▣</button>
+          <button class="tool-button" data-tool="node" type="button" title="Edit points (A)">✥</button>
+        </nav>
 
-      <section class="main-grid">
-        <aside class="library">
-          <div class="panel-head">
-            <span>Library</span>
-            <div class="panel-actions">
-              <button id="browse-button" class="ghost-button" type="button">Browse</button>
-              <button id="clean-derivatives" class="ghost-button" type="button" title="Delete .cutout/.mask/.preview files from source">Clean</button>
-              <button id="remove-selected" class="ghost-button" type="button">Remove</button>
+        <aside class="rail" id="rail">
+          <div class="rail-section" data-section="import">
+            <div class="panel-head section-head"><span class="caret">▾</span><span class="sec-label">Import from image</span></div>
+            <div class="rail-body section-body">
+              <div class="source-row">
+                <span class="label source-label">SOURCE</span>
+                <span id="source-path" class="workspace-path" title="Click to change"></span>
+                <button id="source-edit" class="ghost-button" type="button">Change</button>
+                <button id="source-reset" class="ghost-button" type="button" hidden>Default</button>
+              </div>
+              <select id="process-select" title="Process (shortcut: [ / ])">
+                <option value="upscale">Upscale PNG</option>
+                <option value="cutout">Cutout PNG</option>
+                <option value="chromakey">Greenscreen Cutout</option>
+                <option value="vectorize">SVG Trace</option>
+                <option value="pixelvec">Pixel Art → SVG</option>
+                <option value="pipeline" selected>Production SVG</option>
+              </select>
+              <select id="mode-select" title="Batch processes the whole library; Single processes only the selected image">
+                <option value="batch" selected>Batch</option>
+                <option value="single">Single</option>
+              </select>
+              <label id="force-toggle" class="force-toggle" title="Re-run even on inputs that already have output for this process">
+                <input id="force-input" type="checkbox" /> Force
+              </label>
+              <div class="panel-actions">
+                <button id="settings-button" class="ghost-button" type="button" title="Process parameters (shortcut: ,)">Settings</button>
+                <button id="run-button" type="button" title="Run (shortcut: Enter)">Run → canvas</button>
+              </div>
             </div>
           </div>
-          <div id="queue" class="queue"></div>
+
+          <div class="rail-section library" data-section="library">
+            <div class="panel-head section-head">
+              <span class="caret">▾</span><span class="sec-label">Library</span>
+              <div class="panel-actions">
+                <div class="menu" data-menu="library">
+                  <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false" title="Library actions">⋯</button>
+                  <div class="menu-list" role="menu" hidden></div>
+                </div>
+              </div>
+            </div>
+            <div id="queue" class="queue section-body"></div>
+          </div>
+
+          <div class="rail-section">
+            <button id="dropzone" class="drop-button" type="button">
+              Add Images
+              <input id="file-input" type="file" accept="image/*" multiple hidden />
+            </button>
+          </div>
         </aside>
 
-        <article class="panel preview-panel">
-          <div class="panel-head">
-            <span>Input</span>
-            <div class="panel-actions">
-              <button id="info-button" class="ghost-button" type="button" title="Image info & rotate (i)">Info</button>
-              <button id="copy-input-path" class="ghost-button" type="button" title="Copy absolute file path">Copy Path</button>
-              <button id="copy-input-folder" class="ghost-button" type="button" title="Copy containing folder path">Folder</button>
-              <button id="reveal-input" class="ghost-button" type="button" title="Open containing folder in file manager">Reveal</button>
-              <a id="open-input" class="ghost-link" href="#" target="_blank" rel="noreferrer">Open</a>
-            </div>
+        <article class="stage-wrap preview-panel">
+          <div class="stage-head panel-head">
+            <span id="output-label">Canvas</span>
+            <div id="output-picker" class="output-picker" hidden></div>
           </div>
-          <div id="input-preview" class="preview-frame empty-frame">No image selected.</div>
-          <div class="panel-foot">
-            <div class="panel-actions viewport-controls">
-              <button class="ghost-button" data-vp="input" data-action="zoom-out" type="button" title="Zoom out (-)">-</button>
-              <button class="ghost-button" data-vp="input" data-action="fit" type="button" title="Fit (f)">Fit</button>
-              <button class="ghost-button" data-vp="input" data-action="actual" type="button" title="Actual size (0)">1:1</button>
-              <button class="ghost-button" data-vp="input" data-action="zoom-in" type="button" title="Zoom in (+)">+</button>
-              <button class="ghost-button" data-vp="input" data-action="bg" type="button" title="Cycle background (b)">BG</button>
-            </div>
-          </div>
-        </article>
-
-        <article class="panel preview-panel output-panel">
-          <div class="panel-head">
-            <span id="output-label">Output</span>
-            <div class="panel-actions">
-              <button id="copy-svg-source" class="ghost-button" type="button" hidden title="Copy SVG markup to clipboard">Copy SVG</button>
-              <button id="export-png" class="ghost-button" type="button" hidden title="Rasterize this SVG to a PNG at a chosen size">Export PNG</button>
-              <button id="copy-output-path" class="ghost-button" type="button" title="Copy absolute file path">Copy Path</button>
-              <button id="copy-output-folder" class="ghost-button" type="button" title="Copy containing folder path">Folder</button>
-              <button id="reveal-output" class="ghost-button" type="button" title="Open containing folder in file manager">Reveal</button>
-              <a id="open-output" class="ghost-link" href="#" target="_blank" rel="noreferrer">Open</a>
-            </div>
-          </div>
-          <div id="output-picker" class="output-picker" hidden></div>
-          <div id="output-preview" class="preview-frame empty-frame">Run a process to render output.</div>
+          <!-- hidden, kept for code compatibility with the two-pane plumbing -->
+          <div id="input-preview" class="preview-frame" hidden></div>
+          <div id="output-preview" class="preview-frame empty-frame">Import or open a vector to start.</div>
           <div class="panel-foot">
             <div class="panel-actions viewport-controls">
               <button class="ghost-button" data-vp="output" data-action="zoom-out" type="button" title="Zoom out (-)">-</button>
@@ -106,6 +113,11 @@
             </div>
           </div>
         </article>
+
+        <aside class="inspector" id="inspector">
+          <div class="panel-head"><span id="inspector-title">Nothing selected</span></div>
+          <div id="inspector-body" class="inspector-body"></div>
+        </aside>
       </section>
 
       <footer class="status-bar">
