@@ -86,6 +86,16 @@ def draw_shape(page, tool, fx0, fy0, fx1, fy1, shift=False):
     if shift: page.keyboard.up("Shift")
     page.wait_for_timeout(40)
 
+def pen_click(page, fx, fy, drag=None):
+    """Pen-tool click at an artboard fraction; pass drag=(fx,fy) to make it a curve anchor."""
+    ab = artboard_rect(page)
+    x, y = ab["x"] + ab["w"] * fx, ab["y"] + ab["h"] * fy
+    page.mouse.move(x, y); page.mouse.down()
+    if drag:
+        page.mouse.move(ab["x"] + ab["w"] * drag[0], ab["y"] + ab["h"] * drag[1], steps=6)
+    page.mouse.up()
+    page.wait_for_timeout(30)
+
 def sel_node(page):
     return page.evaluate(
         "() => { const id=[...editor.selection][0]; const n=id&&editor.nodeById(id);"
@@ -456,10 +466,70 @@ def main():
 
         # Keyboard shortcuts switch tools
         page.evaluate("editor.setTool('select')")
+        page.keyboard.press("p"); check("P selects pen tool", page.evaluate("editor.tool") == "pen")
         page.keyboard.press("r"); check("R selects rect tool", page.evaluate("editor.tool") == "rect")
         page.keyboard.press("e"); check("E selects ellipse tool", page.evaluate("editor.tool") == "ellipse")
         page.keyboard.press("l"); check("L selects line tool", page.evaluate("editor.tool") == "line")
         page.keyboard.press("v"); check("V returns to select tool", page.evaluate("editor.tool") == "select")
+
+        # ---- Phase 4: pen tool ----
+        mount_ctl(page)
+        base = n_nodes(page)
+        page.evaluate("editor.setTool('pen')")
+        pen_click(page, 0.2, 0.2); pen_click(page, 0.6, 0.25); pen_click(page, 0.5, 0.6)
+        check("pen path in progress (uncommitted)", page.evaluate("!!editor._pen") and n_nodes(page) == base)
+        page.keyboard.press("Enter"); page.wait_for_timeout(40)
+        psel = sel_node(page)
+        check("Enter finishes an open path", psel and psel["tag"] == "path" and n_nodes(page) == base + 1
+              and "L" in psel["attrs"]["d"] and "Z" not in psel["attrs"]["d"], str(psel and psel["attrs"].get("d")))
+        check("open pen path has no fill", psel and psel["attrs"].get("fill") == "none")
+        page.evaluate("editor.undo()"); page.wait_for_timeout(40)
+        check("undo removes the pen path", n_nodes(page) == base and not page.evaluate("!!editor._pen"))
+
+        # Click-drag at an anchor yields a curve (cubic segment)
+        mount_ctl(page)
+        page.evaluate("editor.setTool('pen')")
+        pen_click(page, 0.2, 0.3); pen_click(page, 0.6, 0.3, drag=(0.7, 0.15))
+        page.keyboard.press("Enter"); page.wait_for_timeout(40)
+        csel = sel_node(page)
+        check("drag in pen yields a curve", csel and "C" in csel["attrs"]["d"], str(csel and csel["attrs"].get("d")))
+
+        # Clicking the first anchor closes the path and it takes the fill
+        mount_ctl(page)
+        page.evaluate("editor.setTool('pen'); editor.style.fill='#22aa44';")
+        pen_click(page, 0.25, 0.25); pen_click(page, 0.65, 0.3); pen_click(page, 0.45, 0.65)
+        pen_click(page, 0.25, 0.25)   # back on the first anchor → close
+        page.wait_for_timeout(40)
+        zsel = sel_node(page)
+        check("clicking first anchor closes the path", zsel and zsel["attrs"]["d"].rstrip().endswith("Z")
+              and zsel["attrs"].get("fill") == "#22aa44", str(zsel and (zsel["attrs"].get("d"), zsel["attrs"].get("fill"))))
+
+        # A lone point + finish creates nothing and leaves no history
+        mount_ctl(page)
+        base = n_nodes(page)
+        page.evaluate("editor.setTool('pen')")
+        pen_click(page, 0.5, 0.5)
+        page.keyboard.press("Enter"); page.wait_for_timeout(40)
+        check("single-point pen makes nothing / no history",
+              n_nodes(page) == base and page.evaluate("editor.history.length") == 0 and not page.evaluate("!!editor._pen"))
+
+        # Switching tools commits an in-progress path
+        mount_ctl(page)
+        base = n_nodes(page)
+        page.evaluate("editor.setTool('pen')")
+        pen_click(page, 0.3, 0.3); pen_click(page, 0.7, 0.7)
+        page.evaluate("editor.setTool('select')"); page.wait_for_timeout(40)
+        check("switching tool commits the open path", n_nodes(page) == base + 1 and not page.evaluate("!!editor._pen"))
+
+        # Pen marks live in the overlay → stripped on serialize
+        mount_ctl(page)
+        page.evaluate("editor.setTool('pen')")
+        pen_click(page, 0.3, 0.3); pen_click(page, 0.6, 0.6)
+        has_marks = page.evaluate("!!editor._overlayEl().querySelector('.hv-pen-anchor')")
+        clean = page.evaluate("editor.serialize()")
+        check("pen marks render then serialize-strip", has_marks and "hv-pen" not in clean)
+        page.keyboard.press("Escape"); page.wait_for_timeout(30)
+        check("Escape cancels the pen path", not page.evaluate("!!editor._pen"))
 
         # serialize cleanliness
         mount_ctl(page)

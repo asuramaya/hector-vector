@@ -463,6 +463,9 @@ button:disabled {
 }
 .hv-handle:hover { fill: #000; }
 .hv-handle.dragging { fill: #000; cursor: grabbing; }
+/* Pen-tool anchor markers (while a path is being drawn) */
+.hv-pen-anchor { fill: #fff; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
+.hv-pen-anchor.first { fill: var(--accent); }
 
 /* Dropdown menus in the panel heads */
 .menu {

@@ -1312,6 +1312,7 @@ const editor = {
   _strokeWidthInput: null,
   // last-used appearance — newly drawn shapes inherit it (updated by applyFill/applyStroke)
   style: { fill: "#808080", stroke: "none", strokeWidth: 0 },
+  _pen: null,           // in-progress pen path: { node, pts:[{x,y,out}], closed, dragging }
 
   get dirty() { return this.history.length > 0; },
 
@@ -1323,6 +1324,8 @@ const editor = {
     this.adopt(el);
   },
   adopt(svgEl) {
+    if (this._penHoverBound) { window.removeEventListener("pointermove", this._penHoverBound); this._penHoverBound = null; }
+    this._pen = null;
     this.selection = new Set();
     this.artboardSelected = false;
     this.history = [];
@@ -1442,8 +1445,8 @@ const editor = {
   },
   cancelCoalesce() { this._coalescing = false; this._coalesceState = null; },
   _state() { return { svg: this._historyMarkup(), sel: [...this.selection], ab: this.artboardSelected }; },
-  undo() { this.commitCoalesce(); if (!this.history.length) return; this.redo.push(this._state()); this._restore(this.history.pop()); },
-  redoAction() { this.commitCoalesce(); if (!this.redo.length) return; this.history.push(this._state()); this._restore(this.redo.pop()); },
+  undo() { if (this._pen) this._finishPen(true); this.commitCoalesce(); if (!this.history.length) return; this.redo.push(this._state()); this._restore(this.history.pop()); },
+  redoAction() { if (this._pen) this._finishPen(true); this.commitCoalesce(); if (!this.redo.length) return; this.history.push(this._state()); this._restore(this.redo.pop()); },
   _restore(state) {
     const host = this.stage.parentElement; if (!host) return;
     const doc = new DOMParser().parseFromString(state.svg, "image/svg+xml");
@@ -1468,6 +1471,7 @@ const editor = {
   nodeById(id) { return this.stage && this.stage.querySelector(`[data-hv-id="${CSS.escape(id)}"]`); },
   selectedNodes() { return [...this.selection].map((id) => this.nodeById(id)).filter(Boolean); },
   _onPointerDown(e) {
+    if (this.tool === "pen") { this._penDown(e); return; }
     if (SHAPE_TOOLS.has(this.tool)) {
       if (e.button !== 0) return;
       e.stopPropagation(); e.preventDefault();   // draw, don't pan
@@ -1540,6 +1544,93 @@ const editor = {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   },
+  // Pen tool: click to drop a corner anchor; click-drag to drop a smooth anchor
+  // (the drag sets its bezier handle). Click the first anchor to close; Enter
+  // finishes an open path. The whole construction is one undo step.
+  _penDown(e) {
+    if (e.button !== 0) return;
+    e.stopPropagation(); e.preventDefault();
+    const inv = () => this.stage.getScreenCTM().inverse();
+    const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(inv());
+    if (!this._pen) {
+      this.beginCoalesce();                       // snapshot before the path exists
+      this.selection = new Set(); this.artboardSelected = false; this._renderSelection();
+      const node = document.createElementNS(SVG_NS, "path");
+      node.setAttribute("fill", "none");
+      node.setAttribute("stroke", "#1d1d1f"); node.setAttribute("stroke-width", "1.5");
+      node.setAttribute("vector-effect", "non-scaling-stroke");
+      this.stage.insertBefore(node, this._overlayEl());
+      this._pen = { node, pts: [], closed: false, dragging: false };
+      this._penHoverBound = (ev) => this._penHover(ev);
+      window.addEventListener("pointermove", this._penHoverBound);
+    } else if (this._pen.pts.length >= 2 && this._penNearFirst(pt)) {
+      this._pen.closed = true; this._finishPen(true); return;
+    }
+    const anchor = { x: pt.x, y: pt.y, out: null };
+    this._pen.pts.push(anchor);
+    this._pen.dragging = true;
+    this._redrawPen(); this._renderPenMarks();
+    const move = (ev) => {
+      const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
+      anchor.out = { x: p.x, y: p.y };            // drag → smooth point
+      this._redrawPen(); this._renderPenMarks();
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (this._pen) this._pen.dragging = false;
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  },
+  _penHover(ev) {
+    if (!this._pen || this._pen.dragging) return;
+    const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(this.stage.getScreenCTM().inverse());
+    this._redrawPen({ x: p.x, y: p.y });
+  },
+  _redrawPen(preview) {
+    if (!this._pen) return;
+    this._pen.node.setAttribute("d", penPathD(this._pen.pts, this._pen.closed, preview));
+  },
+  _penNearFirst(pt) {
+    const f = this._pen.pts[0]; if (!f) return false;
+    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
+    return Math.hypot(pt.x - f.x, pt.y - f.y) < 8 / k;
+  },
+  _renderPenMarks() {
+    const ov = this._overlayEl(); if (!ov || !this._pen) return;
+    ov.querySelectorAll("g.hv-pen").forEach((g) => g.remove());
+    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1; const r = 4 / k;
+    const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "hv-pen");
+    this._pen.pts.forEach((a, i) => {
+      const c = document.createElementNS(SVG_NS, "rect");
+      c.setAttribute("class", "hv-pen-anchor" + (i === 0 ? " first" : ""));
+      c.setAttribute("x", nfmt(a.x - r)); c.setAttribute("y", nfmt(a.y - r));
+      c.setAttribute("width", nfmt(r * 2)); c.setAttribute("height", nfmt(r * 2));
+      g.appendChild(c);
+    });
+    ov.appendChild(g);
+  },
+  _finishPen(keep) {
+    if (!this._pen) return;
+    if (this._penHoverBound) { window.removeEventListener("pointermove", this._penHoverBound); this._penHoverBound = null; }
+    const { node, pts, closed } = this._pen;
+    const ov = this._overlayEl(); if (ov) ov.querySelectorAll("g.hv-pen").forEach((g) => g.remove());
+    this._pen = null;
+    if (!keep || pts.length < 2) { node.remove(); this.cancelCoalesce(); return; }
+    node.setAttribute("d", penPathD(pts, closed, null));
+    node.setAttribute("fill", closed ? (this.style.fill || "none") : "none");
+    if (this.style.stroke && this.style.stroke !== "none" && this.style.strokeWidth > 0) {
+      node.setAttribute("stroke", this.style.stroke); node.setAttribute("stroke-width", nfmt(this.style.strokeWidth));
+    } else { node.setAttribute("stroke", "#1d1d1f"); node.setAttribute("stroke-width", "2"); }
+    node.setAttribute("vector-effect", "non-scaling-stroke");
+    node.setAttribute("stroke-linejoin", "round"); node.setAttribute("stroke-linecap", "round");
+    const id = "n" + (++this.idSeq); node.setAttribute("data-hv-id", id);
+    this.commitCoalesce();
+    this.selection = new Set([id]); this.artboardSelected = false;
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+    setStatus(closed ? "Closed path added." : "Path added.", 1500);
+  },
   deleteSelection() {
     const nodes = this.selectedNodes(); if (!nodes.length) return;
     this.push();
@@ -1573,7 +1664,8 @@ const editor = {
 
   // ---------- tools ----------
   setTool(t) {
-    if (t !== "select" && t !== "node" && !SHAPE_TOOLS.has(t)) return;
+    if (t !== "select" && t !== "node" && t !== "pen" && !SHAPE_TOOLS.has(t)) return;
+    if (this._pen && t !== "pen") this._finishPen(true);   // keep any in-progress path
     this.tool = t;
     document.querySelectorAll(".tool-button").forEach((b) => b.classList.toggle("active", b.dataset.tool === t));
     if (t === "node") this.mountNodeHandles(); else this.unmountNodeHandles();
@@ -1583,11 +1675,12 @@ const editor = {
       rect: "Rectangle — drag on the canvas. (V = select)",
       ellipse: "Ellipse — drag on the canvas. Shift = circle.",
       line: "Line — drag on the canvas. Shift = 45°.",
+      pen: "Pen — click to add points, drag for curves, Enter to finish, click the first point to close.",
     };
-    setStatus(msg[t] || "", 1500);
+    setStatus(msg[t] || "", 2000);
   },
   unmountNodeHandles() { const ov = this._overlayEl(); if (ov) ov.querySelectorAll(".hv-handles").forEach((g) => g.remove()); },
-  onViewportChanged() { if (this.tool === "node" && this.stage) this.mountNodeHandles(); },
+  onViewportChanged() { if (this.tool === "node" && this.stage) this.mountNodeHandles(); if (this._pen) { this._redrawPen(); this._renderPenMarks(); } },
   mountNodeHandles() {
     this.unmountNodeHandles();
     const ov = this._overlayEl(); if (!ov || !this.stage) return;
@@ -2061,6 +2154,25 @@ function shapeMeaningful(tool, n) {
   if (tool === "rect") return (+n.getAttribute("width")) > 0.5 && (+n.getAttribute("height")) > 0.5;
   return (+n.getAttribute("rx")) > 0.25 && (+n.getAttribute("ry")) > 0.25;
 }
+// Build a path `d` from pen anchors. Each anchor is {x,y,out} where `out` is the
+// outgoing bezier handle (smooth point) or null (corner); the incoming handle is
+// the mirror of the previous anchor's `out`. `preview` adds a trailing corner
+// point at the cursor (rubber-band); `closed` appends the wrap-around + Z.
+function penPathD(pts, closed, preview) {
+  const all = preview ? pts.concat([{ x: preview.x, y: preview.y, out: null }]) : pts;
+  if (!all.length) return "";
+  const inOf = (a) => (a.out ? { x: 2 * a.x - a.out.x, y: 2 * a.y - a.out.y } : null);
+  const seg = (a, b) => {
+    const c1 = a.out, c2 = inOf(b);
+    if (!c1 && !c2) return ` L${nfmt(b.x)} ${nfmt(b.y)}`;
+    const p1 = c1 || { x: a.x, y: a.y }, p2 = c2 || { x: b.x, y: b.y };
+    return ` C${nfmt(p1.x)} ${nfmt(p1.y)} ${nfmt(p2.x)} ${nfmt(p2.y)} ${nfmt(b.x)} ${nfmt(b.y)}`;
+  };
+  let d = `M${nfmt(all[0].x)} ${nfmt(all[0].y)}`;
+  for (let i = 1; i < all.length; i++) d += seg(all[i - 1], all[i]);
+  if (closed && all.length >= 2) { d += seg(all[all.length - 1], all[0]) + " Z"; }
+  return d;
+}
 function ghostBtn(label, onClick) {
   const b = document.createElement("button"); b.type = "button"; b.className = "ghost-button"; b.textContent = label;
   b.addEventListener("click", onClick); return b;
@@ -2228,9 +2340,14 @@ document.addEventListener("keydown", (e) => {
   if (mod && e.key === "[") { e.preventDefault(); editor.reorder(e.shiftKey ? "back" : "backward"); return; }
   if (mod) return;
   if (!modalRootEl.hidden) return;
+  if (editor._pen) {     // pen construction owns Enter/Escape while a path is open
+    if (e.key === "Enter") { e.preventDefault(); editor._finishPen(true); return; }
+    if (e.key === "Escape") { e.preventDefault(); editor._finishPen(false); return; }
+  }
   if (e.key === "Delete" || e.key === "Backspace") { if (editor.selection.size) { e.preventDefault(); editor.deleteSelection(); } return; }
   if (e.key === "v" || e.key === "V") { editor.setTool("select"); return; }
   if (e.key === "a" || e.key === "A") { editor.setTool("node"); return; }
+  if (e.key === "p" || e.key === "P") { editor.setTool("pen"); return; }
   if (e.key === "r" || e.key === "R") { editor.setTool("rect"); return; }
   if (e.key === "e" || e.key === "E") { editor.setTool("ellipse"); return; }
   if (e.key === "l" || e.key === "L") { editor.setTool("line"); return; }
