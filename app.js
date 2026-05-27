@@ -4032,30 +4032,53 @@ function renderInfoModal(info) {
 function openShortcutsModal() {
   openModal("Keyboard shortcuts");
   modalSearchEl.hidden = true;
+  const mod = /Mac|iP(hone|ad|od)/.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl";
+  // Mirrors the live keymap in app.js (editor keymap + view/nav keymap + space-pan).
   const rows = [
-    ["j / ↓", "Next image"],
-    ["k / ↑", "Previous image"],
-    ["g / G", "First / last image"],
-    ["Enter", "Run process"],
-    [",", "Process settings"],
-    ["i", "Image info & rotate"],
-    ["/", "Browse library"],
-    ["[ / ]", "Cycle process"],
-    ["m", "Cycle Single / Batch"],
-    ["q", "Open Jobs queue"],
-    ["1 / 2", "Focus input / output panel"],
-    ["+ / -", "Zoom focused panel"],
+    ["§", "Tools"],
+    ["V", "Select / move"],
+    ["A", "Edit points (direct select)"],
+    ["P", "Pen"],
+    ["R / E / L", "Rectangle / Ellipse / Line"],
+    ["Shift + O", "Select the artboard"],
+    ["§", "Edit"],
+    [`${mod} + Z`, "Undo"],
+    [`${mod} + Shift + Z`, "Redo"],
+    [`${mod} + C / X / V`, "Copy / Cut / Paste"],
+    [`${mod} + D`, "Duplicate"],
+    [`${mod} + A`, "Select all"],
+    ["Delete / Backspace", "Delete selection"],
+    ["← ↑ ↓ →", "Nudge (Shift = ×10)"],
+    ["Esc", "Deselect / cancel"],
+    ["§", "Arrange"],
+    [`${mod} + G`, "Group"],
+    [`${mod} + Shift + G`, "Ungroup"],
+    [`${mod} + ] / [`, "Bring forward / send backward"],
+    [`${mod} + Shift + ] / [`, "Bring to front / send to back"],
+    ["§", "Pen (while drawing)"],
+    ["Enter", "Finish path"],
+    ["Esc", "Cancel path"],
+    ["§", "View & navigation"],
+    ["Space (hold)", "Pan the canvas (Hand tool)"],
+    ["+ / −", "Zoom in / out"],
     ["0", "Actual size (1:1)"],
-    ["f", "Fit to frame"],
-    ["t", "Cycle output variant"],
-    ["b", "Cycle background of focused panel"],
-    ["Esc", "Close modal / cancel"],
+    ["f", "Fit canvas to window"],
+    ["b", "Cycle background"],
+    ["q", "Open the Process workspace"],
+    ["?", "This help"],
   ];
   const root = document.createElement("div");
   root.className = "form";
   const grid = document.createElement("div");
-  grid.className = "info-grid";
+  grid.className = "info-grid shortcut-grid";
   for (const [keys, desc] of rows) {
+    if (keys === "§") {
+      const h = document.createElement("div");
+      h.className = "shortcut-section";
+      h.textContent = desc;
+      grid.appendChild(h);
+      continue;
+    }
     const k = document.createElement("div");
     k.className = "info-key";
     k.textContent = keys;
@@ -4066,6 +4089,10 @@ function openShortcutsModal() {
     grid.appendChild(d);
   }
   root.appendChild(grid);
+  const note = document.createElement("p");
+  note.className = "form-hint";
+  note.textContent = "Tip: right-click the canvas for object actions, or empty space for canvas actions. Rotate/flip live on the left toolstrip.";
+  root.appendChild(note);
   modalBodyEl.innerHTML = "";
   modalBodyEl.appendChild(root);
 }

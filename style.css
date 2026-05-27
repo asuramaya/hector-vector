@@ -1030,6 +1030,23 @@ button:disabled {
   word-break: break-all;
 }
 
+/* Keyboard-shortcuts modal: section headers span the grid; key column auto-fits. */
+.shortcut-grid { grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; }
+.shortcut-grid .info-key { white-space: nowrap; color: var(--fg); }
+.shortcut-grid .info-val { word-break: normal; }
+.shortcut-section {
+  grid-column: 1 / -1;
+  margin-top: 12px;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 3px;
+}
+.shortcut-section:first-child { margin-top: 0; }
+
 .panel-focused {
   box-shadow: inset 0 0 0 1px var(--line);
 }
