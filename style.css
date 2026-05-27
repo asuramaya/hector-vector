@@ -262,6 +262,7 @@ button:disabled {
   display: grid; place-items: center;
 }
 .tool-button.active { background: #000; color: #fff; }
+.tool-sep { height: 1px; background: var(--line); margin: 2px 4px; align-self: stretch; }
 
 .rail {
   border: 1px solid var(--line);

@@ -1298,6 +1298,8 @@ function currentTranslate(n) {
 }
 function setTranslate(n, x, y) { n.setAttribute("transform", `translate(${nfmt(x)} ${nfmt(y)})`); }
 
+const SHAPE_TOOLS = new Set(["rect", "ellipse", "line"]);
+
 const editor = {
   stage: null,
   selection: new Set(),
@@ -1308,6 +1310,8 @@ const editor = {
   idSeq: 0,
   pinned: false,        // true when showing a blank/opened doc (skip library remount)
   _strokeWidthInput: null,
+  // last-used appearance — newly drawn shapes inherit it (updated by applyFill/applyStroke)
+  style: { fill: "#808080", stroke: "none", strokeWidth: 0 },
 
   get dirty() { return this.history.length > 0; },
 
@@ -1436,6 +1440,7 @@ const editor = {
     this.redo = []; this._coalescing = false; this._coalesceState = null;
     this._updateButtons();
   },
+  cancelCoalesce() { this._coalescing = false; this._coalesceState = null; },
   _state() { return { svg: this._historyMarkup(), sel: [...this.selection], ab: this.artboardSelected }; },
   undo() { this.commitCoalesce(); if (!this.history.length) return; this.redo.push(this._state()); this._restore(this.history.pop()); },
   redoAction() { this.commitCoalesce(); if (!this.redo.length) return; this.history.push(this._state()); this._restore(this.redo.pop()); },
@@ -1463,6 +1468,12 @@ const editor = {
   nodeById(id) { return this.stage && this.stage.querySelector(`[data-hv-id="${CSS.escape(id)}"]`); },
   selectedNodes() { return [...this.selection].map((id) => this.nodeById(id)).filter(Boolean); },
   _onPointerDown(e) {
+    if (SHAPE_TOOLS.has(this.tool)) {
+      if (e.button !== 0) return;
+      e.stopPropagation(); e.preventDefault();   // draw, don't pan
+      this._beginDraw(e);
+      return;
+    }
     if (this.tool !== "select") return;
     let hit = e.target.closest && e.target.closest("[data-hv-id]");
     if (hit && hit.getAttribute("data-hv-locked") === "1") hit = null;   // locked → not selectable
@@ -1494,6 +1505,38 @@ const editor = {
       this._renderSelection();
     };
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  },
+  // Shape tools: click-drag on the canvas to create a primitive. The whole gesture
+  // is one undo step — beginCoalesce snapshots the pre-draw doc, commitCoalesce
+  // commits it once the shape is large enough to keep (a bare click creates nothing).
+  _beginDraw(startEvent) {
+    const tool = this.tool;
+    const inv = () => this.stage.getScreenCTM().inverse();
+    const start = new DOMPoint(startEvent.clientX, startEvent.clientY).matrixTransform(inv());
+    this.beginCoalesce();                         // snapshot the document before the shape exists
+    this.selection = new Set(); this.artboardSelected = false; this._renderSelection();
+    const ov = this._overlayEl();
+    const node = makeShapeNode(tool, start, this.style);
+    this.stage.insertBefore(node, ov);
+    let moved = false;
+    const move = (ev) => {
+      const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
+      sizeShape(tool, node, start, p, ev.shiftKey);
+      moved = true;
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (!moved || !shapeMeaningful(tool, node)) { node.remove(); this.cancelCoalesce(); return; }
+      const id = "n" + (++this.idSeq);
+      node.setAttribute("data-hv-id", id);
+      this.commitCoalesce();                      // one undo entry for the whole draw
+      this.selection = new Set([id]); this.artboardSelected = false;
+      this._renderSelection(); this._renderInspector(); this._renderLayers();
+      setStatus(`Added ${this.nodeName(node).toLowerCase()}.`, 1500);
+    };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   },
@@ -1530,11 +1573,18 @@ const editor = {
 
   // ---------- tools ----------
   setTool(t) {
-    if (t !== "select" && t !== "node") return;
+    if (t !== "select" && t !== "node" && !SHAPE_TOOLS.has(t)) return;
     this.tool = t;
     document.querySelectorAll(".tool-button").forEach((b) => b.classList.toggle("active", b.dataset.tool === t));
     if (t === "node") this.mountNodeHandles(); else this.unmountNodeHandles();
-    setStatus(t === "node" ? "Node tool — drag anchors. (V = select)" : "Select tool. (A = nodes)", 1500);
+    const msg = {
+      select: "Select tool. (A = nodes)",
+      node: "Node tool — drag anchors. (V = select)",
+      rect: "Rectangle — drag on the canvas. (V = select)",
+      ellipse: "Ellipse — drag on the canvas. Shift = circle.",
+      line: "Line — drag on the canvas. Shift = 45°.",
+    };
+    setStatus(msg[t] || "", 1500);
   },
   unmountNodeHandles() { const ov = this._overlayEl(); if (ov) ov.querySelectorAll(".hv-handles").forEach((g) => g.remove()); },
   onViewportChanged() { if (this.tool === "node" && this.stage) this.mountNodeHandles(); },
@@ -1584,8 +1634,9 @@ const editor = {
 
   // ---------- property edits — apply* do NOT push; wrap with beginCoalesce/commitCoalesce ----------
   _eachSel(fn) { this.selectedNodes().forEach(fn); this._renderSelection(); },
-  applyFill(color) { this._eachSel((n) => n.setAttribute("fill", color || "none")); },
+  applyFill(color) { this.style.fill = color || "none"; this._eachSel((n) => n.setAttribute("fill", color || "none")); },
   applyStroke(color, width) {
+    this.style.stroke = width > 0 ? color : "none"; this.style.strokeWidth = width > 0 ? width : 0;
     this._eachSel((n) => {
       if (width > 0) {
         n.setAttribute("stroke", color); n.setAttribute("stroke-width", nfmt(width));
@@ -1940,6 +1991,76 @@ function shapeToAbsPath(el) {
   }
   return "";
 }
+// ---------- shape-tool geometry (pure) ----------
+function applyShapeStyle(n, style, isLine) {
+  if (isLine) {
+    n.setAttribute("fill", "none");
+    const col = style.stroke && style.stroke !== "none" ? style.stroke : "#1d1d1f";
+    const w = style.strokeWidth > 0 ? style.strokeWidth : 2;
+    n.setAttribute("stroke", col); n.setAttribute("stroke-width", nfmt(w));
+    n.setAttribute("vector-effect", "non-scaling-stroke");
+    n.setAttribute("stroke-linecap", "round");
+    return;
+  }
+  n.setAttribute("fill", style.fill || "#808080");
+  if (style.stroke && style.stroke !== "none" && style.strokeWidth > 0) {
+    n.setAttribute("stroke", style.stroke); n.setAttribute("stroke-width", nfmt(style.strokeWidth));
+    n.setAttribute("vector-effect", "non-scaling-stroke");
+    n.setAttribute("stroke-linejoin", "round"); n.setAttribute("stroke-linecap", "round");
+  }
+}
+function makeShapeNode(tool, p, style) {
+  if (tool === "line") {
+    const n = document.createElementNS(SVG_NS, "line");
+    n.setAttribute("x1", nfmt(p.x)); n.setAttribute("y1", nfmt(p.y));
+    n.setAttribute("x2", nfmt(p.x)); n.setAttribute("y2", nfmt(p.y));
+    applyShapeStyle(n, style, true);
+    return n;
+  }
+  if (tool === "ellipse") {
+    const n = document.createElementNS(SVG_NS, "ellipse");
+    n.setAttribute("cx", nfmt(p.x)); n.setAttribute("cy", nfmt(p.y));
+    n.setAttribute("rx", 0); n.setAttribute("ry", 0);
+    applyShapeStyle(n, style, false);
+    return n;
+  }
+  const n = document.createElementNS(SVG_NS, "rect");
+  n.setAttribute("x", nfmt(p.x)); n.setAttribute("y", nfmt(p.y));
+  n.setAttribute("width", 0); n.setAttribute("height", 0);
+  applyShapeStyle(n, style, false);
+  return n;
+}
+function sizeShape(tool, n, a, b, constrain) {
+  let dx = b.x - a.x, dy = b.y - a.y;
+  if (tool === "line") {
+    let x2 = b.x, y2 = b.y;
+    if (constrain) {                 // snap to 0 / 45 / 90°
+      const len = Math.hypot(dx, dy);
+      const ang = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+      x2 = a.x + Math.cos(ang) * len; y2 = a.y + Math.sin(ang) * len;
+    }
+    n.setAttribute("x2", nfmt(x2)); n.setAttribute("y2", nfmt(y2));
+    return;
+  }
+  if (constrain) { const m = Math.max(Math.abs(dx), Math.abs(dy)); dx = (dx < 0 ? -1 : 1) * m; dy = (dy < 0 ? -1 : 1) * m; }
+  const x = Math.min(a.x, a.x + dx), y = Math.min(a.y, a.y + dy), w = Math.abs(dx), h = Math.abs(dy);
+  if (tool === "rect") {
+    n.setAttribute("x", nfmt(x)); n.setAttribute("y", nfmt(y));
+    n.setAttribute("width", nfmt(w)); n.setAttribute("height", nfmt(h));
+  } else {
+    n.setAttribute("cx", nfmt(x + w / 2)); n.setAttribute("cy", nfmt(y + h / 2));
+    n.setAttribute("rx", nfmt(w / 2)); n.setAttribute("ry", nfmt(h / 2));
+  }
+}
+function shapeMeaningful(tool, n) {
+  if (tool === "line") {
+    const dx = (+n.getAttribute("x2")) - (+n.getAttribute("x1"));
+    const dy = (+n.getAttribute("y2")) - (+n.getAttribute("y1"));
+    return Math.hypot(dx, dy) > 0.5;
+  }
+  if (tool === "rect") return (+n.getAttribute("width")) > 0.5 && (+n.getAttribute("height")) > 0.5;
+  return (+n.getAttribute("rx")) > 0.25 && (+n.getAttribute("ry")) > 0.25;
+}
 function ghostBtn(label, onClick) {
   const b = document.createElement("button"); b.type = "button"; b.className = "ghost-button"; b.textContent = label;
   b.addEventListener("click", onClick); return b;
@@ -2110,6 +2231,9 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Delete" || e.key === "Backspace") { if (editor.selection.size) { e.preventDefault(); editor.deleteSelection(); } return; }
   if (e.key === "v" || e.key === "V") { editor.setTool("select"); return; }
   if (e.key === "a" || e.key === "A") { editor.setTool("node"); return; }
+  if (e.key === "r" || e.key === "R") { editor.setTool("rect"); return; }
+  if (e.key === "e" || e.key === "E") { editor.setTool("ellipse"); return; }
+  if (e.key === "l" || e.key === "L") { editor.setTool("line"); return; }
   if (e.key === "Escape" && editor.stage) { editor.selection = new Set(); editor.artboardSelected = false; editor._renderSelection(); editor._renderInspector(); }
 });
 

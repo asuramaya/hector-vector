@@ -69,6 +69,32 @@ def set_inspector_input(page, kind, index, value, event):
             el.dispatchEvent(new Event(event, { bubbles: true }));
         }""", {"kind": kind, "index": index, "value": value, "event": event})
 
+def artboard_rect(page):
+    return page.evaluate(
+        "() => { const r = editor.artboardEl().getBoundingClientRect();"
+        "return {x:r.left, y:r.top, w:r.width, h:r.height}; }")
+
+def draw_shape(page, tool, fx0, fy0, fx1, fy1, shift=False):
+    """Drag a shape across the artboard, coords given as fractions of the artboard box."""
+    page.evaluate(f"editor.setTool('{tool}')")
+    ab = artboard_rect(page)
+    x0, y0 = ab["x"] + ab["w"] * fx0, ab["y"] + ab["h"] * fy0
+    x1, y1 = ab["x"] + ab["w"] * fx1, ab["y"] + ab["h"] * fy1
+    page.mouse.move(x0, y0); page.mouse.down()
+    if shift: page.keyboard.down("Shift")
+    page.mouse.move(x1, y1, steps=12); page.mouse.up()
+    if shift: page.keyboard.up("Shift")
+    page.wait_for_timeout(40)
+
+def sel_node(page):
+    return page.evaluate(
+        "() => { const id=[...editor.selection][0]; const n=id&&editor.nodeById(id);"
+        "if(!n) return null; const a={}; for (const x of n.attributes) a[x.name]=x.value;"
+        "return {tag:n.tagName.toLowerCase(), attrs:a}; }")
+
+def n_nodes(page):
+    return page.evaluate("editor.stage.querySelectorAll('[data-hv-id]').length")
+
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
@@ -384,6 +410,56 @@ def main():
         page.evaluate("editor.rename('r1','My Rect'); editor.toggleLock('r2');")
         meta = page.evaluate("editor.serialize()")
         check("serialize strips editor metadata", ("data-hv-name" not in meta) and ("data-hv-locked" not in meta))
+
+        # ---- Phase 4: shape tools ----
+        mount_ctl(page)
+        base = n_nodes(page)
+        page.evaluate("editor.style.fill = '#123456'")   # last-used fill new shapes should inherit
+        draw_shape(page, "rect", 0.15, 0.15, 0.55, 0.5)
+        rsel = sel_node(page)
+        check("rect tool creates a selected rect", rsel and rsel["tag"] == "rect" and n_nodes(page) == base + 1,
+              f"sel={rsel} n={n_nodes(page)}")
+        check("drawn rect inherits last-used fill", rsel and rsel["attrs"].get("fill") == "#123456",
+              str(rsel and rsel["attrs"].get("fill")))
+        check("shape tool stays active after drawing", page.evaluate("editor.tool") == "rect")
+        page.evaluate("editor.undo()"); page.wait_for_timeout(40)
+        check("undo removes the drawn rect", n_nodes(page) == base)
+
+        mount_ctl(page)
+        draw_shape(page, "ellipse", 0.2, 0.2, 0.7, 0.6)
+        esel = sel_node(page)
+        check("ellipse tool creates a selected ellipse", esel and esel["tag"] == "ellipse")
+
+        mount_ctl(page)
+        draw_shape(page, "line", 0.2, 0.2, 0.8, 0.7)
+        lsel = sel_node(page)
+        check("line tool creates a selected line with a stroke",
+              lsel and lsel["tag"] == "line" and lsel["attrs"].get("stroke") not in (None, "none")
+              and lsel["attrs"].get("fill") == "none", str(lsel))
+
+        # Shift constrains a rect to a square even on a wide drag
+        mount_ctl(page)
+        draw_shape(page, "rect", 0.1, 0.4, 0.9, 0.55, shift=True)
+        sq = sel_node(page)
+        ok_sq = sq and abs(float(sq["attrs"]["width"]) - float(sq["attrs"]["height"])) < 0.5
+        check("Shift constrains rect to a square", ok_sq, str(sq and (sq["attrs"]["width"], sq["attrs"]["height"])))
+
+        # A bare click (no drag) creates nothing and leaves no undo entry
+        mount_ctl(page)
+        base = n_nodes(page)
+        page.evaluate("editor.setTool('rect')")
+        ab = artboard_rect(page)
+        page.mouse.move(ab["x"] + ab["w"] * 0.5, ab["y"] + ab["h"] * 0.5)
+        page.mouse.down(); page.mouse.up(); page.wait_for_timeout(40)
+        check("bare click draws nothing / no history", n_nodes(page) == base and page.evaluate("editor.history.length") == 0,
+              f"n={n_nodes(page)} hist={page.evaluate('editor.history.length')}")
+
+        # Keyboard shortcuts switch tools
+        page.evaluate("editor.setTool('select')")
+        page.keyboard.press("r"); check("R selects rect tool", page.evaluate("editor.tool") == "rect")
+        page.keyboard.press("e"); check("E selects ellipse tool", page.evaluate("editor.tool") == "ellipse")
+        page.keyboard.press("l"); check("L selects line tool", page.evaluate("editor.tool") == "line")
+        page.keyboard.press("v"); check("V returns to select tool", page.evaluate("editor.tool") == "select")
 
         # serialize cleanliness
         mount_ctl(page)
