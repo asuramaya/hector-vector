@@ -341,6 +341,50 @@ def main():
         page.keyboard.press("Control+z"); page.wait_for_timeout(40)
         check("ungroup is undoable", page.evaluate("editor._artworkNodes().length") == 2)
 
+        # ---- H. Polish pass: handle scaling, panel collapse, modal width, swatch, flatten ----
+        # node handles stay a constant screen size under zoom
+        mount_ctl(page)
+        page.evaluate("editor.setTool('node')"); page.wait_for_timeout(80)
+        hw = lambda: page.evaluate("() => { const c = editor._overlayEl().querySelector('.hv-handle'); return c ? c.getBoundingClientRect().width : 0; }")
+        w1 = hw()
+        page.evaluate("zoomVp(viewports.output, 4)"); page.wait_for_timeout(80)
+        w2 = hw()
+        check("node handles stay constant screen size under zoom", w1 > 0 and abs(w2 - w1) < 4, f"w1={w1:.1f} w2={w2:.1f}")
+        page.evaluate("editor.setTool('select'); fitVp(viewports.output)")
+
+        # collapsed section shrinks to its header (no empty flex gap)
+        page.evaluate("() => { const s = document.querySelector('#rail .rail-section.layers'); if (!s.classList.contains('collapsed')) s.querySelector('.section-head').click(); }")
+        page.wait_for_timeout(60)
+        ch = page.evaluate("document.querySelector('#rail .rail-section.layers').offsetHeight")
+        check("collapsed section shrinks to header", ch < 70, f"height={ch}")
+        page.evaluate("() => { const s = document.querySelector('#rail .rail-section.layers'); if (s.classList.contains('collapsed')) s.querySelector('.section-head').click(); }")
+
+        # form modal narrow vs gallery modal wide
+        page.evaluate("newBlankDoc()"); page.wait_for_timeout(60)
+        check("form modal is narrow", page.evaluate("document.querySelector('.modal-window').classList.contains('modal-narrow')"))
+        page.evaluate("closeModal()")
+        page.evaluate("openOpenModal()"); page.wait_for_timeout(60)
+        check("gallery modal is wide", not page.evaluate("document.querySelector('.modal-window').classList.contains('modal-narrow')"))
+        page.evaluate("closeModal()")
+
+        # layer rows show a colour swatch
+        mount_ctl(page); page.wait_for_timeout(60)
+        sw = page.evaluate("() => { const s = document.querySelector('#layers-list .layer-swatch'); return s ? getComputedStyle(s).backgroundColor : null; }")
+        check("layer rows show a colour swatch", sw is not None and sw != "rgba(0, 0, 0, 0)", f"bg={sw}")
+
+        # a single wrapper <g> import is flattened into per-shape layers (layered extraction)
+        WRAP = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100"><g transform="translate(5 5)"><rect x="0" y="0" width="40" height="40" fill="#ff0000"/><rect x="50" y="0" width="40" height="40" fill="#00ff00"/><circle cx="50" cy="70" r="18" fill="#0000ff"/></g></svg>'
+        page.evaluate("svg => { selectedOutput=null; mountStageFromText(svg,'wrap.svg'); }", WRAP)
+        page.wait_for_function("editor.stage && editor._artworkNodes().length >= 1", timeout=8000); page.wait_for_timeout(120)
+        check("wrapper group flattened into per-shape layers", page.evaluate("editor._artworkNodes().length") == 3,
+              f"n={page.evaluate('editor._artworkNodes().length')}")
+
+        # serialize strips editor-only metadata
+        mount_ctl(page)
+        page.evaluate("editor.rename('r1','My Rect'); editor.toggleLock('r2');")
+        meta = page.evaluate("editor.serialize()")
+        check("serialize strips editor metadata", ("data-hv-name" not in meta) and ("data-hv-locked" not in meta))
+
         # serialize cleanliness
         mount_ctl(page)
         s = page.evaluate("editor.serialize()")

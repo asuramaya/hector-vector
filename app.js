@@ -850,6 +850,7 @@ document.querySelectorAll("[data-vp]").forEach((button) => {
     if (action === "fit") vp.scale = vp.fitScale || 1, vp.x = 0, vp.y = 0;
     if (action === "actual") vp.scale = 1, vp.x = 0, vp.y = 0;
     applyViewportState(vp);
+    if (vp === viewports.output) editor.onViewportChanged();
   });
 });
 
@@ -892,9 +893,11 @@ function beginSourceEdit() {
   input.select();
 }
 
-function openModal(title) {
+function openModal(title, narrow = false) {
   modalTitleEl.textContent = title;
   modalSearchEl.value = "";
+  const win = modalRootEl.querySelector(".modal-window");
+  if (win) win.classList.toggle("modal-narrow", !!narrow);
   modalRootEl.hidden = false;
   setTimeout(() => modalSearchEl.focus(), 0);
 }
@@ -1351,6 +1354,7 @@ const editor = {
     }
     ab.setAttribute("x", nfmt(vb.x)); ab.setAttribute("y", nfmt(vb.y));
     ab.setAttribute("width", nfmt(vb.width)); ab.setAttribute("height", nfmt(vb.height));
+    this._flattenWrapper(svg);    // layered extraction: unwrap a single wrapper <g> on import
     let max = 0;
     svg.querySelectorAll("[data-hv-id]").forEach((n) => {
       const m = +(/\d+/.exec(n.getAttribute("data-hv-id")) || [0])[0];
@@ -1367,6 +1371,25 @@ const editor = {
     if (!ov) { ov = document.createElementNS(SVG_NS, "g"); ov.setAttribute("class", "hv-overlay"); }
     svg.appendChild(ov);   // keep overlay last
   },
+  // If the whole graphic is one un-tagged wrapper <g> (common in exported/traced
+  // SVGs), unwrap it so each colour/shape becomes its own editable layer.
+  _flattenWrapper(svg) {
+    const art = [...svg.children].filter((c) => {
+      const t = c.tagName.toLowerCase();
+      return !SKIP_TAGS.has(t) && !c.classList.contains("hv-artboard") && !c.classList.contains("hv-overlay");
+    });
+    if (art.length !== 1) return;
+    const g = art[0];
+    if (g.tagName.toLowerCase() !== "g" || g.hasAttribute("data-hv-id")) return;
+    const kids = [...g.children].filter((k) => !SKIP_TAGS.has(k.tagName.toLowerCase()));
+    if (kids.length < 2) return;
+    const gt = currentTranslate(g);
+    for (const k of [...g.children]) {
+      if (gt.x || gt.y) { const kt = currentTranslate(k); setTranslate(k, kt.x + gt.x, kt.y + gt.y); }
+      svg.insertBefore(k, g);
+    }
+    g.remove();
+  },
   _overlayEl() { return this.stage && this.stage.querySelector("g.hv-overlay"); },
   artboardEl() { return this.stage && this.stage.querySelector("rect.hv-artboard"); },
 
@@ -1382,7 +1405,9 @@ const editor = {
     const c = this.stage.cloneNode(true);
     c.querySelectorAll("g.hv-overlay").forEach((g) => g.remove());
     c.classList.remove("hv-pickable");
-    c.querySelectorAll("[data-hv-id]").forEach((n) => n.removeAttribute("data-hv-id"));
+    c.querySelectorAll("[data-hv-id]").forEach((n) => {
+      ["data-hv-id", "data-hv-name", "data-hv-locked"].forEach((a) => n.removeAttribute(a));
+    });
     const ab = c.querySelector("rect.hv-artboard");
     if (ab) {
       const f = ab.getAttribute("fill");
@@ -1512,14 +1537,17 @@ const editor = {
     setStatus(t === "node" ? "Node tool — drag anchors. (V = select)" : "Select tool. (A = nodes)", 1500);
   },
   unmountNodeHandles() { const ov = this._overlayEl(); if (ov) ov.querySelectorAll(".hv-handles").forEach((g) => g.remove()); },
+  onViewportChanged() { if (this.tool === "node" && this.stage) this.mountNodeHandles(); },
   mountNodeHandles() {
     this.unmountNodeHandles();
     const ov = this._overlayEl(); if (!ov || !this.stage) return;
     const anchors = collectAnchors(this.stage);
     if (!anchors.length) return;
     if (anchors.length > MAX_HANDLES) { setStatus(`Too many anchors (${anchors.length}) to edit. Works best on traced paths.`, 4000); return; }
-    const vb = this.stage.viewBox.baseVal;
-    const r = Math.max(0.6, Math.hypot(vb.width, vb.height) / 180);
+    // constant ~5px on screen regardless of zoom (CTM.a = screen px per user unit)
+    const m = this.stage.getScreenCTM();
+    const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
+    const r = 5 / k;
     const g = document.createElementNS(SVG_NS, "g");
     g.setAttribute("class", "hv-handles");
     for (const a of anchors) {
@@ -1715,6 +1743,12 @@ const editor = {
       eye.textContent = hidden ? "○" : "●"; eye.title = hidden ? "Show" : "Hide";
       eye.addEventListener("click", (e) => { e.stopPropagation(); this.setVisibility(id, hidden); });
 
+      const swatch = document.createElement("span");
+      swatch.className = "layer-swatch";
+      const fill = toHexColor(n.getAttribute("fill"));
+      if (fill && n.getAttribute("fill") !== "none") { swatch.style.background = fill; swatch.style.backgroundImage = "none"; }
+      swatch.title = n.getAttribute("fill") || "no fill";
+
       const name = document.createElement("span");
       name.className = "layer-name"; name.textContent = this.nodeName(n);
       name.title = "Double-click to rename";
@@ -1726,7 +1760,7 @@ const editor = {
       lock.textContent = locked ? "L" : "·"; lock.title = locked ? "Unlock" : "Lock"; lock.classList.toggle("on", locked);
       lock.addEventListener("click", (e) => { e.stopPropagation(); this.toggleLock(id); });
 
-      row.append(eye, name, lock);
+      row.append(eye, swatch, name, lock);
       row.addEventListener("click", () => {
         if (n.getAttribute("data-hv-locked") === "1") return;
         this.selection = new Set([id]); this.artboardSelected = false;
@@ -1937,7 +1971,7 @@ function importRun(process) {
 }
 
 function newBlankDoc() {
-  openModal("New canvas");
+  openModal("New canvas", true);
   modalSearchEl.hidden = true;
   const root = document.createElement("div"); root.className = "form";
   root.appendChild(sectionTitle("Artboard size"));
@@ -2167,7 +2201,7 @@ function targetSizeFor(native) {
 
 async function openExportModal() {
   if (!selectedOutput || viewports.output.kind !== "svg") return;
-  openModal("Export PNG");
+  openModal("Export PNG", true);
   modalSearchEl.hidden = true;
   const native = await svgNativeSize(selectedOutput.url);
   const root = document.createElement("div");
@@ -2787,7 +2821,7 @@ function buildSettingsForm(process) {
 function openSettingsModal() {
   const proc = processSelectEl.value;
   const label = processSelectEl.options[processSelectEl.selectedIndex]?.text || proc;
-  openModal(`Settings — ${label}`);
+  openModal(`Settings — ${label}`, true);
   modalSearchEl.hidden = true;
   modalBodyEl.innerHTML = "";
   modalBodyEl.appendChild(buildSettingsForm(proc));
@@ -2805,7 +2839,7 @@ async function openInfoModal() {
     setStatus("Select an image first.", 2000);
     return;
   }
-  openModal(`Info — ${selectedName}`);
+  openModal(`Info — ${selectedName}`, true);
   modalSearchEl.hidden = true;
   modalBodyEl.innerHTML = `<div class="form-section">Loading…</div>`;
   let info;
@@ -2979,17 +3013,20 @@ function zoomVp(vp, factor) {
   if (!vp.el.querySelector(".viewport-content")) return;
   vp.scale = Math.max(0.02, Math.min(40, vp.scale * factor));
   applyViewportState(vp);
+  if (vp === viewports.output) editor.onViewportChanged();
 }
 function fitVp(vp) {
   if (!vp.el.querySelector(".viewport-content")) return;
   vp.scale = vp.fitScale || 1;
   vp.x = 0; vp.y = 0;
   applyViewportState(vp);
+  if (vp === viewports.output) editor.onViewportChanged();
 }
 function actualVp(vp) {
   if (!vp.el.querySelector(".viewport-content")) return;
   vp.scale = 1; vp.x = 0; vp.y = 0;
   applyViewportState(vp);
+  if (vp === viewports.output) editor.onViewportChanged();
 }
 
 for (const vp of Object.values(viewports)) {

@@ -325,6 +325,13 @@ button:disabled {
 .layer-row:hover { background: #f2f2f2; }
 .layer-row.active { background: #000; color: #fff; }
 .layer-row.dragging { opacity: 0.4; }
+.layer-swatch {
+  flex: 0 0 auto; width: 14px; height: 14px; border: 1px solid var(--line);
+  background-image:
+    linear-gradient(45deg, #ccc 25%, transparent 25%), linear-gradient(-45deg, #ccc 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #ccc 75%), linear-gradient(-45deg, transparent 75%, #ccc 75%);
+  background-size: 8px 8px; background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+}
 .layer-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .layer-btn {
   flex: 0 0 auto; width: 20px; height: 20px; padding: 0;
@@ -340,7 +347,7 @@ button:disabled {
 .section-head .caret { flex: 0 0 auto; font-size: 10px; color: var(--muted); transition: transform 0.12s; }
 .rail-section.collapsed .section-head .caret { transform: rotate(-90deg); }
 .rail-section.collapsed .section-body { display: none; }
-.rail-section.library.collapsed { flex: 0 0 auto; }
+.rail-section.collapsed { flex: 0 0 auto; min-height: 0; }   /* must not reserve flex/min space */
 
 @media (max-width: 900px) {
   .editor-grid { grid-template-columns: auto minmax(0, 1fr); }
@@ -762,6 +769,7 @@ button:disabled {
   display: grid;
   grid-template-rows: auto 1fr;
 }
+.modal-window.modal-narrow { width: min(460px, 92vw); }
 
 .modal-search {
   border: 1px solid var(--line);
