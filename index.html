@@ -13,31 +13,19 @@
   <body>
     <main class="app editor">
       <header class="topbar editor-bar">
-        <div class="doc-actions panel-actions">
-          <div class="menu" data-menu="doc-new">
-            <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">New ▾</button>
+        <div class="panel-actions doc-actions-left">
+          <div class="menu" data-menu="file">
+            <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false" title="New / Open / Save / Export">File ▾</button>
             <div class="menu-list" role="menu" hidden></div>
           </div>
+        </div>
+        <div class="panel-actions doc-actions-center">
           <button id="process-button" class="ghost-button" type="button" title="Process & batch images into vectors (gallery + jobs)">Process<span id="process-count" class="menu-count"></span>…</button>
-          <button id="open-button" class="ghost-button" type="button" title="Open a vector from outputs">Open</button>
-          <button id="save-button" class="ghost-button" type="button" title="Save the canvas as .svg">Save</button>
-          <div class="menu" data-menu="doc-export">
-            <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">Export ▾</button>
-            <div class="menu-list" role="menu" hidden></div>
-          </div>
-          <button id="install-button" class="ghost-button" type="button" hidden title="Install as a desktop app (borderless window)">⤓ Install</button>
         </div>
         <div class="panel-actions doc-actions-right">
           <button id="undo-button" class="ghost-button" type="button" title="Undo (Ctrl/Cmd+Z)" disabled>↶ Undo</button>
           <button id="redo-button" class="ghost-button" type="button" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>↷ Redo</button>
           <button id="rail-toggle" class="ghost-button" type="button" title="Collapse the side panel">⊟</button>
-        </div>
-        <!-- App-window titlebar controls — shown only when launched as a standalone
-             window (see launch.sh); driven by AWC / window.close in app.js. -->
-        <div class="window-controls" id="window-controls" hidden>
-          <button id="win-min" class="win-button" type="button" title="Minimize" aria-label="Minimize">─</button>
-          <button id="win-max" class="win-button" type="button" title="Maximize" aria-label="Maximize">▢</button>
-          <button id="win-close" class="win-button win-close" type="button" title="Close" aria-label="Close">✕</button>
         </div>
       </header>
 
@@ -50,6 +38,12 @@
           <button class="tool-button" data-tool="rect" type="button" title="Rectangle (R)">▭</button>
           <button class="tool-button" data-tool="ellipse" type="button" title="Ellipse (E)">◯</button>
           <button class="tool-button" data-tool="line" type="button" title="Line (L)">╱</button>
+          <span class="tool-sep" aria-hidden="true"></span>
+          <!-- Object controls: act on the selection, or the whole artboard when nothing is selected. -->
+          <button class="tool-action" data-xform="rotateCCW" type="button" title="Rotate 90° left (selection or artboard)">↺</button>
+          <button class="tool-action" data-xform="rotateCW" type="button" title="Rotate 90° right (selection or artboard)">↻</button>
+          <button class="tool-action" data-xform="flipH" type="button" title="Flip horizontal (selection or artboard)">⇄</button>
+          <button class="tool-action" data-xform="flipV" type="button" title="Flip vertical (selection or artboard)">⇅</button>
         </nav>
 
         <article class="stage-wrap preview-panel">
@@ -61,22 +55,19 @@
           <div id="input-preview" class="preview-frame" hidden></div>
           <div id="output-preview" class="preview-frame empty-frame">Import or open a vector to start.</div>
           <div class="panel-foot">
+            <!-- Navigation only: object controls live on the left toolstrip. -->
             <div class="panel-actions viewport-controls">
               <button class="ghost-button" data-vp="output" data-action="zoom-out" type="button" title="Zoom out (-)">-</button>
               <button class="ghost-button" data-vp="output" data-action="fit" type="button" title="Fit (f)">Fit</button>
               <button class="ghost-button" data-vp="output" data-action="actual" type="button" title="Actual size (0)">1:1</button>
               <button class="ghost-button" data-vp="output" data-action="zoom-in" type="button" title="Zoom in (+)">+</button>
               <button class="ghost-button" data-vp="output" data-action="bg" type="button" title="Cycle background (b)">BG</button>
-              <span class="bar-sep"></span>
-              <button class="ghost-button" data-xform="rotateCCW" type="button" title="Rotate 90° left (selection, or whole artboard)">↺</button>
-              <button class="ghost-button" data-xform="rotateCW" type="button" title="Rotate 90° right (selection, or whole artboard)">↻</button>
-              <button class="ghost-button" data-xform="flipH" type="button" title="Flip horizontal (selection, or whole artboard)">⇄</button>
-              <button class="ghost-button" data-xform="flipV" type="button" title="Flip vertical (selection, or whole artboard)">⇅</button>
             </div>
           </div>
         </article>
 
         <aside class="rightdock" id="rightdock">
+          <div class="dock-resizer" id="dock-resizer" title="Drag to resize"></div>
           <div class="inspector" id="inspector">
             <div class="panel-head"><span id="inspector-title">Nothing selected</span></div>
             <div id="inspector-body" class="inspector-body"></div>

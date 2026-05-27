@@ -123,6 +123,11 @@ def sel_node(page):
 def n_nodes(page):
     return page.evaluate("editor.stage.querySelectorAll('[data-hv-id]').length")
 
+def file_menu_click(page, label):
+    """Open the header File menu and click the item whose label contains `label`."""
+    page.click('.menu[data-menu="file"] .menu-trigger'); page.wait_for_timeout(60)
+    page.click(f'.menu[data-menu="file"] .menu-item:has-text("{label}")'); page.wait_for_timeout(60)
+
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
@@ -139,7 +144,7 @@ def main():
         big_nodes = page.evaluate("editor.stage.querySelectorAll('[data-hv-id]').length")
         has_output = page.evaluate("!!selectedOutput")
         if has_output:
-            page.click("#save-button")
+            file_menu_click(page, "Save")
             page.wait_for_function("/Saved|Save failed/.test(document.querySelector('#status-text').textContent)", timeout=8000)
             status = page.eval_on_selector("#status-text", "e => e.textContent")
             check("save library doc", "Saved" in status, status)
@@ -366,6 +371,21 @@ def main():
         page.evaluate("closeModal()")
         # brand removed → header is action-only
         check("brand removed from header", page.evaluate("!document.querySelector('.brand')"))
+        # header: File ▾ menu (left), Process centered, no loose New/Open/Save/Export buttons
+        check("File menu replaces loose header buttons", page.evaluate(
+            "!!document.querySelector('.menu[data-menu=\"file\"]') && !document.querySelector('#open-button') && !document.querySelector('#save-button')"))
+        file_menu_click(page, "Open vector")
+        check("File menu Open opens the browser", page.evaluate("!document.querySelector('#modal-root').hidden"))
+        page.evaluate("closeModal()")
+        proc_centered = page.evaluate("""() => {
+            const h=document.querySelector('.editor-bar').getBoundingClientRect();
+            const p=document.querySelector('#process-button').getBoundingClientRect();
+            return Math.abs((p.left+p.right)/2 - (h.left+h.right)/2) < 40;   // process button ~centered
+        }""")
+        check("Process button is centered in the header", proc_centered)
+        # object controls (rotate/flip) moved to the toolstrip; nav-only chin
+        check("transforms live in the toolstrip", page.evaluate("!!document.querySelector('.toolstrip [data-xform]')"))
+        check("bottom chin is navigation-only", page.evaluate("!document.querySelector('.panel-foot [data-xform]')"))
         # Layers live in the right dock (alongside the inspector), not a left rail
         check("Layers panel is in the right dock", page.evaluate("!!document.querySelector('#rightdock .rail-section.layers #layers-list')"))
         # collapsing the dock must keep the stage wide (regression: it used to fall into
@@ -771,23 +791,22 @@ def main():
 
         # Open modal opens and lists vectors
         page.evaluate("editor.pinned=false")
-        page.click("#open-button"); page.wait_for_timeout(150)
+        file_menu_click(page, "Open vector"); page.wait_for_timeout(100)
         modal_open = page.evaluate("!document.querySelector('#modal-root').hidden")
         cells = page.evaluate("document.querySelectorAll('#modal-body .gallery-cell').length")
         check("Open modal lists vectors", modal_open and cells >= 0, f"open={modal_open} cells={cells}")
         page.evaluate("closeModal()")
 
         # ---- App-window mode (standalone Chromium window) ----
-        # Headless can't exercise WCO/AWC, but the ?app=1 gate must engage and
-        # reveal the custom titlebar controls without disturbing normal layout.
+        # Headless can't exercise WCO/AWC, but the ?app=1 gate must engage and make
+        # the header a draggable titlebar without disturbing normal layout. Window
+        # controls are left to the native window manager (no custom buttons).
         page.goto(BASE + "/?app=1", wait_until="networkidle")
         page.wait_for_function("typeof editor !== 'undefined'")
         page.wait_for_timeout(80)
         check("app=1 adds .app-window", page.evaluate("document.querySelector('.app.editor').classList.contains('app-window')") is True)
         check("header becomes a drag region", page.evaluate("getComputedStyle(document.querySelector('.topbar')).getPropertyValue('-webkit-app-region')") == "drag")
-        # Without Additional Windowing Controls (headless / snap chromium) the custom
-        # cluster stays hidden — the platform titlebar or WCO overlay owns the controls.
-        check("custom controls hidden without AWC", page.evaluate("document.querySelector('#window-controls').hidden && !document.querySelector('#window-controls').offsetParent") is True)
+        check("no custom window controls (native WM only)", page.evaluate("!document.querySelector('#window-controls') && !document.querySelector('.win-button')") is True)
         # normal browser load must NOT engage app-window mode
         page.goto(BASE, wait_until="networkidle")
         page.wait_for_function("typeof editor !== 'undefined'")
