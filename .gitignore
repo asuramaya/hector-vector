@@ -4,6 +4,8 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+# Playwright dev venv for the E2E editor tests
+.venv-e2e/
 
 # --- Local workspace data (never publish) ---
 inputs/

@@ -1,0 +1,3 @@
+# Dev-only: end-to-end browser tests for the editor. NOT a runtime dependency
+# (the app itself needs only Pillow + numpy — see ../../requirements.txt).
+playwright>=1.40
