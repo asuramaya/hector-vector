@@ -340,11 +340,22 @@ def main():
         page.keyboard.press("Control+z"); page.wait_for_timeout(50)
         check("invert-space is undoable", page.evaluate("editor._artworkNodes().length") == 3)
 
-        # ---- F. Side-panel UX: header Library menu + rail collapse doesn't break the stage ----
-        page.click(".doc-actions .menu[data-menu='library'] .menu-trigger"); page.wait_for_timeout(80)
-        menu_items = page.evaluate("document.querySelectorAll(\".doc-actions .menu[data-menu='library'] .menu-item\").length")
-        check("header Library menu opens with items", menu_items >= 6, f"items={menu_items}")
-        page.keyboard.press("Escape")
+        # ---- F. Process workspace + rail collapse doesn't break the stage ----
+        page.click("#process-button"); page.wait_for_timeout(150)
+        ws = page.evaluate("""() => ({
+            open: !document.querySelector('#modal-root').hidden,
+            gallery: !!document.querySelector('#process-gallery'),
+            jobs: !!document.querySelector('#process-jobs'),
+            run: [...document.querySelectorAll('.process-controls .primary-button')].some(b => /Run/.test(b.textContent)),
+        })""")
+        check("Process workspace opens with gallery + jobs + run", ws["open"] and ws["gallery"] and ws["jobs"] and ws["run"], str(ws))
+        page.evaluate("closeModal()")
+        # footer Jobs button also opens the workspace (jobs unified there)
+        page.click("#jobs-button"); page.wait_for_timeout(120)
+        check("footer Jobs opens the workspace", page.evaluate("!!document.querySelector('#process-jobs')"))
+        page.evaluate("closeModal()")
+        # brand removed → header is action-only
+        check("brand removed from header", page.evaluate("!document.querySelector('.brand')"))
         # collapsing the rail must keep the stage wide (regression: it used to fall into
         # the rail's grid track and collapse to ~0)
         w_before = page.evaluate("document.querySelector('#output-preview').getBoundingClientRect().width")

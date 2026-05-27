@@ -15,7 +15,7 @@ const jobsButtonEl = document.querySelector("#jobs-button");
 const jobsCountEl = document.querySelector("#jobs-count");
 const forceInputEl = document.querySelector("#force-input");
 const runButtonEl = document.querySelector("#run-button");
-const libraryHeaderEl = document.querySelector("#library-count");
+const libraryHeaderEl = document.querySelector("#process-count");
 const sourcePathEl = document.querySelector("#source-path");
 const sourceEditEl = document.querySelector("#source-edit");
 const sourceResetEl = document.querySelector("#source-reset");
@@ -692,6 +692,7 @@ const TERMINAL_STATES = new Set(["done", "failed", "cancelled"]);
 const ACTIVE_STATES = new Set(["queued", "running"]);
 let jobsCache = [];
 let jobsModalOpen = false;
+let processModalOpen = false;
 
 function jobsForSource(name) {
   if (!name) return [];
@@ -714,6 +715,27 @@ function updateJobsButton() {
   jobsCountEl.hidden = false;
   jobsCountEl.textContent = active ? `${active}/${total}` : String(total);
   jobsCountEl.className = "badge" + (active ? " badge-busy" : failed ? " badge-fail" : "");
+}
+
+// Live progress in the chin: a bar that tracks the running job (determinate when
+// the pipeline reports step/total, indeterminate otherwise), hidden when idle.
+function updateFooterProgress(running, queuedCount) {
+  const wrap = document.querySelector("#status-progress");
+  const bar = document.querySelector("#status-progress-bar");
+  const label = document.querySelector("#status-progress-label");
+  if (!wrap || !bar || !label) return;
+  if (!running) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  const p = running.progress;
+  const tail = queuedCount ? ` · ${queuedCount} queued` : "";
+  if (p && p.total) {
+    const pct = Math.max(0, Math.min(100, Math.round((p.step / p.total) * 100)));
+    bar.style.width = pct + "%"; bar.classList.remove("indeterminate");
+    label.textContent = `${p.step}/${p.total}${p.label ? " " + p.label : ""}${tail}`;
+  } else {
+    bar.style.width = "100%"; bar.classList.add("indeterminate");
+    label.textContent = `working…${tail}`;
+  }
 }
 
 async function fetchJobs() {
@@ -746,8 +768,10 @@ function applyJobsData(jobs) {
 
   updateJobsButton();
   if (jobsModalOpen) renderJobsModal();
+  if (processModalOpen) renderProcessJobs();
 
   const running = jobs.find((job) => job.status === "running");
+  updateFooterProgress(running, jobs.filter((j) => j.status === "queued").length);
   const queuedCount = jobs.filter((job) => job.status === "queued").length;
   const failedCount = jobs.filter((job) => job.status === "failed").length;
   const cancelledCount = jobs.filter((job) => job.status === "cancelled").length;
@@ -786,7 +810,7 @@ function applyJobsData(jobs) {
     setStatus(
       `Failed${stage}: ${short || `${failedCount} job(s) failed${note}.`} — click for Jobs.`,
       8000,
-      { error: true, onClick: () => openJobsModal && openJobsModal(), title: tail }
+      { error: true, onClick: () => openProcessModal(true), title: tail }
     );
   } else if (failedCount === 0 && cancelledCount === 0) {
     setStatus(`Done. ${latest.summary}`);
@@ -934,6 +958,7 @@ function closeModal() {
   modalRootEl.hidden = true;
   modalBodyEl.innerHTML = "";
   jobsModalOpen = false;
+  processModalOpen = false;
 }
 
 modalRootEl.addEventListener("click", (event) => {
@@ -2473,38 +2498,10 @@ const MENU_ITEMS = {
   "doc-new": () => [
     { label: "Blank canvas…", onClick: newBlankDoc },
   ],
-  "doc-import": () => [
-    { label: "Production SVG", onClick: () => importRun("pipeline") },
-    { label: "SVG Trace", onClick: () => importRun("vectorize") },
-    { label: "Pixel Art → SVG", onClick: () => importRun("pixelvec") },
-    { type: "sep" },
-    { label: "Cutout PNG", onClick: () => importRun("cutout") },
-    { label: "Upscale PNG", onClick: () => importRun("upscale") },
-    { label: "Greenscreen Cutout", onClick: () => importRun("chromakey") },
-    { type: "sep" },
-    { type: "toggle", label: "Batch (whole library)", checked: modeSelectEl.value === "batch",
-      onClick: () => { modeSelectEl.value = modeSelectEl.value === "batch" ? "single" : "batch"; modeSelectEl.dispatchEvent(new Event("change")); } },
-    { type: "toggle", label: "Force re-run", checked: forceInputEl.checked,
-      onClick: () => { forceInputEl.checked = !forceInputEl.checked; forceInputEl.dispatchEvent(new Event("change")); } },
-    { label: "Process settings…", onClick: () => settingsButtonEl.click() },
-    { label: "Change source folder…", onClick: openSourceModal },
-  ],
   "doc-export": () => [
     { label: "Export PNG…", onClick: exportFlow },
     { label: "Copy SVG markup", onClick: copySvgSource },
   ],
-  "library": () => {
-    const item = selectedItem();
-    return [
-      { label: "Browse images…", onClick: openBrowseModal },
-      { label: "Add images…", onClick: () => fileInputEl.click() },
-      { label: "Image info…", disabled: !selectedName, onClick: openInfoModal },
-      { type: "sep" },
-      { label: "Jobs…", onClick: () => openJobsModal() },
-      { label: "Clean derivatives", onClick: cleanDerivatives },
-      { label: "Remove selected", disabled: !(item && item.removable), onClick: removeSelected },
-    ];
-  },
   "layers": () => {
     const sel = editor.selectedNodes();
     const hasGroup = sel.some((n) => n.tagName.toLowerCase() === "g");
@@ -2518,6 +2515,7 @@ const MENU_ITEMS = {
 // ---------- editor wiring: tools, header buttons, rail, keyboard ----------
 document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("click", () => editor.setTool(b.dataset.tool)));
 {
+  const procBtn = document.querySelector("#process-button"); if (procBtn) procBtn.addEventListener("click", () => openProcessModal());
   const openBtn = document.querySelector("#open-button"); if (openBtn) openBtn.addEventListener("click", openOpenModal);
   const saveBtn = document.querySelector("#save-button"); if (saveBtn) saveBtn.addEventListener("click", () => editor.save());
   const undoBtn = document.querySelector("#undo-button"); if (undoBtn) undoBtn.addEventListener("click", () => editor.undo());
@@ -2849,7 +2847,7 @@ async function removeSelected() {
   }
 }
 
-clearJobsEl.addEventListener("click", async () => {
+if (clearJobsEl) clearJobsEl.addEventListener("click", async () => {
   try {
     const data = await api("/api/jobs/clear", "POST", {});
     setStatus(data.message, 2000);
@@ -2898,6 +2896,11 @@ function renderJobsModal() {
   if (!jobsModalOpen) return;
   modalTitleEl.textContent = `Jobs — ${jobsCache.length}`;
   modalBodyEl.innerHTML = "";
+  modalBodyEl.appendChild(buildJobsPanel());
+}
+// Job queue (toolbar + rows) — shared by the Process workspace's jobs pane and
+// the legacy Jobs modal. Returns the .jobs-panel node.
+function buildJobsPanel() {
   const wrap = document.createElement("div");
   wrap.className = "jobs-panel";
 
@@ -2933,8 +2936,7 @@ function renderJobsModal() {
     empty.className = "jobs-empty";
     empty.textContent = "No jobs yet.";
     wrap.appendChild(empty);
-    modalBodyEl.appendChild(wrap);
-    return;
+    return wrap;
   }
 
   for (const job of jobsCache) {
@@ -2999,7 +3001,111 @@ function renderJobsModal() {
     row.appendChild(actions);
     wrap.appendChild(row);
   }
-  modalBodyEl.appendChild(wrap);
+  return wrap;
+}
+
+// ---------- Process workspace: gallery + processing controls + live jobs ----------
+// First-class home for the image→vector pipeline. Opened on demand (header
+// "Process…" / footer Jobs / `q`), so it never eats editor canvas space.
+const PROCESS_OPTIONS = [
+  ["pipeline", "Production SVG"], ["vectorize", "SVG Trace"], ["pixelvec", "Pixel Art → SVG"],
+  ["cutout", "Cutout PNG"], ["upscale", "Upscale PNG"], ["chromakey", "Greenscreen Cutout"],
+];
+
+function openProcessModal(focusJobs = false) {
+  processModalOpen = true;
+  jobsModalOpen = false;
+  openModal("Process — batch images to vectors");
+  modalSearchEl.hidden = true;
+  renderProcessWorkspace();
+  if (focusJobs) { const j = document.querySelector("#process-jobs"); if (j) j.scrollIntoView({ block: "nearest" }); }
+  loadJobs().catch(() => {});
+}
+
+function renderProcessWorkspace() {
+  if (!processModalOpen) return;
+  modalTitleEl.textContent = `Process — ${workItems.length} image(s)`;
+  modalBodyEl.innerHTML = "";
+  const root = document.createElement("div");
+  root.className = "process-workspace";
+
+  // --- controls bar ---
+  const bar = document.createElement("div");
+  bar.className = "process-controls";
+  const procSel = makeSelectRaw(processSelectEl.value, PROCESS_OPTIONS, (v) => { processSelectEl.value = v; processSelectEl.dispatchEvent(new Event("change")); });
+  procSel.title = "Pipeline to run";
+  const modeSel = makeSelectRaw(modeSelectEl.value, [["batch", "Batch — whole library"], ["single", "Single — selected image"]], (v) => { modeSelectEl.value = v; modeSelectEl.dispatchEvent(new Event("change")); });
+  const force = document.createElement("label"); force.className = "process-force";
+  const forceBox = document.createElement("input"); forceBox.type = "checkbox"; forceBox.checked = forceInputEl.checked;
+  forceBox.addEventListener("change", () => { forceInputEl.checked = forceBox.checked; });
+  force.appendChild(forceBox); force.appendChild(document.createTextNode(" Force re-run"));
+  const runBtn = document.createElement("button"); runBtn.type = "button"; runBtn.className = "primary-button"; runBtn.textContent = "Run → canvas";
+  runBtn.addEventListener("click", () => runProcess());
+  bar.appendChild(procSel);
+  bar.appendChild(modeSel);
+  bar.appendChild(force);
+  bar.appendChild(ghostBtn("Add images", () => fileInputEl.click()));
+  bar.appendChild(ghostBtn("Source…", openSourceModal));
+  bar.appendChild(runBtn);
+  root.appendChild(bar);
+
+  // --- advanced settings (collapsible, inline so it stays in one place) ---
+  const adv = document.createElement("details");
+  adv.className = "process-advanced";
+  const sum = document.createElement("summary"); sum.textContent = "Advanced settings"; adv.appendChild(sum);
+  adv.appendChild(buildSettingsForm(processSelectEl.value));
+  root.appendChild(adv);
+
+  // --- gallery (left) + jobs (right) ---
+  const panes = document.createElement("div");
+  panes.className = "process-panes";
+  const gallery = document.createElement("div"); gallery.id = "process-gallery"; gallery.className = "process-gallery";
+  const jobs = document.createElement("div"); jobs.id = "process-jobs"; jobs.className = "process-jobs";
+  panes.appendChild(gallery);
+  panes.appendChild(jobs);
+  root.appendChild(panes);
+
+  modalBodyEl.appendChild(root);
+  renderProcessGallery();
+  renderProcessJobs();
+}
+
+function renderProcessGallery() {
+  const host = document.querySelector("#process-gallery"); if (!host) return;
+  host.innerHTML = "";
+  const head = document.createElement("div"); head.className = "process-pane-head"; head.textContent = `Library (${workItems.length})`;
+  host.appendChild(head);
+  if (!workItems.length) {
+    const empty = document.createElement("div"); empty.className = "gallery-empty"; empty.textContent = "No images yet — drop files here or use Add images.";
+    host.appendChild(empty); return;
+  }
+  const grid = document.createElement("div"); grid.className = "gallery-grid";
+  for (const item of workItems) {
+    const cell = document.createElement("div");
+    cell.className = "gallery-cell" + (item.name === selectedName ? " active" : "") + (itemIsProcessed(item.name) ? " processed" : "");
+    const thumb = document.createElement("button");
+    thumb.type = "button"; thumb.className = "gallery-thumb-button"; thumb.title = `Select ${item.name}`;
+    thumb.innerHTML = `<div class="gallery-thumb"><img src="${item.url}" alt="${item.name}" loading="lazy" /></div>`;
+    thumb.addEventListener("click", () => {
+      selectedName = item.name; manualOutputName = null; editor.pinned = false;
+      renderQueue(); renderProcessGallery();
+      renderPreviews().catch((e) => setStatus(e.message, 2500));
+    });
+    cell.appendChild(thumb);
+    const cap = document.createElement("div"); cap.className = "gallery-caption"; cap.title = item.name;
+    cap.textContent = item.name + (itemIsProcessed(item.name) ? " ✓" : "");
+    cell.appendChild(cap);
+    grid.appendChild(cell);
+  }
+  host.appendChild(grid);
+}
+
+function renderProcessJobs() {
+  const host = document.querySelector("#process-jobs"); if (!host) return;
+  host.innerHTML = "";
+  const head = document.createElement("div"); head.className = "process-pane-head"; head.textContent = `Jobs (${jobsCache.length})`;
+  host.appendChild(head);
+  host.appendChild(buildJobsPanel());
 }
 
 function openJobsModal() {
@@ -3011,7 +3117,7 @@ function openJobsModal() {
   loadJobs().catch(() => {});
 }
 
-if (jobsButtonEl) jobsButtonEl.addEventListener("click", openJobsModal);
+if (jobsButtonEl) jobsButtonEl.addEventListener("click", () => openProcessModal(true));
 
 api("/api/bootstrap", "POST")
   .then(() => refreshAll())
@@ -3559,7 +3665,7 @@ document.addEventListener("keydown", (event) => {
     case "[": event.preventDefault(); cycleProcess(-1); break;
     case "]": event.preventDefault(); cycleProcess(1); break;
     case "m": event.preventDefault(); cycleMode(); break;
-    case "q": event.preventDefault(); openJobsModal(); break;
+    case "q": event.preventDefault(); openProcessModal(true); break;
     case "1": event.preventDefault(); focusViewport("input"); break;
     case "2": event.preventDefault(); focusViewport("output"); break;
     case "+": case "=": event.preventDefault(); zoomVp(viewports[focusedVp], 1.2); break;
@@ -3581,6 +3687,7 @@ function schedulePoll() {
       const { completionsHappened, completedNow } = await loadJobs();
       if (wasBusy || activityState === "busy" || completionsHappened) {
         await loadOutputs();
+        if (processModalOpen) renderProcessGallery();   // refresh processed badges
       }
       if (completionsHappened) {
         const stem = selectedName ? stem_(selectedName) : null;

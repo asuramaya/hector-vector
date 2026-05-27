@@ -9,31 +9,20 @@
   <body>
     <main class="app editor">
       <header class="topbar editor-bar">
-        <div class="brand">
-          <span class="brand-name">hector-vector</span>
-          <span id="workspace-title" class="brand-sub"></span>
-          <span id="workspace-path" class="brand-path" hidden></span>
-        </div>
         <div class="doc-actions panel-actions">
           <div class="menu" data-menu="doc-new">
             <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">New ▾</button>
             <div class="menu-list" role="menu" hidden></div>
           </div>
-          <div class="menu" data-menu="doc-import">
-            <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false" title="Run an image pipeline onto the canvas">Import ▾</button>
-            <div class="menu-list" role="menu" hidden></div>
-          </div>
-          <div class="menu" data-menu="library">
-            <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false" title="Image library, add images, jobs">Library<span id="library-count" class="menu-count"></span> ▾</button>
-            <div class="menu-list" role="menu" hidden></div>
-          </div>
+          <button id="process-button" class="ghost-button" type="button" title="Process & batch images into vectors (gallery + jobs)">Process<span id="process-count" class="menu-count"></span>…</button>
           <button id="open-button" class="ghost-button" type="button" title="Open a vector from outputs">Open</button>
           <button id="save-button" class="ghost-button" type="button" title="Save the canvas as .svg">Save</button>
           <div class="menu" data-menu="doc-export">
             <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">Export ▾</button>
             <div class="menu-list" role="menu" hidden></div>
           </div>
-          <span class="bar-sep"></span>
+        </div>
+        <div class="panel-actions doc-actions-right">
           <button id="undo-button" class="ghost-button" type="button" title="Undo (Ctrl/Cmd+Z)" disabled>↶ Undo</button>
           <button id="redo-button" class="ghost-button" type="button" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>↷ Redo</button>
           <button id="rail-toggle" class="ghost-button" type="button" title="Collapse the side panel">⊟</button>
@@ -95,6 +84,8 @@
            library code keeps its element bindings; the UI now lives in header menus
            (Import ▾ / Library ▾) and on-demand modals. -->
       <div id="workspace-plumbing" hidden>
+        <span id="workspace-title"></span>
+        <span id="workspace-path"></span>
         <div class="source-row">
           <span id="source-path"></span>
           <button id="source-edit" type="button">Change</button>
@@ -121,11 +112,14 @@
 
       <footer class="status-bar">
         <div id="status-text">Ready.</div>
+        <div id="status-progress" class="status-progress" hidden>
+          <div class="status-progress-track"><div id="status-progress-bar" class="status-progress-bar"></div></div>
+          <span id="status-progress-label" class="status-progress-label"></span>
+        </div>
         <div class="panel-actions">
-          <button id="jobs-button" class="ghost-button" type="button" title="Show job queue (shortcut: q)">
+          <button id="jobs-button" class="ghost-button" type="button" title="Open the processing workspace (shortcut: q)">
             Jobs <span id="jobs-count" class="badge" hidden></span>
           </button>
-          <button id="clear-jobs" class="ghost-button" type="button" title="Remove finished, failed, and cancelled jobs">Clear Jobs</button>
         </div>
       </footer>
     </main>
