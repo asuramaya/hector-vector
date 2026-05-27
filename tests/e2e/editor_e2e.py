@@ -381,9 +381,14 @@ def main():
         # ---- G. Phase 3: layers panel ----
         mount_ctl(page)
         page.wait_for_timeout(60)
-        rows = page.evaluate("[...document.querySelectorAll('#layers-list .layer-row')].map(r=>r.dataset.id)")
+        rows = page.evaluate("[...document.querySelectorAll('#layers-list .layer-row:not(.artboard-row)')].map(r=>r.dataset.id)")
         # list is reverse DOM order: top row = frontmost (last artwork child)
         check("layers list reflects nodes (reverse order)", rows == ["r3", "r2", "r1"], f"rows={rows}")
+
+        # the Artboard row is pinned at the bottom and selects the canvas
+        check("artboard row pinned at bottom of layers", page.evaluate("document.querySelector('#layers-list .layer-row:last-child').classList.contains('artboard-row')") is True)
+        page.click("#layers-list .layer-row.artboard-row"); page.wait_for_timeout(50)
+        check("clicking artboard row selects the artboard", page.evaluate("editor.artboardSelected === true && editor.selection.size === 0"))
 
         # click a layer row selects that node on the canvas
         page.click("#layers-list .layer-row[data-id='r2']"); page.wait_for_timeout(50)
@@ -646,6 +651,39 @@ def main():
         # cleanup is undoable
         page.evaluate("editor.undo()"); page.wait_for_timeout(60)
         check("layers cleanup is undoable", page.evaluate("editor._artworkNodes().length") == 4)
+
+        # ---- Merge same-colour layers (consolidate trace output) ----
+        # Mimics a monochrome trace: same fill, each path positioned by translate.
+        page.evaluate("""svg => { selectedOutput=null; manualOutputName=null; mountStageFromText(svg,'mono.svg'); }""",
+                      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
+                      '<path data-hv-id="m1" transform="translate(10,10)" d="M0 0 H20 V20 H0 Z" fill="#000"/>'
+                      '<path data-hv-id="m2" transform="translate(100,100)" d="M0 0 H20 V20 H0 Z" fill="#000"/>'
+                      '<path data-hv-id="m3" transform="translate(150,20)" d="M0 0 H10 V10 H0 Z" fill="#ff0000"/></svg>')
+        page.wait_for_function("editor.stage && editor.nodeById('m1')", timeout=8000)
+        before = page.evaluate("editor._artworkNodes().length")
+        page.evaluate("editor.consolidateByColor()"); page.wait_for_timeout(60)
+        after = page.evaluate("editor._artworkNodes().length")
+        check("merge same-colour collapses paths", before == 3 and after == 2, f"before={before} after={after}")
+        merged_ok = page.evaluate("""() => {
+            const ps=[...editor.stage.querySelectorAll('path')].filter(p=>['#000','#000000'].includes(p.getAttribute('fill')));
+            if(ps.length!==1) return false;
+            const p=ps[0]; if(p.getAttribute('transform')) return false;   // translate baked in
+            const bb=p.getBBox();                                          // spans (10,10)->(30,30) and (100,100)->(120,120)
+            return bb.x<=11 && bb.y<=11 && (bb.x+bb.width)>=119 && (bb.y+bb.height)>=119;
+        }""")
+        check("merged path keeps both regions (transform baked)", merged_ok)
+        check("merge leaves other colours alone", page.evaluate("!!editor.nodeById('m3')"))
+        page.evaluate("editor.undo()"); page.wait_for_timeout(60)
+        check("merge is undoable", page.evaluate("editor._artworkNodes().length") == 3)
+
+        # ---- Artboard navigation: Shift+O selects it, spacebar pans ----
+        page.evaluate("editor.selection=new Set(); editor.artboardSelected=false; editor._renderSelection(); if(document.activeElement?.blur) document.activeElement.blur();")
+        page.keyboard.press("Shift+O"); page.wait_for_timeout(40)
+        check("Shift+O selects the artboard", page.evaluate("editor.artboardSelected === true"))
+        page.keyboard.down("Space"); page.wait_for_timeout(30)
+        check("spacebar engages pan mode", page.evaluate("editor._spacePan === true && document.querySelector('.stage-wrap').classList.contains('space-pan')"))
+        page.keyboard.up("Space"); page.wait_for_timeout(30)
+        check("releasing space ends pan mode", page.evaluate("!editor._spacePan && !document.querySelector('.stage-wrap').classList.contains('space-pan')"))
 
         # ---- Phase 4: contextual transforms (rotate / flip) ----
         page.evaluate("""svg => { selectedOutput=null; manualOutputName=null; mountStageFromText(svg,'xf.svg'); }""",

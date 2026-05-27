@@ -1526,7 +1526,14 @@ const editor = {
   // ---------- selection ----------
   nodeById(id) { return this.stage && this.stage.querySelector(`[data-hv-id="${CSS.escape(id)}"]`); },
   selectedNodes() { return [...this.selection].map((id) => this.nodeById(id)).filter(Boolean); },
+  selectArtboard() {
+    if (!this.stage) return;
+    this.selection = new Set();
+    this.artboardSelected = true;
+    this._renderSelection(); this._renderInspector();
+  },
   _onPointerDown(e) {
+    if (this._spacePan) return;   // spacebar held → let the viewport pan the drag (don't select/draw)
     if (e.button !== 0) return;   // right/middle clicks are for the context menu, not draw/select
     if (this.tool === "pen") { this._penDown(e); return; }
     if (SHAPE_TOOLS.has(this.tool)) {
@@ -2074,6 +2081,10 @@ const editor = {
     if (!this.stage) return;
     this.beginCoalesce();
     let removed = 0, unwrapped = 0;
+    // Speck threshold is relative to the canvas — a 0.5px floor is meaningless on a
+    // 9000px trace, where noise blobs can be tens of px. ~0.3% of the larger side.
+    const vb = this.stage.viewBox.baseVal;
+    const speck = Math.max((Math.max(vb?.width || 0, vb?.height || 0) || 1000) * 0.003, 0.5);
     const unpainted = (n) => {
       const fill = n.getAttribute("fill");
       const stroke = n.getAttribute("stroke");
@@ -2083,7 +2094,7 @@ const editor = {
     };
     const degenerate = (n) => {
       let bb; try { bb = n.getBBox(); } catch { return true; }
-      if (bb.width < 0.5 && bb.height < 0.5) return true;   // no visible area (speck / empty path)
+      if (bb.width < speck && bb.height < speck) return true;   // sub-threshold speck / empty path
       return unpainted(n);
     };
     const scrub = (parent) => {
@@ -2113,6 +2124,48 @@ const editor = {
     if (removed) bits.push(`removed ${removed} ghost layer${removed > 1 ? "s" : ""}`);
     if (unwrapped) bits.push(`unwrapped ${unwrapped} group${unwrapped > 1 ? "s" : ""}`);
     setStatus(`Cleaned up — ${bits.join(", ")}.`, 2500);
+  },
+  // Collapse same-paint sibling <path>s into one compound path. Traces commonly
+  // explode a single colour into hundreds of translate-positioned paths, so we
+  // bake each path's translate into its geometry first, then concatenate `d`.
+  consolidateByColor() {
+    if (!this.stage) return;
+    const I = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+    const paintSig = (n) => ["fill", "stroke", "stroke-width", "opacity", "fill-opacity", "stroke-opacity", "fill-rule"]
+      .map((a) => n.getAttribute(a) || "").join("|");
+    this.beginCoalesce();
+    let mergedAway = 0, into = 0;
+    const parents = [this.stage, ...this.stage.querySelectorAll("g")].filter((p) => !p.classList.contains("hv-overlay"));
+    for (const parent of parents) {
+      if (!parent.isConnected) continue;
+      const buckets = new Map();
+      for (const child of [...parent.children]) {
+        if (child.tagName.toLowerCase() !== "path") continue;
+        if (child.classList.contains("hv-artboard") || child.classList.contains("hv-overlay")) continue;
+        if (child.getAttribute("data-hv-locked") === "1" || child.getAttribute("display") === "none") continue;
+        const k = paintSig(child);
+        if (!buckets.has(k)) buckets.set(k, []);
+        buckets.get(k).push(child);
+      }
+      for (const arr of buckets.values()) {
+        if (arr.length < 2) continue;
+        arr.forEach((p) => bakeMatrixInto(p, I, 0, 0));   // translate → absolute geometry
+        const head = arr[0];
+        let d = (head.getAttribute("d") || "").trim();
+        for (let i = 1; i < arr.length; i++) {
+          const dd = (arr[i].getAttribute("d") || "").trim();
+          if (dd) d += " " + dd;
+          arr[i].remove(); mergedAway++;
+        }
+        head.setAttribute("d", d);
+        into++;
+      }
+    }
+    if (!mergedAway) { this.cancelCoalesce(); setStatus("Nothing to merge — each layer is already a distinct colour.", 3000); return; }
+    this.commitCoalesce();
+    this.selection = new Set([...this.selection].filter((id) => this.nodeById(id)));
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+    setStatus(`Merged ${mergedAway + into} layers into ${into} by colour.`, 3000);
   },
   _renderLayers() {
     const list = document.querySelector("#layers-list");
@@ -2161,6 +2214,22 @@ const editor = {
       row.addEventListener("drop", (e) => { e.preventDefault(); const src = e.dataTransfer.getData("text/plain"); if (src && src !== id) this.reorderTo(src, id); });
       list.appendChild(row);
     }
+    // Artboard row, pinned at the bottom like a background — a reliable click
+    // target for selecting the canvas even when artwork covers every pixel.
+    const abRow = document.createElement("div");
+    abRow.className = "layer-row artboard-row" + (this.artboardSelected ? " active" : "");
+    const abSwatch = document.createElement("span");
+    abSwatch.className = "layer-swatch";
+    const ab = this.artboardEl();
+    const abFill = ab && toHexColor(ab.getAttribute("fill"));
+    if (abFill && ab.getAttribute("fill") !== "none") { abSwatch.style.background = abFill; abSwatch.style.backgroundImage = "none"; }
+    abSwatch.title = (ab && ab.getAttribute("fill")) || "no background";
+    const abName = document.createElement("span");
+    abName.className = "layer-name"; abName.textContent = "Artboard";
+    abName.title = "The canvas (Shift+O)";
+    abRow.append(abSwatch, abName);
+    abRow.addEventListener("click", () => this.selectArtboard());
+    list.appendChild(abRow);
   },
   _renameInline(node, span) {
     const input = document.createElement("input");
@@ -2697,6 +2766,7 @@ const MENU_ITEMS = {
       { label: "Ungroup", disabled: !hasGroup, onClick: () => editor.ungroup() },
       { type: "sep" },
       { label: "Clean up ghost layers", onClick: () => editor.cleanupLayers() },
+      { label: "Merge same-colour layers", onClick: () => editor.consolidateByColor() },
     ];
   },
 };
@@ -2980,6 +3050,7 @@ function canvasMenuItems() {
     { type: "sep" },
     { label: "Invert space", onClick: () => editor.invertSpace() },
     { label: "Clean up ghost layers", onClick: () => editor.cleanupLayers() },
+    { label: "Merge same-colour layers", onClick: () => editor.consolidateByColor() },
     { type: "sep" },
     { label: "Rotate artboard 90° CW", onClick: () => editor.transform("rotateCW") },
     { label: "Rotate artboard 90° CCW", onClick: () => editor.transform("rotateCCW") },
@@ -3192,6 +3263,22 @@ if (forceInputEl) {
   });
 }
 
+// True when the selected source already has an output for the chosen process.
+// Single-mode runs send an explicit input, which the server processes
+// unconditionally — so without this guard, re-running a done image silently
+// redoes the whole pipeline (incl. the expensive upscale) into a fresh folder.
+function alreadyProcessed(name, process) {
+  const matches = latestOutputsFor(name);
+  if (!matches.length) return false;
+  if (process === "cutout") return matches.some((x) => x.name.includes(".cutout."));
+  if (process === "chromakey") return matches.some((x) => x.name.includes(".chromakey."));
+  if (process === "upscale") {
+    return matches.some((x) => x.kind === "png"
+      && !/\.(cutout|chromakey|preview|mask)\./.test(x.name));
+  }
+  return matches.some((x) => x.kind === "svg" && !x.name.includes(".edited."));   // vectorize / pixelvec / pipeline
+}
+
 async function runProcess() {
   if (runButtonEl.disabled) return;
   runButtonEl.disabled = true;
@@ -3199,9 +3286,17 @@ async function runProcess() {
   runButtonEl.textContent = "Starting…";
   try {
     const payload = { ...settings };
-    if (modeSelectEl.value === "single" && selectedName) payload.inputs = [selectedName];
-    if (forceInputEl && forceInputEl.checked) payload.force = true;
-    const data = await api(`/api/run/${processSelectEl.value}`, "POST", payload);
+    const proc = processSelectEl.value;
+    const force = !!(forceInputEl && forceInputEl.checked);
+    if (modeSelectEl.value === "single" && selectedName) {
+      payload.inputs = [selectedName];
+      if (!force && alreadyProcessed(selectedName, proc)) {
+        setStatus(`“${selectedName}” is already processed — turn on Force to re-run.`, 4000);
+        return;   // finally{} restores the button; no wasteful re-run
+      }
+    }
+    if (force) payload.force = true;
+    const data = await api(`/api/run/${proc}`, "POST", payload);
     lastBatchFailCount = 0;
     const hold = data.started === 0 ? 4000 : 1800;
     setStatus(data.message || "Started.", hold);
@@ -4067,41 +4162,47 @@ function cycleOutputVariant() {
   renderPreviews().catch((error) => setStatus(error.message, 2500));
 }
 
+// View / navigation keys. The editor's editing + tool keymap lives above; this
+// handler is single-key and Illustrator-flavoured, and — unlike the old image-tool
+// keymap it replaces — nothing here triggers processing or moves the library
+// selection (that used to fire pipeline runs on stray Enter / arrow presses).
 document.addEventListener("keydown", (event) => {
   const tag = (event.target?.tagName || "").toLowerCase();
   const isEditing = tag === "input" || tag === "textarea" || tag === "select" || event.target?.isContentEditable;
-  if (event.key === "Escape" && isEditing && document.activeElement?.blur) {
-    document.activeElement.blur();
-    return;
-  }
   if (isEditing) return;
   if (event.ctrlKey || event.metaKey || event.altKey) return;
-  if (!modalRootEl.hidden && event.key !== "Escape") return;
+  if (!modalRootEl.hidden) return;
 
   switch (event.key) {
-    case "j": case "ArrowDown": event.preventDefault(); moveLibrary(1); break;
-    case "k": case "ArrowUp": event.preventDefault(); moveLibrary(-1); break;
-    case "g": event.preventDefault(); moveLibrary(-workItems.length); break;
-    case "G": event.preventDefault(); moveLibrary(workItems.length); break;
-    case "Enter": event.preventDefault(); runProcess(); break;
-    case ",": event.preventDefault(); openSettingsModal(); break;
-    case "i": event.preventDefault(); openInfoModal(); break;
-    case "/": event.preventDefault(); openBrowseModal(); break;
-    case "?": event.preventDefault(); openShortcutsModal(); break;
-    case "[": event.preventDefault(); cycleProcess(-1); break;
-    case "]": event.preventDefault(); cycleProcess(1); break;
-    case "m": event.preventDefault(); cycleMode(); break;
+    case "+": case "=": event.preventDefault(); zoomVp(viewports.output, 1.2); break;
+    case "-": case "_": event.preventDefault(); zoomVp(viewports.output, 1 / 1.2); break;
+    case "0": event.preventDefault(); actualVp(viewports.output); break;
+    case "f": event.preventDefault(); fitVp(viewports.output); break;
+    case "b": event.preventDefault(); cycleBg("output"); break;
     case "q": event.preventDefault(); openProcessModal(true); break;
-    case "1": event.preventDefault(); focusViewport("input"); break;
-    case "2": event.preventDefault(); focusViewport("output"); break;
-    case "+": case "=": event.preventDefault(); zoomVp(viewports[focusedVp], 1.2); break;
-    case "-": case "_": event.preventDefault(); zoomVp(viewports[focusedVp], 1 / 1.2); break;
-    case "0": event.preventDefault(); actualVp(viewports[focusedVp]); break;
-    case "f": event.preventDefault(); fitVp(viewports[focusedVp]); break;
-    case "t": event.preventDefault(); cycleOutputVariant(); break;
-    case "b": event.preventDefault(); cycleBg(focusedVp); break;
+    case "?": event.preventDefault(); openShortcutsModal(); break;
+    case "O": event.preventDefault(); editor.selectArtboard(); break;   // Shift+O — Illustrator's Artboard tool
   }
 });
+
+// Spacebar = temporary Hand tool (Illustrator): hold space and drag to pan, even
+// when artwork covers the whole canvas. editor._onPointerDown bails while it's
+// held so the viewport's own pan handler (bindViewportDragging) takes the drag.
+{
+  const stageWrap = document.querySelector(".stage-wrap");
+  const release = () => { editor._spacePan = false; if (stageWrap) stageWrap.classList.remove("space-pan"); };
+  window.addEventListener("keydown", (e) => {
+    if (e.code !== "Space" || editor._spacePan) return;
+    const t = (e.target?.tagName || "").toLowerCase();
+    if (t === "input" || t === "textarea" || t === "select" || t === "button" || e.target?.isContentEditable) return;
+    if (!modalRootEl.hidden) return;
+    editor._spacePan = true;
+    if (stageWrap) stageWrap.classList.add("space-pan");
+    e.preventDefault();   // don't scroll the page
+  });
+  window.addEventListener("keyup", (e) => { if (e.code === "Space") release(); });
+  window.addEventListener("blur", release);   // never let the grab cursor stick
+}
 
 let pollTimer = null;
 function schedulePoll() {

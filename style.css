@@ -329,6 +329,9 @@ button:disabled {
 .layer-row:hover { background: #f2f2f2; }
 .layer-row.active { background: #000; color: #fff; }
 .layer-row.dragging { opacity: 0.4; }
+/* Artboard pinned at the bottom of the stack, like a background layer. */
+.layer-row.artboard-row { border-top: 2px solid var(--line); border-bottom: none; color: var(--muted); font-style: italic; }
+.layer-row.artboard-row.active { color: #fff; }
 .layer-swatch {
   flex: 0 0 auto; width: 14px; height: 14px; border: 1px solid var(--line);
   background-image:
@@ -452,8 +455,20 @@ button:disabled {
 }
 
 .inline-svg {
+  /* The artboard reads as an obvious sheet floating on the checker pasteboard.
+     overflow stays visible so artwork can spill onto the pasteboard. The white
+     background shows through wherever the artboard fill is "none". */
   overflow: visible;
+  background: #ffffff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.20), 0 0 0 1px rgba(0, 0, 0, 0.12);
 }
+
+/* Spacebar = temporary Hand tool: grab cursor while held (Illustrator). */
+.stage-wrap.space-pan,
+.stage-wrap.space-pan .viewport-shell,
+.stage-wrap.space-pan .inline-svg { cursor: grab; }
+.stage-wrap.space-pan:active,
+.stage-wrap.space-pan .viewport-shell:active { cursor: grabbing; }
 
 /* In-viewport point-editing handles (re-enable pointer events the svg disables) */
 .hv-handle {
