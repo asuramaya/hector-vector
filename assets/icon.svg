@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="hector-vector">
+  <!-- maskable-safe: all meaningful content sits inside the central ~80% -->
+  <rect width="512" height="512" rx="112" fill="#1b73e8"/>
+  <!-- bezier path drawn through three anchors -->
+  <path d="M136 360 C 136 232, 232 152, 376 152"
+        fill="none" stroke="#ffffff" stroke-width="34"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- control handle for the mid anchor -->
+  <line x1="256" y1="200" x2="320" y2="136" stroke="#bcd6fb" stroke-width="14" stroke-linecap="round"/>
+  <!-- anchor points -->
+  <rect x="112" y="336" width="48" height="48" rx="9" fill="#ffffff"/>
+  <rect x="232" y="176" width="48" height="48" rx="9" fill="#ffffff"/>
+  <circle cx="320" cy="136" r="22" fill="#bcd6fb"/>
+  <rect x="352" y="128" width="48" height="48" rx="9" fill="#ffffff"/>
+</svg>

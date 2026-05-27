@@ -28,8 +28,11 @@ TOOLS_DIR = APP_DIR / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 import pixelvec  # noqa: E402  (pure numpy/PIL, no venv needed)
 import svg_render  # noqa: E402  (pure Pillow for axis-aligned SVGs; cairosvg optional)
+# `.webmanifest` is not in the stdlib mime table; Chromium wants a JSON-ish type.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 OUTPUTS_DIR = APP_DIR / "outputs"
 INPUTS_DIR = APP_DIR / "inputs"
+ASSETS_DIR = APP_DIR / "assets"
 WORKSPACE_DIR = APP_DIR
 MASK_PREP_SCRIPT = APP_DIR / "mask_trace_prep.py"
 STATIC_FILES = {
@@ -37,6 +40,8 @@ STATIC_FILES = {
     "/index.html": "index.html",
     "/app.js": "app.js",
     "/style.css": "style.css",
+    "/manifest.webmanifest": "manifest.webmanifest",
+    "/sw.js": "sw.js",
 }
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 DERIVATIVE_MARKERS = (".cutout.", ".chromakey.", ".mask.", ".newmask.", ".preview.")
@@ -1957,6 +1962,16 @@ class Handler(SimpleHTTPRequestHandler):
             path = (OUTPUTS_DIR / rel).resolve()
             try:
                 path.relative_to(OUTPUTS_DIR.resolve())
+            except ValueError:
+                self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+                return
+            self.serve_file(path)
+            return
+        if parsed.path.startswith("/assets/"):
+            rel = Path(urllib.parse.unquote(parsed.path.removeprefix("/assets/")))
+            path = (ASSETS_DIR / rel).resolve()
+            try:
+                path.relative_to(ASSETS_DIR.resolve())
             except ValueError:
                 self.send_error(HTTPStatus.NOT_FOUND, "Not found")
                 return

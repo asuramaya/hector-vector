@@ -4,6 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>hector-vector</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/assets/icon.svg" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="application-name" content="hector-vector" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
@@ -21,11 +25,19 @@
             <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false">Export ▾</button>
             <div class="menu-list" role="menu" hidden></div>
           </div>
+          <button id="install-button" class="ghost-button" type="button" hidden title="Install as a desktop app (borderless window)">⤓ Install</button>
         </div>
         <div class="panel-actions doc-actions-right">
           <button id="undo-button" class="ghost-button" type="button" title="Undo (Ctrl/Cmd+Z)" disabled>↶ Undo</button>
           <button id="redo-button" class="ghost-button" type="button" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>↷ Redo</button>
           <button id="rail-toggle" class="ghost-button" type="button" title="Collapse the side panel">⊟</button>
+        </div>
+        <!-- App-window titlebar controls — shown only when launched as a standalone
+             window (see launch.sh); driven by AWC / window.close in app.js. -->
+        <div class="window-controls" id="window-controls" hidden>
+          <button id="win-min" class="win-button" type="button" title="Minimize" aria-label="Minimize">─</button>
+          <button id="win-max" class="win-button" type="button" title="Maximize" aria-label="Maximize">▢</button>
+          <button id="win-close" class="win-button win-close" type="button" title="Close" aria-label="Close">✕</button>
         </div>
       </header>
 

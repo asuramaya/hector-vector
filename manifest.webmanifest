@@ -1,0 +1,18 @@
+{
+  "name": "hector-vector",
+  "short_name": "hector-vector",
+  "description": "Lean browser vector editor.",
+  "id": "/?app=1",
+  "start_url": "/?app=1",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "landscape",
+  "theme_color": "#ffffff",
+  "background_color": "#ffffff",
+  "categories": ["graphics", "productivity"],
+  "icons": [
+    { "src": "/assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

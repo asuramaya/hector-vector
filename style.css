@@ -1052,3 +1052,60 @@ button:disabled {
     grid-column: auto;
   }
 }
+
+/* ===================== App-window mode (standalone / WCO) =====================
+   Active only when launched via launch.sh as a Chromium app window (the JS adds
+   `.app-window`, and `.wco` when the Window-Controls-Overlay is live). Gated so
+   the normal in-browser layout is completely unaffected. */
+.window-controls { display: none; }
+.app-window .window-controls[hidden] { display: none; }
+.app-window .window-controls {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin-left: 4px;
+}
+.win-button {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  border: 1px solid var(--line);
+  margin-left: -1px;        /* overlap shared edges (display-independent) */
+  background: var(--bg);
+  color: var(--fg);
+  width: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+}
+.win-button:first-child { margin-left: 0; }
+/* author `display:flex` above would otherwise defeat the UA hidden rule */
+.win-button[hidden] { display: none; }
+.win-button:hover { background: #eef2f7; }
+.win-close:hover { background: #e81123; color: #fff; border-color: #e81123; }
+
+/* In app-window mode the header doubles as the OS titlebar: empty header areas
+   drag the window; interactive controls opt out. */
+.app-window .topbar {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+.app-window .topbar button,
+.app-window .topbar a,
+.app-window .topbar select,
+.app-window .topbar input,
+.app-window .topbar .menu,
+.app-window .topbar .menu-list {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* When the Window-Controls-Overlay is active, the native min/max/close buttons
+   sit in a reserved corner; `--wco-*-inset` (set from JS via getTitlebarAreaRect)
+   keep our header content clear of them. The custom cluster hides to avoid dupes. */
+.app-window.wco .window-controls { display: none; }
+.app-window.wco .topbar {
+  padding-left: calc(12px + var(--wco-left-inset, 0px));
+  padding-right: calc(12px + var(--wco-right-inset, 0px));
+}

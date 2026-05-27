@@ -2732,6 +2732,97 @@ document.querySelectorAll("[data-xform]").forEach((b) => b.addEventListener("cli
       try { localStorage.setItem(key, c ? "1" : "0"); } catch {}
     });
   });
+
+  // ---- PWA install affordance (one-click path to the borderless WCO window) ----
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  }
+  {
+    const installBtn = document.querySelector("#install-button");
+    const inApp =
+      new URLSearchParams(location.search).has("app") ||
+      window.navigator.standalone === true ||
+      matchMedia("(display-mode: standalone)").matches ||
+      matchMedia("(display-mode: window-controls-overlay)").matches;
+    let deferred = null;
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault();
+      deferred = e;
+      if (installBtn && !inApp) installBtn.hidden = false;
+    });
+    if (installBtn) installBtn.addEventListener("click", async () => {
+      if (!deferred) return;
+      installBtn.hidden = true;
+      deferred.prompt();
+      try { await deferred.userChoice; } catch {}
+      deferred = null;
+    });
+    window.addEventListener("appinstalled", () => { if (installBtn) installBtn.hidden = true; });
+  }
+
+  // ---- App-window mode (standalone Chromium window launched via launch.sh) ----
+  // Turns the header into a draggable custom titlebar and, where the browser
+  // exposes Additional Windowing Controls, wires custom min/max/close. Under the
+  // Window-Controls-Overlay the OS draws compact native controls in a reserved
+  // corner instead. Everything below no-ops in a normal browser tab.
+  (() => {
+    if (!appEl) return;
+    const wco = navigator.windowControlsOverlay || null;
+    const appMode =
+      new URLSearchParams(location.search).has("app") ||
+      window.navigator.standalone === true ||
+      (wco && wco.visible) ||
+      matchMedia("(display-mode: standalone)").matches ||
+      matchMedia("(display-mode: window-controls-overlay)").matches;
+    if (!appMode) return;
+    appEl.classList.add("app-window");
+
+    const controls = document.querySelector("#window-controls");
+    const btnMin = document.querySelector("#win-min");
+    const btnMax = document.querySelector("#win-max");
+    const btnClose = document.querySelector("#win-close");
+    // Additional Windowing Controls: only then can we actually drive the window
+    // from buttons. Without it the platform draws its own titlebar (or the WCO
+    // overlay does), so our cluster would be redundant — keep it hidden.
+    const hasMin = typeof window.minimize === "function";
+    const hasMax = typeof window.maximize === "function" && typeof window.restore === "function";
+    const hasAWC = hasMin || hasMax;
+
+    if (btnMin) {
+      btnMin.hidden = !hasMin;
+      if (hasMin) btnMin.addEventListener("click", () => { try { window.minimize(); } catch {} });
+    }
+    if (btnMax) {
+      btnMax.hidden = !hasMax;
+      if (hasMax) btnMax.addEventListener("click", () => {
+        try {
+          if (btnMax.dataset.maxed === "1") { window.restore(); btnMax.dataset.maxed = "0"; btnMax.textContent = "▢"; }
+          else { window.maximize(); btnMax.dataset.maxed = "1"; btnMax.textContent = "❐"; }
+        } catch {}
+      });
+    }
+    if (btnClose) btnClose.addEventListener("click", () => { try { window.close(); } catch {} });
+
+    // The custom cluster shows only on AWC-capable builds, and never while the
+    // Window-Controls-Overlay is live (it provides native controls instead).
+    // In WCO mode keep header content clear of the native overlay corner.
+    const sync = () => {
+      const wcoOn = !!(wco && wco.visible);
+      appEl.classList.toggle("wco", wcoOn);
+      if (controls) controls.hidden = wcoOn || !hasAWC;
+      if (wcoOn) {
+        const r = wco.getTitlebarAreaRect();
+        appEl.style.setProperty("--wco-left-inset", Math.max(0, r.x) + "px");
+        appEl.style.setProperty("--wco-right-inset", Math.max(0, window.innerWidth - (r.x + r.width)) + "px");
+      } else {
+        appEl.style.removeProperty("--wco-left-inset");
+        appEl.style.removeProperty("--wco-right-inset");
+      }
+    };
+    if (wco) wco.addEventListener("geometrychange", sync);
+    window.addEventListener("resize", sync);
+    sync();
+  })();
 }
 document.addEventListener("keydown", (e) => {
   const tag = (e.target && e.target.tagName || "").toLowerCase();

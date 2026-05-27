@@ -739,6 +739,22 @@ def main():
         check("Open modal lists vectors", modal_open and cells >= 0, f"open={modal_open} cells={cells}")
         page.evaluate("closeModal()")
 
+        # ---- App-window mode (standalone Chromium window) ----
+        # Headless can't exercise WCO/AWC, but the ?app=1 gate must engage and
+        # reveal the custom titlebar controls without disturbing normal layout.
+        page.goto(BASE + "/?app=1", wait_until="networkidle")
+        page.wait_for_function("typeof editor !== 'undefined'")
+        page.wait_for_timeout(80)
+        check("app=1 adds .app-window", page.evaluate("document.querySelector('.app.editor').classList.contains('app-window')") is True)
+        check("header becomes a drag region", page.evaluate("getComputedStyle(document.querySelector('.topbar')).getPropertyValue('-webkit-app-region')") == "drag")
+        # Without Additional Windowing Controls (headless / snap chromium) the custom
+        # cluster stays hidden — the platform titlebar or WCO overlay owns the controls.
+        check("custom controls hidden without AWC", page.evaluate("document.querySelector('#window-controls').hidden && !document.querySelector('#window-controls').offsetParent") is True)
+        # normal browser load must NOT engage app-window mode
+        page.goto(BASE, wait_until="networkidle")
+        page.wait_for_function("typeof editor !== 'undefined'")
+        check("normal load stays windowed", page.evaluate("!document.querySelector('.app.editor').classList.contains('app-window') && getComputedStyle(document.querySelector('.topbar')).getPropertyValue('-webkit-app-region') !== 'drag'") is True)
+
         browser.close()
 
     n_fail = sum(1 for _, ok, _ in results if not ok)
