@@ -808,14 +808,29 @@ const editor = {
   },
   unmountNodeHandles() { const ov = this._overlayEl(); if (ov) ov.querySelectorAll(".hv-handles").forEach((g) => g.remove()); },
   onViewportChanged() {
+    if (this._handleDragging) return;   // a zoom/pan mid-drag must not re-mount and yank the dragged handle
     if (this.tool === "node" && this.stage) this.mountNodeHandles();
     if (this.tool === "transform" && this.stage) this._renderSelection();   // handles are constant-screen-size
     if (this._pen) { this._redrawPen(); this._renderPenMarks(); }
     if (this._curv) { this._curvRedraw(); this._curvMarks(); }
   },
+  // Node handles render at the artwork's LOCAL coords (in the overlay, which has no
+  // transform), so any translate left by an object move would offset them from the
+  // shape ("ghosting"). Bake those translates into geometry first (render-identical)
+  // so anchors/handles line up — deltas are translate-invariant, so this is safe.
+  _bakeArtTransforms() {
+    const IDENT = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+    let baked = false;
+    for (const n of this._artworkNodes()) {
+      const t = currentTranslate(n);
+      if (Math.abs(t.x) > 1e-9 || Math.abs(t.y) > 1e-9) { bakeMatrixInto(n, IDENT, 0, 0); baked = true; }
+    }
+    return baked;
+  },
   mountNodeHandles() {
     this.unmountNodeHandles();
     const ov = this._overlayEl(); if (!ov || !this.stage) return;
+    this._bakeArtTransforms();                     // normalize translates so handles align with the shapes
     const pnodes = pathNodes(this.stage);          // path anchors carry bezier direction handles
     const anchors = collectAnchors(this.stage);    // rect/ellipse/line/polygon corner points
     const total = pnodes.length + anchors.length;
@@ -916,7 +931,7 @@ const editor = {
   _bindAnchorDrag(c, nd, r, refs) {
     c.addEventListener("pointerdown", (e) => {
       e.stopPropagation(); e.preventDefault();
-      c.setPointerCapture(e.pointerId); c.classList.add("dragging");
+      c.setPointerCapture(e.pointerId); c.classList.add("dragging"); this._handleDragging = true;
       const key = this._nodeKey(nd), alt = e.altKey;
       // selection: plain click = this anchor only; Shift = add for the (possible) drag,
       // deferring the deselect-toggle to pointerup so Shift-DRAG constrains the move
@@ -960,7 +975,7 @@ const editor = {
       };
       const up = () => {
         try { c.releasePointerCapture(e.pointerId); } catch {}
-        c.classList.remove("dragging");
+        c.classList.remove("dragging"); this._handleDragging = false;
         c.removeEventListener("pointermove", move); c.removeEventListener("pointerup", up);
         this._clearGuides();
         if (alt && !moved) this._altClickAnchor(nd);                       // Alt-click (no drag) → smooth→corner
@@ -1092,7 +1107,7 @@ const editor = {
   _bindHandleDrag(dot, nd, side, refs) {
     dot.addEventListener("pointerdown", (e) => {
       e.stopPropagation(); e.preventDefault();
-      dot.setPointerCapture(e.pointerId); dot.classList.add("dragging");
+      dot.setPointerCapture(e.pointerId); dot.classList.add("dragging"); this._handleDragging = true;
       const smooth = this._nodeIsSmooth(nd);            // mirror the partner only if it started smooth
       let pushed = false;
       const sync = (line, h) => { dot.setAttribute("cx", nfmt(h.x)); dot.setAttribute("cy", nfmt(h.y)); line.setAttribute("x2", nfmt(h.x)); line.setAttribute("y2", nfmt(h.y)); };
@@ -1113,7 +1128,7 @@ const editor = {
       };
       const up = () => {
         try { dot.releasePointerCapture(e.pointerId); } catch {}
-        dot.classList.remove("dragging");
+        dot.classList.remove("dragging"); this._handleDragging = false;
         dot.removeEventListener("pointermove", move); dot.removeEventListener("pointerup", up);
         this.mountNodeHandles();
       };
@@ -1124,7 +1139,7 @@ const editor = {
   _bindNodeHandle(c, a) {
     c.addEventListener("pointerdown", (e) => {
       e.stopPropagation(); e.preventDefault();
-      c.setPointerCapture(e.pointerId); c.classList.add("dragging");
+      c.setPointerCapture(e.pointerId); c.classList.add("dragging"); this._handleDragging = true;
       let pushed = false;
       const move = (ev) => {
         const m = this.stage.getScreenCTM(); if (!m) return;
@@ -1135,7 +1150,7 @@ const editor = {
       };
       const up = () => {
         try { c.releasePointerCapture(e.pointerId); } catch {}
-        c.classList.remove("dragging");
+        c.classList.remove("dragging"); this._handleDragging = false;
         c.removeEventListener("pointermove", move); c.removeEventListener("pointerup", up);
         this.mountNodeHandles();
       };
@@ -1207,7 +1222,7 @@ const editor = {
       e.stopPropagation(); e.preventDefault();
       const nodes = this.selectedNodes(); if (!nodes.length) return;
       try { c.setPointerCapture(e.pointerId); } catch {}
-      c.classList.add("dragging");
+      c.classList.add("dragging"); this._handleDragging = true;
       const bases = nodes.map((n) => currentTranslate(n));
       const xf = this._xform, cx = (xf.bb.x0 + xf.bb.x1) / 2, cy = (xf.bb.y0 + xf.bb.y1) / 2;   // bbox centre (Alt anchor)
       let pushed = false, last = { sx: 1, sy: 1, ax: spec.ax, ay: spec.ay };
@@ -1227,7 +1242,7 @@ const editor = {
       };
       const up = () => {
         try { c.releasePointerCapture(e.pointerId); } catch {}
-        c.classList.remove("dragging"); this._hideSizeReadout();
+        c.classList.remove("dragging"); this._handleDragging = false; this._hideSizeReadout();
         c.removeEventListener("pointermove", move); c.removeEventListener("pointerup", up);
         if (!pushed) { nodes.forEach((n, i) => setTranslate(n, bases[i].x, bases[i].y)); this._renderSelection(); return; }
         const { sx, sy, ax, ay } = last;
