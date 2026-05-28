@@ -464,7 +464,8 @@ button:disabled {
 
 .viewport-content {
   transform-origin: center center;
-  will-change: transform;
+  /* will-change is toggled on in JS only during active pan/zoom and cleared at
+     rest — a permanent GPU layer caches a bitmap that scales blurry on zoom. */
   width: max-content;
   height: max-content;
 }

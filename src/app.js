@@ -329,10 +329,18 @@ async function loadInlineSvg(host) {
   host.appendChild(svg);
 }
 
+let _willChangeTimer = null;
 function applyViewportState(vp) {
   const content = vp.el.querySelector(".viewport-content");
   if (!content) return;
   content.style.transform = `translate(${vp.x}px, ${vp.y}px) scale(${vp.scale})`;
+  // Promote to a GPU layer only WHILE actively panning/zooming, then drop the
+  // hint so the resting frame re-rasterizes the SVG at the displayed scale. A
+  // permanent will-change caches a bitmap at the artwork's intrinsic size, so a
+  // zoomed-in vector renders blurry/rastery (it's a stretched texture, not redrawn).
+  content.style.willChange = "transform";
+  clearTimeout(_willChangeTimer);
+  _willChangeTimer = setTimeout(() => { content.style.willChange = "auto"; }, 220);
 }
 
 function resetViewport(vp) {
