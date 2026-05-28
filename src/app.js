@@ -926,6 +926,7 @@ async function copySvgSource() {
 
 // ---------- document menu actions ----------
 function mountStageFromText(text, name) {
+  editor.dispose();   // release the previous document (undo snapshots, listeners) before swapping
   const vp = viewports.output;
   vp.url = "mem:" + name; vp.name = name; vp.kind = "svg"; vp.path = null;
   vp.el.className = "preview-frame";
@@ -1166,6 +1167,7 @@ document.addEventListener("keydown", (e) => {
   if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); editor.redoAction(); return; }
   if (mod && (e.key === "d" || e.key === "D")) { e.preventDefault(); editor.duplicate(); return; }
   if (mod && (e.key === "g" || e.key === "G")) { e.preventDefault(); if (e.shiftKey) editor.ungroup(); else editor.group(); return; }
+  if (mod && (e.key === "j" || e.key === "J")) { e.preventDefault(); editor.joinNodes(); return; }
   if (mod && e.key === "]") { e.preventDefault(); editor.reorder(e.shiftKey ? "front" : "forward"); return; }
   if (mod && e.key === "[") { e.preventDefault(); editor.reorder(e.shiftKey ? "back" : "backward"); return; }
   if (mod && (e.key === "c" || e.key === "C")) { e.preventDefault(); editor.copy(); return; }
@@ -1186,8 +1188,14 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); editor._finishPen(true); return; }
     if (e.key === "Escape") { e.preventDefault(); editor._finishPen(false); return; }
   }
-  if (e.key === "Delete" || e.key === "Backspace") { if (editor.selection.size) { e.preventDefault(); editor.deleteSelection(); } return; }
+  if (e.key === "Delete" || e.key === "Backspace") {
+    if (editor.tool === "node" && editor._nodeSel && editor._nodeSel.size) { e.preventDefault(); editor.deleteNodeSelection(); return; }
+    if (editor.selection.size) { e.preventDefault(); editor.deleteSelection(); }
+    return;
+  }
   if (e.key === "v" || e.key === "V") { editor.setTool("select"); return; }
+  if (e.key === "m" || e.key === "M") { editor.setTool("marquee"); return; }
+  if (e.key === "t" || e.key === "T") { editor.setTool("transform"); return; }
   if (e.key === "a" || e.key === "A") { editor.setTool("node"); return; }
   if (e.key === "p" || e.key === "P") { editor.setTool("pen"); return; }
   if (e.key === "r" || e.key === "R") { editor.setTool("rect"); return; }
@@ -1280,6 +1288,7 @@ function objectMenuItems() {
     { label: "Copy", onClick: () => editor.copy() },
     { label: "Paste", disabled: !editor.clipboard.length, onClick: () => editor.paste() },
     { label: "Duplicate", onClick: () => editor.duplicate() },
+    { label: "Rename…", disabled: sel.length !== 1, onClick: () => editor.beginRename(sel[0].getAttribute("data-hv-id")) },
     { label: "Delete", onClick: () => editor.deleteSelection() },
     { type: "sep" },
     { label: "Bring to Front", onClick: () => editor.reorder("front") },
@@ -1295,11 +1304,22 @@ function objectMenuItems() {
     { label: "Subtract", onClick: () => editor.booleanOp("subtract") },
     { label: "Intersect", onClick: () => editor.booleanOp("intersect") });
   items.push({ type: "sep" },
+    { label: "Invert space", onClick: () => editor.invertSpace() },
     { label: "Rotate 90° CW", onClick: () => editor.transform("rotateCW") },
     { label: "Rotate 90° CCW", onClick: () => editor.transform("rotateCCW") },
     { label: "Flip Horizontal", onClick: () => editor.transform("flipH") },
     { label: "Flip Vertical", onClick: () => editor.transform("flipV") });
   return items;
+}
+function pointMenuItems() {
+  const n = editor._nodeSel.size;
+  return [
+    { label: "Smooth / round", onClick: () => editor.setSelectedAnchorsType("smooth") },
+    { label: "Corner / sharpen", onClick: () => editor.setSelectedAnchorsType("corner") },
+    { type: "sep" },
+    { label: n === 2 ? "Join / close" : "Join (select 2 ends)", disabled: n !== 2, onClick: () => editor.joinNodes() },
+    { label: n > 1 ? `Delete ${n} points` : "Delete point", onClick: () => editor.deleteNodeSelection() },
+  ];
 }
 function canvasMenuItems() {
   return [
@@ -1321,6 +1341,14 @@ function canvasMenuItems() {
   if (wrap) wrap.addEventListener("contextmenu", (e) => {
     if (!editor.stage) return;
     e.preventDefault();
+    if (editor.tool === "node") {                 // right-click an anchor → point menu
+      const a = editor.anchorAt(e.clientX, e.clientY);
+      if (a) {
+        if (!editor._nodeSel.has(a.key)) { editor._nodeSel = new Set([a.key]); editor.mountNodeHandles(); }
+        showContextMenu(e.clientX, e.clientY, pointMenuItems());
+        return;
+      }
+    }
     let hit = e.target.closest && e.target.closest("[data-hv-id]");
     if (hit && hit.getAttribute("data-hv-locked") === "1") hit = null;
     if (hit && editor.stage.contains(hit)) {
@@ -1340,6 +1368,7 @@ function canvasMenuItems() {
 document.addEventListener("pointerdown", (e) => { if (ctxMenuEl && !e.target.closest(".context-menu")) hideContextMenu(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideContextMenu(); });
 window.addEventListener("blur", hideContextMenu);
+window.addEventListener("pagehide", () => editor.dispose());   // free document state when the app closes
 
 let exportState = { mode: "scale", scale: 16, longest: 1024, width: 0, height: 0, background: "transparent" };
 
@@ -2300,6 +2329,8 @@ function openShortcutsModal() {
   const rows = [
     ["§", "Tools"],
     ["V", "Select / move"],
+    ["M", "Drag-select (Alt = lasso)"],
+    ["T", "Transform / scale"],
     ["A", "Edit points (direct select)"],
     ["P", "Pen"],
     ["R / E / L", "Rectangle / Ellipse / Line"],
@@ -2318,9 +2349,23 @@ function openShortcutsModal() {
     [`${mod} + Shift + G`, "Ungroup"],
     [`${mod} + ] / [`, "Bring forward / send backward"],
     [`${mod} + Shift + ] / [`, "Bring to front / send to back"],
-    ["§", "Pen (while drawing)"],
+    ["§", "Pen"],
+    ["Click / drag", "Corner point / smooth curve"],
+    ["Alt + drag", "Break handle (cusp)"],
+    ["Shift", "Constrain to 45°"],
+    ["Click path / anchor", "Add (+) / remove (−) a point"],
+    ["Click an endpoint", "Continue an open path"],
     ["Enter", "Finish path"],
     ["Esc", "Cancel path"],
+    ["§", "Node tool"],
+    ["Click / Shift-click", "Select anchor / multi-select"],
+    ["Drag square", "Move selected anchors (Shift = 45°)"],
+    ["Drag round dot", "Reshape curve (Alt = break)"],
+    ["Alt-click anchor", "Smooth → corner"],
+    ["Alt-drag anchor", "Corner → smooth"],
+    [`${mod} + J`, "Join two selected endpoints"],
+    ["Right-click a point", "Smooth / sharpen / join / delete"],
+    ["Delete / Backspace", "Remove selected anchors"],
     ["§", "View & navigation"],
     ["Space (hold)", "Pan the canvas (Hand tool)"],
     ["+ / −", "Zoom in / out"],

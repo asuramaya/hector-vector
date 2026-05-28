@@ -32,6 +32,8 @@
       <section class="editor-grid">
         <nav class="toolstrip" role="toolbar" aria-label="Tools">
           <button class="tool-button active" data-tool="select" type="button" title="Select / Move (V)">▣</button>
+          <button class="tool-button" data-tool="marquee" type="button" title="Drag-select (M) — box; hold Alt for lasso">⬚</button>
+          <button class="tool-button" data-tool="transform" type="button" title="Transform / scale (T) — drag the box handles">⛶</button>
           <button class="tool-button" data-tool="node" type="button" title="Edit points (A)">✥</button>
           <span class="tool-sep" aria-hidden="true"></span>
           <button class="tool-button" data-tool="pen" type="button" title="Pen — click to add points (P)">✎</button>
@@ -46,7 +48,7 @@
           <button class="tool-action" data-xform="flipV" type="button" title="Flip vertical (selection or artboard)">⇅</button>
         </nav>
 
-        <article class="stage-wrap preview-panel">
+        <article class="stage-wrap preview-panel" data-tool="select">
           <div class="stage-head panel-head">
             <span id="output-label">Canvas</span>
           </div>

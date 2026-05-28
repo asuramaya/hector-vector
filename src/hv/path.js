@@ -68,16 +68,18 @@ export function serializeSegs(segs) {
   }).join(" ");
 }
 
-// Build a path `d` from pen anchors. Each anchor is {x,y,out} where `out` is the
-// outgoing bezier handle (smooth point) or null (corner); the incoming handle is
-// the mirror of the previous anchor's `out`. `preview` adds a trailing corner
-// point at the cursor (rubber-band); `closed` appends the wrap-around + Z.
+// Build a path `d` from pen anchors. Each anchor is {x,y,in,out} where `out` is
+// the outgoing bezier handle and `in` the incoming one (either null for a corner
+// on that side). Smooth points keep `in`/`out` mirrored; a cusp has them
+// independent. A segment is a line only when both adjacent handles are null.
+// `preview` adds a trailing corner point at the cursor — the segment into it
+// still honours the previous anchor's `out`, so the rubber-band shows the real
+// outgoing curve. `closed` appends the wrap-around back to the first anchor + Z.
 export function penPathD(pts, closed, preview) {
-  const all = preview ? pts.concat([{ x: preview.x, y: preview.y, out: null }]) : pts;
+  const all = preview ? pts.concat([{ x: preview.x, y: preview.y, in: null, out: null }]) : pts;
   if (!all.length) return "";
-  const inOf = (a) => (a.out ? { x: 2 * a.x - a.out.x, y: 2 * a.y - a.out.y } : null);
   const seg = (a, b) => {
-    const c1 = a.out, c2 = inOf(b);
+    const c1 = a.out, c2 = b.in;
     if (!c1 && !c2) return ` L${nfmt(b.x)} ${nfmt(b.y)}`;
     const p1 = c1 || { x: a.x, y: a.y }, p2 = c2 || { x: b.x, y: b.y };
     return ` C${nfmt(p1.x)} ${nfmt(p1.y)} ${nfmt(p2.x)} ${nfmt(p2.y)} ${nfmt(b.x)} ${nfmt(b.y)}`;

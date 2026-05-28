@@ -119,18 +119,152 @@ export function shapeMeaningful(tool, n) {
 
 // Gather draggable anchors across the SVG's shapes. Each anchor knows its
 // current position and how to write a new position back to the element.
-export function collectAnchors(svg) {
+const _anchorSkip = (el) => el.closest(".hv-handles") || el.closest(".hv-overlay") || el.classList.contains("hv-artboard");
+
+// Rich anchor model for <path> elements: each on-curve point exposes its incoming
+// and outgoing bezier direction handles (the trailing control of the segment that
+// ends here, and the leading control of the one that leaves) so the node tool can
+// drag curves, not just move points. moveTo drags the anchor and its handles
+// rigidly; setIn/setOut move one handle and optionally mirror the other (smooth).
+// Closed paths whose final segment returns to the start share that segment as
+// anchor-0's incoming handle (and the last anchor's outgoing handle).
+export function pathNodes(svg) {
   const out = [];
-  const skip = (el) => el.closest(".hv-handles") || el.closest(".hv-overlay") || el.classList.contains("hv-artboard");
   svg.querySelectorAll("path").forEach((el) => {
-    if (skip(el)) return;
+    if (_anchorSkip(el)) return;
     const segs = parsePath(el.getAttribute("d") || "");
     el._hvSegs = segs;
-    segs.forEach((s) => {
-      if (!s.end) return;
-      out.push({ x: s.end.x, y: s.end.y, set: (nx, ny) => { s.end.x = nx; s.end.y = ny; el.setAttribute("d", serializeSegs(el._hvSegs)); } });
-    });
+    const commit = () => el.setAttribute("d", serializeSegs(el._hvSegs));
+    const draw = segs.filter((s) => s.end);     // M + drawing segments, in order
+    const n = draw.length;
+    if (!n) return;
+    const closed = segs[segs.length - 1] && segs[segs.length - 1].t === "Z";
+    const wrap = closed && n >= 2 &&
+      Math.hypot(draw[n - 1].end.x - draw[0].end.x, draw[n - 1].end.y - draw[0].end.y) < 1e-6;
+    const count = wrap ? n - 1 : n;             // the wrap segment is anchor-0's incoming, not its own anchor
+    const lead = (s) => (s && (s.t === "C" || s.t === "Q")) ? s.c1 : null;
+    const trail = (s) => s ? (s.t === "C" ? s.c2 : (s.t === "Q" ? s.c1 : null)) : null;
+    for (let k = 0; k < count; k++) {
+      const endSeg = draw[k];
+      const inSeg = k >= 1 ? draw[k] : (wrap ? draw[n - 1] : null);
+      const outSeg = (k + 1 < n) ? draw[k + 1] : null;
+      const inH = trail(inSeg), outH = lead(outSeg);   // live control-point refs (or null)
+      const a = endSeg.end;
+      out.push({
+        el, id: el.getAttribute("data-hv-id"), k, x: a.x, y: a.y, inH, outH,
+        moveTo(nx, ny) {
+          const dx = nx - a.x, dy = ny - a.y;
+          a.x = nx; a.y = ny;
+          if (k === 0 && wrap) { draw[n - 1].end.x = nx; draw[n - 1].end.y = ny; }
+          if (inH) { inH.x += dx; inH.y += dy; }
+          if (outH) { outH.x += dx; outH.y += dy; }
+          commit();
+        },
+        setIn(nx, ny, mirror) {
+          if (!inH) return;
+          inH.x = nx; inH.y = ny;
+          if (mirror && outH) { outH.x = 2 * a.x - nx; outH.y = 2 * a.y - ny; }
+          commit();
+        },
+        setOut(nx, ny, mirror) {
+          if (!outH) return;
+          outH.x = nx; outH.y = ny;
+          if (mirror && inH) { inH.x = 2 * a.x - nx; inH.y = 2 * a.y - ny; }
+          commit();
+        },
+      });
+    }
   });
+  return out;
+}
+
+// Flatten a <path> to an editable pen-anchor list ({x,y,in,out} with absolute
+// handle coords, mirroring pathNodes' in/out extraction) plus whether it's closed.
+// Lossless round-trip through penPathD for M/L/C paths — `editable` is false when
+// the path carries arcs/quadratics (rebuilding would drop them), so callers can
+// refuse structural edits (delete/convert) on those.
+export function pathToAnchors(el) {
+  const s = parsePath(el.getAttribute("d") || "");
+  const draw = s.filter((x) => x.end);
+  const n = draw.length;
+  if (!n) return { anchors: [], closed: false, editable: false };
+  const editable = !s.some((x) => x.t === "A" || x.t === "Q");
+  const closed = s[s.length - 1] && s[s.length - 1].t === "Z";
+  const wrap = closed && n >= 2 &&
+    Math.hypot(draw[n - 1].end.x - draw[0].end.x, draw[n - 1].end.y - draw[0].end.y) < 1e-6;
+  const count = wrap ? n - 1 : n;
+  const lead = (seg) => (seg && seg.t === "C") ? seg.c1 : null;
+  const trail = (seg) => (seg && seg.t === "C") ? seg.c2 : null;
+  const anchors = [];
+  for (let k = 0; k < count; k++) {
+    const inSeg = k >= 1 ? draw[k] : (wrap ? draw[n - 1] : null);
+    const outSeg = (k + 1 < n) ? draw[k + 1] : null;
+    const ih = trail(inSeg), oh = lead(outSeg);
+    anchors.push({
+      x: draw[k].end.x, y: draw[k].end.y,
+      in: ih ? { x: ih.x, y: ih.y } : null,
+      out: oh ? { x: oh.x, y: oh.y } : null,
+    });
+  }
+  return { anchors, closed: !!closed, editable };
+}
+
+function _cubicAt(p0, p1, p2, p3, t) {
+  const u = 1 - t, a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t;
+  return { x: a * p0.x + b * p1.x + c * p2.x + d * p3.x, y: a * p0.y + b * p1.y + c * p2.y + d * p3.y };
+}
+
+// Nearest editable-path feature to (x,y) within `tol` (user units). Returns the
+// closest anchor when one is in range (delete target), else the closest point on a
+// segment (insert target with its segment index `i` + parameter `t`), or null.
+// `maxPaths` caps how many paths we scan so heavy traced docs don't churn per move.
+export function nearestOnPaths(svg, x, y, tol, maxPaths = 300) {
+  const paths = svg.querySelectorAll("path");
+  if (paths.length > maxPaths) return null;
+  let bestA = null, bestS = null;
+  paths.forEach((el) => {
+    if (_anchorSkip(el)) return;
+    const { anchors, closed, editable } = pathToAnchors(el);
+    if (!editable || anchors.length < 2) return;
+    for (let k = 0; k < anchors.length; k++) {
+      const d = Math.hypot(anchors[k].x - x, anchors[k].y - y);
+      if (d <= tol && (!bestA || d < bestA.dist)) bestA = { el, mode: "anchor", k, x: anchors[k].x, y: anchors[k].y, dist: d, closed, count: anchors.length };
+    }
+    const segCount = closed ? anchors.length : anchors.length - 1;
+    for (let i = 0; i < segCount; i++) {
+      const A = anchors[i], B = anchors[(i + 1) % anchors.length];
+      const P1 = A.out || A, P2 = B.in || B;
+      const N = 24;
+      for (let s = 0; s <= N; s++) {
+        const t = s / N, pt = _cubicAt(A, P1, P2, B, t);
+        const d = Math.hypot(pt.x - x, pt.y - y);
+        if (d <= tol && (!bestS || d < bestS.dist)) bestS = { el, mode: "segment", i, t, x: pt.x, y: pt.y, dist: d };
+      }
+    }
+  });
+  return bestA || bestS;     // an anchor in range wins (delete), else a segment (insert)
+}
+
+// Insert an anchor into a pen-anchor list on segment i at parameter t (de Casteljau
+// split: a straight segment yields a corner, a cubic yields a smooth point and the
+// neighbours keep their adjusted handles). Mutates `anchors` in place.
+export function splitCubicInsert(anchors, closed, i, t) {
+  const n = anchors.length, A = anchors[i], B = anchors[(i + 1) % n];
+  if (!A.out && !B.in) {     // straight segment → corner midpoint, halves stay lines
+    anchors.splice(i + 1, 0, { x: A.x + (B.x - A.x) * t, y: A.y + (B.y - A.y) * t, in: null, out: null });
+    return;
+  }
+  const P1 = A.out || A, P2 = B.in || B, L = (p, q) => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t });
+  const p01 = L(A, P1), p12 = L(P1, P2), p23 = L(P2, B);
+  const p012 = L(p01, p12), p123 = L(p12, p23), M = L(p012, p123);
+  A.out = { x: p01.x, y: p01.y };
+  B.in = { x: p23.x, y: p23.y };
+  anchors.splice(i + 1, 0, { x: M.x, y: M.y, in: { x: p012.x, y: p012.y }, out: { x: p123.x, y: p123.y } });
+}
+
+export function collectAnchors(svg) {
+  const out = [];
+  const skip = _anchorSkip;
   svg.querySelectorAll("rect").forEach((el) => {
     if (skip(el)) return;
     const get = () => ({ x: +el.getAttribute("x") || 0, y: +el.getAttribute("y") || 0, w: +el.getAttribute("width") || 0, h: +el.getAttribute("height") || 0 });
