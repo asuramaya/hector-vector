@@ -642,6 +642,22 @@ def main():
         check("clicking first anchor closes the path", zsel and zsel["attrs"]["d"].rstrip().endswith("Z")
               and zsel["attrs"].get("fill") == "#22aa44", str(zsel and (zsel["attrs"].get("d"), zsel["attrs"].get("fill"))))
 
+        # Closing waits for release: pressing the first anchor does NOT finish on
+        # pointer-down, and dragging before release sets the closing tangent (curve).
+        mount_ctl(page)
+        page.evaluate("editor.setTool('pen'); editor.style.fill='#22aa44';")
+        pen_click(page, 0.25, 0.25); pen_click(page, 0.65, 0.3); pen_click(page, 0.45, 0.65)
+        abx = artboard_rect(page)
+        fx, fy = abx["x"] + abx["w"] * 0.25, abx["y"] + abx["h"] * 0.25
+        page.mouse.move(fx, fy); page.mouse.down()
+        mid_open = page.evaluate("!!editor._pen")   # still in progress while the button is held
+        page.mouse.move(fx, fy - 40, steps=8); page.mouse.up(); page.wait_for_timeout(60)
+        dsel = sel_node(page)
+        check("close waits for release; drag sets the closing tangent",
+              mid_open and dsel and dsel["attrs"]["d"].rstrip().endswith("Z") and "C" in dsel["attrs"]["d"]
+              and not page.evaluate("!!editor._pen"),
+              str((mid_open, dsel and dsel["attrs"].get("d"))))
+
         # A lone point + finish creates nothing and leaves no history
         mount_ctl(page)
         base = n_nodes(page)

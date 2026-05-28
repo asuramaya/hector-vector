@@ -428,6 +428,8 @@ const editor = {
     }
     const inv = () => this.stage.getScreenCTM().inverse();
     let pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(inv());
+    let anchor;            // the anchor this press adjusts (a new one, or the first when closing)
+    let closing = false;
     if (!this._pen) {
       this._renderPenHint(null); this._setPenCursor(null);
       this.beginCoalesce();                       // snapshot before the path exists
@@ -440,20 +442,29 @@ const editor = {
       this._pen = { node, pts: [], closed: false, dragging: false };
       this._penHoverBound = (ev) => this._penHover(ev);
       window.addEventListener("pointermove", this._penHoverBound);
+      anchor = { x: pt.x, y: pt.y, in: null, out: null };
+      this._pen.pts.push(anchor);
     } else if (this._pen.pts.length >= 2 && this._penNearFirst(pt)) {
-      this._pen.closed = true; this._finishPen(true); return;
-    } else if (e.shiftKey && this._pen.pts.length) {
-      const prev = this._pen.pts[this._pen.pts.length - 1];   // Shift = 45°-constrained segment
-      pt = snapPoint(prev.x, prev.y, pt.x, pt.y);
+      // Close on the first anchor — but DON'T finish on press. Like Illustrator,
+      // dragging now sets the closing tangent (the first anchor's handles); a plain
+      // click (no drag) keeps the existing handles. The path finishes on release.
+      this._pen.closed = true; closing = true;
+      anchor = this._pen.pts[0];
+      pt = { x: anchor.x, y: anchor.y };          // snap the close point exactly onto the first anchor
+    } else {
+      if (e.shiftKey && this._pen.pts.length) {
+        const prev = this._pen.pts[this._pen.pts.length - 1];   // Shift = 45°-constrained segment
+        pt = snapPoint(prev.x, prev.y, pt.x, pt.y);
+      }
+      anchor = { x: pt.x, y: pt.y, in: null, out: null };
+      this._pen.pts.push(anchor);
     }
-    const anchor = { x: pt.x, y: pt.y, in: null, out: null };
-    this._pen.pts.push(anchor);
     this._pen.dragging = true;
     this._redrawPen(); this._renderPenMarks();
     let lastP = { x: pt.x, y: pt.y };
     const move = (ev) => {
       const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
-      if (this._spacePan) {                                         // Space = reposition the anchor (handles follow)
+      if (this._spacePan && !closing) {                             // Space = reposition the anchor (handles follow)
         const ddx = p.x - lastP.x, ddy = p.y - lastP.y;
         anchor.x += ddx; anchor.y += ddy;
         if (anchor.out) { anchor.out.x += ddx; anchor.out.y += ddy; }
@@ -470,6 +481,7 @@ const editor = {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       if (this._pen) this._pen.dragging = false;
+      if (closing) this._finishPen(true);          // close completes on release, after any tangent drag
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
