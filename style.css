@@ -483,6 +483,7 @@ button:disabled {
 /* Per-tool canvas cursors (set via .stage-wrap[data-tool]). */
 .stage-wrap[data-tool="marquee"] .viewport-shell, .stage-wrap[data-tool="marquee"] .inline-svg,
 .stage-wrap[data-tool="pen"] .viewport-shell,     .stage-wrap[data-tool="pen"] .inline-svg,
+.stage-wrap[data-tool="curvature"] .viewport-shell, .stage-wrap[data-tool="curvature"] .inline-svg,
 .stage-wrap[data-tool="rect"] .viewport-shell,    .stage-wrap[data-tool="rect"] .inline-svg,
 .stage-wrap[data-tool="ellipse"] .viewport-shell, .stage-wrap[data-tool="ellipse"] .inline-svg,
 .stage-wrap[data-tool="line"] .viewport-shell,    .stage-wrap[data-tool="line"] .inline-svg { cursor: crosshair; }

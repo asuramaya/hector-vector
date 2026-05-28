@@ -1188,6 +1188,10 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); editor._finishPen(true); return; }
     if (e.key === "Escape") { e.preventDefault(); editor._finishPen(false); return; }
   }
+  if (editor._curv) {    // curvature construction owns Enter/Escape too
+    if (e.key === "Enter") { e.preventDefault(); editor._curvFinish(true); return; }
+    if (e.key === "Escape") { e.preventDefault(); editor._curvFinish(false); return; }
+  }
   if (e.key === "Delete" || e.key === "Backspace") {
     if (editor.tool === "node" && editor._nodeSel && editor._nodeSel.size) { e.preventDefault(); editor.deleteNodeSelection(); return; }
     if (editor.selection.size) { e.preventDefault(); editor.deleteSelection(); }
@@ -1198,6 +1202,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "t" || e.key === "T") { editor.setTool("transform"); return; }
   if (e.key === "a" || e.key === "A") { editor.setTool("node"); return; }
   if (e.key === "p" || e.key === "P") { editor.setTool("pen"); return; }
+  if (e.key === "c" || e.key === "C") { editor.setTool("curvature"); return; }
   if (e.key === "r" || e.key === "R") { editor.setTool("rect"); return; }
   if (e.key === "e" || e.key === "E") { editor.setTool("ellipse"); return; }
   if (e.key === "l" || e.key === "L") { editor.setTool("line"); return; }
@@ -2337,6 +2342,7 @@ function openShortcutsModal() {
     ["T", "Transform / scale"],
     ["A", "Edit points (direct select)"],
     ["P", "Pen"],
+    ["C", "Curvature (auto-smooth; dbl-click = corner)"],
     ["R / E / L", "Rectangle / Ellipse / Line"],
     ["Shift + O", "Select the artboard"],
     ["§", "Edit"],

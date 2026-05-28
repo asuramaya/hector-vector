@@ -11,7 +11,7 @@ import {
   nfmt, penPathD, toHexColor, marchingSquares, rasterMask,
   currentTranslate, setTranslate, matForOp, bakeMatrixInto,
   shapeToAbsPath, makeShapeNode, sizeShape, shapeMeaningful, collectAnchors, pathNodes, pathToAnchors,
-  nearestOnPaths, splitCubicInsert,
+  nearestOnPaths, splitCubicInsert, catmullRomAnchors,
 } from "./hv/index.js";
 import {
   setStatus, api, refreshAll, viewports, measureFit, outputPreviewEl,
@@ -39,6 +39,7 @@ const editor = {
   _lastLayerId: null,   // anchor row for Shift-range select in the layers panel
   _nodeSel: new Set(),  // node tool: selected path-anchor keys ("pathId#k")
   _penTempSelect: false,// pen tool: Ctrl/Cmd held → act as Direct-Select (handles mounted)
+  _curv: null,          // in-progress curvature path: { node, pts:[{x,y,corner}], closed }
   clipboard: [],        // in-app clipboard: serialized node markup
 
   get dirty() { return this.history.length > 0; },
@@ -52,7 +53,9 @@ const editor = {
   },
   adopt(svgEl) {
     if (this._penHoverBound) { window.removeEventListener("pointermove", this._penHoverBound); this._penHoverBound = null; }
+    if (this._curvHoverBound) { window.removeEventListener("pointermove", this._curvHoverBound); this._curvHoverBound = null; }
     this._pen = null;
+    this._curv = null;
     this.selection = new Set();
     this._nodeSel = new Set();
     this.artboardSelected = false;
@@ -69,6 +72,7 @@ const editor = {
   // stage element itself is GC'd once the viewport innerHTML is replaced.
   dispose() {
     if (this._pen) this._finishPen(false);
+    if (this._curv) this._curvFinish(false);
     if (this._penHoverBound) { window.removeEventListener("pointermove", this._penHoverBound); this._penHoverBound = null; }
     if (this._penIdleBound) { window.removeEventListener("pointermove", this._penIdleBound); this._penIdleBound = null; this._penHit = null; }
     this._penTempSelect = false;
@@ -204,8 +208,8 @@ const editor = {
   },
   cancelCoalesce() { this._coalescing = false; this._coalesceState = null; },
   _state() { return { svg: this._historyMarkup(), sel: [...this.selection], ab: this.artboardSelected }; },
-  undo() { if (this._pen) this._finishPen(true); this.commitCoalesce(); if (!this.history.length) return; this.redo.push(this._state()); this._restore(this.history.pop()); },
-  redoAction() { if (this._pen) this._finishPen(true); this.commitCoalesce(); if (!this.redo.length) return; this.history.push(this._state()); this._restore(this.redo.pop()); },
+  undo() { if (this._pen) this._finishPen(true); if (this._curv) this._curvFinish(true); this.commitCoalesce(); if (!this.history.length) return; this.redo.push(this._state()); this._restore(this.history.pop()); },
+  redoAction() { if (this._pen) this._finishPen(true); if (this._curv) this._curvFinish(true); this.commitCoalesce(); if (!this.redo.length) return; this.history.push(this._state()); this._restore(this.redo.pop()); },
   _restore(state) {
     const host = this.stage.parentElement; if (!host) return;
     const doc = new DOMParser().parseFromString(state.svg, "image/svg+xml");
@@ -239,6 +243,7 @@ const editor = {
     if (this._spacePan) return;   // spacebar held → let the viewport pan the drag (don't select/draw)
     if (e.button !== 0) return;   // right/middle clicks are for the context menu, not draw/select
     if (this.tool === "pen") { this._penDown(e); return; }
+    if (this.tool === "curvature") { this._curvDown(e); return; }
     if (SHAPE_TOOLS.has(this.tool)) {
       if (e.button !== 0) return;
       e.stopPropagation(); e.preventDefault();   // draw, don't pan
@@ -583,6 +588,102 @@ const editor = {
     this._renderSelection(); this._renderInspector(); this._renderLayers();
     setStatus(closed ? "Closed path added." : "Path added.", 1500);
   },
+  // ---------- curvature tool: click to drop auto-smoothed points ----------
+  _curvDown(e) {
+    if (e.button !== 0) return;
+    e.stopPropagation(); e.preventDefault();
+    const inv = () => this.stage.getScreenCTM().inverse();
+    const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(inv());
+    if (!this._curv) {
+      this.beginCoalesce();
+      this.selection = new Set(); this.artboardSelected = false; this._renderSelection();
+      const node = document.createElementNS(SVG_NS, "path");
+      node.setAttribute("fill", "none"); node.setAttribute("stroke", "#1d1d1f"); node.setAttribute("stroke-width", "1.5");
+      node.setAttribute("vector-effect", "non-scaling-stroke");
+      this.stage.insertBefore(node, this._overlayEl());
+      this._curv = { node, pts: [], closed: false };
+      this._curvLastClick = null;
+      this._curvHoverBound = (ev) => this._curvHover(ev);
+      window.addEventListener("pointermove", this._curvHoverBound);
+      this._curv.pts.push({ x: pt.x, y: pt.y, corner: false });
+      this._curvRedraw(); this._curvMarks();
+      return;
+    }
+    if (this._curv.pts.length >= 2 && this._curvNearFirst(pt)) { this._curv.closed = true; this._curvFinish(true); return; }
+    const near = this._curvNearPoint(pt);
+    if (near >= 0) {   // clicking an existing point: 2nd click within 350ms toggles corner, else no-op
+      const lc = this._curvLastClick;
+      if (lc && lc.i === near && (e.timeStamp - lc.t) < 350) {
+        this._curv.pts[near].corner = !this._curv.pts[near].corner;
+        this._curvRedraw(); this._curvMarks(); this._curvLastClick = null; return;
+      }
+      this._curvLastClick = { t: e.timeStamp, i: near }; return;
+    }
+    this._curvLastClick = null;
+    this._curv.pts.push({ x: pt.x, y: pt.y, corner: false });
+    this._curvRedraw(); this._curvMarks();
+  },
+  _curvHover(ev) {
+    if (!this._curv) return;
+    const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(this.stage.getScreenCTM().inverse());
+    const closeHover = this._curv.pts.length >= 2 && this._curvNearFirst(p);
+    this._curvRedraw(closeHover ? null : p);
+    this._curvMarks(closeHover);
+    this._setPenCloseCursor(closeHover);
+  },
+  _curvNearFirst(pt) {
+    const f = this._curv.pts[0]; if (!f) return false;
+    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
+    return Math.hypot(pt.x - f.x, pt.y - f.y) < 8 / k;
+  },
+  _curvNearPoint(pt) {
+    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1, tol = 8 / k;
+    for (let i = 0; i < this._curv.pts.length; i++) if (Math.hypot(pt.x - this._curv.pts[i].x, pt.y - this._curv.pts[i].y) < tol) return i;
+    return -1;
+  },
+  _curvRedraw(preview) {
+    if (!this._curv) return;
+    const pts = preview ? this._curv.pts.concat([{ x: preview.x, y: preview.y, corner: false }]) : this._curv.pts;
+    const anchors = catmullRomAnchors(pts, this._curv.closed);
+    this._curv.node.setAttribute("d", penPathD(anchors, this._curv.closed, null));
+  },
+  _curvMarks(closeHover) {
+    const ov = this._overlayEl(); if (!ov || !this._curv) return;
+    ov.querySelectorAll("g.hv-pen").forEach((g) => g.remove());
+    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1, r = 4 / k;
+    const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "hv-pen");
+    this._curv.pts.forEach((a, i) => {
+      const first = i === 0, close = first && closeHover, rr = close ? r * 1.7 : r;
+      // smooth = circle, corner = square (Illustrator curvature affordance)
+      const el = document.createElementNS(SVG_NS, a.corner ? "rect" : "circle");
+      el.setAttribute("class", "hv-pen-anchor" + (first ? " first" : "") + (close ? " close" : ""));
+      if (a.corner) { el.setAttribute("x", nfmt(a.x - rr)); el.setAttribute("y", nfmt(a.y - rr)); el.setAttribute("width", nfmt(rr * 2)); el.setAttribute("height", nfmt(rr * 2)); }
+      else { el.setAttribute("cx", nfmt(a.x)); el.setAttribute("cy", nfmt(a.y)); el.setAttribute("r", nfmt(rr)); }
+      g.appendChild(el);
+    });
+    ov.appendChild(g);
+  },
+  _curvFinish(keep) {
+    if (!this._curv) return;
+    if (this._curvHoverBound) { window.removeEventListener("pointermove", this._curvHoverBound); this._curvHoverBound = null; }
+    this._setPenCloseCursor(false);
+    const { node, pts, closed } = this._curv;
+    const ov = this._overlayEl(); if (ov) ov.querySelectorAll("g.hv-pen").forEach((g) => g.remove());
+    this._curv = null;
+    if (!keep || pts.length < 2) { node.remove(); this.cancelCoalesce(); return; }
+    node.setAttribute("d", penPathD(catmullRomAnchors(pts, closed), closed, null));
+    node.setAttribute("fill", closed ? (this.style.fill || "none") : "none");
+    if (this.style.stroke && this.style.stroke !== "none" && this.style.strokeWidth > 0) {
+      node.setAttribute("stroke", this.style.stroke); node.setAttribute("stroke-width", nfmt(this.style.strokeWidth));
+    } else { node.setAttribute("stroke", "#1d1d1f"); node.setAttribute("stroke-width", "2"); }
+    node.setAttribute("vector-effect", "non-scaling-stroke");
+    node.setAttribute("stroke-linejoin", "round"); node.setAttribute("stroke-linecap", "round");
+    const id = "n" + (++this.idSeq); node.setAttribute("data-hv-id", id);
+    this.commitCoalesce();
+    this.selection = new Set([id]); this.artboardSelected = false;
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+    setStatus(closed ? "Closed curve added." : "Curve added.", 1500);
+  },
   deleteSelection() {
     const nodes = this.selectedNodes(); if (!nodes.length) return;
     this.push();
@@ -617,8 +718,9 @@ const editor = {
 
   // ---------- tools ----------
   setTool(t) {
-    if (t !== "select" && t !== "node" && t !== "pen" && t !== "transform" && t !== "marquee" && !SHAPE_TOOLS.has(t)) return;
+    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "transform" && t !== "marquee" && !SHAPE_TOOLS.has(t)) return;
     if (this._pen && t !== "pen") this._finishPen(true);   // keep any in-progress path
+    if (this._curv && t !== "curvature") this._curvFinish(true);
     if (t !== "node") this._nodeSel = new Set();           // anchor selection is node-tool-only
     this.tool = t;
     document.querySelectorAll(".tool-button").forEach((b) => b.classList.toggle("active", b.dataset.tool === t));
@@ -642,6 +744,7 @@ const editor = {
       ellipse: "Ellipse — drag on the canvas. Shift = circle.",
       line: "Line — drag on the canvas. Shift = 45°.",
       pen: "Pen — click for corners, drag for curves. Alt-drag = cusp, Shift = 45°. Over a path: + adds a point, over an anchor: − removes it. Enter finishes, click the first point to close.",
+      curvature: "Curvature — click to drop points (auto-smooth). Double-click a point to toggle corner. Click the first point to close, Enter to finish.",
     };
     setStatus(msg[t] || "", 2000);
   },
@@ -650,6 +753,7 @@ const editor = {
     if (this.tool === "node" && this.stage) this.mountNodeHandles();
     if (this.tool === "transform" && this.stage) this._renderSelection();   // handles are constant-screen-size
     if (this._pen) { this._redrawPen(); this._renderPenMarks(); }
+    if (this._curv) { this._curvRedraw(); this._curvMarks(); }
   },
   mountNodeHandles() {
     this.unmountNodeHandles();

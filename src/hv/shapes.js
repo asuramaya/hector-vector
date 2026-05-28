@@ -262,6 +262,30 @@ export function splitCubicInsert(anchors, closed, i, t) {
   anchors.splice(i + 1, 0, { x: M.x, y: M.y, in: { x: p012.x, y: p012.y }, out: { x: p123.x, y: p123.y } });
 }
 
+// Curvature tool: turn a list of {x,y,corner} points into pen anchors with
+// auto-computed Catmull-Rom tangent handles (smooth points), corner points keeping
+// null handles. Feed the result to penPathD. Open paths get one-sided end tangents.
+export function catmullRomAnchors(pts, closed) {
+  const n = pts.length;
+  const out = pts.map((p) => ({ x: p.x, y: p.y, in: null, out: null }));
+  if (n < 2) return out;
+  const f = 1 / 3;
+  for (let i = 0; i < n; i++) {
+    if (pts[i].corner) continue;
+    const prev = closed ? pts[(i - 1 + n) % n] : (i > 0 ? pts[i - 1] : null);
+    const next = closed ? pts[(i + 1) % n] : (i < n - 1 ? pts[i + 1] : null);
+    if (!prev && !next) continue;
+    let dx, dy;
+    if (prev && next) { dx = next.x - prev.x; dy = next.y - prev.y; }
+    else if (next) { dx = next.x - pts[i].x; dy = next.y - pts[i].y; }
+    else { dx = pts[i].x - prev.x; dy = pts[i].y - prev.y; }
+    const len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
+    if (next) { const d = Math.hypot(next.x - pts[i].x, next.y - pts[i].y); out[i].out = { x: pts[i].x + ux * d * f, y: pts[i].y + uy * d * f }; }
+    if (prev) { const d = Math.hypot(pts[i].x - prev.x, pts[i].y - prev.y); out[i].in = { x: pts[i].x - ux * d * f, y: pts[i].y - uy * d * f }; }
+  }
+  return out;
+}
+
 export function collectAnchors(svg) {
   const out = [];
   const skip = _anchorSkip;
