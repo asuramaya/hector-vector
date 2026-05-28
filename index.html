@@ -50,8 +50,6 @@
           <div class="stage-head panel-head">
             <span id="output-label">Canvas</span>
           </div>
-          <!-- hidden, kept for code compatibility with the two-pane plumbing -->
-          <div id="input-preview" class="preview-frame" hidden></div>
           <div id="output-preview" class="preview-frame empty-frame">Import or open a vector to start.</div>
           <div class="panel-foot">
             <!-- Navigation only: object controls live on the left toolstrip. -->
@@ -143,6 +141,6 @@
       <button id="shortcut-button" class="ghost-button" type="button">?</button>
     </div>
 
-    <script src="/app.js"></script>
+    <script type="module" src="/src/app.js"></script>
   </body>
 </html>

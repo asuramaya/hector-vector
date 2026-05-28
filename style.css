@@ -832,7 +832,8 @@ button:disabled {
 .process-advanced .form { padding: 10px; }
 .process-panes { display: grid; grid-template-columns: 2fr 1fr; gap: 10px; flex: 1 1 auto; min-height: 0; }
 .process-gallery, .process-jobs { border: 1px solid var(--line); min-height: 0; overflow-y: auto; padding: 8px; }
-.process-pane-head { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; position: sticky; top: -8px; background: var(--bg); padding: 4px 0; }
+.process-pane-head { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; position: sticky; top: -8px; background: var(--bg); padding: 4px 0; display: flex; align-items: center; gap: 8px; }
+.process-filter { margin-left: auto; max-width: 180px; text-transform: none; letter-spacing: 0; }
 .gallery-cell.processed .gallery-caption { color: var(--accent); }
 .process-jobs .jobs-toolbar { margin-bottom: 8px; }
 

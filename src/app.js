@@ -1,3 +1,13 @@
+// =========================================================================
+// hector-vector — app shell. State, library/queue, viewports, modal + form
+// primitives, the Process workspace, menus, document ops, keyboard, bootstrap.
+// Consumes the hv library and the editor module; exposes a small service set to
+// the editor and a window bridge for automation (both at the bottom of file).
+// =========================================================================
+import * as hv from "./hv/index.js";
+import { shapeToAbsPath } from "./hv/index.js";
+import { editor, ghostBtn } from "./editor.js";
+
 const fileInputEl = document.querySelector("#file-input");
 const dropzoneEl = document.querySelector("#dropzone");
 const queueEl = document.querySelector("#queue");
@@ -6,13 +16,8 @@ const workspacePathEl = document.querySelector("#workspace-path");
 const processSelectEl = document.querySelector("#process-select");
 const modeSelectEl = document.querySelector("#mode-select");
 const settingsButtonEl = document.querySelector("#settings-button");
-const inputPreviewEl = document.querySelector("#input-preview");
 const outputPreviewEl = document.querySelector("#output-preview");
 const statusTextEl = document.querySelector("#status-text");
-const removeSelectedEl = document.querySelector("#remove-selected");
-const clearJobsEl = document.querySelector("#clear-jobs");
-const jobsButtonEl = document.querySelector("#jobs-button");
-const jobsCountEl = document.querySelector("#jobs-count");
 const forceInputEl = document.querySelector("#force-input");
 const runButtonEl = document.querySelector("#run-button");
 const libraryHeaderEl = document.querySelector("#process-count");
@@ -20,10 +25,6 @@ const sourcePathEl = document.querySelector("#source-path");
 const sourceEditEl = document.querySelector("#source-edit");
 const sourceResetEl = document.querySelector("#source-reset");
 const sourceRowEl = document.querySelector(".source-row");
-const browseButtonEl = document.querySelector("#browse-button");
-const cleanDerivativesEl = document.querySelector("#clean-derivatives");
-const infoButtonEl = document.querySelector("#info-button");
-const outputPickerEl = document.querySelector("#output-picker");
 const outputLabelEl = document.querySelector("#output-label");
 const modalRootEl = document.querySelector("#modal-root");
 const modalTitleEl = document.querySelector("#modal-title");
@@ -104,29 +105,6 @@ function absInputPath(item) {
   return joinAbsPath(sourceInfo.source_dir, item.name);
 }
 
-function absOutputPath(item) {
-  if (!item) return "";
-  if (item.path && item.path.startsWith("/")) return item.path;
-  return joinAbsPath(outputsDir, item.folder, item.name);
-}
-
-function parentDir(absPath) {
-  if (!absPath) return "";
-  const i = absPath.lastIndexOf("/");
-  return i <= 0 ? absPath : absPath.slice(0, i);
-}
-
-function stripBust(url) {
-  if (!url) return url;
-  return url.replace(/[?&]v=\d+/g, "").replace(/\?$/, "");
-}
-
-function bustUrl(url, stamp) {
-  if (!url) return url;
-  const sep = url.includes("?") ? "&" : "?";
-  return `${url}${sep}v=${stamp || Date.now()}`;
-}
-
 async function copyToClipboard(text, label) {
   if (!text) return false;
   try {
@@ -144,10 +122,10 @@ const BG_STORAGE_KEY = "hector-vector:viewport-bg";
 function loadBgModes() {
   try {
     const raw = localStorage.getItem(BG_STORAGE_KEY);
-    if (!raw) return { input: "checker", output: "checker" };
-    return { input: "checker", output: "checker", ...JSON.parse(raw) };
+    if (!raw) return { output: "checker" };
+    return { output: "checker", ...JSON.parse(raw) };
   } catch {
-    return { input: "checker", output: "checker" };
+    return { output: "checker" };
   }
 }
 const bgModes = loadBgModes();
@@ -156,7 +134,6 @@ function persistBgModes() {
 }
 
 const viewports = {
-  input: { el: inputPreviewEl, scale: 1, x: 0, y: 0, fitScale: 1, path: null, url: null, name: null, kind: null },
   output: { el: outputPreviewEl, scale: 1, x: 0, y: 0, fitScale: 1, path: null, url: null, name: null, kind: null },
 };
 
@@ -175,7 +152,7 @@ function cycleBg(vpName) {
   bgModes[vpName] = BG_MODES[(i + 1) % BG_MODES.length];
   persistBgModes();
   applyBgMode(vpName);
-  setStatus(`${vpName === "input" ? "Input" : "Output"} BG: ${bgModes[vpName]}`, 1200);
+  setStatus(`Background: ${bgModes[vpName]}`, 1200);
 }
 
 async function api(url, method = "GET", payload) {
@@ -258,10 +235,6 @@ function canReplaceStatus() {
   return Date.now() >= statusHoldUntil;
 }
 
-function selectedItem() {
-  return workItems.find((item) => item.name === selectedName) || null;
-}
-
 function latestOutputsFor(name) {
   if (!name) return [];
   const targetStem = stem(name);
@@ -317,56 +290,6 @@ function preferredOutput(name) {
   if (process === "upscale") return matches.find((x) => x.kind === "png" && !x.name.includes(".cutout.") && !x.name.includes(".chromakey.") && !x.name.includes(".preview.")) || matches[0];
   if (process === "vectorize") return matches.find((x) => x.kind === "svg") || matches[0];
   return matches.find((x) => x.kind === "svg") || matches.find((x) => x.name.includes(".cutout.")) || matches[0];
-}
-
-function variantLabel(name) {
-  const render = name.match(/@(\d+)x(\d+)\.png$/i);
-  if (render) return `PNG ${render[1]}×${render[2]}`;
-  if (name.includes(".edited.")) return "Edited";
-  if (name.includes(".cutout.")) return "Cutout";
-  if (name.includes(".chromakey.")) return "Chromakey";
-  if (name.includes(".preview.")) return "Preview";
-  if (name.includes(".mask.")) return "Mask";
-  if (name.endsWith(".svg")) return "SVG";
-  return "Upscale";
-}
-
-const VARIANT_ORDER = ["Upscale", "Preview", "Cutout", "Chromakey", "Mask", "SVG", "Edited"];
-
-function renderOutputPicker() {
-  if (!outputPickerEl) return;
-  const matches = latestOutputsFor(selectedName);
-  if (!matches.length) {
-    outputPickerEl.hidden = true;
-    outputPickerEl.innerHTML = "";
-    return;
-  }
-  outputPickerEl.hidden = false;
-  outputPickerEl.innerHTML = "";
-  const activeKey = selectedOutput ? `${selectedOutput.folder}/${selectedOutput.name}` : null;
-  // Dedup by variant label, keeping the newest (matches is ordered newest-folder first)
-  const seenLabel = new Set();
-  const ordered = [];
-  for (const item of matches) {
-    const lab = variantLabel(item.name);
-    if (seenLabel.has(lab)) continue;
-    seenLabel.add(lab);
-    ordered.push({ ...item, label: lab });
-  }
-  ordered.sort((a, b) => VARIANT_ORDER.indexOf(a.label) - VARIANT_ORDER.indexOf(b.label));
-  for (const item of ordered) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    const isActive = `${item.folder}/${item.name}` === activeKey;
-    btn.className = `output-pick ${isActive ? "active" : ""}`;
-    btn.textContent = item.label;
-    btn.title = `${item.name}\n${item.folder || ""}`;
-    btn.addEventListener("click", () => {
-      manualOutputName = item.name;
-      renderPreviews().catch((error) => setStatus(error.message, 2500));
-    });
-    outputPickerEl.appendChild(btn);
-  }
 }
 
 function makeViewportContent(kind, url, name) {
@@ -458,8 +381,7 @@ async function mountViewport(vp, kind, url, name, path) {
   vp.kind = kind;
   vp.el.className = "preview-frame";
   vp.el.innerHTML = `<div class="checker viewport-shell">${makeViewportContent(kind, url, name)}</div>`;
-  const vpName = vp === viewports.input ? "input" : "output";
-  applyBgMode(vpName);
+  applyBgMode("output");
   const svgHost = vp.el.querySelector(".svg-host");
   if (svgHost) await loadInlineSvg(svgHost);
   const img = vp.el.querySelector("img");
@@ -482,11 +404,6 @@ function clearViewport(vp, text) {
   vp.el.textContent = text;
 }
 
-function updateActionState() {
-  // The Remove action now lives in the Library panel menu; its disabled state
-  // is computed when that menu opens (see MENU_ITEMS["library"]).
-}
-
 function updateLibraryHeader() {
   if (!libraryHeaderEl) return;
   libraryHeaderEl.textContent = workItems.length ? ` (${workItems.length})` : "";
@@ -494,7 +411,6 @@ function updateLibraryHeader() {
 
 const LIBRARY_GROUPS_KEY = "hector-vector:library-groups";
 let libraryGroupCollapsed = loadLibraryGroups();
-let visibleLibraryItems = [];
 
 function loadLibraryGroups() {
   try {
@@ -519,11 +435,9 @@ function itemIsProcessed(name) {
 function renderQueue() {
   queueEl.innerHTML = "";
   updateLibraryHeader();
-  visibleLibraryItems = [];
   if (!workItems.length) {
     queueEl.innerHTML = `<div class="queue-empty">Drop images here.</div>`;
     selectedName = null;
-    updateActionState();
     return;
   }
   if (!workItems.some((item) => item.name === selectedName)) selectedName = workItems[0].name;
@@ -533,7 +447,6 @@ function renderQueue() {
 
   renderQueueGroup("Unprocessed", unprocessed, "unprocessed");
   renderQueueGroup("Processed", processed, "processed");
-  updateActionState();
 }
 
 function renderQueueGroup(label, items, groupKey) {
@@ -552,7 +465,6 @@ function renderQueueGroup(label, items, groupKey) {
   if (collapsed) return;
 
   for (const item of items) {
-    visibleLibraryItems.push(item);
     const button = document.createElement("button");
     button.type = "button";
     button.className = `queue-item ${groupKey} ${item.name === selectedName ? "active" : ""}`;
@@ -580,20 +492,7 @@ function renderQueueGroup(label, items, groupKey) {
 }
 
 async function renderPreviews() {
-  const input = selectedItem();
   selectedOutput = preferredOutput(selectedName);
-
-  if (input) {
-    if (viewports.input.url !== input.url) {
-      try {
-        await mountViewport(viewports.input, "png", input.url, input.name, input.path);
-      } catch (error) {
-        clearViewport(viewports.input, error.message);
-      }
-    }
-  } else if (viewports.input.url !== null) {
-    clearViewport(viewports.input, "No image selected.");
-  }
 
   // editor.pinned = showing a blank/opened doc that isn't tied to the library;
   // don't let a library-driven render clobber it.
@@ -639,10 +538,6 @@ function applyQueueData(items, preferredSelection = null) {
   renderQueue();
 }
 
-async function loadQueue(preferredSelection = null) {
-  applyQueueData(await fetchQueue(), preferredSelection);
-}
-
 async function fetchStatus() {
   return api("/api/status");
 }
@@ -658,10 +553,6 @@ function applyStatusData(data) {
     is_default: workspace.source_dir === workspace.default_source_dir,
   };
   renderSourceRow();
-}
-
-async function loadStatus() {
-  applyStatusData(await fetchStatus());
 }
 
 function renderSourceRow() {
@@ -688,34 +579,11 @@ let lastBatchFailCount = -1;
 let activityState = "idle"; // "idle" | "busy"
 const knownJobStates = new Map();
 const TERMINAL_STATES = new Set(["done", "failed", "cancelled"]);
-const ACTIVE_STATES = new Set(["queued", "running"]);
 let jobsCache = [];
-let jobsModalOpen = false;
 let processModalOpen = false;
 let settingsFormRerender = null;   // where buildSettingsForm re-renders to (Settings modal vs Process workspace)
 
-function jobsForSource(name) {
-  if (!name) return [];
-  const stem = stem_(name);
-  return jobsCache.filter((j) => j.source_name && stem_(j.source_name) === stem);
-}
-
 function stem_(n) { return n.replace(/\.[^.]+$/, ""); }
-
-function updateJobsButton() {
-  if (!jobsButtonEl) return;
-  const total = jobsCache.length;
-  const active = jobsCache.filter((j) => ACTIVE_STATES.has(j.status)).length;
-  const failed = jobsCache.filter((j) => j.status === "failed").length;
-  if (!total) {
-    jobsCountEl.hidden = true;
-    jobsCountEl.className = "badge";
-    return;
-  }
-  jobsCountEl.hidden = false;
-  jobsCountEl.textContent = active ? `${active}/${total}` : String(total);
-  jobsCountEl.className = "badge" + (active ? " badge-busy" : failed ? " badge-fail" : "");
-}
 
 // Live progress in the chin: a bar that tracks the running job (determinate when
 // the pipeline reports step/total, indeterminate otherwise), hidden when idle.
@@ -766,8 +634,6 @@ function applyJobsData(jobs) {
     if (!seen.has(id)) knownJobStates.delete(id);
   }
 
-  updateJobsButton();
-  if (jobsModalOpen) renderJobsModal();
   if (processModalOpen) renderProcessJobs();
 
   const running = jobs.find((job) => job.status === "running");
@@ -958,7 +824,6 @@ function openModal(title, narrow = false) {
 function closeModal() {
   modalRootEl.hidden = true;
   modalBodyEl.innerHTML = "";
-  jobsModalOpen = false;
   processModalOpen = false;
 }
 
@@ -1026,42 +891,6 @@ function renderGalleryGrid(items, onPick) {
   modalBodyEl.appendChild(grid);
 }
 
-function openBrowseModal() {
-  openModal(`Browse — ${workItems.length} image(s)`);
-  const items = workItems.map((item) => ({
-    name: item.name,
-    url: item.url,
-    kind: "png",
-    active: item.name === selectedName,
-    absPath: absInputPath(item),
-  }));
-  const applyFilter = () => {
-    const q = modalSearchEl.value.trim().toLowerCase();
-    const visible = q ? items.filter((it) => it.name.toLowerCase().includes(q)) : items;
-    renderGalleryGrid(visible, (picked) => {
-      selectedName = picked.name;
-      manualOutputName = null;
-      editor.pinned = false;
-      closeModal();
-      renderQueue();
-      renderPreviews().catch((error) => setStatus(error.message, 2500));
-    });
-  };
-  modalSearchEl.oninput = applyFilter;
-  applyFilter();
-}
-
-async function cleanDerivatives() {
-  if (!confirm("Delete all .cutout/.mask/.preview/.chromakey files from the current source folder?")) return;
-  try {
-    const data = await api("/api/work-items/clean-derivatives", "POST", {});
-    setStatus(data.message || "Cleaned.", 2500);
-    await refreshAll();
-  } catch (error) {
-    setStatus(error.message, 3000);
-  }
-}
-
 sourceEditEl.addEventListener("click", beginSourceEdit);
 sourcePathEl.addEventListener("click", beginSourceEdit);
 sourceResetEl.addEventListener("click", async () => {
@@ -1075,32 +904,7 @@ sourceResetEl.addEventListener("click", async () => {
   }
 });
 
-// --- File/locate actions (invoked from the panel-head menus) ---
-
-function inputAbs() {
-  const item = selectedItem();
-  return item ? absInputPath(item) : viewports.input.path;
-}
-function outputAbs() {
-  return selectedOutput ? absOutputPath(selectedOutput) : viewports.output.path;
-}
-
-async function copyInputPath() {
-  const abs = inputAbs();
-  if (abs) await copyToClipboard(abs);
-}
-async function copyOutputPath() {
-  const abs = outputAbs();
-  if (abs) await copyToClipboard(abs);
-}
-async function copyInputFolder() {
-  const dir = parentDir(inputAbs());
-  if (dir) await copyToClipboard(dir);
-}
-async function copyOutputFolder() {
-  const dir = parentDir(outputAbs());
-  if (dir) await copyToClipboard(dir);
-}
+// --- File/locate actions (used by the gallery cell actions) ---
 
 async function revealInFileManager(absPath) {
   if (!absPath) return;
@@ -1111,10 +915,6 @@ async function revealInFileManager(absPath) {
     setStatus(`Reveal failed: ${e.message}`, 3000);
   }
 }
-function revealInput() { revealInFileManager(inputAbs()); }
-function revealOutput() { revealInFileManager(outputAbs()); }
-function openInput() { if (viewports.input.url) window.open(viewports.input.url, "_blank", "noopener"); }
-function openOutput() { if (viewports.output.url) window.open(viewports.output.url, "_blank", "noopener"); }
 
 async function copySvgSource() {
   const text = editor.serialize() ||
@@ -1123,1603 +923,6 @@ async function copySvgSource() {
   await copyToClipboard(text, `SVG (${text.length} chars)`);
 }
 
-// =========================================================================
-// SVG editor — invert / stroke / in-viewport point editing of the output SVG.
-// Operates directly on the live inline <svg> mounted in the output viewport
-// (single source of truth). pristine markup is kept only for Reset.
-// =========================================================================
-
-const SVG_NS = "http://www.w3.org/2000/svg";
-const MAX_HANDLES = 1500;
-
-function editorSvgEl() {
-  return outputPreviewEl.querySelector("svg.inline-svg");
-}
-
-// --- colour helpers (canvas normalises any CSS colour to #rrggbb / rgba()) ---
-const _colorCtx = document.createElement("canvas").getContext("2d");
-function normalizeColor(c) {
-  if (c == null) return null;
-  c = String(c).trim();
-  if (!c || c === "none" || c === "transparent" || c === "currentColor" || c.startsWith("url(")) return null;
-  _colorCtx.fillStyle = "#000000"; _colorCtx.fillStyle = c; const a = _colorCtx.fillStyle;
-  _colorCtx.fillStyle = "#ffffff"; _colorCtx.fillStyle = c; const b = _colorCtx.fillStyle;
-  return a === b ? a : null;   // invalid colours don't change the seed → reject
-}
-function invertColor(c) {
-  const norm = normalizeColor(c);
-  if (!norm) return null;
-  if (norm[0] === "#") {
-    const v = parseInt(norm.slice(1), 16);
-    const r = 255 - ((v >> 16) & 255), g = 255 - ((v >> 8) & 255), b = 255 - (v & 255);
-    return "#" + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
-  }
-  const m = norm.match(/rgba?\(([^)]+)\)/i);
-  if (m) {
-    const p = m[1].split(",").map((s) => s.trim());
-    const r = 255 - (+p[0] || 0), g = 255 - (+p[1] || 0), b = 255 - (+p[2] || 0);
-    return p.length > 3 ? `rgba(${r}, ${g}, ${b}, ${p[3]})` : `rgb(${r}, ${g}, ${b})`;
-  }
-  return null;
-}
-
-const COLOR_ATTRS = ["fill", "stroke", "stop-color", "flood-color", "lighting-color"];
-const STYLE_COLOR_PROPS = ["fill", "stroke", "stopColor", "floodColor", "lightingColor"];
-function applyInvert(svg) {                       // involutive: calling twice restores
-  const els = [svg, ...svg.querySelectorAll("*")];
-  for (const el of els) {
-    if (el.closest && el.closest(".hv-handles")) continue;
-    for (const attr of COLOR_ATTRS) {
-      if (el.hasAttribute && el.hasAttribute(attr)) {
-        const inv = invertColor(el.getAttribute(attr));
-        if (inv) el.setAttribute(attr, inv);
-      }
-    }
-    if (el.style) {
-      for (const prop of STYLE_COLOR_PROPS) {
-        const v = el.style[prop];
-        if (v) { const inv = invertColor(v); if (inv) el.style[prop] = inv; }
-      }
-    }
-  }
-}
-
-const STROKE_SHAPES = "path, rect, circle, ellipse, line, polygon, polyline";
-function applyStroke(svg, { color, width }) {
-  svg.querySelectorAll(STROKE_SHAPES).forEach((el) => {
-    if (el.closest(".hv-handles")) return;
-    if (!el.hasAttribute("data-hv-stroke")) {
-      el.setAttribute("data-hv-ostroke", el.getAttribute("stroke") ?? "");
-      el.setAttribute("data-hv-ostroke-w", el.getAttribute("stroke-width") ?? "");
-      el.setAttribute("data-hv-stroke", "1");
-    }
-    el.setAttribute("stroke", color);
-    el.setAttribute("stroke-width", String(width));
-    el.setAttribute("stroke-linejoin", "round");
-    el.setAttribute("stroke-linecap", "round");
-    el.setAttribute("vector-effect", "non-scaling-stroke");
-  });
-}
-function removeStroke(svg) {
-  svg.querySelectorAll("[data-hv-stroke]").forEach((el) => {
-    const os = el.getAttribute("data-hv-ostroke"), ow = el.getAttribute("data-hv-ostroke-w");
-    if (os) el.setAttribute("stroke", os); else el.removeAttribute("stroke");
-    if (ow) el.setAttribute("stroke-width", ow); else el.removeAttribute("stroke-width");
-    ["vector-effect", "stroke-linejoin", "stroke-linecap", "data-hv-stroke", "data-hv-ostroke", "data-hv-ostroke-w"]
-      .forEach((a) => el.removeAttribute(a));
-  });
-}
-
-// --- path d parsing → absolute, normalised to M/L/C/Q/A/Z ---
-function parsePath(d) {
-  const re = /([MmLlHhVvCcSsQqTtAaZz])|(-?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?)/g;
-  const toks = []; let mm;
-  while ((mm = re.exec(d))) toks.push(mm[1] || mm[2]);
-  let i = 0; const num = () => parseFloat(toks[i++]);
-  const segs = []; let cx = 0, cy = 0, sx = 0, sy = 0, prevCtrl = null, cmd = "", last = "";
-  while (i < toks.length) {
-    if (/[a-zA-Z]/.test(toks[i])) cmd = toks[i++];
-    const rel = cmd === cmd.toLowerCase(), C = cmd.toUpperCase();
-    if (C === "M") {
-      let x = num(), y = num(); if (rel) { x += cx; y += cy; }
-      cx = x; cy = y; sx = x; sy = y; segs.push({ t: "M", end: { x, y } });
-      last = "M"; prevCtrl = null; cmd = rel ? "l" : "L";
-    } else if (C === "L") {
-      let x = num(), y = num(); if (rel) { x += cx; y += cy; }
-      cx = x; cy = y; segs.push({ t: "L", end: { x, y } }); last = "L"; prevCtrl = null;
-    } else if (C === "H") {
-      let x = num(); if (rel) x += cx; cx = x; segs.push({ t: "L", end: { x, y: cy } }); last = "L"; prevCtrl = null;
-    } else if (C === "V") {
-      let y = num(); if (rel) y += cy; cy = y; segs.push({ t: "L", end: { x: cx, y } }); last = "L"; prevCtrl = null;
-    } else if (C === "C") {
-      let x1 = num(), y1 = num(), x2 = num(), y2 = num(), x = num(), y = num();
-      if (rel) { x1 += cx; y1 += cy; x2 += cx; y2 += cy; x += cx; y += cy; }
-      segs.push({ t: "C", c1: { x: x1, y: y1 }, c2: { x: x2, y: y2 }, end: { x, y } });
-      prevCtrl = { x: x2, y: y2 }; cx = x; cy = y; last = "C";
-    } else if (C === "S") {
-      let x2 = num(), y2 = num(), x = num(), y = num();
-      if (rel) { x2 += cx; y2 += cy; x += cx; y += cy; }
-      const refl = (last === "C" || last === "S") && prevCtrl ? { x: 2 * cx - prevCtrl.x, y: 2 * cy - prevCtrl.y } : { x: cx, y: cy };
-      segs.push({ t: "C", c1: refl, c2: { x: x2, y: y2 }, end: { x, y } });
-      prevCtrl = { x: x2, y: y2 }; cx = x; cy = y; last = "S";
-    } else if (C === "Q") {
-      let x1 = num(), y1 = num(), x = num(), y = num();
-      if (rel) { x1 += cx; y1 += cy; x += cx; y += cy; }
-      segs.push({ t: "Q", c1: { x: x1, y: y1 }, end: { x, y } });
-      prevCtrl = { x: x1, y: y1 }; cx = x; cy = y; last = "Q";
-    } else if (C === "T") {
-      let x = num(), y = num(); if (rel) { x += cx; y += cy; }
-      const refl = (last === "Q" || last === "T") && prevCtrl ? { x: 2 * cx - prevCtrl.x, y: 2 * cy - prevCtrl.y } : { x: cx, y: cy };
-      segs.push({ t: "Q", c1: refl, end: { x, y } });
-      prevCtrl = refl; cx = x; cy = y; last = "T";
-    } else if (C === "A") {
-      let rx = num(), ry = num(), rot = num(), laf = num(), sf = num(), x = num(), y = num();
-      if (rel) { x += cx; y += cy; }
-      segs.push({ t: "A", rx, ry, rot, laf, sf, end: { x, y } });
-      cx = x; cy = y; last = "A"; prevCtrl = null;
-    } else if (C === "Z") {
-      segs.push({ t: "Z" }); cx = sx; cy = sy; last = "Z"; prevCtrl = null;
-    } else { i++; }
-  }
-  return segs;
-}
-function nfmt(v) { return (Math.round(v * 1000) / 1000).toString(); }
-function serializeSegs(segs) {
-  return segs.map((s) => {
-    if (s.t === "M") return `M${nfmt(s.end.x)} ${nfmt(s.end.y)}`;
-    if (s.t === "L") return `L${nfmt(s.end.x)} ${nfmt(s.end.y)}`;
-    if (s.t === "C") return `C${nfmt(s.c1.x)} ${nfmt(s.c1.y)} ${nfmt(s.c2.x)} ${nfmt(s.c2.y)} ${nfmt(s.end.x)} ${nfmt(s.end.y)}`;
-    if (s.t === "Q") return `Q${nfmt(s.c1.x)} ${nfmt(s.c1.y)} ${nfmt(s.end.x)} ${nfmt(s.end.y)}`;
-    if (s.t === "A") return `A${nfmt(s.rx)} ${nfmt(s.ry)} ${nfmt(s.rot)} ${s.laf} ${s.sf} ${nfmt(s.end.x)} ${nfmt(s.end.y)}`;
-    if (s.t === "Z") return "Z";
-    return "";
-  }).join(" ");
-}
-
-// Gather draggable anchors across the SVG's shapes. Each anchor knows its
-// current position and how to write a new position back to the element.
-function collectAnchors(svg) {
-  const out = [];
-  const skip = (el) => el.closest(".hv-handles") || el.closest(".hv-overlay") || el.classList.contains("hv-artboard");
-  svg.querySelectorAll("path").forEach((el) => {
-    if (skip(el)) return;
-    const segs = parsePath(el.getAttribute("d") || "");
-    el._hvSegs = segs;
-    segs.forEach((s) => {
-      if (!s.end) return;
-      out.push({ x: s.end.x, y: s.end.y, set: (nx, ny) => { s.end.x = nx; s.end.y = ny; el.setAttribute("d", serializeSegs(el._hvSegs)); } });
-    });
-  });
-  svg.querySelectorAll("rect").forEach((el) => {
-    if (skip(el)) return;
-    const get = () => ({ x: +el.getAttribute("x") || 0, y: +el.getAttribute("y") || 0, w: +el.getAttribute("width") || 0, h: +el.getAttribute("height") || 0 });
-    const corner = (xMin, yMin) => {
-      const r = get();
-      return {
-        x: xMin ? r.x : r.x + r.w, y: yMin ? r.y : r.y + r.h,
-        set: (nx, ny) => {
-          const c = get();
-          const ox = xMin ? c.x + c.w : c.x, oy = yMin ? c.y + c.h : c.y;
-          const x0 = Math.min(nx, ox), x1 = Math.max(nx, ox), y0 = Math.min(ny, oy), y1 = Math.max(ny, oy);
-          el.setAttribute("x", nfmt(x0)); el.setAttribute("y", nfmt(y0));
-          el.setAttribute("width", nfmt(x1 - x0)); el.setAttribute("height", nfmt(y1 - y0));
-        },
-      };
-    };
-    out.push(corner(true, true), corner(false, true), corner(true, false), corner(false, false));
-  });
-  svg.querySelectorAll("polygon, polyline").forEach((el) => {
-    if (skip(el)) return;
-    const pts = (el.getAttribute("points") || "").trim().split(/[\s,]+/).map(Number).filter((v) => !Number.isNaN(v));
-    el._hvPts = pts;
-    for (let k = 0; k + 1 < pts.length; k += 2) {
-      const idx = k;
-      out.push({ x: pts[idx], y: pts[idx + 1], set: (nx, ny) => { el._hvPts[idx] = nx; el._hvPts[idx + 1] = ny; el.setAttribute("points", el._hvPts.map(nfmt).join(" ")); } });
-    }
-  });
-  svg.querySelectorAll("circle, ellipse").forEach((el) => {
-    if (skip(el)) return;
-    out.push({ x: +el.getAttribute("cx") || 0, y: +el.getAttribute("cy") || 0, set: (nx, ny) => { el.setAttribute("cx", nfmt(nx)); el.setAttribute("cy", nfmt(ny)); } });
-  });
-  svg.querySelectorAll("line").forEach((el) => {
-    if (skip(el)) return;
-    out.push({ x: +el.getAttribute("x1") || 0, y: +el.getAttribute("y1") || 0, set: (nx, ny) => { el.setAttribute("x1", nfmt(nx)); el.setAttribute("y1", nfmt(ny)); } });
-    out.push({ x: +el.getAttribute("x2") || 0, y: +el.getAttribute("y2") || 0, set: (nx, ny) => { el.setAttribute("x2", nfmt(nx)); el.setAttribute("y2", nfmt(ny)); } });
-  });
-  return out;
-}
-
-// =========================================================================
-// Vector editor — the document IS the live stage <svg> (single source of
-// truth). Undo/redo via markup snapshots; selection by data-hv-id. Replaces
-// the v0 global invert/stroke/point-edit toggles with a selection model.
-// =========================================================================
-
-const SKIP_TAGS = new Set(["defs", "style", "title", "metadata", "desc"]);
-
-function toHexColor(c) {
-  const n = normalizeColor(c);
-  if (!n) return null;
-  if (n[0] === "#") return n;
-  const m = n.match(/rgba?\(([^)]+)\)/i);
-  if (!m) return null;
-  const [r, g, b] = m[1].split(",").map((s) => parseInt(s, 10) || 0);
-  return "#" + [r, g, b].map((v) => (v & 255).toString(16).padStart(2, "0")).join("");
-}
-function currentTranslate(n) {
-  const m = /translate\(\s*([-\d.]+)[ ,]+([-\d.]+)/.exec(n.getAttribute("transform") || "");
-  return m ? { x: parseFloat(m[1]), y: parseFloat(m[2]) } : { x: 0, y: 0 };
-}
-function setTranslate(n, x, y) { n.setAttribute("transform", `translate(${nfmt(x)} ${nfmt(y)})`); }
-
-const SHAPE_TOOLS = new Set(["rect", "ellipse", "line"]);
-
-const editor = {
-  stage: null,
-  selection: new Set(),
-  artboardSelected: false,
-  tool: "select",
-  history: [],
-  redo: [],
-  idSeq: 0,
-  pinned: false,        // true when showing a blank/opened doc (skip library remount)
-  _strokeWidthInput: null,
-  // last-used appearance — newly drawn shapes inherit it (updated by applyFill/applyStroke)
-  style: { fill: "#808080", stroke: "none", strokeWidth: 0 },
-  _pen: null,           // in-progress pen path: { node, pts:[{x,y,out}], closed, dragging }
-  clipboard: [],        // in-app clipboard: serialized node markup
-
-  get dirty() { return this.history.length > 0; },
-
-  // ---------- lifecycle ----------
-  sync() {
-    const el = editorSvgEl();
-    if (el === this.stage) return;
-    if (!el) { this.stage = null; this._renderInspector(); this._updateButtons(); return; }
-    this.adopt(el);
-  },
-  adopt(svgEl) {
-    if (this._penHoverBound) { window.removeEventListener("pointermove", this._penHoverBound); this._penHoverBound = null; }
-    this._pen = null;
-    this.selection = new Set();
-    this.artboardSelected = false;
-    this.history = [];
-    this.redo = [];
-    this._install(svgEl);
-    this._renderSelection();
-    this._renderInspector();
-    this._updateButtons();
-  },
-  _install(svgEl) {
-    this.stage = svgEl;
-    this._ensureStructure(svgEl);
-    svgEl.classList.add("hv-pickable");
-    if (!svgEl._hvBound) {
-      svgEl.addEventListener("pointerdown", (e) => this._onPointerDown(e));
-      svgEl._hvBound = true;
-    }
-  },
-  _ensureStructure(svg) {
-    let vb = svg.viewBox && svg.viewBox.baseVal;
-    if (!vb || !vb.width) {
-      const w = parseFloat(svg.getAttribute("width")) || 100;
-      const h = parseFloat(svg.getAttribute("height")) || 100;
-      svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
-      vb = svg.viewBox.baseVal;
-    }
-    let ab = svg.querySelector("rect.hv-artboard");
-    if (!ab) {
-      ab = document.createElementNS(SVG_NS, "rect");
-      ab.setAttribute("class", "hv-artboard");
-      ab.setAttribute("fill", "none");
-      svg.insertBefore(ab, svg.firstChild);
-    }
-    ab.setAttribute("x", nfmt(vb.x)); ab.setAttribute("y", nfmt(vb.y));
-    ab.setAttribute("width", nfmt(vb.width)); ab.setAttribute("height", nfmt(vb.height));
-    this._flattenWrapper(svg);    // layered extraction: unwrap a single wrapper <g> on import
-    let max = 0;
-    svg.querySelectorAll("[data-hv-id]").forEach((n) => {
-      const m = +(/\d+/.exec(n.getAttribute("data-hv-id")) || [0])[0];
-      if (m > max) max = m;
-    });
-    this.idSeq = max;
-    for (const child of Array.from(svg.children)) {
-      const tag = child.tagName.toLowerCase();
-      if (SKIP_TAGS.has(tag)) continue;
-      if (child.classList.contains("hv-artboard") || child.classList.contains("hv-overlay")) continue;
-      if (!child.hasAttribute("data-hv-id")) child.setAttribute("data-hv-id", "n" + (++this.idSeq));
-    }
-    let ov = svg.querySelector("g.hv-overlay");
-    if (!ov) { ov = document.createElementNS(SVG_NS, "g"); ov.setAttribute("class", "hv-overlay"); }
-    svg.appendChild(ov);   // keep overlay last
-  },
-  // If the whole graphic is one un-tagged wrapper <g> (common in exported/traced
-  // SVGs), unwrap it so each colour/shape becomes its own editable layer.
-  _flattenWrapper(svg) {
-    const art = [...svg.children].filter((c) => {
-      const t = c.tagName.toLowerCase();
-      return !SKIP_TAGS.has(t) && !c.classList.contains("hv-artboard") && !c.classList.contains("hv-overlay");
-    });
-    if (art.length !== 1) return;
-    const g = art[0];
-    if (g.tagName.toLowerCase() !== "g" || g.hasAttribute("data-hv-id")) return;
-    const kids = [...g.children].filter((k) => !SKIP_TAGS.has(k.tagName.toLowerCase()));
-    if (kids.length < 2) return;
-    const gt = currentTranslate(g);
-    for (const k of [...g.children]) {
-      if (gt.x || gt.y) { const kt = currentTranslate(k); setTranslate(k, kt.x + gt.x, kt.y + gt.y); }
-      svg.insertBefore(k, g);
-    }
-    g.remove();
-  },
-  _overlayEl() { return this.stage && this.stage.querySelector("g.hv-overlay"); },
-  artboardEl() { return this.stage && this.stage.querySelector("rect.hv-artboard"); },
-
-  // ---------- serialization ----------
-  _historyMarkup() {
-    const c = this.stage.cloneNode(true);
-    c.querySelectorAll("g.hv-overlay").forEach((g) => g.remove());
-    c.classList.remove("hv-pickable");
-    return c.outerHTML;
-  },
-  serialize() {
-    if (!this.stage) return "";
-    const c = this.stage.cloneNode(true);
-    c.querySelectorAll("g.hv-overlay").forEach((g) => g.remove());
-    c.classList.remove("hv-pickable");
-    c.querySelectorAll("[data-hv-id]").forEach((n) => {
-      ["data-hv-id", "data-hv-name", "data-hv-locked"].forEach((a) => n.removeAttribute(a));
-    });
-    const ab = c.querySelector("rect.hv-artboard");
-    if (ab) {
-      const f = ab.getAttribute("fill");
-      if (!f || f === "none") ab.remove();      // drop the invisible artboard from saved output
-      else ab.removeAttribute("class");
-    }
-    return c.outerHTML;
-  },
-
-  // ---------- history ----------
-  push() {
-    if (!this.stage) return;
-    this.commitCoalesce();                 // flush any in-progress live edit first
-    this.history.push(this._state());
-    if (this.history.length > 100) this.history.shift();
-    this.redo = [];
-    this._updateButtons();
-  },
-  // A run of continuous live edits (dragging a colour picker, typing a number)
-  // collapses into ONE undo entry: snapshot once on begin, push it on commit.
-  beginCoalesce() { if (!this._coalescing) { this._coalesceState = this._state(); this._coalescing = true; } },
-  commitCoalesce() {
-    if (!this._coalescing) return;
-    this.history.push(this._coalesceState);
-    if (this.history.length > 100) this.history.shift();
-    this.redo = []; this._coalescing = false; this._coalesceState = null;
-    this._updateButtons();
-  },
-  cancelCoalesce() { this._coalescing = false; this._coalesceState = null; },
-  _state() { return { svg: this._historyMarkup(), sel: [...this.selection], ab: this.artboardSelected }; },
-  undo() { if (this._pen) this._finishPen(true); this.commitCoalesce(); if (!this.history.length) return; this.redo.push(this._state()); this._restore(this.history.pop()); },
-  redoAction() { if (this._pen) this._finishPen(true); this.commitCoalesce(); if (!this.redo.length) return; this.history.push(this._state()); this._restore(this.redo.pop()); },
-  _restore(state) {
-    const host = this.stage.parentElement; if (!host) return;
-    const doc = new DOMParser().parseFromString(state.svg, "image/svg+xml");
-    const fresh = document.importNode(doc.documentElement, true);
-    fresh.classList.add("inline-svg");
-    host.replaceChild(fresh, this.stage);
-    this._install(fresh);
-    this.selection = new Set(state.sel.filter((id) => this.nodeById(id)));
-    this.artboardSelected = !!state.ab;
-    this._renderSelection();
-    this._renderInspector();
-    this._updateButtons();
-    measureFit(viewports.output);
-  },
-  _updateButtons() {
-    const u = document.querySelector("#undo-button"), r = document.querySelector("#redo-button");
-    if (u) u.disabled = !this.history.length;
-    if (r) r.disabled = !this.redo.length;
-  },
-
-  // ---------- selection ----------
-  nodeById(id) { return this.stage && this.stage.querySelector(`[data-hv-id="${CSS.escape(id)}"]`); },
-  selectedNodes() { return [...this.selection].map((id) => this.nodeById(id)).filter(Boolean); },
-  selectArtboard() {
-    if (!this.stage) return;
-    this.selection = new Set();
-    this.artboardSelected = true;
-    this._renderSelection(); this._renderInspector();
-  },
-  _onPointerDown(e) {
-    if (this._spacePan) return;   // spacebar held → let the viewport pan the drag (don't select/draw)
-    if (e.button !== 0) return;   // right/middle clicks are for the context menu, not draw/select
-    if (this.tool === "pen") { this._penDown(e); return; }
-    if (SHAPE_TOOLS.has(this.tool)) {
-      if (e.button !== 0) return;
-      e.stopPropagation(); e.preventDefault();   // draw, don't pan
-      this._beginDraw(e);
-      return;
-    }
-    if (this.tool !== "select") return;
-    let hit = e.target.closest && e.target.closest("[data-hv-id]");
-    if (hit && hit.getAttribute("data-hv-locked") === "1") hit = null;   // locked → not selectable
-    if (hit && this.stage.contains(hit)) {
-      e.stopPropagation();
-      const id = hit.getAttribute("data-hv-id");
-      if (e.shiftKey) { this.selection.has(id) ? this.selection.delete(id) : this.selection.add(id); }
-      else if (!this.selection.has(id)) { this.selection = new Set([id]); }
-      this.artboardSelected = false;
-      this._renderSelection(); this._renderInspector();
-      if (this.selection.size) this._beginMove(e);
-    } else {
-      this.selection = new Set();      // empty space → select the artboard, let the frame pan
-      this.artboardSelected = true;
-      this._renderSelection(); this._renderInspector();
-    }
-  },
-  _beginMove(startEvent) {
-    const nodes = this.selectedNodes(); if (!nodes.length) return;
-    const inv = () => this.stage.getScreenCTM().inverse();
-    const start = new DOMPoint(startEvent.clientX, startEvent.clientY).matrixTransform(inv());
-    const bases = nodes.map((n) => currentTranslate(n));
-    let pushed = false;
-    const move = (ev) => {
-      const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
-      const dx = p.x - start.x, dy = p.y - start.y;
-      if (!pushed && (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01)) { this.push(); pushed = true; }
-      nodes.forEach((n, i) => setTranslate(n, bases[i].x + dx, bases[i].y + dy));
-      this._renderSelection();
-    };
-    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  },
-  // Shape tools: click-drag on the canvas to create a primitive. The whole gesture
-  // is one undo step — beginCoalesce snapshots the pre-draw doc, commitCoalesce
-  // commits it once the shape is large enough to keep (a bare click creates nothing).
-  _beginDraw(startEvent) {
-    const tool = this.tool;
-    const inv = () => this.stage.getScreenCTM().inverse();
-    const start = new DOMPoint(startEvent.clientX, startEvent.clientY).matrixTransform(inv());
-    this.beginCoalesce();                         // snapshot the document before the shape exists
-    this.selection = new Set(); this.artboardSelected = false; this._renderSelection();
-    const ov = this._overlayEl();
-    const node = makeShapeNode(tool, start, this.style);
-    this.stage.insertBefore(node, ov);
-    let moved = false;
-    const move = (ev) => {
-      const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
-      sizeShape(tool, node, start, p, ev.shiftKey);
-      moved = true;
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      if (!moved || !shapeMeaningful(tool, node)) { node.remove(); this.cancelCoalesce(); return; }
-      const id = "n" + (++this.idSeq);
-      node.setAttribute("data-hv-id", id);
-      this.commitCoalesce();                      // one undo entry for the whole draw
-      this.selection = new Set([id]); this.artboardSelected = false;
-      this._renderSelection(); this._renderInspector(); this._renderLayers();
-      setStatus(`Added ${this.nodeName(node).toLowerCase()}.`, 1500);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  },
-  // Pen tool: click to drop a corner anchor; click-drag to drop a smooth anchor
-  // (the drag sets its bezier handle). Click the first anchor to close; Enter
-  // finishes an open path. The whole construction is one undo step.
-  _penDown(e) {
-    if (e.button !== 0) return;
-    e.stopPropagation(); e.preventDefault();
-    const inv = () => this.stage.getScreenCTM().inverse();
-    const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(inv());
-    if (!this._pen) {
-      this.beginCoalesce();                       // snapshot before the path exists
-      this.selection = new Set(); this.artboardSelected = false; this._renderSelection();
-      const node = document.createElementNS(SVG_NS, "path");
-      node.setAttribute("fill", "none");
-      node.setAttribute("stroke", "#1d1d1f"); node.setAttribute("stroke-width", "1.5");
-      node.setAttribute("vector-effect", "non-scaling-stroke");
-      this.stage.insertBefore(node, this._overlayEl());
-      this._pen = { node, pts: [], closed: false, dragging: false };
-      this._penHoverBound = (ev) => this._penHover(ev);
-      window.addEventListener("pointermove", this._penHoverBound);
-    } else if (this._pen.pts.length >= 2 && this._penNearFirst(pt)) {
-      this._pen.closed = true; this._finishPen(true); return;
-    }
-    const anchor = { x: pt.x, y: pt.y, out: null };
-    this._pen.pts.push(anchor);
-    this._pen.dragging = true;
-    this._redrawPen(); this._renderPenMarks();
-    const move = (ev) => {
-      const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
-      anchor.out = { x: p.x, y: p.y };            // drag → smooth point
-      this._redrawPen(); this._renderPenMarks();
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      if (this._pen) this._pen.dragging = false;
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  },
-  _penHover(ev) {
-    if (!this._pen || this._pen.dragging) return;
-    const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(this.stage.getScreenCTM().inverse());
-    this._redrawPen({ x: p.x, y: p.y });
-  },
-  _redrawPen(preview) {
-    if (!this._pen) return;
-    this._pen.node.setAttribute("d", penPathD(this._pen.pts, this._pen.closed, preview));
-  },
-  _penNearFirst(pt) {
-    const f = this._pen.pts[0]; if (!f) return false;
-    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
-    return Math.hypot(pt.x - f.x, pt.y - f.y) < 8 / k;
-  },
-  _renderPenMarks() {
-    const ov = this._overlayEl(); if (!ov || !this._pen) return;
-    ov.querySelectorAll("g.hv-pen").forEach((g) => g.remove());
-    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1; const r = 4 / k;
-    const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "hv-pen");
-    this._pen.pts.forEach((a, i) => {
-      const c = document.createElementNS(SVG_NS, "rect");
-      c.setAttribute("class", "hv-pen-anchor" + (i === 0 ? " first" : ""));
-      c.setAttribute("x", nfmt(a.x - r)); c.setAttribute("y", nfmt(a.y - r));
-      c.setAttribute("width", nfmt(r * 2)); c.setAttribute("height", nfmt(r * 2));
-      g.appendChild(c);
-    });
-    ov.appendChild(g);
-  },
-  _finishPen(keep) {
-    if (!this._pen) return;
-    if (this._penHoverBound) { window.removeEventListener("pointermove", this._penHoverBound); this._penHoverBound = null; }
-    const { node, pts, closed } = this._pen;
-    const ov = this._overlayEl(); if (ov) ov.querySelectorAll("g.hv-pen").forEach((g) => g.remove());
-    this._pen = null;
-    if (!keep || pts.length < 2) { node.remove(); this.cancelCoalesce(); return; }
-    node.setAttribute("d", penPathD(pts, closed, null));
-    node.setAttribute("fill", closed ? (this.style.fill || "none") : "none");
-    if (this.style.stroke && this.style.stroke !== "none" && this.style.strokeWidth > 0) {
-      node.setAttribute("stroke", this.style.stroke); node.setAttribute("stroke-width", nfmt(this.style.strokeWidth));
-    } else { node.setAttribute("stroke", "#1d1d1f"); node.setAttribute("stroke-width", "2"); }
-    node.setAttribute("vector-effect", "non-scaling-stroke");
-    node.setAttribute("stroke-linejoin", "round"); node.setAttribute("stroke-linecap", "round");
-    const id = "n" + (++this.idSeq); node.setAttribute("data-hv-id", id);
-    this.commitCoalesce();
-    this.selection = new Set([id]); this.artboardSelected = false;
-    this._renderSelection(); this._renderInspector(); this._renderLayers();
-    setStatus(closed ? "Closed path added." : "Path added.", 1500);
-  },
-  deleteSelection() {
-    const nodes = this.selectedNodes(); if (!nodes.length) return;
-    this.push();
-    nodes.forEach((n) => n.remove());
-    this.selection = new Set();
-    this._renderSelection(); this._renderInspector();
-  },
-  _renderSelection() {
-    const ov = this._overlayEl(); if (!ov) return;
-    ov.innerHTML = "";
-    const targets = this.artboardSelected
-      ? [this.artboardEl()].filter(Boolean)
-      : this.selectedNodes();
-    const ctm = this.stage.getScreenCTM();
-    if (ctm) {
-      const inv = ctm.inverse();
-      for (const n of targets) {
-        let r; try { r = n.getBoundingClientRect(); } catch { continue; }
-        if (!r.width && !r.height) continue;
-        const a = new DOMPoint(r.left, r.top).matrixTransform(inv);
-        const b = new DOMPoint(r.right, r.bottom).matrixTransform(inv);
-        const box = document.createElementNS(SVG_NS, "rect");
-        box.setAttribute("class", "hv-sel-box");
-        box.setAttribute("x", nfmt(Math.min(a.x, b.x))); box.setAttribute("y", nfmt(Math.min(a.y, b.y)));
-        box.setAttribute("width", nfmt(Math.abs(b.x - a.x))); box.setAttribute("height", nfmt(Math.abs(b.y - a.y)));
-        ov.appendChild(box);
-      }
-    }
-    if (this.tool === "node") this.mountNodeHandles();
-  },
-
-  // ---------- tools ----------
-  setTool(t) {
-    if (t !== "select" && t !== "node" && t !== "pen" && !SHAPE_TOOLS.has(t)) return;
-    if (this._pen && t !== "pen") this._finishPen(true);   // keep any in-progress path
-    this.tool = t;
-    document.querySelectorAll(".tool-button").forEach((b) => b.classList.toggle("active", b.dataset.tool === t));
-    if (t === "node") this.mountNodeHandles(); else this.unmountNodeHandles();
-    const msg = {
-      select: "Select tool. (A = nodes)",
-      node: "Node tool — drag anchors. (V = select)",
-      rect: "Rectangle — drag on the canvas. (V = select)",
-      ellipse: "Ellipse — drag on the canvas. Shift = circle.",
-      line: "Line — drag on the canvas. Shift = 45°.",
-      pen: "Pen — click to add points, drag for curves, Enter to finish, click the first point to close.",
-    };
-    setStatus(msg[t] || "", 2000);
-  },
-  unmountNodeHandles() { const ov = this._overlayEl(); if (ov) ov.querySelectorAll(".hv-handles").forEach((g) => g.remove()); },
-  onViewportChanged() { if (this.tool === "node" && this.stage) this.mountNodeHandles(); if (this._pen) { this._redrawPen(); this._renderPenMarks(); } },
-  mountNodeHandles() {
-    this.unmountNodeHandles();
-    const ov = this._overlayEl(); if (!ov || !this.stage) return;
-    const anchors = collectAnchors(this.stage);
-    if (!anchors.length) return;
-    if (anchors.length > MAX_HANDLES) { setStatus(`Too many anchors (${anchors.length}) to edit. Works best on traced paths.`, 4000); return; }
-    // constant ~5px on screen regardless of zoom (CTM.a = screen px per user unit)
-    const m = this.stage.getScreenCTM();
-    const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
-    const r = 5 / k;
-    const g = document.createElementNS(SVG_NS, "g");
-    g.setAttribute("class", "hv-handles");
-    for (const a of anchors) {
-      const c = document.createElementNS(SVG_NS, "circle");
-      c.setAttribute("class", "hv-handle");
-      c.setAttribute("cx", a.x); c.setAttribute("cy", a.y); c.setAttribute("r", r);
-      this._bindNodeHandle(c, a);
-      g.appendChild(c);
-    }
-    ov.appendChild(g);
-  },
-  _bindNodeHandle(c, a) {
-    c.addEventListener("pointerdown", (e) => {
-      e.stopPropagation(); e.preventDefault();
-      c.setPointerCapture(e.pointerId); c.classList.add("dragging");
-      let pushed = false;
-      const move = (ev) => {
-        const m = this.stage.getScreenCTM(); if (!m) return;
-        if (!pushed) { this.push(); pushed = true; }
-        const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
-        c.setAttribute("cx", p.x); c.setAttribute("cy", p.y);
-        a.set(p.x, p.y);
-      };
-      const up = () => {
-        try { c.releasePointerCapture(e.pointerId); } catch {}
-        c.classList.remove("dragging");
-        c.removeEventListener("pointermove", move); c.removeEventListener("pointerup", up);
-        this.mountNodeHandles();
-      };
-      c.addEventListener("pointermove", move);
-      c.addEventListener("pointerup", up);
-    });
-  },
-
-  // ---------- property edits — apply* do NOT push; wrap with beginCoalesce/commitCoalesce ----------
-  _eachSel(fn) { this.selectedNodes().forEach(fn); this._renderSelection(); },
-  applyFill(color) { this.style.fill = color || "none"; this._eachSel((n) => n.setAttribute("fill", color || "none")); },
-  applyStroke(color, width) {
-    this.style.stroke = width > 0 ? color : "none"; this.style.strokeWidth = width > 0 ? width : 0;
-    this._eachSel((n) => {
-      if (width > 0) {
-        n.setAttribute("stroke", color); n.setAttribute("stroke-width", nfmt(width));
-        n.setAttribute("vector-effect", "non-scaling-stroke");
-        n.setAttribute("stroke-linejoin", "round"); n.setAttribute("stroke-linecap", "round");
-      } else {
-        ["stroke", "stroke-width", "vector-effect", "stroke-linejoin", "stroke-linecap"].forEach((x) => n.removeAttribute(x));
-      }
-    });
-  },
-  applyOpacity(v) { this._eachSel((n) => { if (v >= 1) n.removeAttribute("opacity"); else n.setAttribute("opacity", nfmt(v)); }); },
-  applyArtboardBg(color) { const ab = this.artboardEl(); if (ab) ab.setAttribute("fill", color || "none"); },
-  applyArtboardSize(w, h) {
-    const ab = this.artboardEl(); if (!ab || !this.stage) return;
-    this.stage.setAttribute("viewBox", `0 0 ${nfmt(w)} ${nfmt(h)}`);
-    this.stage.setAttribute("width", nfmt(w)); this.stage.setAttribute("height", nfmt(h));
-    ab.setAttribute("x", 0); ab.setAttribute("y", 0); ab.setAttribute("width", nfmt(w)); ab.setAttribute("height", nfmt(h));
-    this._renderSelection(); measureFit(viewports.output);
-  },
-
-  // ---------- Phase 2 object ops (each is one undo step) ----------
-  _artworkNodes() { return [...this.stage.children].filter((c) => c.hasAttribute && c.hasAttribute("data-hv-id")); },
-  duplicate() {
-    const nodes = this.selectedNodes(); if (!nodes.length) return;
-    this.push();
-    const ov = this._overlayEl(); const ids = [];
-    for (const n of nodes) {
-      const c = n.cloneNode(true);
-      const id = "n" + (++this.idSeq); c.setAttribute("data-hv-id", id);
-      const t = currentTranslate(c); setTranslate(c, t.x + 12, t.y + 12);
-      this.stage.insertBefore(c, ov);
-      ids.push(id);
-    }
-    this.selection = new Set(ids); this.artboardSelected = false;
-    this._renderSelection(); this._renderInspector();
-    setStatus(`Duplicated ${ids.length} object${ids.length > 1 ? "s" : ""}.`, 1500);
-  },
-  // ---------- clipboard + selection commands (shared by keymap + context menu) ----------
-  copy() {
-    const nodes = this.selectedNodes(); if (!nodes.length) return false;
-    this.clipboard = nodes.map((n) => { const c = n.cloneNode(true); c.removeAttribute("data-hv-id"); return c.outerHTML; });
-    setStatus(`Copied ${nodes.length} object${nodes.length > 1 ? "s" : ""}.`, 1200);
-    return true;
-  },
-  cut() { if (this.copy()) this.deleteSelection(); },
-  paste() {
-    if (!this.clipboard.length || !this.stage) return;
-    const els = [];
-    for (const markup of this.clipboard) {
-      const doc = new DOMParser().parseFromString(`<svg xmlns="${SVG_NS}">${markup}</svg>`, "image/svg+xml");
-      const src = doc.documentElement && doc.documentElement.firstElementChild;
-      if (src) els.push(document.importNode(src, true));
-    }
-    if (!els.length) return;
-    this.push();
-    const ov = this._overlayEl(); const ids = [];
-    for (const el of els) {
-      const id = "n" + (++this.idSeq); el.setAttribute("data-hv-id", id);
-      const t = currentTranslate(el); setTranslate(el, t.x + 12, t.y + 12);
-      this.stage.insertBefore(el, ov); ids.push(id);
-    }
-    this.selection = new Set(ids); this.artboardSelected = false;
-    this._renderSelection(); this._renderInspector(); this._renderLayers();
-    setStatus(`Pasted ${ids.length} object${ids.length > 1 ? "s" : ""}.`, 1200);
-  },
-  // Merge another vector's artwork INTO the current canvas (vs Open, which replaces).
-  // The incoming art is scaled to fit (never upscaled past native) and centred in
-  // this artboard, with the fit baked into geometry so everything stays
-  // translate-only, then wrapped in one group → a single movable/ungroupable object.
-  placeSvgMarkup(text, label) {
-    if (!this.stage) { setStatus("Open or create a canvas first, then place into it.", 3500); return 0; }
-    let root;
-    try { root = new DOMParser().parseFromString(text, "image/svg+xml").documentElement; } catch { root = null; }
-    if (!root || root.tagName.toLowerCase() !== "svg") { setStatus("Couldn't read that vector.", 3000); return 0; }
-    const SKIP = new Set(["defs", "metadata", "style", "title", "desc", "symbol"]);
-    const src = [...root.children].filter((c) => {
-      const t = c.tagName.toLowerCase();
-      return !SKIP.has(t) && !c.classList.contains("hv-artboard") && !c.classList.contains("hv-overlay");
-    });
-    if (!src.length) { setStatus("That vector has no artwork to place.", 3000); return 0; }
-    // Source bounds: viewBox, else width/height, else this artboard (no transform).
-    const vbA = this.stage.viewBox.baseVal;
-    const p = (root.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(Number);
-    let sx = 0, sy = 0, sw = 0, sh = 0;
-    if (p.length === 4 && p[2] > 0) { [sx, sy, sw, sh] = p; }
-    else { sw = parseFloat(root.getAttribute("width")) || 0; sh = parseFloat(root.getAttribute("height")) || 0; }
-    let s = 1, ex = 0, ey = 0;
-    if (sw > 0 && sh > 0 && vbA && vbA.width) {
-      s = Math.min(1, 0.95 * Math.min(vbA.width / sw, vbA.height / sh));
-      ex = vbA.x + (vbA.width - sw * s) / 2 - sx * s;
-      ey = vbA.y + (vbA.height - sh * s) / 2 - sy * s;
-    }
-    const m = { a: s, b: 0, c: 0, d: s, e: ex, f: ey };
-    this.beginCoalesce();
-    const ov = this._overlayEl();
-    const g = document.createElementNS(SVG_NS, "g");
-    const gid = "n" + (++this.idSeq);
-    g.setAttribute("data-hv-id", gid);
-    if (label) g.setAttribute("data-hv-name", "Placed: " + String(label).replace(/\.[^.]+$/, ""));
-    for (const child of src) {
-      const node = document.importNode(child, true);
-      node.querySelectorAll?.("[data-hv-id]").forEach((d) => d.removeAttribute("data-hv-id"));
-      node.setAttribute("data-hv-id", "n" + (++this.idSeq));
-      bakeMatrixInto(node, m, 0, 0);     // fit-scale + centre baked in (stays translate-only)
-      g.appendChild(node);
-    }
-    this.stage.insertBefore(g, ov);
-    this.commitCoalesce();
-    this.selection = new Set([gid]); this.artboardSelected = false;
-    this._renderSelection(); this._renderInspector(); this._renderLayers();
-    setStatus(`Placed ${label || "vector"} — ${src.length} object${src.length > 1 ? "s" : ""} (grouped).`, 2800);
-    return src.length;
-  },
-  selectAll() {
-    if (!this.stage) return;
-    const ids = this._artworkNodes().filter((n) => n.getAttribute("data-hv-locked") !== "1").map((n) => n.getAttribute("data-hv-id"));
-    this.selection = new Set(ids); this.artboardSelected = false;
-    this._renderSelection(); this._renderInspector(); this._renderLayers();
-  },
-  nudge(dx, dy) {
-    const nodes = this.selectedNodes(); if (!nodes.length) return;
-    this.push();
-    nodes.forEach((n) => { const t = currentTranslate(n); setTranslate(n, t.x + dx, t.y + dy); });
-    this._renderSelection();
-  },
-  reorder(mode) {
-    const nodes = this.selectedNodes(); if (!nodes.length || !this.stage) return;
-    this.push();
-    const ov = this._overlayEl();
-    if (mode === "front") { for (const n of nodes) this.stage.insertBefore(n, ov); }
-    else if (mode === "back") { const first = this._artworkNodes()[0]; for (const n of nodes.slice().reverse()) this.stage.insertBefore(n, first); }
-    else if (mode === "forward") { for (const n of nodes.slice().reverse()) { const nx = n.nextElementSibling; if (nx && nx !== ov && nx.hasAttribute("data-hv-id")) this.stage.insertBefore(nx, n); } }
-    else if (mode === "backward") { for (const n of nodes) { const pv = n.previousElementSibling; if (pv && pv.hasAttribute("data-hv-id")) this.stage.insertBefore(n, pv); } }
-    this._renderSelection(); this._renderLayers();
-  },
-  // Rotate 90° / flip — contextual: the selected object(s) around their bbox
-  // centre, or the whole artwork around the artboard centre when the artboard is
-  // selected (a 90° artboard rotation also swaps W/H and reframes to the origin).
-  transform(op) {
-    if (!this.stage) return;
-    const whole = this.artboardSelected || this.selection.size === 0;
-    const nodes = whole ? this._artworkNodes() : this.selectedNodes();
-    if (!nodes.length) { setStatus("Nothing to transform.", 1500); return; }
-    this.push();
-    const vb = this.stage.viewBox.baseVal;
-    let cx, cy;
-    if (whole) { cx = vb.x + vb.width / 2; cy = vb.y + vb.height / 2; }
-    else { const bb = this._bboxUnion(nodes); cx = (bb.x0 + bb.x1) / 2; cy = (bb.y0 + bb.y1) / 2; }
-    const m = matForOp(op, cx, cy);
-    for (const n of nodes) bakeMatrixInto(n, m, 0, 0);
-    if (whole && (op === "rotateCW" || op === "rotateCCW")) {
-      const W = vb.width, H = vb.height;                 // content now spans H×W around the centre
-      const shiftX = H / 2 - cx, shiftY = W / 2 - cy;    // recentre into a fresh H×W frame at origin
-      for (const n of this._artworkNodes()) { const t = currentTranslate(n); setTranslate(n, t.x + shiftX, t.y + shiftY); }
-      this.stage.setAttribute("viewBox", `0 0 ${nfmt(H)} ${nfmt(W)}`);
-      this.stage.setAttribute("width", nfmt(H)); this.stage.setAttribute("height", nfmt(W));
-      const ab = this.artboardEl(); if (ab) { ab.setAttribute("x", 0); ab.setAttribute("y", 0); ab.setAttribute("width", nfmt(H)); ab.setAttribute("height", nfmt(W)); }
-      measureFit(viewports.output);
-    }
-    this._renderSelection(); this._renderInspector(); this._renderLayers();
-    const what = whole ? "Artboard" : "Selection";
-    const how = { flipH: "flipped horizontally", flipV: "flipped vertically", rotateCW: "rotated 90° CW", rotateCCW: "rotated 90° CCW" }[op] || op;
-    setStatus(`${what} ${how}.`, 1800);
-  },
-  invertSpace() {
-    const sel = this._fillableSelection();
-    const nodes = sel.length ? sel : this._artworkNodes().filter((n) => shapeToAbsPath(n));
-    if (!nodes.length || !this.stage) return;
-    const vb = this.stage.viewBox.baseVal;
-    const x0 = vb.x, y0 = vb.y, x1 = vb.x + vb.width, y1 = vb.y + vb.height;
-    const t = this._fillTester(nodes);
-    let d;
-    try {
-      const inArt = (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
-      const pad = Math.max(x1 - x0, y1 - y0) * 0.02 + 1;
-      const bb = { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad };
-      // negative = inside the artboard but outside the union of shapes (overlaps merge,
-      // unlike the old even-odd compound which XOR'd them — that was the Phase-2 caveat)
-      d = marchingSquares((x, y) => inArt(x, y) && !t.inAny(x, y), bb, 160);
-    } finally { t.dispose(); }
-    let color = "#000000";
-    for (const n of nodes) { const f = n.getAttribute("fill"); if (f && f !== "none") { color = f; break; } }
-    this._commitBoolean(nodes, d, "nonzero", null, "Inverted space — negative bounded by the artboard.", color);
-  },
-
-  // ---------- boolean ops (Phase 4) ----------
-  // Shapes convertible to a fillable outline (rect/ellipse/circle/poly/path); lines
-  // and groups have no area and are skipped.
-  _fillableSelection() { return this._artworkNodes().filter((n) => this.selection.has(n.getAttribute("data-hv-id")) && shapeToAbsPath(n)); },
-  _nodeBBoxUser(n) {
-    const bb = n.getBBox(), t = currentTranslate(n);
-    return { x0: bb.x + t.x, y0: bb.y + t.y, x1: bb.x + bb.width + t.x, y1: bb.y + bb.height + t.y };
-  },
-  // A reusable inside-test built from temp absolute-path clones of the shapes,
-  // attached to the stage so SVGGeometryElement.isPointInFill works in stage user space.
-  _fillTester(nodes) {
-    const layer = document.createElementNS(SVG_NS, "g");
-    const tps = [];
-    for (const n of nodes) {
-      const d = shapeToAbsPath(n); if (!d) continue;
-      const p = document.createElementNS(SVG_NS, "path");
-      p.setAttribute("d", d);
-      p.setAttribute("fill-rule", n.getAttribute("fill-rule") || "nonzero");
-      layer.appendChild(p); tps.push(p);
-    }
-    this.stage.insertBefore(layer, this._overlayEl());   // synchronous use only — removed before any paint
-    const pt = this.stage.createSVGPoint();
-    return {
-      count: tps.length,
-      inAny: (x, y) => { pt.x = x; pt.y = y; return tps.some((p) => p.isPointInFill(pt)); },
-      inAll: (x, y) => { pt.x = x; pt.y = y; return tps.length > 0 && tps.every((p) => p.isPointInFill(pt)); },
-      dispose: () => layer.remove(),
-    };
-  },
-  booleanOp(op) {
-    if (!this.stage) return;
-    const nodes = this._fillableSelection();
-    if (nodes.length < 2) { setStatus("Select 2 or more filled shapes for a boolean op.", 2800); return; }
-    let d, msg, src;
-    if (op === "union") { d = this._unionPath(nodes); msg = `United ${nodes.length} shapes.`; src = nodes[nodes.length - 1]; }
-    else if (op === "intersect") { d = this._intersectPath(nodes); msg = `Intersection of ${nodes.length} shapes.`; src = nodes[nodes.length - 1]; }
-    else if (op === "subtract") { d = this._subtractPath(nodes[0], nodes.slice(1)); msg = "Subtracted front shapes from the back one."; src = nodes[0]; }
-    else return;
-    this._commitBoolean(nodes, d, "nonzero", src, msg);
-  },
-  _bboxUnion(nodes) {
-    return nodes.map((n) => this._nodeBBoxUser(n)).reduce((a, b) => ({ x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) }));
-  },
-  _pad(bb, f) { const p = Math.max(bb.x1 - bb.x0, bb.y1 - bb.y0) * f + 1; return { x0: bb.x0 - p, y0: bb.y0 - p, x1: bb.x1 + p, y1: bb.y1 + p }; },
-  _unionPath(nodes) {
-    const t = this._fillTester(nodes);
-    try { return marchingSquares((x, y) => t.inAny(x, y), this._pad(this._bboxUnion(nodes), 0.02), 140); }
-    finally { t.dispose(); }
-  },
-  _intersectPath(nodes) {
-    const t = this._fillTester(nodes);
-    try {
-      const bb = nodes.map((n) => this._nodeBBoxUser(n)).reduce((a, b) => ({ x0: Math.max(a.x0, b.x0), y0: Math.max(a.y0, b.y0), x1: Math.min(a.x1, b.x1), y1: Math.min(a.y1, b.y1) }));
-      if (bb.x1 <= bb.x0 || bb.y1 <= bb.y0) return "";
-      return marchingSquares((x, y) => t.inAll(x, y), this._pad(bb, 0.02), 130);
-    } finally { t.dispose(); }
-  },
-  _subtractPath(base, others) {
-    const tB = this._fillTester([base]), tO = this._fillTester(others);
-    try { return marchingSquares((x, y) => tB.inAny(x, y) && !tO.inAny(x, y), this._pad(this._nodeBBoxUser(base), 0.02), 140); }
-    finally { tB.dispose(); tO.dispose(); }
-  },
-  _commitBoolean(nodes, d, fillRule, src, msg, fillOverride) {
-    if (!d) { setStatus("Result is empty — nothing changed.", 2800); return; }
-    this.push();
-    const anchor = nodes[0];   // keep the result where the bottom-most input was
-    const path = document.createElementNS(SVG_NS, "path");
-    const id = "n" + (++this.idSeq); path.setAttribute("data-hv-id", id);
-    path.setAttribute("d", d);
-    if (fillRule) path.setAttribute("fill-rule", fillRule);
-    path.setAttribute("fill", fillOverride || (src && src.getAttribute("fill")) || "#000000");
-    if (src) ["stroke", "stroke-width", "vector-effect", "stroke-linejoin", "stroke-linecap", "opacity"].forEach((a) => { const v = src.getAttribute(a); if (v) path.setAttribute(a, v); });
-    this.stage.insertBefore(path, anchor);
-    nodes.forEach((n) => n.remove());
-    this.selection = new Set([id]); this.artboardSelected = false;
-    this._renderSelection(); this._renderInspector(); this._renderLayers();
-    setStatus(msg, 2000);
-  },
-
-  // ---------- layers ----------
-  nodeName(n) {
-    const custom = n.getAttribute("data-hv-name"); if (custom) return custom;
-    const map = { path: "Path", rect: "Rectangle", circle: "Circle", ellipse: "Ellipse", polygon: "Polygon", polyline: "Polyline", line: "Line", g: "Group", image: "Image", text: "Text" };
-    return map[n.tagName.toLowerCase()] || n.tagName.toLowerCase();
-  },
-  setVisibility(id, visible) {
-    const n = this.nodeById(id); if (!n) return;
-    this.push();
-    if (visible) n.removeAttribute("display"); else n.setAttribute("display", "none");
-    this._renderLayers(); this._renderSelection();
-  },
-  toggleLock(id) {
-    const n = this.nodeById(id); if (!n) return;
-    this.push();
-    if (n.getAttribute("data-hv-locked") === "1") n.removeAttribute("data-hv-locked");
-    else { n.setAttribute("data-hv-locked", "1"); this.selection.delete(id); }
-    this._renderSelection(); this._renderInspector();
-  },
-  rename(id, name) {
-    const n = this.nodeById(id); if (!n) return;
-    this.push();
-    if (name) n.setAttribute("data-hv-name", name); else n.removeAttribute("data-hv-name");
-    this._renderLayers();
-  },
-  reorderTo(srcId, tgtId) {
-    const src = this.nodeById(srcId), tgt = this.nodeById(tgtId);
-    if (!src || !tgt || src === tgt) return;
-    this.push();
-    this.stage.insertBefore(src, tgt.nextSibling);   // src lands just in front of tgt
-    this._renderSelection(); this._renderLayers();
-  },
-  group() {
-    const ordered = this._artworkNodes().filter((n) => this.selection.has(n.getAttribute("data-hv-id")));
-    if (ordered.length < 2) { setStatus("Select 2 or more objects to group.", 2500); return; }
-    this.push();
-    const ov = this._overlayEl();
-    const g = document.createElementNS(SVG_NS, "g");
-    const id = "n" + (++this.idSeq); g.setAttribute("data-hv-id", id);
-    const anchor = ordered[ordered.length - 1].nextSibling;
-    ordered.forEach((n) => { n.removeAttribute("data-hv-id"); g.appendChild(n); });
-    this.stage.insertBefore(g, anchor && anchor !== ov ? anchor : ov);
-    this.selection = new Set([id]); this.artboardSelected = false;
-    this._renderSelection(); this._renderInspector();
-    setStatus(`Grouped ${ordered.length} objects.`, 1500);
-  },
-  ungroup() {
-    const groups = this.selectedNodes().filter((n) => n.tagName.toLowerCase() === "g");
-    if (!groups.length) { setStatus("Select a group to ungroup.", 2500); return; }
-    this.push();
-    const ids = [];
-    for (const g of groups) {
-      const gt = currentTranslate(g);
-      for (const k of [...g.children]) {
-        if (gt.x || gt.y) { const kt = currentTranslate(k); setTranslate(k, kt.x + gt.x, kt.y + gt.y); }
-        const id = "n" + (++this.idSeq); k.setAttribute("data-hv-id", id); ids.push(id);
-        this.stage.insertBefore(k, g);
-      }
-      g.remove();
-    }
-    this.selection = new Set(ids); this.artboardSelected = false;
-    this._renderSelection(); this._renderInspector();
-    setStatus("Ungrouped.", 1500);
-  },
-  // Remove ghost/redundant layers: empty groups, paths/shapes with no drawable
-  // area (a tracing speck or stray "M0 0"), and fully unpainted nodes. Recurses
-  // into groups and unwraps single-child groups. One undo step; no-op if clean.
-  cleanupLayers() {
-    if (!this.stage) return;
-    this.beginCoalesce();
-    let removed = 0, unwrapped = 0;
-    // Speck threshold is relative to the canvas — a 0.5px floor is meaningless on a
-    // 9000px trace, where noise blobs can be tens of px. ~0.3% of the larger side.
-    const vb = this.stage.viewBox.baseVal;
-    const speck = Math.max((Math.max(vb?.width || 0, vb?.height || 0) || 1000) * 0.003, 0.5);
-    const unpainted = (n) => {
-      const fill = n.getAttribute("fill");
-      const stroke = n.getAttribute("stroke");
-      const sw = parseFloat(n.getAttribute("stroke-width"));
-      const noStroke = !stroke || stroke === "none" || !(sw > 0);
-      return fill === "none" && noStroke;   // fill defaults to black, so only explicit none counts
-    };
-    const degenerate = (n) => {
-      let bb; try { bb = n.getBBox(); } catch { return true; }
-      if (bb.width < speck && bb.height < speck) return true;   // sub-threshold speck / empty path
-      return unpainted(n);
-    };
-    const scrub = (parent) => {
-      for (const child of [...parent.children]) {
-        const tag = child.tagName.toLowerCase();
-        if (SKIP_TAGS.has(tag) || child.classList.contains("hv-artboard") || child.classList.contains("hv-overlay")) continue;
-        if (tag === "g") {
-          scrub(child);
-          const kids = [...child.children].filter((k) => !SKIP_TAGS.has(k.tagName.toLowerCase()));
-          if (kids.length === 0) { child.remove(); removed++; }
-          else if (kids.length === 1) {           // unwrap pointless single-child group
-            const k = kids[0];
-            const gt = currentTranslate(child);
-            if (gt.x || gt.y) { const kt = currentTranslate(k); setTranslate(k, kt.x + gt.x, kt.y + gt.y); }
-            if (!k.hasAttribute("data-hv-id") && child.hasAttribute("data-hv-id")) k.setAttribute("data-hv-id", child.getAttribute("data-hv-id"));
-            parent.insertBefore(k, child); child.remove(); unwrapped++;
-          }
-        } else if (degenerate(child)) { child.remove(); removed++; }
-      }
-    };
-    scrub(this.stage);
-    if (!removed && !unwrapped) { this.cancelCoalesce(); setStatus("No ghost layers found.", 2000); return; }
-    this.commitCoalesce();
-    this.selection = new Set([...this.selection].filter((id) => this.nodeById(id)));
-    this._renderSelection(); this._renderInspector(); this._renderLayers();
-    const bits = [];
-    if (removed) bits.push(`removed ${removed} ghost layer${removed > 1 ? "s" : ""}`);
-    if (unwrapped) bits.push(`unwrapped ${unwrapped} group${unwrapped > 1 ? "s" : ""}`);
-    setStatus(`Cleaned up — ${bits.join(", ")}.`, 2500);
-  },
-  // Collapse same-paint sibling <path>s into one compound path. Traces commonly
-  // explode a single colour into hundreds of translate-positioned paths, so we
-  // bake each path's translate into its geometry first, then concatenate `d`.
-  consolidateByColor() {
-    if (!this.stage) return;
-    const I = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
-    const paintSig = (n) => ["fill", "stroke", "stroke-width", "opacity", "fill-opacity", "stroke-opacity", "fill-rule"]
-      .map((a) => n.getAttribute(a) || "").join("|");
-    this.beginCoalesce();
-    let mergedAway = 0, into = 0;
-    const parents = [this.stage, ...this.stage.querySelectorAll("g")].filter((p) => !p.classList.contains("hv-overlay"));
-    for (const parent of parents) {
-      if (!parent.isConnected) continue;
-      const buckets = new Map();
-      for (const child of [...parent.children]) {
-        if (child.tagName.toLowerCase() !== "path") continue;
-        if (child.classList.contains("hv-artboard") || child.classList.contains("hv-overlay")) continue;
-        if (child.getAttribute("data-hv-locked") === "1" || child.getAttribute("display") === "none") continue;
-        const k = paintSig(child);
-        if (!buckets.has(k)) buckets.set(k, []);
-        buckets.get(k).push(child);
-      }
-      for (const arr of buckets.values()) {
-        if (arr.length < 2) continue;
-        arr.forEach((p) => bakeMatrixInto(p, I, 0, 0));   // translate → absolute geometry
-        const head = arr[0];
-        let d = (head.getAttribute("d") || "").trim();
-        for (let i = 1; i < arr.length; i++) {
-          const dd = (arr[i].getAttribute("d") || "").trim();
-          if (dd) d += " " + dd;
-          arr[i].remove(); mergedAway++;
-        }
-        head.setAttribute("d", d);
-        into++;
-      }
-    }
-    if (!mergedAway) { this.cancelCoalesce(); setStatus("Nothing to merge — each layer is already a distinct colour.", 3000); return; }
-    this.commitCoalesce();
-    this.selection = new Set([...this.selection].filter((id) => this.nodeById(id)));
-    this._renderSelection(); this._renderInspector(); this._renderLayers();
-    setStatus(`Merged ${mergedAway + into} layers into ${into} by colour.`, 3000);
-  },
-  _renderLayers() {
-    const list = document.querySelector("#layers-list");
-    if (!list) return;
-    list.innerHTML = "";
-    if (!this.stage) return;
-    const nodes = this._artworkNodes().slice().reverse();   // top of list = frontmost
-    for (const n of nodes) {
-      const id = n.getAttribute("data-hv-id");
-      const row = document.createElement("div");
-      row.className = "layer-row" + (this.selection.has(id) ? " active" : "");
-      row.draggable = true; row.dataset.id = id;
-
-      const eye = document.createElement("button");
-      eye.type = "button"; eye.className = "layer-btn";
-      const hidden = n.getAttribute("display") === "none";
-      eye.textContent = hidden ? "○" : "●"; eye.title = hidden ? "Show" : "Hide";
-      eye.addEventListener("click", (e) => { e.stopPropagation(); this.setVisibility(id, hidden); });
-
-      const swatch = document.createElement("span");
-      swatch.className = "layer-swatch";
-      const fill = toHexColor(n.getAttribute("fill"));
-      if (fill && n.getAttribute("fill") !== "none") { swatch.style.background = fill; swatch.style.backgroundImage = "none"; }
-      swatch.title = n.getAttribute("fill") || "no fill";
-
-      const name = document.createElement("span");
-      name.className = "layer-name"; name.textContent = this.nodeName(n);
-      name.title = "Double-click to rename";
-      name.addEventListener("dblclick", (e) => { e.stopPropagation(); this._renameInline(n, name); });
-
-      const lock = document.createElement("button");
-      lock.type = "button"; lock.className = "layer-btn";
-      const locked = n.getAttribute("data-hv-locked") === "1";
-      lock.textContent = locked ? "L" : "·"; lock.title = locked ? "Unlock" : "Lock"; lock.classList.toggle("on", locked);
-      lock.addEventListener("click", (e) => { e.stopPropagation(); this.toggleLock(id); });
-
-      row.append(eye, swatch, name, lock);
-      row.addEventListener("click", () => {
-        if (n.getAttribute("data-hv-locked") === "1") return;
-        this.selection = new Set([id]); this.artboardSelected = false;
-        this._renderSelection(); this._renderInspector();
-      });
-      row.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", id); e.dataTransfer.effectAllowed = "move"; row.classList.add("dragging"); });
-      row.addEventListener("dragend", () => row.classList.remove("dragging"));
-      row.addEventListener("dragover", (e) => { e.preventDefault(); });
-      row.addEventListener("drop", (e) => { e.preventDefault(); const src = e.dataTransfer.getData("text/plain"); if (src && src !== id) this.reorderTo(src, id); });
-      list.appendChild(row);
-    }
-    // Artboard row, pinned at the bottom like a background — a reliable click
-    // target for selecting the canvas even when artwork covers every pixel.
-    const abRow = document.createElement("div");
-    abRow.className = "layer-row artboard-row" + (this.artboardSelected ? " active" : "");
-    const abSwatch = document.createElement("span");
-    abSwatch.className = "layer-swatch";
-    const ab = this.artboardEl();
-    const abFill = ab && toHexColor(ab.getAttribute("fill"));
-    if (abFill && ab.getAttribute("fill") !== "none") { abSwatch.style.background = abFill; abSwatch.style.backgroundImage = "none"; }
-    abSwatch.title = (ab && ab.getAttribute("fill")) || "no background";
-    const abName = document.createElement("span");
-    abName.className = "layer-name"; abName.textContent = "Artboard";
-    abName.title = "The canvas (Shift+O)";
-    abRow.append(abSwatch, abName);
-    abRow.addEventListener("click", () => this.selectArtboard());
-    list.appendChild(abRow);
-  },
-  _renameInline(node, span) {
-    const input = document.createElement("input");
-    input.type = "text"; input.className = "layer-rename"; input.value = this.nodeName(node);
-    const done = (commit) => {
-      if (commit) this.rename(node.getAttribute("data-hv-id"), input.value.trim());
-      else this._renderLayers();
-    };
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); });
-    input.addEventListener("blur", () => done(true));
-    span.replaceWith(input); input.focus(); input.select();
-  },
-
-  // ---------- inspector ----------
-  _renderInspector() {
-    this._renderLayers();   // keep the layers panel in sync with structure/selection
-    const body = document.querySelector("#inspector-body");
-    const title = document.querySelector("#inspector-title");
-    if (!body) return;
-    body.innerHTML = "";
-    if (!this.stage) { if (title) title.textContent = "No canvas"; body.innerHTML = `<div class="insp-empty">Import or open a vector.</div>`; return; }
-    if (this.artboardSelected) { if (title) title.textContent = "Artboard"; body.appendChild(this._artboardPanel()); return; }
-    const nodes = this.selectedNodes();
-    if (!nodes.length) { if (title) title.textContent = "Nothing selected"; body.innerHTML = `<div class="insp-empty">Click a shape to select it, or click empty canvas for the artboard.</div>`; return; }
-    if (title) title.textContent = nodes.length === 1 ? "Object" : `${nodes.length} objects`;
-    body.appendChild(this._objectPanel(nodes));
-  },
-  _objectPanel(nodes) {
-    const first = nodes[0];
-    const wrap = document.createElement("div");
-    const commit = () => this.commitCoalesce();
-    const fillHex = toHexColor(first.getAttribute("fill")) || "#000000";
-    const fillNone = first.getAttribute("fill") === "none";
-    wrap.appendChild(inspGroup("Fill", [
-      colorRow("Colour", fillHex, (v) => { this.beginCoalesce(); this.applyFill(v); }, commit),
-      checkRow("No fill", fillNone, (on) => { this.push(); this.applyFill(on ? null : (toHexColor(first.getAttribute("fill")) || "#000000")); }),
-    ]));
-    const strokeHex = toHexColor(first.getAttribute("stroke")) || "#000000";
-    const strokeW = parseFloat(first.getAttribute("stroke-width")) || 0;
-    this._strokeWidthInput = null;
-    const curW = () => Math.max(parseFloat(this._strokeWidthInput && this._strokeWidthInput.value) || strokeW || 1, 0.01);
-    const curC = () => toHexColor(first.getAttribute("stroke")) || strokeHex;
-    wrap.appendChild(inspGroup("Stroke", [
-      colorRow("Colour", strokeHex, (v) => { this.beginCoalesce(); this.applyStroke(v, curW()); }, commit),
-      numRow("Width", strokeW, 0, 0.5, (v) => { this.beginCoalesce(); this.applyStroke(curC(), v); }, (inp) => { this._strokeWidthInput = inp; }, commit),
-    ]));
-    const op = first.hasAttribute("opacity") ? parseFloat(first.getAttribute("opacity")) : 1;
-    wrap.appendChild(inspGroup("Opacity", [
-      numRow("Alpha", op, 0, 0.05, (v) => { this.beginCoalesce(); this.applyOpacity(Math.max(0, Math.min(1, v))); }, null, commit),
-    ]));
-    const act = document.createElement("div"); act.className = "insp-actions";
-    act.appendChild(ghostBtn("Duplicate", () => this.duplicate()));
-    act.appendChild(ghostBtn("Invert space", () => this.invertSpace()));
-    act.appendChild(ghostBtn("Delete", () => this.deleteSelection()));
-    wrap.appendChild(act);
-    const z = document.createElement("div"); z.className = "insp-actions";
-    z.appendChild(ghostBtn("Front", () => this.reorder("front")));
-    z.appendChild(ghostBtn("Fwd", () => this.reorder("forward")));
-    z.appendChild(ghostBtn("Bwd", () => this.reorder("backward")));
-    z.appendChild(ghostBtn("Back", () => this.reorder("back")));
-    wrap.appendChild(z);
-    if (nodes.filter((n) => shapeToAbsPath(n)).length >= 2) {   // boolean ops need 2+ fillable shapes
-      const lbl = document.createElement("div"); lbl.className = "insp-title"; lbl.textContent = "Combine"; wrap.appendChild(lbl);
-      const bool = document.createElement("div"); bool.className = "insp-actions";
-      bool.appendChild(ghostBtn("Unite", () => this.booleanOp("union")));
-      bool.appendChild(ghostBtn("Subtract", () => this.booleanOp("subtract")));
-      bool.appendChild(ghostBtn("Intersect", () => this.booleanOp("intersect")));
-      wrap.appendChild(bool);
-    }
-    return wrap;
-  },
-  _artboardPanel() {
-    const ab = this.artboardEl();
-    const vb = this.stage.viewBox.baseVal;
-    const wrap = document.createElement("div");
-    const commit = () => this.commitCoalesce();
-    const bgHex = toHexColor(ab.getAttribute("fill")) || "#ffffff";
-    const bgNone = !ab.getAttribute("fill") || ab.getAttribute("fill") === "none";
-    let wInp, hInp;
-    const liveSize = () => { this.beginCoalesce(); this.applyArtboardSize(parseFloat(wInp.value) || vb.width, parseFloat(hInp.value) || vb.height); };
-    wrap.appendChild(inspGroup("Size", [
-      numRow("Width", Math.round(vb.width), 1, 1, liveSize, (i) => { wInp = i; }, commit),
-      numRow("Height", Math.round(vb.height), 1, 1, liveSize, (i) => { hInp = i; }, commit),
-    ]));
-    wrap.appendChild(inspGroup("Background", [
-      colorRow("Colour", bgHex, (v) => { this.beginCoalesce(); this.applyArtboardBg(v); }, commit),
-      checkRow("Transparent", bgNone, (on) => { this.push(); this.applyArtboardBg(on ? null : (toHexColor(ab.getAttribute("fill")) || "#ffffff")); }),
-    ]));
-    return wrap;
-  },
-
-  // ---------- save ----------
-  async save() {
-    if (!this.stage) return;
-    if (!selectedOutput) { setStatus("Save needs an imported or opened document for now.", 3500); return; }
-    const svgText = this.serialize(); if (!svgText) return;
-    try {
-      const data = await api("/api/save-svg", "POST", { folder: selectedOutput.folder, name: selectedOutput.name, svg: svgText });
-      manualOutputName = data.name;
-      this.pinned = false;
-      await refreshAll();
-      setStatus(data.message || "Saved.", 2500);
-    } catch (e) { setStatus(`Save failed: ${e.message}`, 4000); }
-  },
-};
-
-// ---------- inspector control builders ----------
-function inspGroup(title, rows) {
-  const g = document.createElement("div"); g.className = "insp-group";
-  const t = document.createElement("div"); t.className = "insp-title"; t.textContent = title; g.appendChild(t);
-  rows.forEach((r) => g.appendChild(r));
-  return g;
-}
-function inspRow(label, control) {
-  const row = document.createElement("div"); row.className = "insp-row";
-  const s = document.createElement("span"); s.textContent = label;
-  row.appendChild(s); row.appendChild(control); return row;
-}
-function colorRow(label, value, onLive, onCommit) {
-  const inp = document.createElement("input"); inp.type = "color"; inp.value = value || "#000000";
-  inp.addEventListener("input", () => onLive(inp.value));
-  inp.addEventListener("change", () => { onLive(inp.value); if (onCommit) onCommit(); });
-  return inspRow(label, inp);
-}
-function numRow(label, value, min, step, onLive, capture, onCommit) {
-  const inp = document.createElement("input"); inp.type = "number"; inp.value = String(value);
-  if (min != null) inp.min = String(min);
-  inp.step = String(step);
-  inp.addEventListener("input", () => { if (inp.value !== "") onLive(parseFloat(inp.value)); });
-  inp.addEventListener("change", () => { if (inp.value !== "") onLive(parseFloat(inp.value)); if (onCommit) onCommit(); });
-  if (capture) capture(inp);
-  return inspRow(label, inp);
-}
-function checkRow(label, checked, onChange) {
-  const inp = document.createElement("input"); inp.type = "checkbox"; inp.checked = checked;
-  inp.addEventListener("change", () => onChange(inp.checked));
-  return inspRow(label, inp);
-}
-
-// Convert a shape element to an absolute path `d` (baking in any translate),
-// used to build the even-odd compound for invert-space.
-function shapeToAbsPath(el) {
-  const t = currentTranslate(el);
-  const off = (x, y) => `${nfmt(x + t.x)} ${nfmt(y + t.y)}`;
-  const num = (a) => parseFloat(el.getAttribute(a)) || 0;
-  const tag = el.tagName.toLowerCase();
-  if (tag === "path") {
-    const segs = parsePath(el.getAttribute("d") || "");
-    if (t.x || t.y) segs.forEach((s) => {
-      if (s.end) { s.end.x += t.x; s.end.y += t.y; }
-      if (s.c1) { s.c1.x += t.x; s.c1.y += t.y; }
-      if (s.c2) { s.c2.x += t.x; s.c2.y += t.y; }
-    });
-    return serializeSegs(segs);
-  }
-  if (tag === "rect") {
-    const x = num("x"), y = num("y"), w = num("width"), h = num("height");
-    return `M${off(x, y)} L${off(x + w, y)} L${off(x + w, y + h)} L${off(x, y + h)} Z`;
-  }
-  if (tag === "polygon" || tag === "polyline") {
-    const pts = (el.getAttribute("points") || "").trim().split(/[\s,]+/).map(Number);
-    if (pts.length < 4) return "";
-    let s = `M${off(pts[0], pts[1])}`;
-    for (let i = 2; i + 1 < pts.length; i += 2) s += ` L${off(pts[i], pts[i + 1])}`;
-    return s + " Z";
-  }
-  if (tag === "circle") {
-    const cx = num("cx"), cy = num("cy"), r = num("r");
-    return `M${off(cx - r, cy)} A${nfmt(r)} ${nfmt(r)} 0 1 0 ${off(cx + r, cy)} A${nfmt(r)} ${nfmt(r)} 0 1 0 ${off(cx - r, cy)} Z`;
-  }
-  if (tag === "ellipse") {
-    const cx = num("cx"), cy = num("cy"), rx = num("rx"), ry = num("ry");
-    return `M${off(cx - rx, cy)} A${nfmt(rx)} ${nfmt(ry)} 0 1 0 ${off(cx + rx, cy)} A${nfmt(rx)} ${nfmt(ry)} 0 1 0 ${off(cx - rx, cy)} Z`;
-  }
-  return "";
-}
-// ---------- shape-tool geometry (pure) ----------
-function applyShapeStyle(n, style, isLine) {
-  if (isLine) {
-    n.setAttribute("fill", "none");
-    const col = style.stroke && style.stroke !== "none" ? style.stroke : "#1d1d1f";
-    const w = style.strokeWidth > 0 ? style.strokeWidth : 2;
-    n.setAttribute("stroke", col); n.setAttribute("stroke-width", nfmt(w));
-    n.setAttribute("vector-effect", "non-scaling-stroke");
-    n.setAttribute("stroke-linecap", "round");
-    return;
-  }
-  n.setAttribute("fill", style.fill || "#808080");
-  if (style.stroke && style.stroke !== "none" && style.strokeWidth > 0) {
-    n.setAttribute("stroke", style.stroke); n.setAttribute("stroke-width", nfmt(style.strokeWidth));
-    n.setAttribute("vector-effect", "non-scaling-stroke");
-    n.setAttribute("stroke-linejoin", "round"); n.setAttribute("stroke-linecap", "round");
-  }
-}
-function makeShapeNode(tool, p, style) {
-  if (tool === "line") {
-    const n = document.createElementNS(SVG_NS, "line");
-    n.setAttribute("x1", nfmt(p.x)); n.setAttribute("y1", nfmt(p.y));
-    n.setAttribute("x2", nfmt(p.x)); n.setAttribute("y2", nfmt(p.y));
-    applyShapeStyle(n, style, true);
-    return n;
-  }
-  if (tool === "ellipse") {
-    const n = document.createElementNS(SVG_NS, "ellipse");
-    n.setAttribute("cx", nfmt(p.x)); n.setAttribute("cy", nfmt(p.y));
-    n.setAttribute("rx", 0); n.setAttribute("ry", 0);
-    applyShapeStyle(n, style, false);
-    return n;
-  }
-  const n = document.createElementNS(SVG_NS, "rect");
-  n.setAttribute("x", nfmt(p.x)); n.setAttribute("y", nfmt(p.y));
-  n.setAttribute("width", 0); n.setAttribute("height", 0);
-  applyShapeStyle(n, style, false);
-  return n;
-}
-function sizeShape(tool, n, a, b, constrain) {
-  let dx = b.x - a.x, dy = b.y - a.y;
-  if (tool === "line") {
-    let x2 = b.x, y2 = b.y;
-    if (constrain) {                 // snap to 0 / 45 / 90°
-      const len = Math.hypot(dx, dy);
-      const ang = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
-      x2 = a.x + Math.cos(ang) * len; y2 = a.y + Math.sin(ang) * len;
-    }
-    n.setAttribute("x2", nfmt(x2)); n.setAttribute("y2", nfmt(y2));
-    return;
-  }
-  if (constrain) { const m = Math.max(Math.abs(dx), Math.abs(dy)); dx = (dx < 0 ? -1 : 1) * m; dy = (dy < 0 ? -1 : 1) * m; }
-  const x = Math.min(a.x, a.x + dx), y = Math.min(a.y, a.y + dy), w = Math.abs(dx), h = Math.abs(dy);
-  if (tool === "rect") {
-    n.setAttribute("x", nfmt(x)); n.setAttribute("y", nfmt(y));
-    n.setAttribute("width", nfmt(w)); n.setAttribute("height", nfmt(h));
-  } else {
-    n.setAttribute("cx", nfmt(x + w / 2)); n.setAttribute("cy", nfmt(y + h / 2));
-    n.setAttribute("rx", nfmt(w / 2)); n.setAttribute("ry", nfmt(h / 2));
-  }
-}
-function shapeMeaningful(tool, n) {
-  if (tool === "line") {
-    const dx = (+n.getAttribute("x2")) - (+n.getAttribute("x1"));
-    const dy = (+n.getAttribute("y2")) - (+n.getAttribute("y1"));
-    return Math.hypot(dx, dy) > 0.5;
-  }
-  if (tool === "rect") return (+n.getAttribute("width")) > 0.5 && (+n.getAttribute("height")) > 0.5;
-  return (+n.getAttribute("rx")) > 0.25 && (+n.getAttribute("ry")) > 0.25;
-}
-// Build a path `d` from pen anchors. Each anchor is {x,y,out} where `out` is the
-// outgoing bezier handle (smooth point) or null (corner); the incoming handle is
-// the mirror of the previous anchor's `out`. `preview` adds a trailing corner
-// point at the cursor (rubber-band); `closed` appends the wrap-around + Z.
-function penPathD(pts, closed, preview) {
-  const all = preview ? pts.concat([{ x: preview.x, y: preview.y, out: null }]) : pts;
-  if (!all.length) return "";
-  const inOf = (a) => (a.out ? { x: 2 * a.x - a.out.x, y: 2 * a.y - a.out.y } : null);
-  const seg = (a, b) => {
-    const c1 = a.out, c2 = inOf(b);
-    if (!c1 && !c2) return ` L${nfmt(b.x)} ${nfmt(b.y)}`;
-    const p1 = c1 || { x: a.x, y: a.y }, p2 = c2 || { x: b.x, y: b.y };
-    return ` C${nfmt(p1.x)} ${nfmt(p1.y)} ${nfmt(p2.x)} ${nfmt(p2.y)} ${nfmt(b.x)} ${nfmt(b.y)}`;
-  };
-  let d = `M${nfmt(all[0].x)} ${nfmt(all[0].y)}`;
-  for (let i = 1; i < all.length; i++) d += seg(all[i - 1], all[i]);
-  if (closed && all.length >= 2) { d += seg(all[all.length - 1], all[0]) + " Z"; }
-  return d;
-}
-// ---------- boolean ops: contour extraction from a region predicate ----------
-// Booleans (union / subtract / intersect) and invert-space all reduce to "trace
-// the boundary of the region where predicate(x,y) is true". Marching squares over
-// a grid gives the topology; bisecting each crossing edge (predicate is an exact
-// inside-test) snaps the boundary to ~7 bits, so coarse grids still trace smoothly.
-// Robust for any overlap, winding, or shape count — and always yields valid loops.
-function marchingSquares(predicate, bbox, res) {
-  const W = bbox.x1 - bbox.x0, H = bbox.y1 - bbox.y0;
-  if (W <= 0 || H <= 0) return "";
-  const big = Math.max(W, H);
-  const nx = Math.max(2, Math.round(res * W / big));
-  const ny = Math.max(2, Math.round(res * H / big));
-  const dx = W / nx, dy = H / ny;
-  const X = (i) => bbox.x0 + i * dx, Y = (j) => bbox.y0 + j * dy;
-  const grid = [];
-  for (let j = 0; j <= ny; j++) { grid[j] = []; for (let i = 0; i <= nx; i++) grid[j][i] = predicate(X(i), Y(j)); }
-  const bisect = (ax, ay, aIn, bx, by) => {           // boundary between an in/out pair
-    let lo = 0, hi = 1;
-    for (let k = 0; k < 7; k++) { const m = (lo + hi) / 2; if (predicate(ax + (bx - ax) * m, ay + (by - ay) * m) === aIn) lo = m; else hi = m; }
-    const m = (lo + hi) / 2; return { x: ax + (bx - ax) * m, y: ay + (by - ay) * m };
-  };
-  const segs = [], add = (p, q) => segs.push([p, q]);
-  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-    const tl = grid[j][i], tr = grid[j][i + 1], br = grid[j + 1][i + 1], bl = grid[j + 1][i];
-    const code = (tl ? 8 : 0) | (tr ? 4 : 0) | (br ? 2 : 0) | (bl ? 1 : 0);
-    if (code === 0 || code === 15) continue;
-    const top = () => bisect(X(i), Y(j), tl, X(i + 1), Y(j));
-    const right = () => bisect(X(i + 1), Y(j), tr, X(i + 1), Y(j + 1));
-    const bottom = () => bisect(X(i + 1), Y(j + 1), br, X(i), Y(j + 1));
-    const left = () => bisect(X(i), Y(j + 1), bl, X(i), Y(j));
-    const center = () => predicate(X(i) + dx / 2, Y(j) + dy / 2);
-    switch (code) {
-      case 1: add(left(), bottom()); break;
-      case 2: add(bottom(), right()); break;
-      case 3: add(left(), right()); break;
-      case 4: add(right(), top()); break;
-      case 5: if (center()) { add(left(), top()); add(right(), bottom()); } else { add(left(), bottom()); add(right(), top()); } break;
-      case 6: add(bottom(), top()); break;
-      case 7: add(left(), top()); break;
-      case 8: add(top(), left()); break;
-      case 9: add(top(), bottom()); break;
-      case 10: if (center()) { add(top(), right()); add(bottom(), left()); } else { add(top(), left()); add(bottom(), right()); } break;
-      case 11: add(top(), right()); break;
-      case 12: add(right(), left()); break;
-      case 13: add(right(), bottom()); break;
-      case 14: add(bottom(), left()); break;
-    }
-  }
-  return segs.length ? chainSegments(segs, Math.max(dx, dy) * 0.4) : "";
-}
-// Stitch marching-squares segments into closed loops. The segments are DIRECTED
-// (each case emits them with the filled region on the left), so every crossing
-// point has exactly one out-edge — following them never crosses strands at a
-// junction, and holes come out wound opposite to outer boundaries (correct for
-// nonzero fill). Collinear vertices are dropped so straight runs collapse.
-function chainSegments(segs, tol) {
-  const K = (p) => Math.round(p.x * 100) / 100 + "," + Math.round(p.y * 100) / 100;
-  const out = new Map();   // startKey -> { endKey, pt }
-  for (const [a, b] of segs) { const ka = K(a), kb = K(b); if (ka === kb || out.has(ka)) continue; out.set(ka, { endKey: kb, pt: a }); }
-  const used = new Set();
-  let d = "";
-  for (const startKey of out.keys()) {
-    if (used.has(startKey)) continue;
-    const coords = []; let cur = startKey, guard = 0;
-    while (cur && !used.has(cur) && guard++ < out.size + 5) {
-      const e = out.get(cur); if (!e) break;
-      used.add(cur); coords.push(e.pt); cur = e.endKey;
-      if (cur === startKey) break;
-    }
-    const simp = simplifyLoop(coords, tol);
-    if (simp.length >= 3) d += " M" + simp.map((p) => nfmt(p.x) + " " + nfmt(p.y)).join(" L") + " Z";
-  }
-  return d.trim();
-}
-// Douglas-Peucker on a closed loop: collapses straight runs to their endpoints
-// while keeping enough curve points to stay within `tol`. (A per-triple collinear
-// test fails on gentle curves — each step's deviation is sub-tolerance, so the
-// whole arc would wrongly flatten to a chord.) Split at the point farthest from
-// coords[0] so DP gets stable endpoints on the loop.
-function simplifyLoop(coords, tol) {
-  const n = coords.length; if (n < 4) return coords;
-  let far = 0, fd = -1;
-  for (let i = 1; i < n; i++) { const d = (coords[i].x - coords[0].x) ** 2 + (coords[i].y - coords[0].y) ** 2; if (d > fd) { fd = d; far = i; } }
-  const r = dpSimplify(coords.slice(0, far + 1), tol).slice(0, -1)
-    .concat(dpSimplify(coords.slice(far).concat([coords[0]]), tol).slice(0, -1));
-  return r.length >= 3 ? r : coords;
-}
-function dpSimplify(pts, tol) {
-  if (pts.length < 3) return pts;
-  const a = pts[0], b = pts[pts.length - 1];
-  let idx = 0, dmax = 0;
-  for (let i = 1; i < pts.length - 1; i++) { const d = pointSegDist(pts[i], a, b); if (d > dmax) { dmax = d; idx = i; } }
-  if (dmax > tol) return dpSimplify(pts.slice(0, idx + 1), tol).slice(0, -1).concat(dpSimplify(pts.slice(idx), tol));
-  return [a, b];
-}
-function pointSegDist(p, a, b) {
-  const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy);
-  if (L < 1e-9) return Math.hypot(p.x - a.x, p.y - a.y);
-  return Math.abs((p.x - a.x) * dy - (p.y - a.y) * dx) / L;
-}
-// ---------- transforms (rotate 90° / flip), baked into geometry ----------
-// Baking keeps nodes translate-only (so move + node-edit keep working) instead
-// of stacking transform attributes. Only 90° rotations + axis flips are offered,
-// which map primitives to primitives (a rect stays a rect, etc.).
-function applyMat(m, x, y) { return { x: m.a * x + m.c * y + m.e, y: m.b * x + m.d * y + m.f }; }
-function matForOp(op, cx, cy) {
-  switch (op) {
-    case "flipH": return { a: -1, b: 0, c: 0, d: 1, e: 2 * cx, f: 0 };
-    case "flipV": return { a: 1, b: 0, c: 0, d: -1, e: 0, f: 2 * cy };
-    case "rotateCW": return { a: 0, b: 1, c: -1, d: 0, e: cx + cy, f: cy - cx };
-    case "rotateCCW": return { a: 0, b: -1, c: 1, d: 0, e: cx - cy, f: cy + cx };
-    default: return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
-  }
-}
-// Bake an affine transform (in stage space) into a node, keeping it translate-only.
-// Recurses into groups, preserving ancestor translates so nested content lands right.
-function bakeMatrixInto(node, m, atx, aty) {
-  const tag = node.tagName.toLowerCase();
-  if (SKIP_TAGS.has(tag)) return;
-  if (tag === "g") {
-    const t = currentTranslate(node);
-    for (const child of [...node.children]) bakeMatrixInto(child, m, atx + t.x, aty + t.y);
-    return;
-  }
-  const t = currentTranslate(node);
-  const f = (x, y) => { const p = applyMat(m, x + t.x + atx, y + t.y + aty); return { x: p.x - atx, y: p.y - aty }; };
-  transformShapeGeometry(node, tag, f, m);
-  node.removeAttribute("transform");
-}
-function transformShapeGeometry(el, tag, f, m) {
-  const num = (a) => parseFloat(el.getAttribute(a)) || 0;
-  // Per-axis scale magnitudes. For the 90°-rotate / flip matrices these are 1
-  // (no size change); for the uniform fit-scale used by Place they are the fit
-  // factor — so radii / image dims scale correctly without regressing transforms.
-  const sx = Math.hypot(m.a, m.b), sy = Math.hypot(m.c, m.d);
-  if (tag === "rect") {
-    const p1 = f(num("x"), num("y")), p2 = f(num("x") + num("width"), num("y") + num("height"));
-    el.setAttribute("x", nfmt(Math.min(p1.x, p2.x))); el.setAttribute("y", nfmt(Math.min(p1.y, p2.y)));
-    el.setAttribute("width", nfmt(Math.abs(p2.x - p1.x))); el.setAttribute("height", nfmt(Math.abs(p2.y - p1.y)));
-  } else if (tag === "circle") {
-    const c = f(num("cx"), num("cy")); el.setAttribute("cx", nfmt(c.x)); el.setAttribute("cy", nfmt(c.y));
-    el.setAttribute("r", nfmt(num("r") * sx));   // uniform scale keeps it a circle
-  } else if (tag === "ellipse") {
-    const c = f(num("cx"), num("cy"));
-    const rx = Math.abs(m.a) * num("rx") + Math.abs(m.c) * num("ry"), ry = Math.abs(m.b) * num("rx") + Math.abs(m.d) * num("ry");
-    el.setAttribute("cx", nfmt(c.x)); el.setAttribute("cy", nfmt(c.y)); el.setAttribute("rx", nfmt(rx)); el.setAttribute("ry", nfmt(ry));
-  } else if (tag === "line") {
-    const a = f(num("x1"), num("y1")), b = f(num("x2"), num("y2"));
-    el.setAttribute("x1", nfmt(a.x)); el.setAttribute("y1", nfmt(a.y)); el.setAttribute("x2", nfmt(b.x)); el.setAttribute("y2", nfmt(b.y));
-  } else if (tag === "polygon" || tag === "polyline") {
-    const pts = (el.getAttribute("points") || "").trim().split(/[\s,]+/).map(Number);
-    const out = [];
-    for (let i = 0; i + 1 < pts.length; i += 2) { const p = f(pts[i], pts[i + 1]); out.push(nfmt(p.x), nfmt(p.y)); }
-    el.setAttribute("points", out.join(" "));
-  } else if (tag === "path") {
-    const segs = parsePath(el.getAttribute("d") || "");
-    const swap = Math.abs(m.a) < 0.5;            // a 90° rotation swaps the x/y axes
-    const det = m.a * m.d - m.b * m.c;           // <0 ⇒ reflection (flip)
-    for (const s of segs) {
-      if (s.c1) s.c1 = f(s.c1.x, s.c1.y);
-      if (s.c2) s.c2 = f(s.c2.x, s.c2.y);
-      if (s.end) s.end = f(s.end.x, s.end.y);
-      if (s.t === "A") {
-        s.rx *= sx; s.ry *= sy;                  // scale arc radii (1× for rotate/flip)
-        if (swap) { const r = s.rx; s.rx = s.ry; s.ry = r; s.rot = (s.rot + 90) % 360; }
-        if (det < 0) { s.sf = s.sf ? 0 : 1; s.rot = (180 - s.rot + 360) % 360; }
-      }
-    }
-    el.setAttribute("d", serializeSegs(segs));
-  } else if (tag === "text" || tag === "image") {
-    const p = f(num("x"), num("y")); el.setAttribute("x", nfmt(p.x)); el.setAttribute("y", nfmt(p.y));
-    if (tag === "image") { el.setAttribute("width", nfmt(num("width") * sx)); el.setAttribute("height", nfmt(num("height") * sy)); }
-  }
-}
-function ghostBtn(label, onClick) {
-  const b = document.createElement("button"); b.type = "button"; b.className = "ghost-button"; b.textContent = label;
-  b.addEventListener("click", onClick); return b;
-}
 
 // ---------- document menu actions ----------
 function mountStageFromText(text, name) {
@@ -2738,12 +941,6 @@ function mountStageFromText(text, name) {
   editor.pinned = true;
   if (outputLabelEl) outputLabelEl.textContent = `Canvas — ${name}`;
   requestAnimationFrame(() => { measureFit(vp); editor.sync(); });
-}
-
-function importRun(process) {
-  processSelectEl.value = process;
-  processSelectEl.dispatchEvent(new Event("change"));
-  runProcess();
 }
 
 function newBlankDoc() {
@@ -3036,12 +1233,6 @@ function openMenu(menuEl) {
   if (trigger) trigger.setAttribute("aria-expanded", "true");
   menuEl.classList.add("open");
   openMenuEl = menuEl;
-}
-function setMenuHidden(name, hidden) {
-  const el = document.querySelector(`.menu[data-menu="${name}"]`);
-  if (!el) return;
-  el.hidden = !!hidden;
-  if (hidden && openMenuEl === el) closeMenus();
 }
 document.querySelectorAll(".menu .menu-trigger").forEach((trigger) => {
   trigger.addEventListener("click", (event) => {
@@ -3377,33 +1568,6 @@ async function runProcess() {
 }
 runButtonEl.addEventListener("click", runProcess);
 
-async function removeSelected() {
-  if (!selectedName) return;
-  try {
-    const data = await api("/api/work-items/remove", "POST", { name: selectedName });
-    const nextSelection = selectedName;
-    await refreshAll();
-    if (selectedName === nextSelection && workItems.length) {
-      selectedName = workItems[0].name;
-      renderQueue();
-      await renderPreviews();
-    }
-    setStatus(data.message, 2500);
-  } catch (error) {
-    setStatus(error.message, 3000);
-  }
-}
-
-if (clearJobsEl) clearJobsEl.addEventListener("click", async () => {
-  try {
-    const data = await api("/api/jobs/clear", "POST", {});
-    setStatus(data.message, 2000);
-    await loadJobs();
-  } catch (error) {
-    setStatus(error.message, 3000);
-  }
-});
-
 function jobLastLine(job) {
   const lines = job.log_lines || [];
   return lines.length ? lines[lines.length - 1] : "";
@@ -3439,14 +1603,8 @@ function progressBarHtml(progress) {
   return `<div class="job-progress"><div class="job-progress-bar" style="width:${pct}%"></div><span class="job-progress-label">${label}</span></div>`;
 }
 
-function renderJobsModal() {
-  if (!jobsModalOpen) return;
-  modalTitleEl.textContent = `Jobs — ${jobsCache.length}`;
-  modalBodyEl.innerHTML = "";
-  modalBodyEl.appendChild(buildJobsPanel());
-}
-// Job queue (toolbar + rows) — shared by the Process workspace's jobs pane and
-// the legacy Jobs modal. Returns the .jobs-panel node.
+// Job queue (toolbar + rows) for the Process workspace's jobs pane.
+// Returns the .jobs-panel node.
 function buildJobsPanel() {
   const wrap = document.createElement("div");
   wrap.className = "jobs-panel";
@@ -3596,7 +1754,6 @@ function processKeyOptions(proc) {
 
 function openProcessModal(focusJobs = false) {
   processModalOpen = true;
-  jobsModalOpen = false;
   openModal("Process — batch images to vectors");
   modalSearchEl.hidden = true;
   renderProcessWorkspace();
@@ -3656,31 +1813,74 @@ function renderProcessWorkspace() {
   renderProcessJobs();
 }
 
+let processGalleryFilter = "";
+
+// Library gallery for the Process workspace. Folds in the old Browse modal's
+// filter + per-item actions (Copy / Path / Reveal / Open) and is the home for the
+// rescued Image-Info panel — right-click a thumbnail, or hit its Info button.
 function renderProcessGallery() {
   const host = document.querySelector("#process-gallery"); if (!host) return;
   host.innerHTML = "";
-  const head = document.createElement("div"); head.className = "process-pane-head"; head.textContent = `Library (${workItems.length})`;
+  const q = processGalleryFilter.trim().toLowerCase();
+  const items = q ? workItems.filter((it) => it.name.toLowerCase().includes(q)) : workItems;
+
+  const head = document.createElement("div"); head.className = "process-pane-head";
+  const title = document.createElement("span");
+  title.textContent = q ? `Library (${items.length}/${workItems.length})` : `Library (${workItems.length})`;
+  head.appendChild(title);
+  const filter = document.createElement("input");
+  filter.type = "search"; filter.className = "modal-search process-filter"; filter.placeholder = "Filter…";
+  filter.value = processGalleryFilter;
+  filter.addEventListener("input", () => { processGalleryFilter = filter.value; renderProcessGallery(); });
+  head.appendChild(filter);
   host.appendChild(head);
+
   if (!workItems.length) {
     const empty = document.createElement("div"); empty.className = "gallery-empty"; empty.textContent = "No images yet — drop files here or use Add images.";
     host.appendChild(empty); return;
   }
+  if (!items.length) {
+    const empty = document.createElement("div"); empty.className = "gallery-empty"; empty.textContent = `No images match “${processGalleryFilter}”.`;
+    host.appendChild(empty); return;
+  }
+
+  const mkBtn = (label, t, onClick) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "ghost-button"; b.textContent = label; b.title = t;
+    b.addEventListener("click", (ev) => { ev.stopPropagation(); onClick(); });
+    return b;
+  };
+
   const grid = document.createElement("div"); grid.className = "gallery-grid";
-  for (const item of workItems) {
+  for (const item of items) {
+    const abs = absInputPath(item);
     const cell = document.createElement("div");
     cell.className = "gallery-cell" + (item.name === selectedName ? " active" : "") + (itemIsProcessed(item.name) ? " processed" : "");
     const thumb = document.createElement("button");
-    thumb.type = "button"; thumb.className = "gallery-thumb-button"; thumb.title = `Select ${item.name}`;
+    thumb.type = "button"; thumb.className = "gallery-thumb-button"; thumb.title = `Select ${item.name} (right-click for info)`;
     thumb.innerHTML = `<div class="gallery-thumb"><img src="${item.url}" alt="${item.name}" loading="lazy" /></div>`;
     thumb.addEventListener("click", () => {
       selectedName = item.name; manualOutputName = null; editor.pinned = false;
       renderQueue(); renderProcessGallery();
       renderPreviews().catch((e) => setStatus(e.message, 2500));
     });
+    thumb.addEventListener("contextmenu", (e) => { e.preventDefault(); openInfoModal(item.name); });   // rescued Info panel
     cell.appendChild(thumb);
+
     const cap = document.createElement("div"); cap.className = "gallery-caption"; cap.title = item.name;
     cap.textContent = item.name + (itemIsProcessed(item.name) ? " ✓" : "");
     cell.appendChild(cap);
+
+    const actions = document.createElement("div"); actions.className = "gallery-actions";
+    actions.appendChild(mkBtn("Info", "Dimensions, EXIF, in-place transforms", () => openInfoModal(item.name)));
+    actions.appendChild(mkBtn("Copy", `Copy filename: ${item.name}`, () => copyToClipboard(item.name)));
+    if (abs) {
+      actions.appendChild(mkBtn("Path", `Copy absolute path: ${abs}`, () => copyToClipboard(abs)));
+      actions.appendChild(mkBtn("Reveal", "Open containing folder", () => revealInFileManager(abs)));
+    }
+    actions.appendChild(mkBtn("Open", "Open in new tab", () => window.open(item.url, "_blank", "noopener")));
+    cell.appendChild(actions);
+
     grid.appendChild(cell);
   }
   host.appendChild(grid);
@@ -3693,17 +1893,6 @@ function renderProcessJobs() {
   host.appendChild(head);
   host.appendChild(buildJobsPanel());
 }
-
-function openJobsModal() {
-  jobsModalOpen = true;
-  openModal(`Jobs — ${jobsCache.length}`);
-  modalSearchEl.hidden = true;
-  renderJobsModal();
-  // Refresh immediately so the panel reflects current state without waiting for the next poll tick.
-  loadJobs().catch(() => {});
-}
-
-if (jobsButtonEl) jobsButtonEl.addEventListener("click", () => openProcessModal(true));
 
 api("/api/bootstrap", "POST")
   .then(() => refreshAll())
@@ -3986,17 +2175,17 @@ function fmtBytes(n) {
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }
 
-async function openInfoModal() {
-  if (!selectedName) {
+async function openInfoModal(name = selectedName) {
+  if (!name) {
     setStatus("Select an image first.", 2000);
     return;
   }
-  openModal(`Info — ${selectedName}`, true);
+  openModal(`Info — ${name}`, true);
   modalSearchEl.hidden = true;
   modalBodyEl.innerHTML = `<div class="form-section">Loading…</div>`;
   let info;
   try {
-    info = await api(`/api/work-items/info?name=${encodeURIComponent(selectedName)}`);
+    info = await api(`/api/work-items/info?name=${encodeURIComponent(name)}`);
   } catch (error) {
     modalBodyEl.innerHTML = `<div class="form-section">${error.message}</div>`;
     return;
@@ -4080,13 +2269,9 @@ function renderInfoModal(info) {
       try {
         const updated = await api("/api/work-items/transform", "POST", { name: info.name, op });
         setStatus(updated.message || "Applied.", 1500);
-        const stamp = Date.now();
-        if (viewports.input.url && viewports.input.name === updated.name) {
-          const freshUrl = bustUrl(stripBust(viewports.input.url), stamp);
-          viewports.input.url = null;
-          mountViewport(viewports.input, "png", freshUrl, updated.name, updated.path)
-            .catch((e) => clearViewport(viewports.input, e.message));
-        }
+        // In-place raster edit: the Info panel re-renders with the new metadata
+        // (dimensions swap on rotate); refreshAll re-reads the library so the
+        // Process gallery thumbnail reflects it next time the workspace opens.
         renderInfoModal(updated);
         refreshAll(info.name).catch((e) => setStatus(e.message, 3000));
       } catch (error) {
@@ -4178,16 +2363,6 @@ function openShortcutsModal() {
 settingsButtonEl.addEventListener("click", openSettingsModal);
 shortcutButtonEl.addEventListener("click", openShortcutsModal);
 
-let focusedVp = "output";
-function focusViewport(name) {
-  focusedVp = name;
-  for (const [n, vp] of Object.entries(viewports)) {
-    vp.el.parentElement?.classList.toggle("panel-focused", n === name);
-  }
-}
-focusViewport("output");
-outputPreviewEl.addEventListener("pointerdown", () => focusViewport("output"));
-
 function zoomVp(vp, factor) {
   if (!vp.el.querySelector(".viewport-content")) return;
   vp.scale = Math.max(0.02, Math.min(40, vp.scale * factor));
@@ -4217,44 +2392,6 @@ for (const vp of Object.values(viewports)) {
   }, { passive: false });
 }
 
-function moveLibrary(delta) {
-  const list = visibleLibraryItems.length ? visibleLibraryItems : workItems;
-  if (!list.length) return;
-  const i = list.findIndex((it) => it.name === selectedName);
-  const j = Math.max(0, Math.min(list.length - 1, (i < 0 ? 0 : i) + delta));
-  if (list[j].name === selectedName) return;
-  selectedName = list[j].name;
-  manualOutputName = null;
-  editor.pinned = false;
-  renderQueue();
-  renderPreviews().catch((error) => setStatus(error.message, 2500));
-  const active = queueEl.querySelector(".queue-item.active");
-  if (active && active.scrollIntoView) active.scrollIntoView({ block: "nearest", inline: "nearest" });
-}
-
-function cycleProcess(delta) {
-  const opts = Array.from(processSelectEl.options);
-  const i = opts.findIndex((o) => o.value === processSelectEl.value);
-  const j = (i + delta + opts.length) % opts.length;
-  processSelectEl.value = opts[j].value;
-  processSelectEl.dispatchEvent(new Event("change"));
-  setStatus(`Process: ${opts[j].text}`, 1500);
-}
-
-function cycleMode() {
-  modeSelectEl.value = modeSelectEl.value === "batch" ? "single" : "batch";
-  setStatus(`Mode: ${modeSelectEl.value}`, 1200);
-}
-
-function cycleOutputVariant() {
-  const matches = latestOutputsFor(selectedName);
-  if (matches.length <= 1) return;
-  const cur = selectedOutput?.name;
-  const i = matches.findIndex((m) => m.name === cur);
-  const next = matches[(i + 1 + matches.length) % matches.length];
-  manualOutputName = next.name;
-  renderPreviews().catch((error) => setStatus(error.message, 2500));
-}
 
 // View / navigation keys. The editor's editing + tool keymap lives above; this
 // handler is single-key and Illustrator-flavoured, and — unlike the old image-tool
@@ -4336,3 +2473,41 @@ schedulePoll();
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) schedulePoll();
 });
+
+// =========================================================================
+// Service exports for the editor module. Live bindings (so editor reads the
+// current selectedOutput); writes route through a setter since ESM imports
+// are read-only.
+// =========================================================================
+export function setManualOutputName(v) { manualOutputName = v; }
+export { setStatus, api, refreshAll, viewports, measureFit, outputPreviewEl, selectedOutput };
+
+// =========================================================================
+// Window bridge — exposes the library, the editor, and a small mutable app
+// surface for in-browser automation and the E2E suite (which both read and
+// write selectedName / selectedOutput / manualOutputName).
+// =========================================================================
+window.hv = hv;
+window.editor = editor;
+// Handles exposed directly so in-browser automation / the E2E suite can drive
+// the app by bare name (module scope is otherwise private).
+window.viewports = viewports;
+window.applyViewportState = applyViewportState;
+window.measureFit = measureFit;
+window.mountStageFromText = mountStageFromText;
+window.closeModal = closeModal;
+window.newBlankDoc = newBlankDoc;
+window.openOpenModal = openOpenModal;
+window.renderProcessWorkspace = renderProcessWorkspace;
+window.zoomVp = zoomVp;
+window.fitVp = fitVp;
+window.processSelectEl = processSelectEl;
+window.settings = settings;
+// Mutable selection state goes through accessors (ESM module bindings can't be
+// reassigned by name from outside the module).
+window.app = {
+  viewports, applyViewportState, measureFit, mountStageFromText,
+  get selectedName() { return selectedName; }, set selectedName(v) { selectedName = v; },
+  get selectedOutput() { return selectedOutput; }, set selectedOutput(v) { selectedOutput = v; },
+  get manualOutputName() { return manualOutputName; }, set manualOutputName(v) { manualOutputName = v; },
+};

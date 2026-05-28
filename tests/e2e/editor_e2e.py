@@ -52,7 +52,7 @@ def click_node(page, nid, shift=False):
         page.mouse.click(r["cx"], r["cy"])
 
 def mount_ctl(page):
-    page.evaluate("svg => { selectedOutput = null; manualOutputName = null; mountStageFromText(svg, 'ctl.svg'); }", CTL)
+    page.evaluate("svg => { app.selectedOutput = null; app.manualOutputName = null; mountStageFromText(svg, 'ctl.svg'); }", CTL)
     page.wait_for_function("editor.stage && editor.nodeById('r2')", timeout=8000)
     page.wait_for_timeout(150)
 
@@ -103,7 +103,7 @@ BOOL_DOC = """
 </svg>"""   # A covers 20..100, B covers 60..140 → overlap 60..100 (40x40)
 
 def mount_bool(page, select_both=True):
-    page.evaluate("svg => { selectedOutput=null; manualOutputName=null; mountStageFromText(svg,'bool.svg'); }", BOOL_DOC)
+    page.evaluate("svg => { app.selectedOutput=null; app.manualOutputName=null; mountStageFromText(svg,'bool.svg'); }", BOOL_DOC)
     page.wait_for_function("editor.stage && editor.nodeById('rb')", timeout=8000)
     if select_both:
         page.evaluate("editor.selection = new Set(['ra','rb']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector();")
@@ -142,7 +142,7 @@ def main():
 
         # ---- A. Save on the auto-loaded (library) document ----
         big_nodes = page.evaluate("editor.stage.querySelectorAll('[data-hv-id]').length")
-        has_output = page.evaluate("!!selectedOutput")
+        has_output = page.evaluate("!!window.app.selectedOutput")
         if has_output:
             file_menu_click(page, "Save")
             page.wait_for_function("/Saved|Save failed/.test(document.querySelector('#status-text').textContent)", timeout=8000)
@@ -359,6 +359,9 @@ def main():
             run: [...document.querySelectorAll('.process-controls .primary-button')].some(b => /Run/.test(b.textContent)),
         })""")
         check("Process workspace opens with gallery + jobs + run", ws["open"] and ws["gallery"] and ws["jobs"] and ws["run"], str(ws))
+        # rescued Browse: the gallery head carries a filter box (+ per-item actions)
+        check("Process gallery has a filter box (rescued Browse)",
+              page.evaluate("!!document.querySelector('#process-gallery .process-filter')"))
         # processing defaults to Single
         mode_default = page.evaluate("document.querySelector('#mode-select').value")
         check("processing defaults to Single", mode_default == "single", mode_default)
@@ -493,7 +496,7 @@ def main():
 
         # a single wrapper <g> import is flattened into per-shape layers (layered extraction)
         WRAP = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100"><g transform="translate(5 5)"><rect x="0" y="0" width="40" height="40" fill="#ff0000"/><rect x="50" y="0" width="40" height="40" fill="#00ff00"/><circle cx="50" cy="70" r="18" fill="#0000ff"/></g></svg>'
-        page.evaluate("svg => { selectedOutput=null; mountStageFromText(svg,'wrap.svg'); }", WRAP)
+        page.evaluate("svg => { app.selectedOutput=null; mountStageFromText(svg,'wrap.svg'); }", WRAP)
         page.wait_for_function("editor.stage && editor._artworkNodes().length >= 1", timeout=8000); page.wait_for_timeout(120)
         check("wrapper group flattened into per-shape layers", page.evaluate("editor._artworkNodes().length") == 3,
               f"n={page.evaluate('editor._artworkNodes().length')}")
@@ -628,7 +631,7 @@ def main():
 
         # Union of a rect + ellipse must keep the curved bulge (guards the DP
         # simplifier from flattening a gently-curved arc into a chord)
-        page.evaluate("""svg => { selectedOutput=null; manualOutputName=null; mountStageFromText(svg,'ue.svg'); }""",
+        page.evaluate("""svg => { app.selectedOutput=null; app.manualOutputName=null; mountStageFromText(svg,'ue.svg'); }""",
                       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect data-hv-id="ra" x="30" y="40" width="90" height="90" fill="#36c"/><ellipse data-hv-id="eb" cx="130" cy="120" rx="55" ry="45" fill="#e08a2b"/></svg>')
         page.wait_for_function("editor.stage && editor.nodeById('eb')", timeout=8000)
         page.evaluate("editor.selection=new Set(['ra','eb']); editor.booleanOp('union');")
@@ -650,7 +653,7 @@ def main():
               and not result_inside(page, 130, 130) and n_nodes(page) == 1)
 
         # Non-overlapping shapes → empty intersection leaves the inputs untouched
-        page.evaluate("""svg => { selectedOutput=null; manualOutputName=null; mountStageFromText(svg,'sep.svg'); }""",
+        page.evaluate("""svg => { app.selectedOutput=null; app.manualOutputName=null; mountStageFromText(svg,'sep.svg'); }""",
                       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect data-hv-id="ra" x="10" y="10" width="40" height="40" fill="#36c"/><rect data-hv-id="rb" x="140" y="140" width="40" height="40" fill="#c33"/></svg>')
         page.wait_for_function("editor.stage && editor.nodeById('rb')", timeout=8000)
         page.evaluate("editor.selection=new Set(['ra','rb']); editor.booleanOp('intersect');")
@@ -671,7 +674,7 @@ def main():
               and not result_inside(page, 130, 130))
 
         # ---- Layers cleanup: drop ghost/empty nodes, keep valid ones ----
-        page.evaluate("""svg => { selectedOutput=null; manualOutputName=null; mountStageFromText(svg,'ghosts.svg'); }""",
+        page.evaluate("""svg => { app.selectedOutput=null; app.manualOutputName=null; mountStageFromText(svg,'ghosts.svg'); }""",
                       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
                       '<rect data-hv-id="ra" x="20" y="20" width="60" height="60" fill="#36c"/>'
                       '<path data-hv-id="gp" d="M10 10" fill="#000"/>'
@@ -688,7 +691,7 @@ def main():
 
         # ---- Merge same-colour layers (consolidate trace output) ----
         # Mimics a monochrome trace: same fill, each path positioned by translate.
-        page.evaluate("""svg => { selectedOutput=null; manualOutputName=null; mountStageFromText(svg,'mono.svg'); }""",
+        page.evaluate("""svg => { app.selectedOutput=null; app.manualOutputName=null; mountStageFromText(svg,'mono.svg'); }""",
                       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
                       '<path data-hv-id="m1" transform="translate(10,10)" d="M0 0 H20 V20 H0 Z" fill="#000"/>'
                       '<path data-hv-id="m2" transform="translate(100,100)" d="M0 0 H20 V20 H0 Z" fill="#000"/>'
@@ -711,7 +714,7 @@ def main():
         check("merge is undoable", page.evaluate("editor._artworkNodes().length") == 3)
 
         # ---- Place / merge a vector INTO the current canvas (not replace) ----
-        page.evaluate("""() => { selectedOutput=null; manualOutputName=null;
+        page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
             mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect data-hv-id="a1" x="10" y="10" width="40" height="40" fill="#36c"/></svg>','A.svg'); }""")
         page.wait_for_function("editor.stage && editor.nodeById('a1')", timeout=8000)
         # place a larger vector (400x400) — should fit-scale + centre, wrapped as one group
@@ -744,7 +747,7 @@ def main():
         check("releasing space ends pan mode", page.evaluate("!editor._spacePan && !document.querySelector('.stage-wrap').classList.contains('space-pan')"))
 
         # ---- Phase 4: contextual transforms (rotate / flip) ----
-        page.evaluate("""svg => { selectedOutput=null; manualOutputName=null; mountStageFromText(svg,'xf.svg'); }""",
+        page.evaluate("""svg => { app.selectedOutput=null; app.manualOutputName=null; mountStageFromText(svg,'xf.svg'); }""",
                       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect data-hv-id="rr" x="50" y="50" width="40" height="20" fill="#36c"/></svg>')
         page.wait_for_function("editor.stage && editor.nodeById('rr')", timeout=8000)
         page.evaluate("editor.selection=new Set(['rr']); editor.artboardSelected=false; editor.transform('rotateCW');")
@@ -761,7 +764,7 @@ def main():
         check("artboard flip H mirrors then restores", abs(x1 - 140) < 1 and abs(x2 - x0) < 1, f"x0={x0} x1={x1} x2={x2}")
 
         # whole-artboard rotate 90° swaps the artboard dimensions, undoably
-        page.evaluate("""svg => { selectedOutput=null; manualOutputName=null; mountStageFromText(svg,'wide.svg'); }""",
+        page.evaluate("""svg => { app.selectedOutput=null; app.manualOutputName=null; mountStageFromText(svg,'wide.svg'); }""",
                       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 200"><rect data-hv-id="ra" x="10" y="10" width="50" height="30" fill="#36c"/></svg>')
         page.wait_for_function("editor.stage && editor.nodeById('ra')", timeout=8000)
         page.evaluate("editor.selection=new Set(); editor.artboardSelected=true; editor.transform('rotateCW');")

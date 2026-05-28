@@ -33,12 +33,12 @@ mimetypes.add_type("application/manifest+json", ".webmanifest")
 OUTPUTS_DIR = APP_DIR / "outputs"
 INPUTS_DIR = APP_DIR / "inputs"
 ASSETS_DIR = APP_DIR / "assets"
+SRC_DIR = APP_DIR / "src"          # ES-module tree: hv/ library + editor + app shell
 WORKSPACE_DIR = APP_DIR
 MASK_PREP_SCRIPT = APP_DIR / "mask_trace_prep.py"
 STATIC_FILES = {
     "/": "index.html",
     "/index.html": "index.html",
-    "/app.js": "app.js",
     "/style.css": "style.css",
     "/manifest.webmanifest": "manifest.webmanifest",
     "/sw.js": "sw.js",
@@ -1972,6 +1972,16 @@ class Handler(SimpleHTTPRequestHandler):
             path = (ASSETS_DIR / rel).resolve()
             try:
                 path.relative_to(ASSETS_DIR.resolve())
+            except ValueError:
+                self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+                return
+            self.serve_file(path)
+            return
+        if parsed.path.startswith("/src/"):
+            rel = Path(urllib.parse.unquote(parsed.path.removeprefix("/src/")))
+            path = (SRC_DIR / rel).resolve()
+            try:
+                path.relative_to(SRC_DIR.resolve())
             except ValueError:
                 self.send_error(HTTPStatus.NOT_FOUND, "Not found")
                 return
