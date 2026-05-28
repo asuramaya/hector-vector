@@ -1402,13 +1402,22 @@ const editor = {
       if (width > 0) {
         n.setAttribute("stroke", color); n.setAttribute("stroke-width", nfmt(width));
         n.setAttribute("vector-effect", "non-scaling-stroke");
-        n.setAttribute("stroke-linejoin", "round"); n.setAttribute("stroke-linecap", "round");
+        // seed cap/join defaults only if the object doesn't already carry a choice
+        if (!n.hasAttribute("stroke-linejoin")) n.setAttribute("stroke-linejoin", "round");
+        if (!n.hasAttribute("stroke-linecap")) n.setAttribute("stroke-linecap", "round");
       } else {
-        ["stroke", "stroke-width", "vector-effect", "stroke-linejoin", "stroke-linecap"].forEach((x) => n.removeAttribute(x));
+        ["stroke", "stroke-width", "vector-effect", "stroke-linejoin", "stroke-linecap",
+         "stroke-opacity", "stroke-miterlimit", "stroke-dasharray"].forEach((x) => n.removeAttribute(x));
       }
     });
   },
   applyOpacity(v) { this._eachSel((n) => { if (v >= 1) n.removeAttribute("opacity"); else n.setAttribute("opacity", nfmt(v)); }); },
+  applyFillOpacity(a) { this._eachSel((n) => { if (a == null || a >= 1) n.removeAttribute("fill-opacity"); else n.setAttribute("fill-opacity", nfmt(Math.max(0, a))); }); },
+  applyStrokeOpacity(a) { this._eachSel((n) => { if (a == null || a >= 1) n.removeAttribute("stroke-opacity"); else n.setAttribute("stroke-opacity", nfmt(Math.max(0, a))); }); },
+  // Generic stroke-style setter (cap / join / miterlimit / dasharray); empty value clears.
+  setStrokeAttr(attr, value) {
+    this._eachSel((n) => { if (value === "" || value == null) n.removeAttribute(attr); else n.setAttribute(attr, String(value)); });
+  },
   applyArtboardBg(color) { const ab = this.artboardEl(); if (ab) ab.setAttribute("fill", color || "none"); },
   applyArtboardSize(w, h) {
     const ab = this.artboardEl(); if (!ab || !this.stage) return;
@@ -2006,26 +2015,110 @@ const editor = {
   _objectPanel(nodes) {
     const first = nodes[0];
     const wrap = document.createElement("div");
-    const fillHex = toHexColor(first.getAttribute("fill")) || "#000000";
-    const fillNone = first.getAttribute("fill") === "none";
+
+    // FILL — swatch opens the unified colour picker (colour + alpha + None).
+    const fillVal = first.getAttribute("fill");
+    const fillNone = fillVal === "none";
+    const fillHex = toHexColor(fillVal) || "#000000";
+    const fillA = first.hasAttribute("fill-opacity") ? parseFloat(first.getAttribute("fill-opacity")) : 1;
     wrap.appendChild(inspGroup("Fill", [
-      colorRow("Colour", fillHex, (v) => { this.beginCoalesce(); this.applyFill(v); }, () => this.commitCoalesce("Fill")),
-      checkRow("No fill", fillNone, (on) => { this.push("Fill"); this.applyFill(on ? null : (toHexColor(first.getAttribute("fill")) || "#000000")); }),
+      this._paintRow("Colour", fillNone ? null : fillHex, fillA, "Fill",
+        (hex, a) => { this.applyFill(hex); this.applyFillOpacity(a); }),
     ]));
-    const strokeHex = toHexColor(first.getAttribute("stroke")) || "#000000";
+
+    // STROKE — colour/alpha, weight, cap, join, miter limit, dashes.
+    const strokeVal = first.getAttribute("stroke");
+    const strokeNone = !strokeVal || strokeVal === "none";
+    const strokeHex = toHexColor(strokeVal) || "#000000";
+    const strokeA = first.hasAttribute("stroke-opacity") ? parseFloat(first.getAttribute("stroke-opacity")) : 1;
     const strokeW = parseFloat(first.getAttribute("stroke-width")) || 0;
     this._strokeWidthInput = null;
     const curW = () => Math.max(parseFloat(this._strokeWidthInput && this._strokeWidthInput.value) || strokeW || 1, 0.01);
     const curC = () => toHexColor(first.getAttribute("stroke")) || strokeHex;
-    wrap.appendChild(inspGroup("Stroke", [
-      colorRow("Colour", strokeHex, (v) => { this.beginCoalesce(); this.applyStroke(v, curW()); }, () => this.commitCoalesce("Stroke")),
-      numRow("Width", strokeW, 0, 0.5, (v) => { this.beginCoalesce(); this.applyStroke(curC(), v); }, (inp) => { this._strokeWidthInput = inp; }, () => this.commitCoalesce("Stroke")),
-    ]));
+    const strokeRows = [
+      this._paintRow("Colour", strokeNone ? null : strokeHex, strokeA, "Stroke",
+        (hex, a) => { this.applyStroke(hex || "none", hex ? curW() : 0); this.applyStrokeOpacity(a); }),
+      numRow("Width", strokeW, 0, 0.5, (v) => { this.beginCoalesce(); this.applyStroke(curC(), v); }, (inp) => { this._strokeWidthInput = inp; }, () => this.commitCoalesce("Stroke width")),
+      this._segRow("Cap", first.getAttribute("stroke-linecap") || "butt",
+        [["butt", "▭"], ["round", "▢"], ["square", "■"]], { butt: "Butt", round: "Round", square: "Projecting" },
+        (v) => { this.push("Stroke cap"); this.setStrokeAttr("stroke-linecap", v); }),
+      this._segRow("Join", first.getAttribute("stroke-linejoin") || "miter",
+        [["miter", "⌐"], ["round", "◜"], ["bevel", "◹"]], { miter: "Miter", round: "Round", bevel: "Bevel" },
+        (v) => { this.push("Stroke join"); this.setStrokeAttr("stroke-linejoin", v); }),
+      numRow("Miter", parseFloat(first.getAttribute("stroke-miterlimit")) || 4, 1, 1,
+        (v) => { this.beginCoalesce(); this.setStrokeAttr("stroke-miterlimit", v); }, null, () => this.commitCoalesce("Miter limit")),
+      this._dashRow("Dashes", first.getAttribute("stroke-dasharray") || "",
+        (v) => { this.push("Dashes"); this.setStrokeAttr("stroke-dasharray", v.trim()); }),
+    ];
+    wrap.appendChild(inspGroup("Stroke", strokeRows));
+
+    // OPACITY — object opacity 0–100% as a slider.
     const op = first.hasAttribute("opacity") ? parseFloat(first.getAttribute("opacity")) : 1;
     wrap.appendChild(inspGroup("Opacity", [
-      numRow("Alpha", op, 0, 0.05, (v) => { this.beginCoalesce(); this.applyOpacity(Math.max(0, Math.min(1, v))); }, null, () => this.commitCoalesce("Opacity")),
+      this._sliderRow("Opacity", op, (v) => { this.beginCoalesce(); this.applyOpacity(v); }, () => this.commitCoalesce("Opacity")),
     ]));
     return wrap;
+  },
+  // A colour row: a swatch button (None shows a hatched chip) that opens the
+  // unified picker. `apply(hex|null, alpha)` is called live; history is coalesced.
+  _paintRow(label, hex, alpha, commitLabel, apply) {
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "insp-swatch" + (hex == null ? " none" : "");
+    if (hex != null) { btn.style.background = hex; btn.style.opacity = String(alpha == null ? 1 : alpha); }
+    btn.title = hex == null ? "None — click to set a colour" : hex;
+    const paintBtn = (h, a) => {
+      btn.classList.toggle("none", h == null);
+      btn.style.background = h == null ? "" : h;
+      btn.style.opacity = h == null ? "1" : String(a == null ? 1 : a);
+      btn.title = h == null ? "None — click to set a colour" : h;
+    };
+    btn.addEventListener("click", () => {
+      if (!this.pickColor) return;
+      this.beginCoalesce();
+      this.pickColor({
+        title: `${commitLabel} colour`, color: hex == null ? "none" : hex, alpha: alpha == null ? 1 : alpha, allowNone: true,
+        onChange: (h, a) => { apply(h, a); paintBtn(h, a); },   // keep the swatch live with the artwork
+        onCommit: () => this.commitCoalesce(commitLabel),
+        onCancel: () => this.cancelCoalesce(),
+      });
+    });
+    return inspRow(label, btn);
+  },
+  // A segmented control (cap / join). `glyphs` is [[value, glyph], …]; `titles` maps value→tooltip.
+  _segRow(label, value, glyphs, titles, onPick) {
+    const seg = document.createElement("div"); seg.className = "insp-seg";
+    for (const [val, glyph] of glyphs) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "insp-seg-btn" + (val === value ? " active" : "");
+      b.textContent = glyph; b.title = (titles && titles[val]) || val;
+      b.addEventListener("click", () => { onPick(val); this._renderInspector(); });
+      seg.appendChild(b);
+    }
+    return inspRow(label, seg);
+  },
+  // Dash editor: free-text dash-array (e.g. "6 4") plus quick presets.
+  _dashRow(label, value, onSet) {
+    const wrap = document.createElement("div"); wrap.className = "insp-dash";
+    const inp = document.createElement("input"); inp.type = "text"; inp.value = value; inp.placeholder = "solid";
+    inp.title = "dash gap … (px), blank = solid";
+    inp.addEventListener("change", () => onSet(inp.value));
+    const presets = document.createElement("div"); presets.className = "insp-dash-presets";
+    [["", "—"], ["4 3", "··"], ["8 4", "- -"], ["1 4", ":"]].forEach(([v, g]) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "insp-seg-btn"; b.textContent = g;
+      b.title = v || "solid"; b.addEventListener("click", () => { inp.value = v; onSet(v); }); presets.appendChild(b);
+    });
+    wrap.appendChild(inp); wrap.appendChild(presets);
+    return inspRow(label, wrap);
+  },
+  // Opacity slider 0–100% with a live numeric echo.
+  _sliderRow(label, value, onLive, onCommit) {
+    const wrap = document.createElement("div"); wrap.className = "insp-slider";
+    const range = document.createElement("input"); range.type = "range"; range.min = "0"; range.max = "100"; range.value = String(Math.round(value * 100));
+    const num = document.createElement("span"); num.className = "insp-slider-val"; num.textContent = Math.round(value * 100) + "%";
+    range.addEventListener("input", () => { num.textContent = range.value + "%"; onLive(parseInt(range.value, 10) / 100); });
+    range.addEventListener("change", () => { if (onCommit) onCommit(); });
+    wrap.appendChild(range); wrap.appendChild(num);
+    return inspRow(label, wrap);
   },
   _artboardPanel() {
     const ab = this.artboardEl();
@@ -2040,8 +2133,7 @@ const editor = {
       numRow("Height", Math.round(vb.height), 1, 1, liveSize, (i) => { hInp = i; }, () => this.commitCoalesce("Resize artboard")),
     ]));
     wrap.appendChild(inspGroup("Background", [
-      colorRow("Colour", bgHex, (v) => { this.beginCoalesce(); this.applyArtboardBg(v); }, () => this.commitCoalesce("Background")),
-      checkRow("Transparent", bgNone, (on) => { this.push("Background"); this.applyArtboardBg(on ? null : (toHexColor(ab.getAttribute("fill")) || "#ffffff")); }),
+      this._paintRow("Colour", bgNone ? null : bgHex, 1, "Background", (hex) => this.applyArtboardBg(hex)),
     ]));
     return wrap;
   },

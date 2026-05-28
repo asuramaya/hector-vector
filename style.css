@@ -337,6 +337,73 @@ button:disabled {
 }
 .insp-empty { color: var(--muted); font-size: 13px; }
 
+/* inspector swatch (opens the colour picker) */
+.insp-swatch {
+  width: 100%; height: 30px; padding: 0; border: 1px solid var(--line); cursor: pointer;
+  background: #000; box-shadow: inset 0 0 0 1px #fff;
+}
+.insp-swatch.none {
+  background: #fff;
+  background-image: linear-gradient(to top right, transparent 45%, #e0245e 46%, #e0245e 54%, transparent 55%);
+}
+/* segmented control (cap / join / dash presets) */
+.insp-seg, .insp-dash-presets { display: flex; gap: 0; }
+.insp-seg-btn {
+  flex: 1 1 0; border: 1px solid var(--line); margin-left: -1px; background: var(--bg); color: var(--fg);
+  padding: 5px 0; font-size: 13px; line-height: 1; cursor: pointer; min-width: 0;
+}
+.insp-seg-btn:first-child { margin-left: 0; }
+.insp-seg-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); position: relative; z-index: 1; }
+.insp-dash { display: flex; flex-direction: column; gap: 4px; }
+.insp-dash input { width: 100%; border: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 6px 8px; font: inherit; min-width: 0; }
+.insp-dash-presets .insp-seg-btn { font-size: 11px; }
+.insp-slider { display: flex; align-items: center; gap: 8px; }
+.insp-slider input[type="range"] { flex: 1 1 0; min-width: 0; accent-color: var(--accent); }
+.insp-slider-val { font-size: 12px; color: var(--muted); min-width: 34px; text-align: right; }
+
+/* active fill/stroke swatch in the toolstrip (Illustrator's X focus) */
+.swatch.active { outline: 2px solid var(--accent); outline-offset: 1px; z-index: 3; }
+
+/* ---------- unified colour picker ---------- */
+.cp-backdrop {
+  position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+.cp-window {
+  width: 300px; background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35); padding: 12px; display: flex; flex-direction: column; gap: 10px;
+  font-size: 12px;
+}
+.cp-head { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.cp-body { display: flex; gap: 8px; }
+.cp-field { position: relative; width: 200px; height: 160px; cursor: crosshair; border: 1px solid var(--line); flex: 0 0 auto; }
+.cp-field-sat { position: absolute; inset: 0; background: linear-gradient(to right, #fff, rgba(255,255,255,0)); }
+.cp-field-val { position: absolute; inset: 0; background: linear-gradient(to top, #000, rgba(0,0,0,0)); }
+.cp-field-thumb {
+  position: absolute; width: 12px; height: 12px; border: 2px solid #fff; border-radius: 50%;
+  transform: translate(-50%, -50%); box-shadow: 0 0 0 1px #000; pointer-events: none;
+}
+.cp-hue { position: relative; width: 16px; height: 160px; cursor: ns-resize; border: 1px solid var(--line); flex: 0 0 auto;
+  background: linear-gradient(to bottom, #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%); }
+.cp-hue-thumb { position: absolute; left: -2px; right: -2px; height: 4px; background: #fff; border: 1px solid #000; transform: translateY(-50%); pointer-events: none; }
+.cp-preview { flex: 1 1 auto; display: flex; flex-direction: column; border: 1px solid var(--line); min-width: 28px; }
+.cp-prev-new, .cp-prev-old { flex: 1 1 0; }
+.cp-prev-new { border-bottom: 1px solid var(--line); }
+.cp-alpha { position: relative; height: 16px; cursor: ew-resize; border: 1px solid var(--line); }
+.cp-alpha-track { position: absolute; inset: 0; }
+.cp-alpha-thumb { position: absolute; top: -2px; bottom: -2px; width: 4px; background: #fff; border: 1px solid #000; transform: translateX(-50%); pointer-events: none; }
+.cp-fields { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 8px; }
+.cp-inp { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); }
+.cp-hex { grid-column: span 4; }
+.cp-inp input { flex: 1 1 0; min-width: 0; border: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 4px 5px; font: inherit; }
+.cp-swatches { display: flex; gap: 4px; flex-wrap: wrap; }
+.cp-sw { width: 20px; height: 20px; padding: 0; border: 1px solid var(--line); cursor: pointer; }
+.cp-actions { display: flex; align-items: center; gap: 6px; }
+.cp-spacer { flex: 1 1 auto; }
+.cp-window.cp-is-none .cp-prev-new {
+  background-image: linear-gradient(to top right, transparent 45%, #e0245e 46%, #e0245e 54%, transparent 55%) !important;
+}
+
 /* selection overlay — lives in the stage svg but is stripped from saved output */
 .hv-sel-box { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
 .inline-svg.hv-pickable { pointer-events: auto; }

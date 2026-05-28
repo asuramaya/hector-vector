@@ -80,6 +80,29 @@ def set_inspector_input(page, kind, index, value, event):
             el.dispatchEvent(new Event(event, { bubbles: true }));
         }""", {"kind": kind, "index": index, "value": value, "event": event})
 
+def pick_color(page, swatch_index, hexes=None, none=False):
+    """Open the context panel, click the index-th colour swatch to launch the unified
+    picker, fire each hex in `hexes` (live), optionally click None, then OK."""
+    open_ctx_panel(page)
+    page.evaluate("""(i) => { const s = document.querySelectorAll('.context-panel .insp-swatch')[i];
+        if (!s) throw new Error('no swatch #' + i); s.click(); }""", swatch_index)
+    page.wait_for_function("!!document.querySelector('.cp-window')", timeout=4000)
+    for h in (hexes or []):
+        page.evaluate("""(v) => { const el = document.querySelector('.cp-hex input');
+            el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }""", h)
+    if none:
+        page.click(".cp-window .cp-none")
+    page.click(".cp-window .cp-ok")
+    page.wait_for_timeout(40)
+
+def set_opacity(page, frac):
+    """Drive the object-opacity slider in the context panel (0..1)."""
+    open_ctx_panel(page)
+    page.evaluate("""(f) => { const el = document.querySelector('.context-panel input[type=range]');
+        if (!el) throw new Error('no opacity slider'); el.value = String(Math.round(f * 100));
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true })); }""", frac)
+
 def artboard_rect(page):
     return page.evaluate(
         "() => { const r = editor.artboardEl().getBoundingClientRect();"
@@ -217,31 +240,47 @@ def main():
         redo = node_rect(page, "r3")
         check("redo re-applies move", abs(redo["x"] - after["x"]) < 4)
 
-        # inspector: fill via the real color input, and verify a whole picker
-        # drag (many 'input' events + one 'change') coalesces to ONE undo entry.
+        # inspector: fill via the unified colour picker — a whole picker session
+        # (many live 'input' events + one OK) coalesces to ONE undo entry.
         click_node(page, "r1")
         page.wait_for_timeout(60)
         hf = page.evaluate("editor.history.length")
-        open_ctx_panel(page)
-        page.evaluate("""() => { const el = document.querySelector('.context-panel input[type=color]');
-            ['#00aa00','#00cc00','#00ee00','#00ff00'].forEach(v => { el.value = v; el.dispatchEvent(new Event('input',{bubbles:true})); });
-            el.dispatchEvent(new Event('change',{bubbles:true})); }""")
-        page.wait_for_timeout(60)
+        pick_color(page, 0, hexes=["00aa00", "00cc00", "00ee00", "00ff00"])
         check("inspector fill applies", page.evaluate("editor.nodeById('r1').getAttribute('fill')") == "#00ff00")
-        check("colour drag coalesces to ONE undo entry", page.evaluate("editor.history.length") == hf + 1,
+        check("colour picker session coalesces to ONE undo entry", page.evaluate("editor.history.length") == hf + 1,
               f"delta={page.evaluate('editor.history.length')-hf}")
 
-        # inspector: stroke width (the v0 'stroke not applied' regression)
+        # inspector: stroke width (the v0 'stroke not applied' regression). Width is
+        # the first number input in the object panel.
         set_inspector_input(page, "number", 0, "5", "change")
         page.wait_for_timeout(60)
         sw = page.evaluate("editor.nodeById('r1').getAttribute('stroke-width')")
         sk = page.evaluate("editor.nodeById('r1').getAttribute('stroke')")
         check("inspector stroke applies", sw and float(sw) == 5 and bool(sk), f"width={sw} stroke={sk}")
 
-        # inspector: opacity
-        set_inspector_input(page, "number", 1, "0.5", "change")
+        # inspector: object opacity via the slider
+        set_opacity(page, 0.5)
         page.wait_for_timeout(60)
         check("inspector opacity applies", page.evaluate("editor.nodeById('r1').getAttribute('opacity')") == "0.5")
+
+        # inspector: stroke cap (segmented control) + dashes (r1 has a stroke now)
+        open_ctx_panel(page)
+        page.evaluate("""() => { const seg = document.querySelectorAll('.context-panel .insp-seg')[0];
+            [...seg.querySelectorAll('.insp-seg-btn')].find(b => b.title === 'Round').click(); }""")
+        page.wait_for_timeout(40)
+        check("stroke cap via segmented control", page.evaluate("editor.nodeById('r1').getAttribute('stroke-linecap')") == "round")
+        open_ctx_panel(page)
+        page.evaluate("""() => { const el = document.querySelector('.context-panel .insp-dash input');
+            el.value = '6 4'; el.dispatchEvent(new Event('change', { bubbles: true })); }""")
+        page.wait_for_timeout(40)
+        check("stroke dashes apply", page.evaluate("editor.nodeById('r1').getAttribute('stroke-dasharray')") == "6 4")
+
+        # D shortcut → default white fill / black stroke on the selection
+        page.evaluate("() => { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); }")
+        page.keyboard.press("d"); page.wait_for_timeout(40)
+        dstate = page.evaluate("""() => { const n = editor.nodeById('r1');
+            return { fill: n.getAttribute('fill'), stroke: n.getAttribute('stroke') }; }""")
+        check("D sets default fill/stroke", dstate["fill"] == "#ffffff" and dstate["stroke"] == "#000000", str(dstate))
 
         # delete
         page.keyboard.press("Escape")   # close the style panel before clicking the canvas
@@ -302,9 +341,9 @@ def main():
         # fill 'none' + stroke width 0 removes the attributes cleanly
         mount_ctl(page)
         click_node(page, "r3"); page.wait_for_timeout(50)
-        set_inspector_input(page, "checkbox", 0, True, "change")      # No fill
+        pick_color(page, 0, none=True)      # fill → None via the picker
         page.wait_for_timeout(50)
-        check("fill none via checkbox", page.evaluate("editor.nodeById('r3').getAttribute('fill')") == "none")
+        check("fill none via picker", page.evaluate("editor.nodeById('r3').getAttribute('fill')") == "none")
         set_inspector_input(page, "number", 0, "4", "change"); page.wait_for_timeout(40)
         set_inspector_input(page, "number", 0, "0", "change"); page.wait_for_timeout(40)
         check("stroke width 0 removes stroke", page.evaluate("!editor.nodeById('r3').getAttribute('stroke')"))
@@ -312,7 +351,7 @@ def main():
         # undo consistency: a batch of mixed ops fully undoes back to the baseline document
         mount_ctl(page)
         base = page.evaluate(SUMMARY)
-        click_node(page, "r1"); set_inspector_input(page, "color", 0, "#0000ff", "input"); page.wait_for_timeout(40)
+        click_node(page, "r1"); pick_color(page, 0, hexes=["0000ff"]); page.wait_for_timeout(40)
         page.keyboard.press("Escape")   # close the style panel before clicking the canvas
         click_node(page, "r2")
         rr = node_rect(page, "r2"); page.mouse.move(rr["cx"], rr["cy"]); page.mouse.down(); page.mouse.move(rr["cx"]+33, rr["cy"]+22, steps=6); page.mouse.up()

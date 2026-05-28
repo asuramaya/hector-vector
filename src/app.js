@@ -848,6 +848,134 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !modalRootEl.hidden) closeModal();
 });
 
+// ---------- unified colour picker (Illustrator-style) ----------
+// One modal for fill, stroke, artboard background and the toolstrip swatches.
+// SV field + hue slider + alpha slider, with hex / RGB / HSB / A inputs and a
+// new-vs-previous preview. Live-applies through onChange; OK commits, Cancel
+// (or backdrop / Esc) reverts to the colour it opened with.
+//   opts: { color, alpha=1, allowNone=false, title, onChange(hex|null, alpha), onCommit(hex|null, alpha) }
+let _activeColorPicker = null;
+function openColorPicker(opts) {
+  if (_activeColorPicker) _activeColorPicker.cancel();
+  const startHex = hv.toHexColor(opts.color) || (opts.allowNone && (!opts.color || opts.color === "none") ? null : "#000000");
+  const startAlpha = opts.alpha == null ? 1 : Math.max(0, Math.min(1, opts.alpha));
+  // working state in HSV (+ a) so dragging the field doesn't drift the hue at S/V=0
+  const seed = hv.hexToRgb(startHex || "#000000") || { r: 0, g: 0, b: 0 };
+  const st = Object.assign({ a: startAlpha, none: startHex === null }, hv.rgbToHsv(seed.r, seed.g, seed.b));
+
+  const back = document.createElement("div"); back.className = "cp-backdrop";
+  const win = document.createElement("div"); win.className = "cp-window";
+  back.appendChild(win);
+  win.innerHTML = `
+    <div class="cp-head">${opts.title || "Colour"}</div>
+    <div class="cp-body">
+      <div class="cp-field" tabindex="-1"><div class="cp-field-sat"></div><div class="cp-field-val"></div><div class="cp-field-thumb"></div></div>
+      <div class="cp-hue"><div class="cp-hue-thumb"></div></div>
+      <div class="cp-preview"><div class="cp-prev-new"></div><div class="cp-prev-old"></div></div>
+    </div>
+    <div class="cp-alpha"><div class="cp-alpha-track"></div><div class="cp-alpha-thumb"></div></div>
+    <div class="cp-fields">
+      <label class="cp-inp cp-hex">#<input data-k="hex" maxlength="7" /></label>
+      <label class="cp-inp">R<input data-k="r" type="number" min="0" max="255" /></label>
+      <label class="cp-inp">G<input data-k="g" type="number" min="0" max="255" /></label>
+      <label class="cp-inp">B<input data-k="b" type="number" min="0" max="255" /></label>
+      <label class="cp-inp">H<input data-k="h" type="number" min="0" max="360" /></label>
+      <label class="cp-inp">S<input data-k="s" type="number" min="0" max="100" /></label>
+      <label class="cp-inp">Bv<input data-k="v" type="number" min="0" max="100" /></label>
+      <label class="cp-inp">A%<input data-k="a" type="number" min="0" max="100" /></label>
+    </div>
+    <div class="cp-swatches"></div>
+    <div class="cp-actions">
+      ${opts.allowNone ? `<button type="button" class="ghost-button cp-none">None</button>` : ""}
+      <span class="cp-spacer"></span>
+      <button type="button" class="ghost-button cp-cancel">Cancel</button>
+      <button type="button" class="ghost-button cp-ok">OK</button>
+    </div>`;
+  document.body.appendChild(back);
+
+  const $ = (s) => win.querySelector(s);
+  const field = $(".cp-field"), fieldSat = $(".cp-field-sat"), fieldThumb = $(".cp-field-thumb");
+  const hue = $(".cp-hue"), hueThumb = $(".cp-hue-thumb");
+  const alphaEl = $(".cp-alpha"), alphaTrack = $(".cp-alpha-track"), alphaThumb = $(".cp-alpha-thumb");
+  const prevNew = $(".cp-prev-new"), prevOld = $(".cp-prev-old");
+  const inputs = {}; win.querySelectorAll(".cp-fields input").forEach((i) => (inputs[i.dataset.k] = i));
+
+  const curHex = () => { const c = hv.hsvToRgb(st.h, st.s, st.v); return hv.rgbToHex(c.r, c.g, c.b); };
+  const checker = "repeating-conic-gradient(#bbb 0% 25%, #fff 0% 50%) 50% / 12px 12px";
+  prevOld.style.background = startHex ? startHex : checker;
+
+  function paint() {
+    const hex = curHex(); const rgb = hv.hexToRgb(hex);
+    const hueHex = (() => { const c = hv.hsvToRgb(st.h, 100, 100); return hv.rgbToHex(c.r, c.g, c.b); })();
+    fieldSat.parentElement.style.background = hueHex;
+    fieldThumb.style.left = st.s + "%"; fieldThumb.style.top = (100 - st.v) + "%";
+    fieldThumb.style.background = hex;
+    hueThumb.style.top = (st.h / 360 * 100) + "%";
+    alphaTrack.style.background = `linear-gradient(to right, transparent, ${hex}), ${checker}`;
+    alphaThumb.style.left = (st.a * 100) + "%";
+    prevNew.style.background = st.none ? checker : hex;
+    prevNew.style.opacity = st.none ? 1 : st.a;
+    inputs.hex.value = hex.slice(1); inputs.r.value = rgb.r; inputs.g.value = rgb.g; inputs.b.value = rgb.b;
+    inputs.h.value = Math.round(st.h); inputs.s.value = Math.round(st.s); inputs.v.value = Math.round(st.v);
+    inputs.a.value = Math.round(st.a * 100);
+    win.classList.toggle("cp-is-none", st.none);
+  }
+  function emit() { if (opts.onChange) opts.onChange(st.none ? null : curHex(), st.a); }
+  function changed() { st.none = false; paint(); emit(); }
+
+  // --- drag helpers ---
+  function bindDrag(el, onMove) {
+    el.addEventListener("pointerdown", (e) => {
+      e.preventDefault(); el.setPointerCapture(e.pointerId);
+      const r = el.getBoundingClientRect();
+      const go = (ev) => onMove(ev.clientX - r.left, ev.clientY - r.top, r.width, r.height);
+      go(e);
+      const mv = (ev) => go(ev);
+      const up = () => { el.removeEventListener("pointermove", mv); el.removeEventListener("pointerup", up); };
+      el.addEventListener("pointermove", mv); el.addEventListener("pointerup", up);
+    });
+  }
+  const clamp01 = (n) => Math.max(0, Math.min(1, n));
+  bindDrag(field, (x, y, w, h) => { st.s = clamp01(x / w) * 100; st.v = (1 - clamp01(y / h)) * 100; changed(); });
+  bindDrag(hue, (x, y, w, h) => { st.h = clamp01(y / h) * 360; changed(); });
+  bindDrag(alphaEl, (x, y, w) => { st.a = clamp01(x / w); paint(); emit(); });
+
+  // --- numeric / hex inputs ---
+  const setFromRgb = (r, g, b) => { Object.assign(st, hv.rgbToHsv(r, g, b)); };
+  inputs.hex.addEventListener("input", () => { const rgb = hv.hexToRgb(inputs.hex.value); if (rgb) { setFromRgb(rgb.r, rgb.g, rgb.b); changed(); } });
+  ["r", "g", "b"].forEach((k) => inputs[k].addEventListener("input", () => {
+    const r = +inputs.r.value || 0, g = +inputs.g.value || 0, b = +inputs.b.value || 0; setFromRgb(r, g, b); changed();
+  }));
+  inputs.h.addEventListener("input", () => { st.h = Math.max(0, Math.min(360, +inputs.h.value || 0)); changed(); });
+  inputs.s.addEventListener("input", () => { st.s = Math.max(0, Math.min(100, +inputs.s.value || 0)); changed(); });
+  inputs.v.addEventListener("input", () => { st.v = Math.max(0, Math.min(100, +inputs.v.value || 0)); changed(); });
+  inputs.a.addEventListener("input", () => { st.a = clamp01((+inputs.a.value || 0) / 100); paint(); emit(); });
+
+  // --- quick swatches ---
+  const sw = $(".cp-swatches");
+  ["#000000", "#ffffff", "#808080", "#e23b3b", "#f6a623", "#f8e71c", "#38b24a", "#2f7fe0", "#7d4fd0", "#e0529c"]
+    .forEach((c) => { const b = document.createElement("button"); b.type = "button"; b.className = "cp-sw"; b.style.background = c;
+      b.title = c; b.addEventListener("click", () => { const rgb = hv.hexToRgb(c); setFromRgb(rgb.r, rgb.g, rgb.b); changed(); }); sw.appendChild(b); });
+
+  // --- actions ---
+  const close = () => { back.remove(); document.removeEventListener("keydown", onKey, true); _activeColorPicker = null; };
+  const ok = () => { if (opts.onCommit) opts.onCommit(st.none ? null : curHex(), st.a); close(); };
+  const cancel = () => { if (opts.onChange) opts.onChange(startHex, startAlpha); if (opts.onCancel) opts.onCancel(); close(); };
+  $(".cp-ok").addEventListener("click", ok);
+  $(".cp-cancel").addEventListener("click", cancel);
+  if (opts.allowNone) $(".cp-none").addEventListener("click", () => { st.none = true; paint(); emit(); });
+  back.addEventListener("pointerdown", (e) => { if (e.target === back) cancel(); });
+  const onKey = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel(); }
+    else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); ok(); }
+  };
+  document.addEventListener("keydown", onKey, true);
+  _activeColorPicker = { cancel };
+
+  paint();
+  setTimeout(() => inputs.hex.focus(), 0);
+}
+
 function renderGalleryGrid(items, onPick) {
   if (!items.length) {
     modalBodyEl.innerHTML = `<div class="gallery-empty">Nothing to show.</div>`;
@@ -1161,14 +1289,33 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
   const fillSw = document.querySelector("#swatch-fill");
   const strokeSw = document.querySelector("#swatch-stroke");
   const swapBtn = document.querySelector("#swatch-swap");
-  const colorInput = document.querySelector("#swatch-color-input");
   const firstSel = () => (editor.stage ? editor.selectedNodes()[0] : null);
   const cur = (which) => { const n = firstSel(); return n ? n.getAttribute(which) : editor.style[which]; };
+  const curAlpha = (which) => { const n = firstSel(); const a = n ? n.getAttribute(which === "fill" ? "fill-opacity" : "stroke-opacity") : null; return a == null ? 1 : parseFloat(a); };
   const strokeW = () => { const n = firstSel(); const w = n ? parseFloat(n.getAttribute("stroke-width")) : editor.style.strokeWidth; return w > 0 ? w : 2; };
   const setSw = (el, color) => { const none = !color || color === "none"; if (el) { el.classList.toggle("none", none); el.style.background = none ? "#fff" : color; } };
-  function refreshSwatches() { setSw(fillSw, cur("fill")); setSw(strokeSw, cur("stroke")); }
-  let target = "fill";
-  const openPicker = (which) => { target = which; colorInput.value = hv.toHexColor(cur(which)) || (which === "fill" ? "#808080" : "#000000"); colorInput.click(); };
+  let active = "fill";   // which swatch the picker / shortcuts target (Illustrator's X focus)
+  function refreshSwatches() {
+    setSw(fillSw, cur("fill")); setSw(strokeSw, cur("stroke"));
+    if (fillSw) fillSw.classList.toggle("active", active === "fill");
+    if (strokeSw) strokeSw.classList.toggle("active", active === "stroke");
+  }
+  const applyPaint = (which, hex, alpha) => {
+    if (which === "fill") { editor.applyFill(hex); editor.applyFillOpacity(alpha); }
+    else { editor.applyStroke(hex || "none", hex ? strokeW() : 0); editor.applyStrokeOpacity(alpha); }
+    refreshSwatches();
+  };
+  const pickFor = (which) => {
+    active = which; refreshSwatches();
+    editor.beginCoalesce();
+    openColorPicker({
+      title: which === "fill" ? "Fill colour" : "Stroke colour",
+      color: cur(which), alpha: curAlpha(which), allowNone: true,
+      onChange: (hex, a) => applyPaint(which, hex, a),
+      onCommit: () => editor.commitCoalesce(which === "fill" ? "Fill" : "Stroke"),
+      onCancel: () => editor.cancelCoalesce(),
+    });
+  };
   const doSwap = () => {
     const f = cur("fill"), s = cur("stroke");
     editor.push("Swap fill/stroke");
@@ -1177,21 +1324,29 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     editor.applyStroke(ns, ns === "none" ? 0 : strokeW());
     refreshSwatches();
   };
-  if (fillSw) fillSw.addEventListener("click", () => openPicker("fill"));
-  if (strokeSw) strokeSw.addEventListener("click", () => openPicker("stroke"));
+  const setDefault = () => {   // Illustrator D: white fill, black 1px stroke
+    editor.push("Default fill/stroke");
+    editor.applyFill("#ffffff"); editor.applyFillOpacity(1);
+    editor.applyStroke("#000000", 1); editor.applyStrokeOpacity(1);
+    refreshSwatches();
+  };
+  const setNone = () => {   // Illustrator /: clear the active swatch
+    editor.push("None");
+    applyPaint(active, null, curAlpha(active));
+  };
+  if (fillSw) fillSw.addEventListener("click", () => pickFor("fill"));
+  if (strokeSw) strokeSw.addEventListener("click", () => pickFor("stroke"));
   if (swapBtn) swapBtn.addEventListener("click", doSwap);
-  if (colorInput) {
-    colorInput.addEventListener("input", () => { editor.beginCoalesce(); if (target === "fill") editor.applyFill(colorInput.value); else editor.applyStroke(colorInput.value, strokeW()); refreshSwatches(); });
-    colorInput.addEventListener("change", () => { editor.commitCoalesce(target === "fill" ? "Fill" : "Stroke"); refreshSwatches(); });
-  }
-  if (swapBtn) document.addEventListener("keydown", (e) => {
-    if (e.shiftKey && !e.ctrlKey && !e.metaKey && (e.key === "X" || e.key === "x")) {
-      const t = (e.target?.tagName || "").toLowerCase();
-      if (t === "input" || t === "textarea" || t === "select" || e.target?.isContentEditable || !modalRootEl.hidden) return;
-      e.preventDefault(); doSwap();
-    }
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = (e.target?.tagName || "").toLowerCase();
+    if (t === "input" || t === "textarea" || t === "select" || e.target?.isContentEditable || !modalRootEl.hidden || _activeColorPicker) return;
+    if (e.key === "X" || e.key === "x") { e.preventDefault(); if (e.shiftKey) doSwap(); else { active = active === "fill" ? "stroke" : "fill"; refreshSwatches(); } }
+    else if (e.key === "d" || e.key === "D") { e.preventDefault(); setDefault(); }
+    else if (e.key === "/") { e.preventDefault(); setNone(); }
   });
   editor.onInspect = refreshSwatches;   // editor pings this on every selection/structure change
+  editor.pickColor = openColorPicker;   // the inspector reuses the same modal
   refreshSwatches();
 }
 {
