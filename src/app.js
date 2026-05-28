@@ -1369,6 +1369,10 @@ document.addEventListener("pointerdown", (e) => { if (ctxMenuEl && !e.target.clo
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideContextMenu(); });
 window.addEventListener("blur", hideContextMenu);
 window.addEventListener("pagehide", () => editor.dispose());   // free document state when the app closes
+// Pen tool: hold Ctrl/Cmd to temporarily act as Direct-Select (move anchors/handles).
+document.addEventListener("keydown", (e) => { if ((e.key === "Control" || e.key === "Meta") && editor.tool === "pen") editor.enterPenTempSelect(); });
+document.addEventListener("keyup", (e) => { if (e.key === "Control" || e.key === "Meta") editor.exitPenTempSelect(); });
+window.addEventListener("blur", () => editor.exitPenTempSelect());
 
 let exportState = { mode: "scale", scale: 16, longest: 1024, width: 0, height: 0, background: "transparent" };
 
@@ -2355,6 +2359,7 @@ function openShortcutsModal() {
     ["Shift", "Constrain to 45°"],
     ["Click path / anchor", "Add (+) / remove (−) a point"],
     ["Click an endpoint", "Continue an open path"],
+    [`${mod} (hold)`, "Temporarily edit points (Direct-Select)"],
     ["Enter", "Finish path"],
     ["Esc", "Cancel path"],
     ["§", "Node tool"],
@@ -2369,7 +2374,7 @@ function openShortcutsModal() {
     ["Right-click a point", "Smooth / sharpen / join / delete"],
     ["Delete / Backspace", "Remove selected anchors"],
     ["§", "View & navigation"],
-    ["Space (hold)", "Pan the canvas (Hand tool)"],
+    ["Space (hold)", "Pan; or reposition a shape/point while creating"],
     ["+ / −", "Zoom in / out"],
     ["0", "Actual size (1:1)"],
     ["f", "Fit canvas to window"],

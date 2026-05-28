@@ -492,6 +492,7 @@ button:disabled {
 .inline-svg [data-hv-locked="1"] { cursor: default; }
 /* Pen close-path affordance (hovering the first anchor). */
 .stage-wrap.pen-close .viewport-shell, .stage-wrap.pen-close .inline-svg { cursor: pointer; }
+.stage-wrap.pen-tempsel .viewport-shell, .stage-wrap.pen-tempsel .inline-svg { cursor: default; }
 /* Pen auto add/delete affordances over an existing path */
 .stage-wrap.pen-add .viewport-shell, .stage-wrap.pen-add .inline-svg { cursor: copy; }
 .stage-wrap.pen-del .viewport-shell, .stage-wrap.pen-del .inline-svg { cursor: pointer; }

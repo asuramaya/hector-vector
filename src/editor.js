@@ -38,6 +38,7 @@ const editor = {
   _xform: null,         // transform-tool handle state during a scale drag
   _lastLayerId: null,   // anchor row for Shift-range select in the layers panel
   _nodeSel: new Set(),  // node tool: selected path-anchor keys ("pathId#k")
+  _penTempSelect: false,// pen tool: Ctrl/Cmd held → act as Direct-Select (handles mounted)
   clipboard: [],        // in-app clipboard: serialized node markup
 
   get dirty() { return this.history.length > 0; },
@@ -70,6 +71,7 @@ const editor = {
     if (this._pen) this._finishPen(false);
     if (this._penHoverBound) { window.removeEventListener("pointermove", this._penHoverBound); this._penHoverBound = null; }
     if (this._penIdleBound) { window.removeEventListener("pointermove", this._penIdleBound); this._penIdleBound = null; this._penHit = null; }
+    this._penTempSelect = false;
     this.cancelCoalesce();
     const ov = this._overlayEl(); if (ov) ov.innerHTML = "";
     this.selection = new Set();
@@ -322,9 +324,13 @@ const editor = {
     const node = makeShapeNode(tool, start, this.style);
     this.stage.insertBefore(node, ov);
     let moved = false;
+    const a = { x: start.x, y: start.y };          // shape anchor (mutable so Space can reposition)
+    let lastP = { x: start.x, y: start.y };
     const move = (ev) => {
       const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
-      sizeShape(tool, node, start, p, ev.shiftKey);
+      if (this._spacePan) { a.x += p.x - lastP.x; a.y += p.y - lastP.y; }   // Space = move the whole shape
+      lastP = { x: p.x, y: p.y };
+      sizeShape(tool, node, a, p, ev.shiftKey);
       moved = true;
     };
     const up = () => {
@@ -346,6 +352,7 @@ const editor = {
   // finishes an open path. The whole construction is one undo step.
   _penDown(e) {
     if (e.button !== 0) return;
+    if (this._penTempSelect) return;   // Ctrl/Cmd held → Direct-Select mode owns the canvas (handle drags only)
     e.stopPropagation(); e.preventDefault();
     // Over an existing path with nothing in progress → auto add/delete an anchor
     // (Illustrator's pen behaviour) instead of starting a new path.
@@ -380,11 +387,20 @@ const editor = {
     this._pen.pts.push(anchor);
     this._pen.dragging = true;
     this._redrawPen(); this._renderPenMarks();
+    let lastP = { x: pt.x, y: pt.y };
     const move = (ev) => {
-      let p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
-      if (ev.shiftKey) p = snap45(anchor.x, anchor.y, p.x, p.y);    // Shift = 45° handle
-      anchor.out = { x: p.x, y: p.y };                              // drag → smooth point
-      anchor.in = ev.altKey ? null : { x: 2 * anchor.x - p.x, y: 2 * anchor.y - p.y };   // Alt = break (cusp)
+      const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
+      if (this._spacePan) {                                         // Space = reposition the anchor (handles follow)
+        const ddx = p.x - lastP.x, ddy = p.y - lastP.y;
+        anchor.x += ddx; anchor.y += ddy;
+        if (anchor.out) { anchor.out.x += ddx; anchor.out.y += ddy; }
+        if (anchor.in) { anchor.in.x += ddx; anchor.in.y += ddy; }
+      } else {
+        const q = ev.shiftKey ? snap45(anchor.x, anchor.y, p.x, p.y) : p;   // Shift = 45° handle
+        anchor.out = { x: q.x, y: q.y };                            // drag → smooth point
+        anchor.in = ev.altKey ? null : { x: 2 * anchor.x - q.x, y: 2 * anchor.y - q.y };   // Alt = break (cusp)
+      }
+      lastP = { x: p.x, y: p.y };
       this._redrawPen(); this._renderPenMarks();
     };
     const up = () => {
@@ -406,8 +422,23 @@ const editor = {
   _setPenCloseCursor(on) { const w = document.querySelector(".stage-wrap"); if (w) w.classList.toggle("pen-close", !!on); },
   // Idle pen hover (no path in progress): detect a nearby editable path point and
   // arm the +/− add/delete affordance for the next click.
+  // Ctrl/Cmd held in the pen tool → temporarily act as Direct-Select: mount the node
+  // handles so anchors/handles are draggable, and suppress pen-down. Released on keyup.
+  enterPenTempSelect() {
+    if (this.tool !== "pen" || this._pen || this._penTempSelect) return;
+    this._penTempSelect = true;
+    this._penHit = null; this._renderPenHint(null); this._setPenCursor(null);
+    const w = document.querySelector(".stage-wrap"); if (w) w.classList.add("pen-tempsel");
+    this.mountNodeHandles();
+  },
+  exitPenTempSelect() {
+    if (!this._penTempSelect) return;
+    this._penTempSelect = false;
+    const w = document.querySelector(".stage-wrap"); if (w) w.classList.remove("pen-tempsel");
+    this.unmountNodeHandles();
+  },
   _penIdleHover(ev) {
-    if (this.tool !== "pen" || this._pen || !this.stage) return;
+    if (this.tool !== "pen" || this._pen || this._penTempSelect || !this.stage) return;
     const m = this.stage.getScreenCTM(); if (!m) { this._penHit = null; return; }
     const k = Math.hypot(m.a, m.b) || 1;
     const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
@@ -598,7 +629,7 @@ const editor = {
       if (!this._penIdleBound) { this._penIdleBound = (ev) => this._penIdleHover(ev); window.addEventListener("pointermove", this._penIdleBound); }
     } else if (this._penIdleBound) {
       window.removeEventListener("pointermove", this._penIdleBound); this._penIdleBound = null;
-      this._penHit = null; this._renderPenHint(null); this._setPenCursor(null);
+      this._penHit = null; this._renderPenHint(null); this._setPenCursor(null); this.exitPenTempSelect();
     }
     if (t === "node") this.mountNodeHandles(); else this.unmountNodeHandles();
     if (this.stage) this._renderSelection();   // show/hide the transform bbox handles
@@ -987,17 +1018,17 @@ const editor = {
     const ov = this._overlayEl(); if (ov) ov.querySelectorAll(".hv-xform").forEach((g) => g.remove());
     this._xform = null;
   },
-  _scaleFactors(spec, p, shift) {
-    let sx = spec.sx ? (p.x - spec.ax) / ((spec.x - spec.ax) || 1e-6) : 1;
-    let sy = spec.sy ? (p.y - spec.ay) / ((spec.y - spec.ay) || 1e-6) : 1;
+  _scaleFactors(spec, p, shift, ax, ay) {
+    let sx = spec.sx ? (p.x - ax) / ((spec.x - ax) || 1e-6) : 1;
+    let sy = spec.sy ? (p.y - ay) / ((spec.y - ay) || 1e-6) : 1;
     const MIN = 0.02;
     if (sx < MIN) sx = MIN; if (sy < MIN) sy = MIN;
     if (shift && spec.sx && spec.sy) { const s = Math.max(sx, sy); sx = s; sy = s; }
     return { sx, sy };
   },
-  _updateXformVisual(spec, sx, sy) {
+  _updateXformVisual(spec, sx, sy, ax, ay) {
     const xf = this._xform; if (!xf) return;
-    const sp = (x, y) => ({ x: spec.ax + (x - spec.ax) * sx, y: spec.ay + (y - spec.ay) * sy });
+    const sp = (x, y) => ({ x: ax + (x - ax) * sx, y: ay + (y - ay) * sy });
     const a = sp(xf.bb.x0, xf.bb.y0), b = sp(xf.bb.x1, xf.bb.y1);
     xf.box.setAttribute("x", nfmt(Math.min(a.x, b.x))); xf.box.setAttribute("y", nfmt(Math.min(a.y, b.y)));
     xf.box.setAttribute("width", nfmt(Math.abs(b.x - a.x))); xf.box.setAttribute("height", nfmt(Math.abs(b.y - a.y)));
@@ -1010,26 +1041,28 @@ const editor = {
       try { c.setPointerCapture(e.pointerId); } catch {}
       c.classList.add("dragging");
       const bases = nodes.map((n) => currentTranslate(n));
-      let pushed = false, last = { sx: 1, sy: 1 };
-      const apply = (sx, sy) => nodes.forEach((n, i) => {
+      const xf = this._xform, cx = (xf.bb.x0 + xf.bb.x1) / 2, cy = (xf.bb.y0 + xf.bb.y1) / 2;   // bbox centre (Alt anchor)
+      let pushed = false, last = { sx: 1, sy: 1, ax: spec.ax, ay: spec.ay };
+      const apply = (sx, sy, ax, ay) => nodes.forEach((n, i) => {
         const b = bases[i];
-        n.setAttribute("transform", `matrix(${nfmt(sx)} 0 0 ${nfmt(sy)} ${nfmt(sx * b.x + spec.ax * (1 - sx))} ${nfmt(sy * b.y + spec.ay * (1 - sy))})`);
+        n.setAttribute("transform", `matrix(${nfmt(sx)} 0 0 ${nfmt(sy)} ${nfmt(sx * b.x + ax * (1 - sx))} ${nfmt(sy * b.y + ay * (1 - sy))})`);
       });
       const move = (ev) => {
         const m = this.stage.getScreenCTM(); if (!m) return;
         const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
-        const f = this._scaleFactors(spec, p, ev.shiftKey); last = f;
+        const ax = ev.altKey ? cx : spec.ax, ay = ev.altKey ? cy : spec.ay;   // Alt → scale from centre
+        const f = this._scaleFactors(spec, p, ev.shiftKey, ax, ay); last = { ...f, ax, ay };
         if (!pushed && (Math.abs(f.sx - 1) > 1e-4 || Math.abs(f.sy - 1) > 1e-4)) { this.push(); pushed = true; }
-        apply(f.sx, f.sy);
-        this._updateXformVisual(spec, f.sx, f.sy);
+        apply(f.sx, f.sy, ax, ay);
+        this._updateXformVisual(spec, f.sx, f.sy, ax, ay);
       };
       const up = () => {
         try { c.releasePointerCapture(e.pointerId); } catch {}
         c.classList.remove("dragging");
         c.removeEventListener("pointermove", move); c.removeEventListener("pointerup", up);
         if (!pushed) { nodes.forEach((n, i) => setTranslate(n, bases[i].x, bases[i].y)); this._renderSelection(); return; }
-        const { sx, sy } = last;
-        const M = { a: sx, b: 0, c: 0, d: sy, e: spec.ax * (1 - sx), f: spec.ay * (1 - sy) };
+        const { sx, sy, ax, ay } = last;
+        const M = { a: sx, b: 0, c: 0, d: sy, e: ax * (1 - sx), f: ay * (1 - sy) };
         nodes.forEach((n, i) => { setTranslate(n, bases[i].x, bases[i].y); bakeMatrixInto(n, M, 0, 0); });
         this._renderSelection(); this._renderInspector(); this._renderLayers();
         setStatus("Scaled selection.", 1200);
