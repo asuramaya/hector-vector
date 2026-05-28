@@ -849,7 +849,34 @@ def main():
         modal_open = page.evaluate("!document.querySelector('#modal-root').hidden")
         cells = page.evaluate("document.querySelectorAll('#modal-body .gallery-cell').length")
         check("Open modal lists vectors", modal_open and cells >= 0, f"open={modal_open} cells={cells}")
+        # SVG thumbs render as <img> (reliable/lazy), never as throttled <object>
+        thumbs = page.evaluate("""() => ({
+            objects: document.querySelectorAll('#modal-body .gallery-thumb object').length,
+            imgs: document.querySelectorAll('#modal-body .gallery-thumb img').length,
+            cells: document.querySelectorAll('#modal-body .gallery-cell').length,
+        })""")
+        check("gallery thumbs use <img>, not <object>",
+              thumbs["objects"] == 0 and thumbs["imgs"] == thumbs["cells"], str(thumbs))
         page.evaluate("closeModal()")
+
+        # ---- Save-As: a new/opened canvas (no selectedOutput) can be saved ----
+        page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+              + '<rect data-hv-id="r1" x="10" y="10" width="40" height="40" fill="#36c"/></svg>','saveas-probe.svg'); }""")
+        check("new canvas has no save target yet", page.evaluate("!window.app.selectedOutput"))
+        file_menu_click(page, "Save as")
+        page.wait_for_function("!document.querySelector('#modal-root').hidden && !!document.querySelector('#modal-body .form input')", timeout=4000)
+        page.fill('#modal-body .form input', 'e2e-saveas-probe')
+        page.click('#modal-body .ghost-button:has-text("Save")')
+        page.wait_for_function("/Saved|Save failed/.test(document.querySelector('#status-text').textContent)", timeout=8000)
+        saveas = page.evaluate("""() => ({
+            status: document.querySelector('#status-text').textContent,
+            folder: window.app.selectedOutput && window.app.selectedOutput.folder,
+            name: window.app.selectedOutput && window.app.selectedOutput.name,
+        })""")
+        check("Save-As gives a new canvas a save target",
+              "Saved" in saveas["status"] and saveas["folder"] == "canvas"
+              and str(saveas["name"]).endswith(".svg"), str(saveas))
 
         # ---- App-window mode (standalone Chromium window) ----
         # Headless can't exercise WCO/AWC, but the ?app=1 gate must engage and make

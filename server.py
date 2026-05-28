@@ -1389,6 +1389,57 @@ def save_svg(payload: dict) -> dict:
     }
 
 
+def save_svg_as(payload: dict) -> dict:
+    """Save a new/opened canvas under a caller-chosen name into a dedicated
+    `canvas/` folder inside the outputs tree (created on demand). Unlike
+    `save_svg`, this needs no pre-existing source folder — it's the Save-As path
+    for documents made with New blank canvas or Open vector, which otherwise have
+    nowhere to write. Returns the folder+name so the client can wire up plain
+    Save (`/api/save-svg`) for subsequent writes."""
+    raw = (payload.get("name") or "").strip()
+    svg_text = payload.get("svg")
+    if not raw:
+        raise ValueError("Missing 'name'.")
+    if not isinstance(svg_text, str) or "<svg" not in svg_text.lower():
+        raise ValueError("Missing or invalid 'svg' markup.")
+    if len(svg_text) > 16_000_000:
+        raise ValueError("SVG is too large to save (>16 MB).")
+    # Reduce the caller's name to a single safe stem; force a .svg extension.
+    stem = Path(raw).name
+    if stem.lower().endswith(".svg"):
+        stem = stem[:-4]
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-.") or "untitled"
+    folder = "canvas"
+    target_dir = (OUTPUTS_DIR / folder).resolve()
+    try:
+        target_dir.relative_to(OUTPUTS_DIR.resolve())
+    except ValueError:
+        raise ValueError("Folder is outside the outputs directory.")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    out = (target_dir / f"{stem}.svg").resolve()
+    try:
+        out.relative_to(OUTPUTS_DIR.resolve())
+    except ValueError:
+        raise ValueError("Resolved path is outside the outputs directory.")
+    # Re-saving an existing canvas doc overwrites in place; a fresh Save-As that
+    # would clobber a different file disambiguates with a numeric suffix.
+    if out.exists() and not payload.get("overwrite"):
+        n = 2
+        while (target_dir / f"{stem}-{n}.svg").exists():
+            n += 1
+        stem = f"{stem}-{n}"
+        out = (target_dir / f"{stem}.svg").resolve()
+    out.write_text(svg_text, encoding="utf-8")
+    invalidate_outputs_cache()
+    _register_output(out)
+    return {
+        "message": f"Saved {out.name}.",
+        "output": str(out),
+        "folder": folder,
+        "name": out.name,
+    }
+
+
 def derive_mask_from_alpha(cutout_path: Path, mask_path: Path, threshold: int = 128) -> None:
     rgba = Image.open(cutout_path).convert("RGBA")
     alpha = rgba.getchannel("A")
@@ -2025,6 +2076,8 @@ class Handler(SimpleHTTPRequestHandler):
                 result = render_output(payload)
             elif parsed.path == "/api/save-svg":
                 result = save_svg(payload)
+            elif parsed.path == "/api/save-svg-as":
+                result = save_svg_as(payload)
             elif parsed.path == "/api/reveal":
                 result = reveal_path(payload)
             elif parsed.path == "/api/source":

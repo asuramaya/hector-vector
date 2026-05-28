@@ -494,11 +494,13 @@ function renderQueueGroup(label, items, groupKey) {
 }
 
 async function renderPreviews() {
-  selectedOutput = preferredOutput(selectedName);
-
-  // editor.pinned = showing a blank/opened doc that isn't tied to the library;
-  // don't let a library-driven render clobber it.
+  // editor.pinned = showing a blank/opened/Save-As'd doc that isn't tied to the
+  // library; don't let a library-driven render clobber it. The selectedOutput
+  // recompute lives inside this guard too: a pinned doc keeps the save target it
+  // owns (null when unsaved, the canvas file after Save-As) instead of silently
+  // adopting whatever preferredOutput(selectedName) resolves to.
   if (!editor.pinned) {
+    selectedOutput = preferredOutput(selectedName);
     if (selectedOutput) {
       if (viewports.output.url !== selectedOutput.url) {
         try {
@@ -853,11 +855,11 @@ function renderGalleryGrid(items, onPick) {
     thumb.type = "button";
     thumb.className = "gallery-thumb-button";
     thumb.title = `Select ${item.name}`;
-    thumb.innerHTML = `<div class="gallery-thumb">${
-      item.kind === "svg"
-        ? `<object type="image/svg+xml" data="${item.url}"></object>`
-        : `<img src="${item.url}" alt="${item.name}" loading="lazy" />`
-    }</div>`;
+    // Render SVG thumbs as <img> (not <object>): browsers cap concurrent nested
+    // <object> document loads and ignore lazy-loading, so a gallery of many
+    // vectors leaves most cells blank. <img> paints reliably and lazily — the
+    // Process gallery already does this.
+    thumb.innerHTML = `<div class="gallery-thumb"><img src="${item.url}" alt="${item.name}" loading="lazy" decoding="async" /></div>`;
     thumb.addEventListener("click", () => onPick(item));
     cell.appendChild(thumb);
 
@@ -969,13 +971,16 @@ function newBlankDoc() {
   modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
 }
 
-async function loadSvgToStage(url, name) {
+async function loadSvgToStage(url, name, output = null) {
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
-    selectedOutput = null; manualOutputName = null;
-    mountStageFromText(text, name);
+    selectedName = null; manualOutputName = null;
+    mountStageFromText(text, name);   // pinned = true; the recompute guard then keeps selectedOutput as set below
+    // A re-opened canvas file keeps its save target so Save overwrites it in place;
+    // any other standalone vector opens untracked (Save → Save-As).
+    selectedOutput = output;
     setStatus(`Opened ${name}.`, 2000);
   } catch (e) { setStatus(`Open failed: ${e.message}`, 3000); }
 }
@@ -991,7 +996,12 @@ function openOpenModal() {
       closeModal();
       const wi = workItems.find((w) => stem(w.name) === stem(picked.name));
       if (wi) { editor.pinned = false; selectedName = wi.name; manualOutputName = picked.name; renderQueue(); refreshAll(); }
-      else { loadSvgToStage(picked.url, picked.name); }
+      else {
+        const out = picked.folder === "canvas"
+          ? { name: picked.name, folder: picked.folder, url: picked.url, kind: "svg", path: picked.path }
+          : null;
+        loadSvgToStage(picked.url, picked.name, out);
+      }
     });
   };
   modalSearchEl.oninput = apply;
@@ -1021,10 +1031,78 @@ function openPlaceModal() {
   apply();
 }
 
+// Save routing. Library docs (imported sources) save through editor.save(), which
+// writes a sibling `.edited.svg`. New blank / opened / canvas docs have no source
+// folder, so they go through Save-As → the `canvas/` outputs folder, after which
+// re-saving overwrites that file in place.
+async function saveDocument() {
+  if (!editor.stage) return;
+  if (selectedOutput && selectedOutput.folder === "canvas") return saveCanvasInPlace();
+  if (selectedOutput) return editor.save();
+  return saveAsDocument();
+}
+
+async function saveCanvasInPlace() {
+  const svg = editor.serialize(); if (!svg) return;
+  try {
+    const data = await api("/api/save-svg-as", "POST", { name: selectedOutput.name, svg, overwrite: true });
+    applySavedCanvas(data);
+    setStatus(data.message || "Saved.", 2500);
+  } catch (e) { setStatus(`Save failed: ${e.message}`, 4000); }
+}
+
+function defaultSaveName() {
+  const n = viewports.output.name || (selectedOutput && selectedOutput.name) || "untitled.svg";
+  return stem_(n).replace(/\.edited$/, "");
+}
+
+function saveAsDocument() {
+  if (!editor.stage) { setStatus("Open or create a canvas first, then save it.", 3000); return; }
+  openModal("Save as", true);
+  modalSearchEl.hidden = true;
+  const root = document.createElement("div"); root.className = "form";
+  root.appendChild(sectionTitle("Save vector"));
+  const inp = document.createElement("input");
+  inp.type = "text"; inp.value = defaultSaveName(); inp.placeholder = "filename";
+  root.appendChild(fieldRow("Name", inp, "Saved as .svg in the canvas folder."));
+  const doSave = async () => {
+    const name = inp.value.trim(); if (!name) { inp.focus(); return; }
+    closeModal();
+    const svg = editor.serialize(); if (!svg) return;
+    try {
+      const data = await api("/api/save-svg-as", "POST", { name, svg });
+      applySavedCanvas(data);
+      setStatus(data.message || "Saved.", 2500);
+    } catch (e) { setStatus(`Save failed: ${e.message}`, 4000); }
+  };
+  const actions = document.createElement("div"); actions.className = "form-actions";
+  actions.appendChild(ghostBtn("Save", doSave));
+  root.appendChild(actions);
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doSave(); } });
+  modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
+  setTimeout(() => { inp.focus(); inp.select(); }, 0);
+}
+
+// A freshly Save-As'd canvas becomes a tracked-but-pinned doc: it owns a concrete
+// selectedOutput (so Export + plain Save work) without being a library item, and
+// stays mounted from memory (no disk remount that would drop the editor state).
+function applySavedCanvas(data) {
+  editor.pinned = true;
+  selectedName = null; manualOutputName = null;
+  selectedOutput = {
+    name: data.name, folder: data.folder,
+    url: `/outputs/${encodeURIComponent(data.folder)}/${encodeURIComponent(data.name)}`,
+    kind: "svg", path: data.output,
+  };
+  viewports.output.name = data.name;
+  if (outputLabelEl) outputLabelEl.textContent = `Canvas — ${data.name}`;
+  refreshAll();
+}
+
 async function exportFlow() {
   if (!editor.stage) return;
-  if (editor.dirty && selectedOutput) await editor.save();
   if (!selectedOutput) { setStatus("Export needs a saved document — use Save first.", 3500); return; }
+  if (editor.dirty) await saveDocument();
   openExportModal();
 }
 
@@ -1046,7 +1124,8 @@ const MENU_ITEMS = {
       { type: "sep" },
       { label: "Open vector…", onClick: openOpenModal },
       { label: "Place into canvas…", onClick: openPlaceModal },
-      { label: "Save (.svg)", onClick: () => editor.save() },
+      { label: "Save (.svg)", onClick: saveDocument },
+      { label: "Save as…", onClick: saveAsDocument },
       { type: "sep" },
       { label: "Export PNG…", onClick: exportFlow },
       { label: "Copy SVG markup", onClick: copySvgSource },
@@ -1228,6 +1307,7 @@ document.addEventListener("keydown", (e) => {
   const tag = (e.target && e.target.tagName || "").toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select" || (e.target && e.target.isContentEditable)) return;
   const mod = e.metaKey || e.ctrlKey;
+  if (mod && (e.key === "s" || e.key === "S")) { e.preventDefault(); if (modalRootEl.hidden) { if (e.shiftKey) saveAsDocument(); else saveDocument(); } return; }
   if (mod && (e.key === "z" || e.key === "Z")) { e.preventDefault(); if (e.shiftKey) editor.redoAction(); else editor.undo(); return; }
   if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); editor.redoAction(); return; }
   if (mod && (e.key === "d" || e.key === "D")) { e.preventDefault(); editor.duplicate(); return; }
