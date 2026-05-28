@@ -40,6 +40,7 @@ const editor = {
   _nodeSel: new Set(),  // node tool: selected path-anchor keys ("pathId#k")
   _penTempSelect: false,// pen tool: Ctrl/Cmd held → act as Direct-Select (handles mounted)
   _curv: null,          // in-progress curvature path: { node, pts:[{x,y,corner}], closed }
+  smartGuides: true,    // snap moves to other objects' bounds + artboard, with guide lines
   clipboard: [],        // in-app clipboard: serialized node markup
 
   get dirty() { return this.history.length > 0; },
@@ -291,6 +292,8 @@ const editor = {
     let bases = nodes.map((n) => currentTranslate(n));
     const altDup = startEvent.altKey;        // Alt-drag → drag a duplicate, leave the original
     const snapper = makeAxisSnapper();
+    const ref0 = this._bboxUnion(nodes);     // selection bounds at start (for smart-guide refs)
+    const cand = this.smartGuides ? this._guideCandidates(nodes) : null;
     let pushed = false, duped = false;
     const move = (ev) => {
       if (!pushed && Math.hypot(ev.clientX - startEvent.clientX, ev.clientY - startEvent.clientY) < 3) return;
@@ -304,13 +307,23 @@ const editor = {
       }
       const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
       let dx = p.x - start.x, dy = p.y - start.y;
+      let gx = null, gy = null;
       if (ev.shiftKey) { const s = snapper.snap(dx, dy); dx = s.x; dy = s.y; }   // sticky 45° move
-      else snapper.reset();
+      else {
+        snapper.reset();
+        if (cand) {                          // smart-guide snap (skipped while Shift-constraining)
+          const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
+          const rx = [ref0.x0, (ref0.x0 + ref0.x1) / 2, ref0.x1], ry = [ref0.y0, (ref0.y0 + ref0.y1) / 2, ref0.y1];
+          const s = this._snapMove(rx, ry, dx, dy, cand, 6 / k); dx = s.dx; dy = s.dy; gx = s.gx; gy = s.gy;
+        }
+      }
       nodes.forEach((n, i) => setTranslate(n, bases[i].x + dx, bases[i].y + dy));
       this._renderSelection();
+      if (cand) { if (gx != null || gy != null) this._drawGuides(gx, gy); else this._clearGuides(); }
     };
     const up = () => {
       window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+      this._clearGuides();
       if (duped) { this._renderLayers(); setStatus(`Duplicated ${this.selection.size} object${this.selection.size > 1 ? "s" : ""}.`, 1500); }
     };
     window.addEventListener("pointermove", move);
@@ -874,6 +887,7 @@ const editor = {
       const group = alt ? [] : [...this._nodeSel].map((kk) => this._nodeEls.get(kk)).filter(Boolean);
       const starts = group.map((ent) => ({ ent, x: ent.nd.x, y: ent.nd.y }));
       const snapper = makeAxisSnapper();
+      const cand = (!alt && this.smartGuides) ? this._guideCandidates([nd.el]) : null;
       let pushed = false, moved = false, conv = null;
       const move = (ev) => {
         if (!moved && Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) < 3) return;   // ignore click jitter
@@ -890,15 +904,20 @@ const editor = {
           nd.el.setAttribute("d", penPathD(conv.anchors, conv.closed));
           return;
         }
-        let dx = p.x - sp.x, dy = p.y - sp.y;
+        let dx = p.x - sp.x, dy = p.y - sp.y, gx = null, gy = null;
         if (ev.shiftKey) { const s = snapper.snap(dx, dy); dx = s.x; dy = s.y; }   // sticky 45° move
-        else snapper.reset();
+        else {
+          snapper.reset();
+          if (cand) { const k = Math.hypot(m.a, m.b) || 1; const s = this._snapMove([nd.x], [nd.y], dx, dy, cand, 6 / k); dx = s.dx; dy = s.dy; gx = s.gx; gy = s.gy; }
+        }
         for (const st of starts) { st.ent.nd.moveTo(st.x + dx, st.y + dy); this._syncNodeEls(st.ent, st.x + dx, st.y + dy); }
+        if (cand) { if (gx != null || gy != null) this._drawGuides(gx, gy); else this._clearGuides(); }
       };
       const up = () => {
         try { c.releasePointerCapture(e.pointerId); } catch {}
         c.classList.remove("dragging");
         c.removeEventListener("pointermove", move); c.removeEventListener("pointerup", up);
+        this._clearGuides();
         if (alt && !moved) this._altClickAnchor(nd);                       // Alt-click (no drag) → smooth→corner
         else if (!alt && e.shiftKey && !moved && wasSel) this._nodeSel.delete(key);   // Shift-click (no drag) → deselect
         this.mountNodeHandles();
@@ -1559,6 +1578,44 @@ const editor = {
     return nodes.map((n) => this._nodeBBoxUser(n)).reduce((a, b) => ({ x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) }));
   },
   _pad(bb, f) { const p = Math.max(bb.x1 - bb.x0, bb.y1 - bb.y0) * f + 1; return { x0: bb.x0 - p, y0: bb.y0 - p, x1: bb.x1 + p, y1: bb.y1 + p }; },
+
+  // ---------- smart guides: snap moving points/objects to other bounds + artboard ----------
+  // Candidate x/y coords to snap to: artboard edges + centre, and the bbox
+  // edges/centre of every other object (capped for perf on large docs).
+  _guideCandidates(excludeEls) {
+    const vb = this.stage.viewBox.baseVal;
+    const xs = [vb.x, vb.x + vb.width / 2, vb.x + vb.width];
+    const ys = [vb.y, vb.y + vb.height / 2, vb.y + vb.height];
+    const ex = new Set(excludeEls || []);
+    const nodes = this._artworkNodes().filter((n) => !ex.has(n));
+    if (nodes.length <= 400) for (const n of nodes) {
+      let bb; try { bb = this._nodeBBoxUser(n); } catch { continue; }
+      xs.push(bb.x0, (bb.x0 + bb.x1) / 2, bb.x1); ys.push(bb.y0, (bb.y0 + bb.y1) / 2, bb.y1);
+    }
+    return { xs, ys };
+  },
+  // Nudge a move delta so a reference coord lands on the nearest candidate within
+  // tol (user units); returns the adjusted delta + the guide coords that were hit.
+  _snapMove(refXs0, refYs0, dx, dy, cand, tol) {
+    let gx = null, adjX = 0, bx = tol;
+    for (const r of refXs0) for (const c of cand.xs) { const g = c - (r + dx); if (Math.abs(g) < bx) { bx = Math.abs(g); adjX = g; gx = c; } }
+    let gy = null, adjY = 0, by = tol;
+    for (const r of refYs0) for (const c of cand.ys) { const g = c - (r + dy); if (Math.abs(g) < by) { by = Math.abs(g); adjY = g; gy = c; } }
+    return { dx: dx + adjX, dy: dy + adjY, gx, gy };
+  },
+  _drawGuides(gx, gy) {
+    const ov = this._overlayEl(); if (!ov) return;
+    ov.querySelectorAll(".hv-guide").forEach((g) => g.remove());
+    const vb = this.stage.viewBox.baseVal;
+    const mk = (x1, y1, x2, y2) => {
+      const l = document.createElementNS(SVG_NS, "line"); l.setAttribute("class", "hv-guide");
+      l.setAttribute("x1", nfmt(x1)); l.setAttribute("y1", nfmt(y1)); l.setAttribute("x2", nfmt(x2)); l.setAttribute("y2", nfmt(y2));
+      ov.appendChild(l);
+    };
+    if (gx != null) mk(gx, vb.y, gx, vb.y + vb.height);
+    if (gy != null) mk(vb.x, gy, vb.x + vb.width, gy);
+  },
+  _clearGuides() { const ov = this._overlayEl(); if (ov) ov.querySelectorAll(".hv-guide").forEach((g) => g.remove()); },
   _unionPath(nodes) {
     const bb = this._pad(this._bboxUnion(nodes), 0.02);
     const mask = this._rasterMask(nodes, bb, 1024);

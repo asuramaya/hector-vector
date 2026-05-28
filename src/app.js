@@ -1331,6 +1331,7 @@ function canvasMenuItems() {
     { label: "Paste", disabled: !editor.clipboard.length, onClick: () => editor.paste() },
     { label: "Select All", onClick: () => editor.selectAll() },
     { type: "sep" },
+    { label: `${editor.smartGuides ? "✓ " : ""}Smart guides`, onClick: () => { editor.smartGuides = !editor.smartGuides; setStatus(`Smart guides ${editor.smartGuides ? "on" : "off"}.`, 1500); } },
     { label: "Invert space", onClick: () => editor.invertSpace() },
     { label: "Clean up ghost layers", onClick: () => editor.cleanupLayers() },
     { label: "Merge same-colour layers", onClick: () => editor.consolidateByColor() },

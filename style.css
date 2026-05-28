@@ -545,6 +545,7 @@ button:disabled {
 .hv-xform-e,  .hv-xform-w  { cursor: ew-resize; }
 /* Drag-select marquee / lasso */
 .hv-marquee { fill: rgba(0, 122, 255, 0.12); stroke: var(--accent); stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.hv-guide { stroke: #ff2d92; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
 
 /* Dropdown menus in the panel heads */
 .menu {
