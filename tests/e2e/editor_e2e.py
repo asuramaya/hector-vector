@@ -417,7 +417,7 @@ def main():
 
         # tool buttons carry their shortcut letter (rendered as a corner badge via CSS)
         badges = page.evaluate("""() => { const tb = [...document.querySelectorAll('.tool-button[data-tool]')];
-            return { total: tb.length, keyed: tb.filter(b => (b.getAttribute('data-key') || '').length === 1).length,
+            return { total: tb.length, keyed: tb.filter(b => (b.getAttribute('data-key') || '').length >= 1).length,
                      pen: document.querySelector('.tool-button[data-tool=pen]').getAttribute('data-key') }; }""")
         check("tool buttons have shortcut badges", badges["total"] >= 9 and badges["keyed"] == badges["total"] and badges["pen"] == "P", str(badges))
         # viewport controls are standardized badged buttons too
@@ -438,20 +438,22 @@ def main():
             return Math.max(Math.abs(r.left-q.left), Math.abs(r.top-q.top), Math.abs(r.right-q.right), Math.abs(r.bottom-q.bottom)); }""")
         check("transform box aligns with a matrix-transformed shape", mbox is not None and mbox < 2, f"max offset={mbox}")
 
-        # rotation: dragging a corner rotation zone rotates the selection (matrix gains b)
+        # Ctrl+R rotate mode: resize handles hidden, corner rotators shown
+        page.evaluate("() => editor.enterTransform('rotate')"); page.wait_for_timeout(60)
+        rmode = page.evaluate("""() => ({ rot: document.querySelectorAll('.hv-xform-rot').length,
+            resize: document.querySelectorAll('.hv-xform-handle').length }) """)
+        check("Ctrl+R rotate mode shows rotators, hides resize handles", rmode["rot"] == 4 and rmode["resize"] == 0, str(rmode))
+        # rotation handles sit OUTSIDE the corners now — grab one directly and rotate
         rb = page.evaluate("""() => { const z = document.querySelector('.hv-xform-rot'); const bx = document.querySelector('.hv-xform-box').getBoundingClientRect();
             const r = z.getBoundingClientRect(); return { cx:(bx.left+bx.right)/2, cy:(bx.top+bx.bottom)/2, zx:r.left+r.width/2, zy:r.top+r.height/2 }; }""")
         import math as _m
-        # grab a point offset OUTWARD from the corner so it lands in the rotation zone,
-        # not on the resize handle that sits on top of the exact corner.
-        ux, uy = rb["zx"] - rb["cx"], rb["zy"] - rb["cy"]; ul = _m.hypot(ux, uy) or 1
-        gx, gy = rb["zx"] + ux / ul * 9, rb["zy"] + uy / ul * 9
-        rad = _m.hypot(gx - rb["cx"], gy - rb["cy"]); a0 = _m.atan2(gy - rb["cy"], gx - rb["cx"])
-        page.mouse.move(gx, gy); page.mouse.down()
+        rad = _m.hypot(rb["zx"] - rb["cx"], rb["zy"] - rb["cy"]) or 1; a0 = _m.atan2(rb["zy"] - rb["cy"], rb["zx"] - rb["cx"])
+        page.mouse.move(rb["zx"], rb["zy"]); page.mouse.down()
         page.mouse.move(rb["cx"] + rad * _m.cos(a0 + _m.pi / 6), rb["cy"] + rad * _m.sin(a0 + _m.pi / 6), steps=12); page.mouse.up()
         page.wait_for_timeout(60)
         rotated = page.evaluate("() => { const c = editor.nodeById('m1').transform.baseVal.consolidate(); return c ? Math.abs(c.matrix.b) > 0.05 : false; }")
-        check("transform tool can rotate the selection", rotated)
+        check("corner rotator rotates the selection", rotated)
+        page.evaluate("() => editor.enterTransform('scale')")   # back to scale for later tests
 
         # ---- F. Process workspace + rail collapse doesn't break the stage ----
         page.click("#process-button"); page.wait_for_timeout(150)

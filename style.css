@@ -640,7 +640,11 @@ button:disabled {
 .hv-xform-box { fill: none; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
 /* before/after: dashed ghost of the original bounds shown during a scale */
 .hv-xform-ghost { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; opacity: 0.7; }
-.hv-xform-rot { fill: rgba(0,0,0,0); stroke: none; pointer-events: all; cursor: crosshair; }
+/* rotation handles — visible circles set outside the corners; subtle in scale mode,
+   emphasized in rotate mode. (cursor 'grab' as a stand-in for a rotate cursor) */
+.hv-xform-rot { fill: #fff; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: all; cursor: grab; opacity: 0.45; }
+.hv-xform-rot:hover { opacity: 1; fill: var(--accent); }
+.hv-xform-rotate .hv-xform-rot { opacity: 1; }
 .hv-xform-handle { fill: #fff; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: all; }
 .hv-xform-handle:hover { fill: var(--accent); }
 .hv-xform-handle.dragging { fill: var(--accent); }

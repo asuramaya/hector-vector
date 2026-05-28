@@ -1504,6 +1504,8 @@ document.addEventListener("keydown", (e) => {
   if (mod && (e.key === "x" || e.key === "X")) { e.preventDefault(); editor.cut(); return; }
   if (mod && (e.key === "v" || e.key === "V")) { e.preventDefault(); editor.paste(); return; }
   if (mod && (e.key === "a" || e.key === "A")) { e.preventDefault(); editor.selectAll(); return; }
+  if (mod && (e.key === "t" || e.key === "T")) { e.preventDefault(); editor.enterTransform("scale"); return; }   // Ctrl/Cmd+T — scale mode
+  if (mod && (e.key === "r" || e.key === "R")) { e.preventDefault(); editor.enterTransform("rotate"); return; }  // Ctrl/Cmd+R — rotate mode
   if (mod) return;
   if (!modalRootEl.hidden) return;
   if (e.key.startsWith("Arrow")) {       // nudge selection (Shift = ×10)
@@ -1529,7 +1531,6 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.key === "v" || e.key === "V") { editor.setTool("select"); return; }
   if (e.key === "m" || e.key === "M") { editor.setTool("marquee"); return; }
-  if (e.key === "t" || e.key === "T") { editor.setTool("transform"); return; }
   if (e.key === "a" || e.key === "A") { editor.setTool("node"); return; }
   if (e.key === "p" || e.key === "P") { editor.setTool("pen"); return; }
   if (e.key === "c" || e.key === "C") { editor.setTool("curvature"); return; }

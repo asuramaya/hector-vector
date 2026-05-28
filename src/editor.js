@@ -35,7 +35,8 @@ const editor = {
   // last-used appearance — newly drawn shapes inherit it (updated by applyFill/applyStroke)
   style: { fill: "#808080", stroke: "none", strokeWidth: 0 },
   _pen: null,           // in-progress pen path: { node, pts:[{x,y,in,out}], closed, dragging }
-  _xform: null,         // transform-tool handle state during a scale drag
+  _xform: null,         // transform-tool handle state during a scale/rotate drag
+  _xformMode: "scale",  // transform tool sub-mode: "scale" (Ctrl+T) or "rotate" (Ctrl+R)
   _lastLayerId: null,   // anchor row for Shift-range select in the layers panel
   _nodeSel: new Set(),  // node tool: selected path-anchor keys ("pathId#k")
   _penTempSelect: false,// pen tool: Ctrl/Cmd held → act as Direct-Select (handles mounted)
@@ -1175,6 +1176,13 @@ const editor = {
   // 8 handles on the selection bbox; dragging one scales (live, via a temporary
   // matrix transform) about the opposite corner/edge, then bakes the scale into
   // geometry on release so nodes stay translate-only. Shift on a corner keeps aspect.
+  // Enter the transform tool in a given sub-mode: "scale" (Ctrl+T) shows the resize
+  // box; "rotate" (Ctrl+R) shows the corner rotators only. Re-entering re-mounts.
+  enterTransform(mode) {
+    this._xformMode = mode === "rotate" ? "rotate" : "scale";
+    if (this.tool === "transform") this._renderSelection(); else this.setTool("transform");
+    setStatus(this._xformMode === "rotate" ? "Rotate mode — drag a corner rotator. Shift = 15°." : "Scale mode — drag the box handles. Shift = aspect, Alt = from centre.", 2200);
+  },
   _mountTransformHandles() {
     this.unmountTransformHandles();
     const ov = this._overlayEl(); if (!ov || !this.stage || this.artboardSelected) return;
@@ -1193,23 +1201,25 @@ const editor = {
       { h: "sw", x: bb.x0, y: bb.y1, ax: bb.x1, ay: bb.y0, sx: 1, sy: 1 },
       { h: "w",  x: bb.x0, y: midY,  ax: bb.x1, ay: midY,  sx: 1, sy: 0 },
     ];
-    const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "hv-xform");
+    const mode = this._xformMode === "rotate" ? "rotate" : "scale";
+    const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "hv-xform hv-xform-" + mode);
     const box = document.createElementNS(SVG_NS, "rect"); box.setAttribute("class", "hv-xform-box");
     box.setAttribute("x", nfmt(bb.x0)); box.setAttribute("y", nfmt(bb.y0));
     box.setAttribute("width", nfmt(bb.x1 - bb.x0)); box.setAttribute("height", nfmt(bb.y1 - bb.y0));
     g.appendChild(box);
-    // Rotation zones: invisible squares just OUTSIDE each corner (appended first so
-    // the resize handles paint on top — the exact corner resizes, just-outside rotates).
-    const rotR = r * 2.4;
-    for (const cnr of [[bb.x0, bb.y0], [bb.x1, bb.y0], [bb.x1, bb.y1], [bb.x0, bb.y1]]) {
-      const z = document.createElementNS(SVG_NS, "rect"); z.setAttribute("class", "hv-xform-rot");
-      z.setAttribute("x", nfmt(cnr[0] - rotR)); z.setAttribute("y", nfmt(cnr[1] - rotR));
-      z.setAttribute("width", nfmt(2 * rotR)); z.setAttribute("height", nfmt(2 * rotR));
+    // Rotation handles: visible circles set OUTSIDE each corner (Illustrator-style),
+    // so they never sit under a resize handle — the earlier on-corner zones were
+    // mostly covered and "didn't work". Always present; emphasized in rotate mode.
+    const rotOut = r * 3.2;   // diagonal offset beyond the corner
+    for (const [x, y, ox, oy] of [[bb.x0, bb.y0, -1, -1], [bb.x1, bb.y0, 1, -1], [bb.x1, bb.y1, 1, 1], [bb.x0, bb.y1, -1, 1]]) {
+      const z = document.createElementNS(SVG_NS, "circle"); z.setAttribute("class", "hv-xform-rot");
+      z.setAttribute("cx", nfmt(x + ox * rotOut)); z.setAttribute("cy", nfmt(y + oy * rotOut)); z.setAttribute("r", nfmt(r * 1.4));
       this._bindRotateHandle(z);
       g.appendChild(z);
     }
     const handles = [];
-    for (const s of specs) {
+    // Resize handles only in scale mode — rotate mode is purely the corner rotators.
+    for (const s of (mode === "scale" ? specs : [])) {
       const c = document.createElementNS(SVG_NS, "rect"); c.setAttribute("class", "hv-xform-handle hv-xform-" + s.h);
       c.setAttribute("x", nfmt(s.x - r)); c.setAttribute("y", nfmt(s.y - r));
       c.setAttribute("width", nfmt(2 * r)); c.setAttribute("height", nfmt(2 * r));
