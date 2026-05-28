@@ -2328,7 +2328,7 @@ function openShortcutsModal() {
   // Mirrors the live keymap in app.js (editor keymap + view/nav keymap + space-pan).
   const rows = [
     ["§", "Tools"],
-    ["V", "Select / move"],
+    ["V", "Select / move (Shift = 45°, Alt-drag = copy)"],
     ["M", "Drag-select (Alt = lasso)"],
     ["T", "Transform / scale"],
     ["A", "Edit points (direct select)"],
@@ -2359,6 +2359,8 @@ function openShortcutsModal() {
     ["Esc", "Cancel path"],
     ["§", "Node tool"],
     ["Click / Shift-click", "Select anchor / multi-select"],
+    ["Drag empty canvas", "Marquee-select anchors (Shift adds)"],
+    ["Drag a segment", "Reshape it (curve bends, line moves)"],
     ["Drag square", "Move selected anchors (Shift = 45°)"],
     ["Drag round dot", "Reshape curve (Alt = break)"],
     ["Alt-click anchor", "Smooth → corner"],

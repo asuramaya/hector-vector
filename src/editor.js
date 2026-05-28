@@ -249,9 +249,15 @@ const editor = {
       return;
     }
     if (this.tool === "node") {
-      // anchor/handle drags stopPropagation, so reaching here = a click on empty
-      // canvas or path body → drop the anchor selection.
-      if (this._nodeSel.size) { this._nodeSel = new Set(); this._refreshNodeSelHighlight(); }
+      // anchor/handle drags stopPropagation, so reaching here = empty canvas or path
+      // body. Over a segment → reshape it; otherwise → marquee-select anchors.
+      e.stopPropagation(); e.preventDefault();
+      const m = this.stage.getScreenCTM();
+      const sp = m ? new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse()) : null;
+      const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
+      const hit = sp ? nearestOnPaths(this.stage, sp.x, sp.y, 6 / k) : null;
+      if (hit && hit.mode === "segment") this._beginSegmentDrag(e, hit.el, hit.i, hit.t);
+      else this._beginNodeMarquee(e, e.shiftKey);
       return;
     }
     if (this.tool !== "select" && this.tool !== "transform") return;
@@ -272,19 +278,34 @@ const editor = {
     }
   },
   _beginMove(startEvent) {
-    const nodes = this.selectedNodes(); if (!nodes.length) return;
+    let nodes = this.selectedNodes(); if (!nodes.length) return;
     const inv = () => this.stage.getScreenCTM().inverse();
     const start = new DOMPoint(startEvent.clientX, startEvent.clientY).matrixTransform(inv());
-    const bases = nodes.map((n) => currentTranslate(n));
-    let pushed = false;
+    let bases = nodes.map((n) => currentTranslate(n));
+    const altDup = startEvent.altKey;        // Alt-drag → drag a duplicate, leave the original
+    const snapper = makeAxisSnapper();
+    let pushed = false, duped = false;
     const move = (ev) => {
+      if (!pushed && Math.hypot(ev.clientX - startEvent.clientX, ev.clientY - startEvent.clientY) < 3) return;
+      if (!pushed) {
+        this.push(); pushed = true;
+        if (altDup) {                        // clone at the origin, then drag the copies
+          const ids = this._cloneSelection(0, 0);
+          if (ids.length) { this.selection = new Set(ids); nodes = this.selectedNodes(); bases = nodes.map((n) => currentTranslate(n)); duped = true; }
+          this._renderInspector();
+        }
+      }
       const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
-      const dx = p.x - start.x, dy = p.y - start.y;
-      if (!pushed && (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01)) { this.push(); pushed = true; }
+      let dx = p.x - start.x, dy = p.y - start.y;
+      if (ev.shiftKey) { const s = snapper.snap(dx, dy); dx = s.x; dy = s.y; }   // sticky 45° move
+      else snapper.reset();
       nodes.forEach((n, i) => setTranslate(n, bases[i].x + dx, bases[i].y + dy));
       this._renderSelection();
     };
-    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    const up = () => {
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+      if (duped) { this._renderLayers(); setStatus(`Duplicated ${this.selection.size} object${this.selection.size > 1 ? "s" : ""}.`, 1500); }
+    };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   },
@@ -1019,6 +1040,74 @@ const editor = {
   },
 
   // ---------- drag-select tool: rubber-band rectangle, or freehand lasso (Alt) ----------
+  // Node tool: drag a path segment to reshape it. A curved segment bends (adjust
+  // its two bounding control handles so the point at parameter t tracks the cursor,
+  // endpoints fixed — minimal-norm solution); a straight segment translates (both
+  // endpoints move). One undo step.
+  _beginSegmentDrag(startEvent, el, i, t0) {
+    const pa = pathToAnchors(el);
+    if (!pa.editable) { this._beginNodeMarquee(startEvent, startEvent.shiftKey); return; }
+    const inv = () => this.stage.getScreenCTM().inverse();
+    const start = new DOMPoint(startEvent.clientX, startEvent.clientY).matrixTransform(inv());
+    const n = pa.anchors.length, A = pa.anchors[i], B = pa.anchors[(i + 1) % n];
+    const straight = !A.out && !B.in;
+    const t = Math.max(0.1, Math.min(0.9, t0));
+    const A0 = { x: A.x, y: A.y }, B0 = { x: B.x, y: B.y };
+    const P1 = A.out ? { x: A.out.x, y: A.out.y } : { x: A.x, y: A.y };
+    const P2 = B.in ? { x: B.in.x, y: B.in.y } : { x: B.x, y: B.y };
+    const snapper = makeAxisSnapper();
+    let pushed = false, moved = false;
+    const move = (ev) => {
+      if (!moved && Math.hypot(ev.clientX - startEvent.clientX, ev.clientY - startEvent.clientY) < 3) return;
+      moved = true;
+      if (!pushed) { this.push(); pushed = true; }
+      const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
+      let dx = p.x - start.x, dy = p.y - start.y;
+      if (ev.shiftKey) { const s = snapper.snap(dx, dy); dx = s.x; dy = s.y; } else snapper.reset();
+      if (straight) { A.x = A0.x + dx; A.y = A0.y + dy; B.x = B0.x + dx; B.y = B0.y + dy; }
+      else {
+        const u = 1 - t, a = 3 * u * u * t, b = 3 * u * t * t, denom = a * a + b * b || 1;
+        A.out = { x: P1.x + dx * a / denom, y: P1.y + dy * a / denom };
+        B.in = { x: P2.x + dx * b / denom, y: P2.y + dy * b / denom };
+      }
+      el.setAttribute("d", penPathD(pa.anchors, pa.closed));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+      this.mountNodeHandles();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  },
+  // Node tool: rubber-band box over the canvas selects all enclosed path anchors
+  // (Shift adds to the current anchor selection). A plain click clears.
+  _beginNodeMarquee(startEvent, additive) {
+    const ov = this._overlayEl(); if (!ov) return;
+    const inv = () => this.stage.getScreenCTM().inverse();
+    const start = new DOMPoint(startEvent.clientX, startEvent.clientY).matrixTransform(inv());
+    const base = additive ? new Set(this._nodeSel) : new Set();
+    const box = document.createElementNS(SVG_NS, "rect"); box.setAttribute("class", "hv-marquee");
+    ov.appendChild(box);
+    let moved = false;
+    const move = (ev) => {
+      if (!moved && Math.hypot(ev.clientX - startEvent.clientX, ev.clientY - startEvent.clientY) < 3) return;
+      moved = true;
+      const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
+      const x0 = Math.min(start.x, p.x), y0 = Math.min(start.y, p.y), x1 = Math.max(start.x, p.x), y1 = Math.max(start.y, p.y);
+      box.setAttribute("x", nfmt(x0)); box.setAttribute("y", nfmt(y0)); box.setAttribute("width", nfmt(x1 - x0)); box.setAttribute("height", nfmt(y1 - y0));
+      const sel = new Set(base);
+      for (const nd of pathNodes(this.stage)) if (nd.x >= x0 && nd.x <= x1 && nd.y >= y0 && nd.y <= y1) sel.add(this._nodeKey(nd));
+      this._nodeSel = sel; this._refreshNodeSelHighlight();
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+      box.remove();
+      if (!moved && !additive) this._nodeSel = new Set();   // plain click on empty → clear
+      this.mountNodeHandles();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  },
   _beginMarquee(startEvent, lasso) {
     if (!this.stage) return;
     const ov = this._overlayEl(); if (!ov) return;
@@ -1114,19 +1203,25 @@ const editor = {
 
   // ---------- Phase 2 object ops (each is one undo step) ----------
   _artworkNodes() { return [...this.stage.children].filter((c) => c.hasAttribute && c.hasAttribute("data-hv-id")); },
-  duplicate() {
-    const nodes = this.selectedNodes(); if (!nodes.length) return;
-    this.push();
+  // Clone the current selection into the stage at an optional offset; returns the
+  // new ids. Does NOT push history or change selection (callers decide).
+  _cloneSelection(offsetX = 0, offsetY = 0) {
     const ov = this._overlayEl(); const ids = [];
-    for (const n of nodes) {
+    for (const n of this.selectedNodes()) {
       const c = n.cloneNode(true);
       const id = "n" + (++this.idSeq); c.setAttribute("data-hv-id", id);
-      const t = currentTranslate(c); setTranslate(c, t.x + 12, t.y + 12);
+      if (offsetX || offsetY) { const t = currentTranslate(c); setTranslate(c, t.x + offsetX, t.y + offsetY); }
       this.stage.insertBefore(c, ov);
       ids.push(id);
     }
+    return ids;
+  },
+  duplicate() {
+    const nodes = this.selectedNodes(); if (!nodes.length) return;
+    this.push();
+    const ids = this._cloneSelection(12, 12);
     this.selection = new Set(ids); this.artboardSelected = false;
-    this._renderSelection(); this._renderInspector();
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
     setStatus(`Duplicated ${ids.length} object${ids.length > 1 ? "s" : ""}.`, 1500);
   },
   // ---------- clipboard + selection commands (shared by keymap + context menu) ----------
