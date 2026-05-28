@@ -1198,6 +1198,16 @@ const editor = {
     box.setAttribute("x", nfmt(bb.x0)); box.setAttribute("y", nfmt(bb.y0));
     box.setAttribute("width", nfmt(bb.x1 - bb.x0)); box.setAttribute("height", nfmt(bb.y1 - bb.y0));
     g.appendChild(box);
+    // Rotation zones: invisible squares just OUTSIDE each corner (appended first so
+    // the resize handles paint on top — the exact corner resizes, just-outside rotates).
+    const rotR = r * 2.4;
+    for (const cnr of [[bb.x0, bb.y0], [bb.x1, bb.y0], [bb.x1, bb.y1], [bb.x0, bb.y1]]) {
+      const z = document.createElementNS(SVG_NS, "rect"); z.setAttribute("class", "hv-xform-rot");
+      z.setAttribute("x", nfmt(cnr[0] - rotR)); z.setAttribute("y", nfmt(cnr[1] - rotR));
+      z.setAttribute("width", nfmt(2 * rotR)); z.setAttribute("height", nfmt(2 * rotR));
+      this._bindRotateHandle(z);
+      g.appendChild(z);
+    }
     const handles = [];
     for (const s of specs) {
       const c = document.createElementNS(SVG_NS, "rect"); c.setAttribute("class", "hv-xform-handle hv-xform-" + s.h);
@@ -1207,7 +1217,42 @@ const editor = {
       g.appendChild(c); handles.push({ el: c, s });
     }
     ov.appendChild(g);
-    this._xform = { box, handles, r, bb };
+    this._xform = { box, handles, r, bb, g };
+  },
+  // Rotate the selection about the bbox centre (corner rotation zones). Shift = 15°
+  // snaps. Composes with any existing transform; result is left as a matrix.
+  _bindRotateHandle(zone) {
+    zone.addEventListener("pointerdown", (e) => {
+      e.stopPropagation(); e.preventDefault();
+      const nodes = this.selectedNodes(); if (!nodes.length) return;
+      try { zone.setPointerCapture(e.pointerId); } catch {}
+      this._handleDragging = true;
+      const xf = this._xform, cx = (xf.bb.x0 + xf.bb.x1) / 2, cy = (xf.bb.y0 + xf.bb.y1) / 2;
+      const origs = nodes.map((n) => n.getAttribute("transform"));
+      const ptU = (ev) => new DOMPoint(ev.clientX, ev.clientY).matrixTransform(this.stage.getScreenCTM().inverse());
+      const a0 = (() => { const p = ptU(e); return Math.atan2(p.y - cy, p.x - cx); })();
+      let pushed = false;
+      const move = (ev) => {
+        const p = ptU(ev); let deg = (Math.atan2(p.y - cy, p.x - cx) - a0) * 180 / Math.PI;
+        if (ev.shiftKey) deg = Math.round(deg / 15) * 15;
+        if (!pushed && Math.abs(deg) > 0.4) { this.push("Rotate"); pushed = true; this._showGhostBox(); }
+        const rot = `rotate(${nfmt(deg)} ${nfmt(cx)} ${nfmt(cy)})`;
+        nodes.forEach((n, i) => n.setAttribute("transform", origs[i] ? `${rot} ${origs[i]}` : rot));
+        if (xf.g) xf.g.setAttribute("transform", rot);   // rotate box + handles to match
+        this._showSizeReadout(deg.toFixed(1) + "°", null, ev.clientX, ev.clientY);
+      };
+      const up = () => {
+        try { zone.releasePointerCapture(e.pointerId); } catch {}
+        this._handleDragging = false; this._hideSizeReadout(); this._clearGhostBox();
+        zone.removeEventListener("pointermove", move); zone.removeEventListener("pointerup", up);
+        if (!pushed) { this._renderSelection(); return; }
+        nodes.forEach((n) => { try { const co = n.transform.baseVal.consolidate(); if (co) { const m = co.matrix; n.setAttribute("transform", `matrix(${nfmt(m.a)} ${nfmt(m.b)} ${nfmt(m.c)} ${nfmt(m.d)} ${nfmt(m.e)} ${nfmt(m.f)})`); } } catch {} });
+        this._renderSelection(); this._renderInspector(); this._renderLayers();
+        setStatus("Rotated selection.", 1200);
+      };
+      zone.addEventListener("pointermove", move);
+      zone.addEventListener("pointerup", up);
+    });
   },
   unmountTransformHandles() {
     const ov = this._overlayEl(); if (ov) ov.querySelectorAll(".hv-xform").forEach((g) => g.remove());
@@ -1221,6 +1266,18 @@ const editor = {
     if (shift && spec.sx && spec.sy) { const s = Math.max(sx, sy); sx = s; sy = s; }
     return { sx, sy };
   },
+  // Before/after: a dashed ghost of the ORIGINAL bounds, drawn behind the live box
+  // during a scale so you can see where you started vs where you're dragging to.
+  _showGhostBox() {
+    const xf = this._xform, ov = this._overlayEl(); if (!xf || !ov) return;
+    this._clearGhostBox();
+    const g = document.createElementNS(SVG_NS, "rect"); g.setAttribute("class", "hv-xform-ghost");
+    g.setAttribute("x", nfmt(xf.bb.x0)); g.setAttribute("y", nfmt(xf.bb.y0));
+    g.setAttribute("width", nfmt(xf.bb.x1 - xf.bb.x0)); g.setAttribute("height", nfmt(xf.bb.y1 - xf.bb.y0));
+    ov.insertBefore(g, ov.firstChild);
+    this._ghostBox = g;
+  },
+  _clearGhostBox() { if (this._ghostBox) { try { this._ghostBox.remove(); } catch {} this._ghostBox = null; } },
   _updateXformVisual(spec, sx, sy, ax, ay) {
     const xf = this._xform; if (!xf) return;
     const sp = (x, y) => ({ x: ax + (x - ax) * sx, y: ay + (y - ay) * sy });
@@ -1235,31 +1292,43 @@ const editor = {
       const nodes = this.selectedNodes(); if (!nodes.length) return;
       try { c.setPointerCapture(e.pointerId); } catch {}
       c.classList.add("dragging"); this._handleDragging = true;
+      // "flat" = every node is translate-only/transform-free → we can bake to a clean
+      // translate (keeps node-editing working). If any node already carries a
+      // scale/rotate/matrix, we COMPOSE the scale on top of it instead of replacing
+      // it (replacing destroyed the rotation — the imported-shape bug) and leave the
+      // result as a consolidated matrix.
+      const transAttr = (n) => (n.getAttribute("transform") || "").trim();
+      const flat = nodes.every((n) => transAttr(n) === "" || /^translate\([^)]*\)$/.test(transAttr(n)));
       const bases = nodes.map((n) => currentTranslate(n));
+      const origs = nodes.map((n) => n.getAttribute("transform"));
       const xf = this._xform, cx = (xf.bb.x0 + xf.bb.x1) / 2, cy = (xf.bb.y0 + xf.bb.y1) / 2;   // bbox centre (Alt anchor)
       let pushed = false, last = { sx: 1, sy: 1, ax: spec.ax, ay: spec.ay };
       const apply = (sx, sy, ax, ay) => nodes.forEach((n, i) => {
-        const b = bases[i];
-        n.setAttribute("transform", `matrix(${nfmt(sx)} 0 0 ${nfmt(sy)} ${nfmt(sx * b.x + ax * (1 - sx))} ${nfmt(sy * b.y + ay * (1 - sy))})`);
+        if (flat) { const b = bases[i]; n.setAttribute("transform", `matrix(${nfmt(sx)} 0 0 ${nfmt(sy)} ${nfmt(sx * b.x + ax * (1 - sx))} ${nfmt(sy * b.y + ay * (1 - sy))})`); }
+        else { const s = `matrix(${nfmt(sx)} 0 0 ${nfmt(sy)} ${nfmt(ax * (1 - sx))} ${nfmt(ay * (1 - sy))})`; n.setAttribute("transform", origs[i] ? `${s} ${origs[i]}` : s); }
       });
       const move = (ev) => {
         const m = this.stage.getScreenCTM(); if (!m) return;
         const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
         const ax = ev.altKey ? cx : spec.ax, ay = ev.altKey ? cy : spec.ay;   // Alt → scale from centre
         const f = this._scaleFactors(spec, p, ev.shiftKey, ax, ay); last = { ...f, ax, ay };
-        if (!pushed && (Math.abs(f.sx - 1) > 1e-4 || Math.abs(f.sy - 1) > 1e-4)) { this.push("Scale"); pushed = true; }
+        if (!pushed && (Math.abs(f.sx - 1) > 1e-4 || Math.abs(f.sy - 1) > 1e-4)) { this.push("Scale"); pushed = true; this._showGhostBox(); }
         apply(f.sx, f.sy, ax, ay);
         this._updateXformVisual(spec, f.sx, f.sy, ax, ay);
         this._showSizeReadout((xf.bb.x1 - xf.bb.x0) * Math.abs(f.sx), (xf.bb.y1 - xf.bb.y0) * Math.abs(f.sy), ev.clientX, ev.clientY);
       };
       const up = () => {
         try { c.releasePointerCapture(e.pointerId); } catch {}
-        c.classList.remove("dragging"); this._handleDragging = false; this._hideSizeReadout();
+        c.classList.remove("dragging"); this._handleDragging = false; this._hideSizeReadout(); this._clearGhostBox();
         c.removeEventListener("pointermove", move); c.removeEventListener("pointerup", up);
-        if (!pushed) { nodes.forEach((n, i) => setTranslate(n, bases[i].x, bases[i].y)); this._renderSelection(); return; }
+        if (!pushed) { nodes.forEach((n, i) => { if (origs[i] == null) n.removeAttribute("transform"); else n.setAttribute("transform", origs[i]); }); this._renderSelection(); return; }
         const { sx, sy, ax, ay } = last;
-        const M = { a: sx, b: 0, c: 0, d: sy, e: ax * (1 - sx), f: ay * (1 - sy) };
-        nodes.forEach((n, i) => { setTranslate(n, bases[i].x, bases[i].y); bakeMatrixInto(n, M, 0, 0); });
+        if (flat) {
+          const M = { a: sx, b: 0, c: 0, d: sy, e: ax * (1 - sx), f: ay * (1 - sy) };
+          nodes.forEach((n, i) => { setTranslate(n, bases[i].x, bases[i].y); bakeMatrixInto(n, M, 0, 0); });
+        } else {   // consolidate the composed scale·original into a single matrix
+          nodes.forEach((n) => { try { const co = n.transform.baseVal.consolidate(); if (co) { const mm = co.matrix; n.setAttribute("transform", `matrix(${nfmt(mm.a)} ${nfmt(mm.b)} ${nfmt(mm.c)} ${nfmt(mm.d)} ${nfmt(mm.e)} ${nfmt(mm.f)})`); } } catch {} });
+        }
         this._renderSelection(); this._renderInspector(); this._renderLayers();
         setStatus("Scaled selection.", 1200);
       };
@@ -1621,8 +1690,21 @@ const editor = {
   // and groups have no area and are skipped.
   _fillableSelection() { return this._artworkNodes().filter((n) => this.selection.has(n.getAttribute("data-hv-id")) && shapeToAbsPath(n)); },
   _nodeBBoxUser(n) {
-    const bb = n.getBBox(), t = currentTranslate(n);
-    return { x0: bb.x + t.x, y0: bb.y + t.y, x1: bb.x + bb.width + t.x, y1: bb.y + bb.height + t.y };
+    // getBBox() is the element's LOCAL geometry bbox; map its corners through the
+    // element's full consolidated transform so the box is correct for ANY transform
+    // (translate / scale / rotate / matrix), not just a translate. (The old version
+    // added only the translate, so imported shapes with a matrix/rotate drew a badly
+    // offset transform box — "bounding boxes bug out".)
+    const bb = n.getBBox();
+    let m = null;
+    try { const tr = n.transform && n.transform.baseVal; if (tr && tr.numberOfItems) { const c = tr.consolidate(); m = c && c.matrix; } } catch {}
+    if (!m) return { x0: bb.x, y0: bb.y, x1: bb.x + bb.width, y1: bb.y + bb.height };
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of [[bb.x, bb.y], [bb.x + bb.width, bb.y], [bb.x + bb.width, bb.y + bb.height], [bb.x, bb.y + bb.height]]) {
+      const px = m.a * x + m.c * y + m.e, py = m.b * x + m.d * y + m.f;
+      x0 = Math.min(x0, px); y0 = Math.min(y0, py); x1 = Math.max(x1, px); y1 = Math.max(y1, py);
+    }
+    return { x0, y0, x1, y1 };
   },
   // A reusable inside-test built from temp absolute-path clones of the shapes,
   // attached to the stage so SVGGeometryElement.isPointInFill works in stage user space.
@@ -1702,7 +1784,7 @@ const editor = {
   _showSizeReadout(w, h, clientX, clientY) {
     let el = document.getElementById("xform-readout");
     if (!el) { el = document.createElement("div"); el.id = "xform-readout"; el.className = "xform-readout"; document.body.appendChild(el); }
-    el.textContent = `W: ${Math.round(w)} px   H: ${Math.round(h)} px`;
+    el.textContent = h == null ? String(w) : `W: ${Math.round(w)} px   H: ${Math.round(h)} px`;   // h==null → w is a preformatted label (e.g. rotation °)
     el.style.left = (clientX + 16) + "px"; el.style.top = (clientY + 16) + "px"; el.hidden = false;
   },
   _hideSizeReadout() { const el = document.getElementById("xform-readout"); if (el) el.hidden = true; },

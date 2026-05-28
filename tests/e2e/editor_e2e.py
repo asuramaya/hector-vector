@@ -420,6 +420,38 @@ def main():
             return { total: tb.length, keyed: tb.filter(b => (b.getAttribute('data-key') || '').length === 1).length,
                      pen: document.querySelector('.tool-button[data-tool=pen]').getAttribute('data-key') }; }""")
         check("tool buttons have shortcut badges", badges["total"] >= 9 and badges["keyed"] == badges["total"] and badges["pen"] == "P", str(badges))
+        # viewport controls are standardized badged buttons too
+        check("viewport controls have shortcut badges",
+              page.evaluate("""() => { const v = [...document.querySelectorAll('.viewport-controls .vp-btn[data-key]')];
+                  return v.length >= 5 && v.every(b => b.getAttribute('data-key')); }"""))
+
+        # transform box is correct for a shape carrying a non-translate transform
+        # (the imported-shape "bounding box bugs out" regression)
+        page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300">'
+              + '<rect data-hv-id="m1" x="10" y="10" width="50" height="50" fill="#888" transform="matrix(1.8 0 0 1.8 60 60)"/></svg>','m.svg'); }""")
+        page.wait_for_timeout(120)
+        page.evaluate("() => { editor.selection = new Set(['m1']); editor.setTool('transform'); editor._renderSelection(); }")
+        page.wait_for_timeout(60)
+        mbox = page.evaluate("""() => { const bx = document.querySelector('.hv-xform-box'); const sh = editor.nodeById('m1');
+            if (!bx) return null; const r = bx.getBoundingClientRect(), q = sh.getBoundingClientRect();
+            return Math.max(Math.abs(r.left-q.left), Math.abs(r.top-q.top), Math.abs(r.right-q.right), Math.abs(r.bottom-q.bottom)); }""")
+        check("transform box aligns with a matrix-transformed shape", mbox is not None and mbox < 2, f"max offset={mbox}")
+
+        # rotation: dragging a corner rotation zone rotates the selection (matrix gains b)
+        rb = page.evaluate("""() => { const z = document.querySelector('.hv-xform-rot'); const bx = document.querySelector('.hv-xform-box').getBoundingClientRect();
+            const r = z.getBoundingClientRect(); return { cx:(bx.left+bx.right)/2, cy:(bx.top+bx.bottom)/2, zx:r.left+r.width/2, zy:r.top+r.height/2 }; }""")
+        import math as _m
+        # grab a point offset OUTWARD from the corner so it lands in the rotation zone,
+        # not on the resize handle that sits on top of the exact corner.
+        ux, uy = rb["zx"] - rb["cx"], rb["zy"] - rb["cy"]; ul = _m.hypot(ux, uy) or 1
+        gx, gy = rb["zx"] + ux / ul * 9, rb["zy"] + uy / ul * 9
+        rad = _m.hypot(gx - rb["cx"], gy - rb["cy"]); a0 = _m.atan2(gy - rb["cy"], gx - rb["cx"])
+        page.mouse.move(gx, gy); page.mouse.down()
+        page.mouse.move(rb["cx"] + rad * _m.cos(a0 + _m.pi / 6), rb["cy"] + rad * _m.sin(a0 + _m.pi / 6), steps=12); page.mouse.up()
+        page.wait_for_timeout(60)
+        rotated = page.evaluate("() => { const c = editor.nodeById('m1').transform.baseVal.consolidate(); return c ? Math.abs(c.matrix.b) > 0.05 : false; }")
+        check("transform tool can rotate the selection", rotated)
 
         # ---- F. Process workspace + rail collapse doesn't break the stage ----
         page.click("#process-button"); page.wait_for_timeout(150)

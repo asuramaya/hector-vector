@@ -271,14 +271,24 @@ button:disabled {
   display: grid; place-items: center;
 }
 .tool-button.active { background: #000; color: #fff; }
-/* shortcut badge: a tiny letter in the bottom-right corner */
-.tool-button[data-key]::after {
+/* shortcut badge: a tiny letter in the bottom-right corner (tool buttons,
+   viewport controls, the fill/stroke swap — one consistent kind of object) */
+.tool-button[data-key]::after, .vp-btn[data-key]::after, .swatch-swap[data-key]::after {
   content: attr(data-key);
   position: absolute; right: 1px; bottom: 0;
   font-size: 8px; line-height: 1; font-weight: 600;
   color: var(--muted); pointer-events: none; letter-spacing: 0;
 }
 .tool-button.active[data-key]::after { color: rgba(255, 255, 255, 0.75); }
+/* viewport controls — same bordered-box object as the tools, sized to their labels */
+.vp-btn {
+  position: relative; box-sizing: border-box; min-width: 34px; height: 30px;
+  padding: 0 9px 2px; border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+  font: inherit; font-size: 13px; line-height: 1; cursor: pointer; display: grid; place-items: center;
+}
+.vp-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.vp-btn:hover[data-key]::after { color: rgba(255, 255, 255, 0.8); }
+.swatch-swap[data-key]::after { right: -7px; bottom: -6px; }
 .tool-sep { height: 1px; background: var(--line); margin: 2px 4px; align-self: stretch; }
 /* Fill (primary) / stroke (secondary) swatches, pinned to the bottom of the strip. */
 .tool-spacer { flex: 1 1 auto; }
@@ -628,6 +638,9 @@ button:disabled {
 .hv-pen-handle { fill: var(--accent); stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
 /* Transform-tool bounding box + scale handles */
 .hv-xform-box { fill: none; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
+/* before/after: dashed ghost of the original bounds shown during a scale */
+.hv-xform-ghost { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; opacity: 0.7; }
+.hv-xform-rot { fill: rgba(0,0,0,0); stroke: none; pointer-events: all; cursor: crosshair; }
 .hv-xform-handle { fill: #fff; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: all; }
 .hv-xform-handle:hover { fill: var(--accent); }
 .hv-xform-handle.dragging { fill: var(--accent); }

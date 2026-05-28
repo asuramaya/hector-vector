@@ -48,7 +48,7 @@
           <div class="tool-swatches" id="tool-swatches">
             <button class="swatch swatch-fill" id="swatch-fill" type="button" title="Fill — click to set the fill colour"></button>
             <button class="swatch swatch-stroke" id="swatch-stroke" type="button" title="Stroke — click to set the stroke colour"></button>
-            <button class="swatch-swap" id="swatch-swap" type="button" title="Swap fill / stroke (Shift+X)">⇄</button>
+            <button class="swatch-swap" id="swatch-swap" data-key="⇧X" type="button" title="Swap fill / stroke (Shift+X)">⇄</button>
             <input type="color" id="swatch-color-input" hidden />
           </div>
         </nav>
@@ -61,11 +61,11 @@
           <div class="panel-foot">
             <!-- Navigation only: object controls live on the left toolstrip. -->
             <div class="panel-actions viewport-controls">
-              <button class="ghost-button" data-vp="output" data-action="zoom-out" type="button" title="Zoom out (-)">-</button>
-              <button class="ghost-button" data-vp="output" data-action="fit" type="button" title="Fit (f)">Fit</button>
-              <button class="ghost-button" data-vp="output" data-action="actual" type="button" title="Actual size (0)">1:1</button>
-              <button class="ghost-button" data-vp="output" data-action="zoom-in" type="button" title="Zoom in (+)">+</button>
-              <button class="ghost-button" data-vp="output" data-action="bg" type="button" title="Cycle background (b)">BG</button>
+              <button class="vp-btn" data-vp="output" data-action="zoom-out" data-key="−" type="button" title="Zoom out (-)">−</button>
+              <button class="vp-btn" data-vp="output" data-action="fit" data-key="F" type="button" title="Fit (f)">Fit</button>
+              <button class="vp-btn" data-vp="output" data-action="actual" data-key="0" type="button" title="Actual size (0)">1:1</button>
+              <button class="vp-btn" data-vp="output" data-action="zoom-in" data-key="+" type="button" title="Zoom in (+)">+</button>
+              <button class="vp-btn" data-vp="output" data-action="bg" data-key="B" type="button" title="Cycle background (b)">BG</button>
             </div>
           </div>
         </article>
