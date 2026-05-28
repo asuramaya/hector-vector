@@ -62,9 +62,11 @@ const editor = {
     this.artboardSelected = false;
     this.history = [];
     this.redo = [];
+    this._curLabel = "Open";
     this._install(svgEl);
     this._renderSelection();
     this._renderInspector();
+    this._renderHistory();
     this._updateButtons();
   },
   // Release the current document before another is mounted (or the app closes) so
@@ -177,13 +179,18 @@ const editor = {
   },
 
   // ---------- history ----------
-  push() {
+  // Each state carries the label of the action that PRODUCED it; the live document's
+  // label is `_curLabel`. push()/commitCoalesce stash the pre-action state (with its
+  // existing label) and set _curLabel to the new action's name, so the History panel
+  // reads as a chronological list: [...history, current, ...redo-reversed].
+  push(label) {
     if (!this.stage) return;
     this.commitCoalesce();                 // flush any in-progress live edit first
     this.history.push(this._state());
     this._trimHistory();
     this.redo = [];
-    this._updateButtons();
+    this._curLabel = label || "Edit";
+    this._updateButtons(); this._renderHistory();
   },
   // Cap undo memory by BYTES, not just count: each snapshot is the full document
   // markup, so a multi-MB traced doc at 100 deep would hold hundreds of MB and the
@@ -200,17 +207,55 @@ const editor = {
   // A run of continuous live edits (dragging a colour picker, typing a number)
   // collapses into ONE undo entry: snapshot once on begin, push it on commit.
   beginCoalesce() { if (!this._coalescing) { this._coalesceState = this._state(); this._coalescing = true; } },
-  commitCoalesce() {
+  commitCoalesce(label) {
     if (!this._coalescing) return;
     this.history.push(this._coalesceState);
     this._trimHistory();
     this.redo = []; this._coalescing = false; this._coalesceState = null;
-    this._updateButtons();
+    if (label) this._curLabel = label;
+    this._updateButtons(); this._renderHistory();
   },
   cancelCoalesce() { this._coalescing = false; this._coalesceState = null; },
-  _state() { return { svg: this._historyMarkup(), sel: [...this.selection], ab: this.artboardSelected }; },
-  undo() { if (this._pen) this._finishPen(true); if (this._curv) this._curvFinish(true); this.commitCoalesce(); if (!this.history.length) return; this.redo.push(this._state()); this._restore(this.history.pop()); },
-  redoAction() { if (this._pen) this._finishPen(true); if (this._curv) this._curvFinish(true); this.commitCoalesce(); if (!this.redo.length) return; this.history.push(this._state()); this._restore(this.redo.pop()); },
+  _state() { return { svg: this._historyMarkup(), sel: [...this.selection], ab: this.artboardSelected, label: this._curLabel || "Edit" }; },
+  undo() {
+    if (this._pen) this._finishPen(true); if (this._curv) this._curvFinish(true); this.commitCoalesce();
+    if (!this.history.length) return;
+    this.redo.push(this._state()); const s = this.history.pop(); this._curLabel = s.label; this._restore(s); this._renderHistory();
+  },
+  redoAction() {
+    if (this._pen) this._finishPen(true); if (this._curv) this._curvFinish(true); this.commitCoalesce();
+    if (!this.redo.length) return;
+    this.history.push(this._state()); const s = this.redo.pop(); this._curLabel = s.label; this._restore(s); this._renderHistory();
+  },
+  // Jump straight to any step in the History panel (one restore, not N steps).
+  jumpTo(i) {
+    if (!this.stage) return;
+    if (this._pen) this._finishPen(true); if (this._curv) this._curvFinish(true); this.commitCoalesce();
+    const all = [...this.history, this._state(), ...this.redo.slice().reverse()];
+    if (i < 0 || i >= all.length || i === this.history.length) return;
+    const target = all[i];
+    this.history = all.slice(0, i);
+    this.redo = all.slice(i + 1).reverse();
+    this._curLabel = target.label;
+    this._restore(target);
+    this._renderHistory();
+  },
+  _renderHistory() {
+    const list = document.querySelector("#history-list"); if (!list) return;
+    list.innerHTML = "";
+    if (!this.stage) return;
+    const all = [...this.history, this._state(), ...this.redo.slice().reverse()];
+    const cur = this.history.length;
+    all.forEach((s, i) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "history-row" + (i === cur ? " current" : "") + (i > cur ? " future" : "");
+      row.textContent = s.label || "Edit";
+      row.addEventListener("click", () => this.jumpTo(i));
+      list.appendChild(row);
+    });
+    list.scrollTop = list.scrollHeight;
+  },
   _restore(state) {
     const host = this.stage.parentElement; if (!host) return;
     const doc = new DOMParser().parseFromString(state.svg, "image/svg+xml");
@@ -298,7 +343,7 @@ const editor = {
     const move = (ev) => {
       if (!pushed && Math.hypot(ev.clientX - startEvent.clientX, ev.clientY - startEvent.clientY) < 3) return;
       if (!pushed) {
-        this.push(); pushed = true;
+        this.push(altDup ? "Duplicate" : "Move"); pushed = true;
         if (altDup) {                        // clone at the origin, then drag the copies
           const ids = this._cloneSelection(0, 0);
           if (ids.length) { this.selection = new Set(ids); nodes = this.selectedNodes(); bases = nodes.map((n) => currentTranslate(n)); duped = true; }
@@ -357,7 +402,7 @@ const editor = {
       if (!moved || !shapeMeaningful(tool, node)) { node.remove(); this.cancelCoalesce(); return; }
       const id = "n" + (++this.idSeq);
       node.setAttribute("data-hv-id", id);
-      this.commitCoalesce();                      // one undo entry for the whole draw
+      this.commitCoalesce(tool === "rect" ? "Rectangle" : tool === "ellipse" ? "Ellipse" : tool === "line" ? "Line" : "Shape");
       this.selection = new Set([id]); this.artboardSelected = false;
       this._renderSelection(); this._renderInspector(); this._renderLayers();
       setStatus(`Added ${this.nodeName(node).toLowerCase()}.`, 1500);
@@ -495,7 +540,7 @@ const editor = {
   },
   _insertPenAnchor(el, i, t) {
     const pa = pathToAnchors(el); if (!pa.editable) return;
-    this.push();
+    this.push("Add point");
     splitCubicInsert(pa.anchors, pa.closed, i, t);
     el.setAttribute("d", penPathD(pa.anchors, pa.closed));
     this.selection = new Set([el.getAttribute("data-hv-id")]); this.artboardSelected = false;
@@ -504,7 +549,7 @@ const editor = {
   },
   _deletePenAnchor(el, k) {
     const pa = pathToAnchors(el); if (!pa.editable) return;
-    this.push();
+    this.push("Delete point");
     pa.anchors.splice(k, 1);
     if (pa.anchors.length < 2) { el.remove(); this.selection = new Set(); }
     else { el.setAttribute("d", penPathD(pa.anchors, pa.closed)); this.selection = new Set([el.getAttribute("data-hv-id")]); }
@@ -580,7 +625,7 @@ const editor = {
     if (continued) {
       // resumed an existing path — keep its id/style, just re-serialize the geometry
       node.setAttribute("d", penPathD(pts, closed, null));
-      this.commitCoalesce();
+      this.commitCoalesce(closed ? "Close path" : "Edit path");
       const id = node.getAttribute("data-hv-id");
       this.selection = id ? new Set([id]) : new Set(); this.artboardSelected = false;
       this._renderSelection(); this._renderInspector(); this._renderLayers();
@@ -596,7 +641,7 @@ const editor = {
     node.setAttribute("vector-effect", "non-scaling-stroke");
     node.setAttribute("stroke-linejoin", "round"); node.setAttribute("stroke-linecap", "round");
     const id = "n" + (++this.idSeq); node.setAttribute("data-hv-id", id);
-    this.commitCoalesce();
+    this.commitCoalesce("Pen path");
     this.selection = new Set([id]); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector(); this._renderLayers();
     setStatus(closed ? "Closed path added." : "Path added.", 1500);
@@ -692,14 +737,14 @@ const editor = {
     node.setAttribute("vector-effect", "non-scaling-stroke");
     node.setAttribute("stroke-linejoin", "round"); node.setAttribute("stroke-linecap", "round");
     const id = "n" + (++this.idSeq); node.setAttribute("data-hv-id", id);
-    this.commitCoalesce();
+    this.commitCoalesce("Curve");
     this.selection = new Set([id]); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector(); this._renderLayers();
     setStatus(closed ? "Closed curve added." : "Curve added.", 1500);
   },
   deleteSelection() {
     const nodes = this.selectedNodes(); if (!nodes.length) return;
-    this.push();
+    this.push("Delete");
     nodes.forEach((n) => n.remove());
     this.selection = new Set();
     this._renderSelection(); this._renderInspector();
@@ -864,7 +909,7 @@ const editor = {
     if (!editable || nd.k >= anchors.length) return;
     const a = anchors[nd.k];
     if (!a.in && !a.out) return;        // already a corner
-    this.push();
+    this.push("Corner");
     a.in = null; a.out = null;
     nd.el.setAttribute("d", penPathD(anchors, closed));
   },
@@ -894,7 +939,7 @@ const editor = {
         moved = true;
         const m = this.stage.getScreenCTM(); if (!m) return;
         const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
-        if (!pushed) { this.push(); pushed = true; }
+        if (!pushed) { this.push("Move point"); pushed = true; }
         if (alt) {                          // Alt-drag → pull symmetric handles (corner→smooth / re-smooth)
           if (!conv) conv = pathToAnchors(nd.el);
           if (!conv.editable || nd.k >= conv.anchors.length) return;
@@ -943,7 +988,7 @@ const editor = {
       jobs.push({ el, ks, pa });
     }
     if (!jobs.length) { this._nodeSel = new Set(); return false; }
-    this.push();
+    this.push("Delete points");
     for (const { el, ks, pa } of jobs) {
       ks.sort((a, b) => b - a).forEach((k) => { if (k >= 0 && k < pa.anchors.length) pa.anchors.splice(k, 1); });
       if (pa.anchors.length < 2) { el.remove(); continue; }
@@ -969,7 +1014,7 @@ const editor = {
       if (pa.closed) { setStatus("Path is already closed.", 2000); return false; }
       const last = pa.anchors.length - 1, ks = [A.k, B.k].sort((a, b) => a - b);
       if (!(ks[0] === 0 && ks[1] === last)) { setStatus("Select an open path's two endpoints to close it.", 3200); return false; }
-      this.push();
+      this.push("Close path");
       el.setAttribute("d", penPathD(pa.anchors, true));
       this.selection = new Set([A.id]); this._nodeSel = new Set();
       this.mountNodeHandles(); this._renderLayers(); this._renderInspector();
@@ -983,7 +1028,7 @@ const editor = {
     if (!(endA || startA) || !(endB || startB)) { setStatus("Select an endpoint on each path.", 3200); return false; }
     const endsAt = endA ? paA.anchors.slice() : rev(paA.anchors);     // list ending at the joined point
     const startsAt = startB ? paB.anchors.slice() : rev(paB.anchors); // list starting at the joined point
-    this.push();
+    this.push("Join paths");
     elA.setAttribute("d", penPathD(endsAt.concat(startsAt), false));
     elB.remove();
     this.selection = new Set([A.id]); this._nodeSel = new Set();
@@ -1019,7 +1064,7 @@ const editor = {
       jobs.push({ el, ks, pa });
     }
     if (!jobs.length) return false;
-    this.push();
+    this.push(type === "smooth" ? "Round" : "Sharpen");
     const f = 1 / 3;
     for (const { el, ks, pa } of jobs) {
       const n = pa.anchors.length;
@@ -1053,7 +1098,7 @@ const editor = {
       const sync = (line, h) => { dot.setAttribute("cx", nfmt(h.x)); dot.setAttribute("cy", nfmt(h.y)); line.setAttribute("x2", nfmt(h.x)); line.setAttribute("y2", nfmt(h.y)); };
       const move = (ev) => {
         const m = this.stage.getScreenCTM(); if (!m) return;
-        if (!pushed) { this.push(); pushed = true; }
+        if (!pushed) { this.push("Reshape"); pushed = true; }
         let p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
         if (ev.shiftKey) p = snap45(nd.x, nd.y, p.x, p.y);
         const mirror = smooth && !ev.altKey;            // Alt breaks the smooth point into a cusp
@@ -1083,7 +1128,7 @@ const editor = {
       let pushed = false;
       const move = (ev) => {
         const m = this.stage.getScreenCTM(); if (!m) return;
-        if (!pushed) { this.push(); pushed = true; }
+        if (!pushed) { this.push("Move point"); pushed = true; }
         const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
         c.setAttribute("cx", p.x); c.setAttribute("cy", p.y);
         a.set(p.x, p.y);
@@ -1175,7 +1220,7 @@ const editor = {
         const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
         const ax = ev.altKey ? cx : spec.ax, ay = ev.altKey ? cy : spec.ay;   // Alt → scale from centre
         const f = this._scaleFactors(spec, p, ev.shiftKey, ax, ay); last = { ...f, ax, ay };
-        if (!pushed && (Math.abs(f.sx - 1) > 1e-4 || Math.abs(f.sy - 1) > 1e-4)) { this.push(); pushed = true; }
+        if (!pushed && (Math.abs(f.sx - 1) > 1e-4 || Math.abs(f.sy - 1) > 1e-4)) { this.push("Scale"); pushed = true; }
         apply(f.sx, f.sy, ax, ay);
         this._updateXformVisual(spec, f.sx, f.sy, ax, ay);
       };
@@ -1216,7 +1261,7 @@ const editor = {
     const move = (ev) => {
       if (!moved && Math.hypot(ev.clientX - startEvent.clientX, ev.clientY - startEvent.clientY) < 3) return;
       moved = true;
-      if (!pushed) { this.push(); pushed = true; }
+      if (!pushed) { this.push("Reshape"); pushed = true; }
       const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
       let dx = p.x - start.x, dy = p.y - start.y;
       if (ev.shiftKey) { const s = snapper.snap(dx, dy); dx = s.x; dy = s.y; } else snapper.reset();
@@ -1374,7 +1419,7 @@ const editor = {
   },
   duplicate() {
     const nodes = this.selectedNodes(); if (!nodes.length) return;
-    this.push();
+    this.push("Duplicate");
     const ids = this._cloneSelection(12, 12);
     this.selection = new Set(ids); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector(); this._renderLayers();
@@ -1397,7 +1442,7 @@ const editor = {
       if (src) els.push(document.importNode(src, true));
     }
     if (!els.length) return;
-    this.push();
+    this.push("Paste");
     const ov = this._overlayEl(); const ids = [];
     for (const el of els) {
       const id = "n" + (++this.idSeq); el.setAttribute("data-hv-id", id);
@@ -1450,7 +1495,7 @@ const editor = {
       g.appendChild(node);
     }
     this.stage.insertBefore(g, ov);
-    this.commitCoalesce();
+    this.commitCoalesce("Place");
     this.selection = new Set([gid]); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector(); this._renderLayers();
     setStatus(`Placed ${label || "vector"} — ${src.length} object${src.length > 1 ? "s" : ""} (grouped).`, 2800);
@@ -1464,13 +1509,13 @@ const editor = {
   },
   nudge(dx, dy) {
     const nodes = this.selectedNodes(); if (!nodes.length) return;
-    this.push();
+    this.push("Move");
     nodes.forEach((n) => { const t = currentTranslate(n); setTranslate(n, t.x + dx, t.y + dy); });
     this._renderSelection();
   },
   reorder(mode) {
     const nodes = this.selectedNodes(); if (!nodes.length || !this.stage) return;
-    this.push();
+    this.push("Arrange");
     const ov = this._overlayEl();
     if (mode === "front") { for (const n of nodes) this.stage.insertBefore(n, ov); }
     else if (mode === "back") { const first = this._artworkNodes()[0]; for (const n of nodes.slice().reverse()) this.stage.insertBefore(n, first); }
@@ -1486,7 +1531,7 @@ const editor = {
     const whole = this.artboardSelected || this.selection.size === 0;
     const nodes = whole ? this._artworkNodes() : this.selectedNodes();
     if (!nodes.length) { setStatus("Nothing to transform.", 1500); return; }
-    this.push();
+    this.push(/rotate/i.test(op) ? "Rotate" : "Flip");
     const vb = this.stage.viewBox.baseVal;
     let cx, cy;
     if (whole) { cx = vb.x + vb.width / 2; cy = vb.y + vb.height / 2; }
@@ -1636,7 +1681,7 @@ const editor = {
   },
   _commitBoolean(nodes, d, fillRule, src, msg, fillOverride) {
     if (!d) { setStatus("Result is empty — nothing changed.", 2800); return; }
-    this.push();
+    this.push("Combine");
     const anchor = nodes[0];   // keep the result where the bottom-most input was
     const path = document.createElementNS(SVG_NS, "path");
     const id = "n" + (++this.idSeq); path.setAttribute("data-hv-id", id);
@@ -1683,34 +1728,34 @@ const editor = {
   },
   setVisibility(id, visible) {
     const n = this.nodeById(id); if (!n) return;
-    this.push();
+    this.push(visible ? "Show" : "Hide");
     if (visible) n.removeAttribute("display"); else n.setAttribute("display", "none");
     this._renderLayers(); this._renderSelection();
   },
   toggleLock(id) {
     const n = this.nodeById(id); if (!n) return;
-    this.push();
+    this.push("Lock");
     if (n.getAttribute("data-hv-locked") === "1") n.removeAttribute("data-hv-locked");
     else { n.setAttribute("data-hv-locked", "1"); this.selection.delete(id); }
     this._renderSelection(); this._renderInspector();
   },
   rename(id, name) {
     const n = this.nodeById(id); if (!n) return;
-    this.push();
+    this.push("Rename");
     if (name) n.setAttribute("data-hv-name", name); else n.removeAttribute("data-hv-name");
     this._renderLayers();
   },
   reorderTo(srcId, tgtId) {
     const src = this.nodeById(srcId), tgt = this.nodeById(tgtId);
     if (!src || !tgt || src === tgt) return;
-    this.push();
+    this.push("Reorder");
     this.stage.insertBefore(src, tgt.nextSibling);   // src lands just in front of tgt
     this._renderSelection(); this._renderLayers();
   },
   group() {
     const ordered = this._artworkNodes().filter((n) => this.selection.has(n.getAttribute("data-hv-id")));
     if (ordered.length < 2) { setStatus("Select 2 or more objects to group.", 2500); return; }
-    this.push();
+    this.push("Group");
     const ov = this._overlayEl();
     const g = document.createElementNS(SVG_NS, "g");
     const id = "n" + (++this.idSeq); g.setAttribute("data-hv-id", id);
@@ -1724,7 +1769,7 @@ const editor = {
   ungroup() {
     const groups = this.selectedNodes().filter((n) => n.tagName.toLowerCase() === "g");
     if (!groups.length) { setStatus("Select a group to ungroup.", 2500); return; }
-    this.push();
+    this.push("Ungroup");
     const ids = [];
     for (const g of groups) {
       const gt = currentTranslate(g);
@@ -1782,7 +1827,7 @@ const editor = {
     };
     scrub(this.stage);
     if (!removed && !unwrapped) { this.cancelCoalesce(); setStatus("No ghost layers found.", 2000); return; }
-    this.commitCoalesce();
+    this.commitCoalesce("Clean up");
     this.selection = new Set([...this.selection].filter((id) => this.nodeById(id)));
     this._renderSelection(); this._renderInspector(); this._renderLayers();
     const bits = [];
@@ -1827,7 +1872,7 @@ const editor = {
       }
     }
     if (!mergedAway) { this.cancelCoalesce(); setStatus("Nothing to merge — each layer is already a distinct colour.", 3000); return; }
-    this.commitCoalesce();
+    this.commitCoalesce("Merge colours");
     this.selection = new Set([...this.selection].filter((id) => this.nodeById(id)));
     this._renderSelection(); this._renderInspector(); this._renderLayers();
     setStatus(`Merged ${mergedAway + into} layers into ${into} by colour.`, 3000);
@@ -1933,12 +1978,11 @@ const editor = {
   _objectPanel(nodes) {
     const first = nodes[0];
     const wrap = document.createElement("div");
-    const commit = () => this.commitCoalesce();
     const fillHex = toHexColor(first.getAttribute("fill")) || "#000000";
     const fillNone = first.getAttribute("fill") === "none";
     wrap.appendChild(inspGroup("Fill", [
-      colorRow("Colour", fillHex, (v) => { this.beginCoalesce(); this.applyFill(v); }, commit),
-      checkRow("No fill", fillNone, (on) => { this.push(); this.applyFill(on ? null : (toHexColor(first.getAttribute("fill")) || "#000000")); }),
+      colorRow("Colour", fillHex, (v) => { this.beginCoalesce(); this.applyFill(v); }, () => this.commitCoalesce("Fill")),
+      checkRow("No fill", fillNone, (on) => { this.push("Fill"); this.applyFill(on ? null : (toHexColor(first.getAttribute("fill")) || "#000000")); }),
     ]));
     const strokeHex = toHexColor(first.getAttribute("stroke")) || "#000000";
     const strokeW = parseFloat(first.getAttribute("stroke-width")) || 0;
@@ -1946,33 +1990,30 @@ const editor = {
     const curW = () => Math.max(parseFloat(this._strokeWidthInput && this._strokeWidthInput.value) || strokeW || 1, 0.01);
     const curC = () => toHexColor(first.getAttribute("stroke")) || strokeHex;
     wrap.appendChild(inspGroup("Stroke", [
-      colorRow("Colour", strokeHex, (v) => { this.beginCoalesce(); this.applyStroke(v, curW()); }, commit),
-      numRow("Width", strokeW, 0, 0.5, (v) => { this.beginCoalesce(); this.applyStroke(curC(), v); }, (inp) => { this._strokeWidthInput = inp; }, commit),
+      colorRow("Colour", strokeHex, (v) => { this.beginCoalesce(); this.applyStroke(v, curW()); }, () => this.commitCoalesce("Stroke")),
+      numRow("Width", strokeW, 0, 0.5, (v) => { this.beginCoalesce(); this.applyStroke(curC(), v); }, (inp) => { this._strokeWidthInput = inp; }, () => this.commitCoalesce("Stroke")),
     ]));
     const op = first.hasAttribute("opacity") ? parseFloat(first.getAttribute("opacity")) : 1;
     wrap.appendChild(inspGroup("Opacity", [
-      numRow("Alpha", op, 0, 0.05, (v) => { this.beginCoalesce(); this.applyOpacity(Math.max(0, Math.min(1, v))); }, null, commit),
+      numRow("Alpha", op, 0, 0.05, (v) => { this.beginCoalesce(); this.applyOpacity(Math.max(0, Math.min(1, v))); }, null, () => this.commitCoalesce("Opacity")),
     ]));
-    // Object actions (duplicate/delete/reorder/booleans/invert) live on the
-    // right-click context menu now — the inspector is properties only.
     return wrap;
   },
   _artboardPanel() {
     const ab = this.artboardEl();
     const vb = this.stage.viewBox.baseVal;
     const wrap = document.createElement("div");
-    const commit = () => this.commitCoalesce();
     const bgHex = toHexColor(ab.getAttribute("fill")) || "#ffffff";
     const bgNone = !ab.getAttribute("fill") || ab.getAttribute("fill") === "none";
     let wInp, hInp;
     const liveSize = () => { this.beginCoalesce(); this.applyArtboardSize(parseFloat(wInp.value) || vb.width, parseFloat(hInp.value) || vb.height); };
     wrap.appendChild(inspGroup("Size", [
-      numRow("Width", Math.round(vb.width), 1, 1, liveSize, (i) => { wInp = i; }, commit),
-      numRow("Height", Math.round(vb.height), 1, 1, liveSize, (i) => { hInp = i; }, commit),
+      numRow("Width", Math.round(vb.width), 1, 1, liveSize, (i) => { wInp = i; }, () => this.commitCoalesce("Resize artboard")),
+      numRow("Height", Math.round(vb.height), 1, 1, liveSize, (i) => { hInp = i; }, () => this.commitCoalesce("Resize artboard")),
     ]));
     wrap.appendChild(inspGroup("Background", [
-      colorRow("Colour", bgHex, (v) => { this.beginCoalesce(); this.applyArtboardBg(v); }, commit),
-      checkRow("Transparent", bgNone, (on) => { this.push(); this.applyArtboardBg(on ? null : (toHexColor(ab.getAttribute("fill")) || "#ffffff")); }),
+      colorRow("Colour", bgHex, (v) => { this.beginCoalesce(); this.applyArtboardBg(v); }, () => this.commitCoalesce("Background")),
+      checkRow("Transparent", bgNone, (on) => { this.push("Background"); this.applyArtboardBg(on ? null : (toHexColor(ab.getAttribute("fill")) || "#ffffff")); }),
     ]));
     return wrap;
   },

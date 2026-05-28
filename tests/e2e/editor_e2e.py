@@ -56,15 +56,26 @@ def mount_ctl(page):
     page.wait_for_function("editor.stage && editor.nodeById('r2')", timeout=8000)
     page.wait_for_timeout(150)
 
+def open_ctx_panel(page):
+    """Open the right-click style+actions panel for the current selection/artboard."""
+    page.evaluate("""() => {
+        const sw = document.querySelector('.stage-wrap');
+        const sel = [...editor.selection];
+        let x = 12, y = 12, target = sw;
+        if (sel.length) { const n = editor.nodeById(sel[0]); const r = n.getBoundingClientRect(); x = r.left + r.width/2; y = r.top + r.height/2; target = n; }
+        target.dispatchEvent(new MouseEvent('contextmenu', { clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    }""")
+
 def set_inspector_input(page, kind, index, value, event):
-    """Set the index-th inspector input of a given type and dispatch `event`."""
+    """Set the index-th style input of a given type in the context panel; dispatch `event`."""
+    open_ctx_panel(page)
     page.evaluate(
         """({kind, index, value, event}) => {
-            const sel = kind === 'color' ? '#inspector-body input[type=color]'
-                      : kind === 'number' ? '#inspector-body input[type=number]'
-                      : '#inspector-body input[type=checkbox]';
+            const sel = kind === 'color' ? '.context-panel input[type=color]'
+                      : kind === 'number' ? '.context-panel input[type=number]'
+                      : '.context-panel input[type=checkbox]';
             const el = document.querySelectorAll(sel)[index];
-            if (!el) throw new Error('no inspector input ' + kind + ' #' + index);
+            if (!el) throw new Error('no style input ' + kind + ' #' + index);
             if (kind === 'checkbox') el.checked = !!value; else el.value = String(value);
             el.dispatchEvent(new Event(event, { bubbles: true }));
         }""", {"kind": kind, "index": index, "value": value, "event": event})
@@ -184,8 +195,7 @@ def main():
         }""")
         page.mouse.click(empty["x"], empty["y"])
         page.wait_for_timeout(80)
-        insp = page.eval_on_selector("#inspector-title", "e => e.textContent")
-        check("empty click selects artboard", page.evaluate("editor.artboardSelected") and insp == "Artboard", insp)
+        check("empty click selects artboard", page.evaluate("editor.artboardSelected"))
 
         # drag-move maps screen delta to geometry (getScreenCTM round trip)
         click_node(page, "r3")
@@ -212,7 +222,8 @@ def main():
         click_node(page, "r1")
         page.wait_for_timeout(60)
         hf = page.evaluate("editor.history.length")
-        page.evaluate("""() => { const el = document.querySelector('#inspector-body input[type=color]');
+        open_ctx_panel(page)
+        page.evaluate("""() => { const el = document.querySelector('.context-panel input[type=color]');
             ['#00aa00','#00cc00','#00ee00','#00ff00'].forEach(v => { el.value = v; el.dispatchEvent(new Event('input',{bubbles:true})); });
             el.dispatchEvent(new Event('change',{bubbles:true})); }""")
         page.wait_for_timeout(60)
@@ -233,6 +244,7 @@ def main():
         check("inspector opacity applies", page.evaluate("editor.nodeById('r1').getAttribute('opacity')") == "0.5")
 
         # delete
+        page.keyboard.press("Escape")   # close the style panel before clicking the canvas
         click_node(page, "r2"); page.wait_for_timeout(50)
         page.keyboard.press("Delete"); page.wait_for_timeout(60)
         check("delete removes node", page.evaluate("!editor.nodeById('r2')") and page.evaluate("editor.selection.size") == 0)
@@ -301,6 +313,7 @@ def main():
         mount_ctl(page)
         base = page.evaluate(SUMMARY)
         click_node(page, "r1"); set_inspector_input(page, "color", 0, "#0000ff", "input"); page.wait_for_timeout(40)
+        page.keyboard.press("Escape")   # close the style panel before clicking the canvas
         click_node(page, "r2")
         rr = node_rect(page, "r2"); page.mouse.move(rr["cx"], rr["cy"]); page.mouse.down(); page.mouse.move(rr["cx"]+33, rr["cy"]+22, steps=6); page.mouse.up()
         page.wait_for_timeout(40)

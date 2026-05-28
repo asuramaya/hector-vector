@@ -926,6 +926,7 @@ async function copySvgSource() {
 
 // ---------- document menu actions ----------
 function mountStageFromText(text, name) {
+  hideContextMenu();  // drop any open style panel referencing the outgoing document
   editor.dispose();   // release the previous document (undo snapshots, listeners) before swapping
   const vp = viewports.output;
   vp.url = "mem:" + name; vp.name = name; vp.kind = "svg"; vp.path = null;
@@ -1264,25 +1265,67 @@ document.addEventListener("keydown", (event) => {
 // ---------- right-click context menu (canvas + objects) ----------
 let ctxMenuEl = null;
 function hideContextMenu() { if (ctxMenuEl) { ctxMenuEl.remove(); ctxMenuEl = null; } }
-function showContextMenu(x, y, items) {
-  hideContextMenu();
-  const menu = document.createElement("div");
-  menu.className = "context-menu menu-list";
-  menu.setAttribute("role", "menu");
+function appendMenuItems(menu, items, afterClick) {
   for (const item of items) {
     if (item.type === "sep") { const s = document.createElement("div"); s.className = "menu-sep"; menu.appendChild(s); continue; }
     const btn = document.createElement("button");
     btn.type = "button"; btn.className = "menu-item"; btn.disabled = !!item.disabled; btn.setAttribute("role", "menuitem");
     btn.innerHTML = `<span class="menu-check"></span><span class="menu-label"></span>`;
     btn.querySelector(".menu-label").textContent = item.label;
-    btn.addEventListener("click", () => { hideContextMenu(); try { item.onClick(); } catch (e) { setStatus(e.message || String(e), 3000); } });
+    btn.addEventListener("click", () => {
+      try { item.onClick(); } catch (e) { setStatus(e.message || String(e), 3000); }
+      if (afterClick) afterClick(); else hideContextMenu();
+    });
     menu.appendChild(btn);
   }
+}
+function placeAt(el, x, y) {
+  const r = el.getBoundingClientRect();
+  el.style.left = Math.max(2, Math.min(x, window.innerWidth - r.width - 4)) + "px";
+  el.style.top = Math.max(2, Math.min(y, window.innerHeight - r.height - 4)) + "px";
+}
+function showContextMenu(x, y, items) {
+  hideContextMenu();
+  const menu = document.createElement("div");
+  menu.className = "context-menu menu-list";
+  menu.setAttribute("role", "menu");
+  appendMenuItems(menu, items, null);
   document.body.appendChild(menu);
-  const r = menu.getBoundingClientRect();
-  menu.style.left = Math.max(2, Math.min(x, window.innerWidth - r.width - 4)) + "px";
-  menu.style.top = Math.max(2, Math.min(y, window.innerHeight - r.height - 4)) + "px";
+  placeAt(menu, x, y);
   ctxMenuEl = menu;
+}
+// Redesigned object/canvas context: a persistent panel holding the style editors
+// (fill/stroke/opacity, or artboard size/background) plus all the actions in one
+// place. Style edits are live; actions execute and rebuild the panel in place
+// (closing if the selection empties). Dismiss with Esc or a click on the canvas.
+function showContextPanel(x, y, kind) {
+  hideContextMenu();
+  const panel = document.createElement("div");
+  panel.className = "context-menu context-panel";
+  const build = () => {
+    panel.innerHTML = "";
+    const head = document.createElement("div"); head.className = "ctx-head";
+    const style = document.createElement("div"); style.className = "ctx-style";
+    if (kind === "object") {
+      const nodes = editor.selectedNodes();
+      head.textContent = nodes.length === 1 ? "Object" : `${nodes.length} objects`;
+      style.appendChild(editor._objectPanel(nodes));
+    } else {
+      head.textContent = "Artboard";
+      style.appendChild(editor._artboardPanel());
+    }
+    panel.appendChild(head); panel.appendChild(style);
+    const acts = document.createElement("div"); acts.className = "ctx-actions";
+    appendMenuItems(acts, kind === "object" ? objectMenuItems() : canvasMenuItems(), () => {
+      if (kind === "object" && !editor.selectedNodes().length) { hideContextMenu(); return; }
+      build();
+    });
+    panel.appendChild(acts);
+  };
+  build();
+  document.body.appendChild(panel);
+  placeAt(panel, x, y);
+  ctxMenuEl = panel;
 }
 function objectMenuItems() {
   const sel = editor.selectedNodes();
@@ -1363,11 +1406,11 @@ function canvasMenuItems() {
         editor.selection = new Set([id]); editor.artboardSelected = false;
         editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
       }
-      showContextMenu(e.clientX, e.clientY, objectMenuItems());
+      showContextPanel(e.clientX, e.clientY, "object");
     } else {
       editor.selection = new Set(); editor.artboardSelected = true;
       editor._renderSelection(); editor._renderInspector();
-      showContextMenu(e.clientX, e.clientY, canvasMenuItems());
+      showContextPanel(e.clientX, e.clientY, "canvas");
     }
   });
 }
