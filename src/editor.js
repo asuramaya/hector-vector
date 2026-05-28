@@ -2097,14 +2097,17 @@ const editor = {
     return inspRow(label, btn);
   },
   // A segmented control (cap / join). `glyphs` is [[value, glyph], …]; `titles` maps value→tooltip.
+  // Updates its own active button inline — the persistent context panel isn't rebuilt
+  // on every edit, so relying on _renderInspector here left the highlight stale ("dead").
   _segRow(label, value, glyphs, titles, onPick) {
     const seg = document.createElement("div"); seg.className = "insp-seg";
+    const btns = [];
     for (const [val, glyph] of glyphs) {
       const b = document.createElement("button");
       b.type = "button"; b.className = "insp-seg-btn" + (val === value ? " active" : "");
       b.textContent = glyph; b.title = (titles && titles[val]) || val;
-      b.addEventListener("click", () => { onPick(val); this._renderInspector(); });
-      seg.appendChild(b);
+      b.addEventListener("click", () => { onPick(val); btns.forEach((x) => x.classList.toggle("active", x === b)); });
+      btns.push(b); seg.appendChild(b);
     }
     return inspRow(label, seg);
   },
@@ -2183,6 +2186,41 @@ function colorRow(label, value, onLive, onCommit) {
   inp.addEventListener("change", () => { onLive(inp.value); if (onCommit) onCommit(); });
   return inspRow(label, inp);
 }
+// Drag-to-scrub: the row label becomes an "invisible slider" (ew-resize). Drag right
+// to raise / left to lower by `step` per ~4px; coarse Shift = ×10, fine Alt = ÷10. A
+// plain click does nothing (so the number field stays normally typeable). The live
+// onLive runs through coalesce; onCommit fires once at the end of the drag.
+function makeScrub(handle, inp, min, step, onLive, onCommit) {
+  if (!handle) return;
+  handle.classList.add("scrub");
+  handle.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    const startX = e.clientX;
+    const start = parseFloat(inp.value) || 0;
+    const base = parseFloat(step) || 1;
+    const lo = min != null ? parseFloat(min) : -Infinity;
+    let moved = false;
+    const move = (ev) => {
+      const dx = ev.clientX - startX;
+      if (!moved && Math.abs(dx) < 3) return;
+      moved = true;
+      const unit = ev.shiftKey ? base * 10 : ev.altKey ? base / 10 : base;
+      let v = start + Math.round(dx / 4) * unit;
+      v = Math.max(lo, Math.round(v * 1e4) / 1e4);
+      inp.value = String(v);
+      onLive(v);
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      if (moved && onCommit) onCommit();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+  });
+}
 function numRow(label, value, min, step, onLive, capture, onCommit) {
   const inp = document.createElement("input"); inp.type = "number"; inp.value = String(value);
   if (min != null) inp.min = String(min);
@@ -2190,7 +2228,9 @@ function numRow(label, value, min, step, onLive, capture, onCommit) {
   inp.addEventListener("input", () => { if (inp.value !== "") onLive(parseFloat(inp.value)); });
   inp.addEventListener("change", () => { if (inp.value !== "") onLive(parseFloat(inp.value)); if (onCommit) onCommit(); });
   if (capture) capture(inp);
-  return inspRow(label, inp);
+  const row = inspRow(label, inp);
+  makeScrub(row.querySelector("span"), inp, min, step, onLive, onCommit);
+  return row;
 }
 function checkRow(label, checked, onChange) {
   const inp = document.createElement("input"); inp.type = "checkbox"; inp.checked = checked;

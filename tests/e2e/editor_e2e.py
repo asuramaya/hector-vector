@@ -265,10 +265,23 @@ def main():
 
         # inspector: stroke cap (segmented control) + dashes (r1 has a stroke now)
         open_ctx_panel(page)
-        page.evaluate("""() => { const seg = document.querySelectorAll('.context-panel .insp-seg')[0];
-            [...seg.querySelectorAll('.insp-seg-btn')].find(b => b.title === 'Round').click(); }""")
+        seg_active = page.evaluate("""() => { const seg = document.querySelectorAll('.context-panel .insp-seg')[0];
+            const btn = [...seg.querySelectorAll('.insp-seg-btn')].find(b => b.title === 'Round'); btn.click();
+            const a = seg.querySelector('.insp-seg-btn.active'); return a && a.title; }""")
         page.wait_for_timeout(40)
         check("stroke cap via segmented control", page.evaluate("editor.nodeById('r1').getAttribute('stroke-linecap')") == "round")
+        # the segmented control updates its OWN active highlight (the 'unresponsive panel' fix)
+        check("segmented control reflects the active option", seg_active == "Round", f"active={seg_active}")
+        # drag-to-scrub: dragging the Width label changes stroke-width (invisible slider)
+        open_ctx_panel(page)
+        lbl = page.evaluate("""() => { const sp = [...document.querySelectorAll('.context-panel .insp-row > span')]
+            .find(s => s.textContent === 'Width'); if (!sp) return null;
+            const r = sp.getBoundingClientRect(); return { x: r.left + r.width/2, y: r.top + r.height/2 }; }""")
+        w0 = page.evaluate("parseFloat(editor.nodeById('r1').getAttribute('stroke-width'))")
+        page.mouse.move(lbl["x"], lbl["y"]); page.mouse.down()
+        page.mouse.move(lbl["x"] + 40, lbl["y"], steps=10); page.mouse.up(); page.wait_for_timeout(50)
+        w1 = page.evaluate("parseFloat(editor.nodeById('r1').getAttribute('stroke-width'))")
+        check("drag-scrub label changes the value", w1 > w0, f"{w0} -> {w1}")
         open_ctx_panel(page)
         page.evaluate("""() => { const el = document.querySelector('.context-panel .insp-dash input');
             el.value = '6 4'; el.dispatchEvent(new Event('change', { bubbles: true })); }""")
@@ -401,6 +414,12 @@ def main():
               and inv["rule"] == "nonzero" and inv["subpaths"] >= 4, str(inv))
         page.keyboard.press("Control+z"); page.wait_for_timeout(50)
         check("invert-space is undoable", page.evaluate("editor._artworkNodes().length") == 3)
+
+        # tool buttons carry their shortcut letter (rendered as a corner badge via CSS)
+        badges = page.evaluate("""() => { const tb = [...document.querySelectorAll('.tool-button[data-tool]')];
+            return { total: tb.length, keyed: tb.filter(b => (b.getAttribute('data-key') || '').length === 1).length,
+                     pen: document.querySelector('.tool-button[data-tool=pen]').getAttribute('data-key') }; }""")
+        check("tool buttons have shortcut badges", badges["total"] >= 9 and badges["keyed"] == badges["total"] and badges["pen"] == "P", str(badges))
 
         # ---- F. Process workspace + rail collapse doesn't break the stage ----
         page.click("#process-button"); page.wait_for_timeout(150)

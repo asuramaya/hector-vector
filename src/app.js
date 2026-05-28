@@ -862,6 +862,7 @@ function openColorPicker(opts) {
   // working state in HSV (+ a) so dragging the field doesn't drift the hue at S/V=0
   const seed = hv.hexToRgb(startHex || "#000000") || { r: 0, g: 0, b: 0 };
   const st = Object.assign({ a: startAlpha, none: startHex === null }, hv.rgbToHsv(seed.r, seed.g, seed.b));
+  let other = { a: st.a, none: st.none, h: st.h, s: st.s, v: st.v };   // the alternate (previous) colour for the preview toggle
 
   const back = document.createElement("div"); back.className = "cp-backdrop";
   const win = document.createElement("div"); win.className = "cp-window";
@@ -902,7 +903,6 @@ function openColorPicker(opts) {
 
   const curHex = () => { const c = hv.hsvToRgb(st.h, st.s, st.v); return hv.rgbToHex(c.r, c.g, c.b); };
   const checker = "repeating-conic-gradient(#bbb 0% 25%, #fff 0% 50%) 50% / 12px 12px";
-  prevOld.style.background = startHex ? startHex : checker;
 
   function paint() {
     const hex = curHex(); const rgb = hv.hexToRgb(hex);
@@ -915,6 +915,9 @@ function openColorPicker(opts) {
     alphaThumb.style.left = (st.a * 100) + "%";
     prevNew.style.background = st.none ? checker : hex;
     prevNew.style.opacity = st.none ? 1 : st.a;
+    const oHex = other.none ? null : (() => { const c = hv.hsvToRgb(other.h, other.s, other.v); return hv.rgbToHex(c.r, c.g, c.b); })();
+    prevOld.style.background = oHex == null ? checker : oHex;
+    prevOld.style.opacity = oHex == null ? 1 : other.a;
     inputs.hex.value = hex.slice(1); inputs.r.value = rgb.r; inputs.g.value = rgb.g; inputs.b.value = rgb.b;
     inputs.h.value = Math.round(st.h); inputs.s.value = Math.round(st.s); inputs.v.value = Math.round(st.v);
     inputs.a.value = Math.round(st.a * 100);
@@ -922,6 +925,11 @@ function openColorPicker(opts) {
   }
   function emit() { if (opts.onChange) opts.onChange(st.none ? null : curHex(), st.a); }
   function changed() { st.none = false; paint(); emit(); }
+  // Click either preview square to alternate between the two colours (the working
+  // pick and the previous one) — applies live so you can A/B compare.
+  const swapPreview = () => { const cur = { a: st.a, none: st.none, h: st.h, s: st.s, v: st.v }; Object.assign(st, other); other = cur; paint(); emit(); };
+  prevNew.addEventListener("click", swapPreview);
+  prevOld.addEventListener("click", swapPreview);
 
   // --- drag helpers ---
   function bindDrag(el, onMove) {
@@ -950,6 +958,20 @@ function openColorPicker(opts) {
   inputs.s.addEventListener("input", () => { st.s = Math.max(0, Math.min(100, +inputs.s.value || 0)); changed(); });
   inputs.v.addEventListener("input", () => { st.v = Math.max(0, Math.min(100, +inputs.v.value || 0)); changed(); });
   inputs.a.addEventListener("input", () => { st.a = clamp01((+inputs.a.value || 0) / 100); paint(); emit(); });
+
+  // --- scrubbable numeric labels (drag the R/G/B/H/S/Bv/A% chips) ---
+  win.querySelectorAll(".cp-inp").forEach((lab) => {
+    const input = lab.querySelector("input"); if (!input || input.dataset.k === "hex") return;
+    lab.addEventListener("pointerdown", (e) => {
+      if (e.target === input || e.button !== 0) return;   // click the field to type; drag the label to scrub
+      e.preventDefault(); lab.setPointerCapture(e.pointerId);
+      const sx = e.clientX, start = parseFloat(input.value) || 0; let moved = false;
+      const mv = (ev) => { const dx = ev.clientX - sx; if (!moved && Math.abs(dx) < 3) return; moved = true;
+        input.value = String(start + Math.round(dx / 4)); input.dispatchEvent(new Event("input", { bubbles: true })); };
+      const up = () => { lab.removeEventListener("pointermove", mv); lab.removeEventListener("pointerup", up); };
+      lab.addEventListener("pointermove", mv); lab.addEventListener("pointerup", up);
+    });
+  });
 
   // --- quick swatches ---
   const sw = $(".cp-swatches");
@@ -1737,7 +1759,11 @@ function canvasMenuItems() {
     }
   });
 }
-document.addEventListener("pointerdown", (e) => { if (ctxMenuEl && !e.target.closest(".context-menu")) hideContextMenu(); });
+// Click-away closes the context panel — but NOT when the click lands in the colour
+// picker it spawned (the picker's backdrop lives outside .context-menu).
+document.addEventListener("pointerdown", (e) => {
+  if (ctxMenuEl && !e.target.closest(".context-menu") && !e.target.closest(".cp-backdrop")) hideContextMenu();
+});
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideContextMenu(); });
 window.addEventListener("blur", hideContextMenu);
 window.addEventListener("pagehide", () => editor.dispose());   // free document state when the app closes

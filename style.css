@@ -263,6 +263,7 @@ button:disabled {
   flex: 0 0 auto;
 }
 .tool-button {
+  position: relative;
   width: 34px; height: 34px;
   border: 1px solid var(--line);
   background: var(--bg); color: var(--fg);
@@ -270,6 +271,14 @@ button:disabled {
   display: grid; place-items: center;
 }
 .tool-button.active { background: #000; color: #fff; }
+/* shortcut badge: a tiny letter in the bottom-right corner */
+.tool-button[data-key]::after {
+  content: attr(data-key);
+  position: absolute; right: 1px; bottom: 0;
+  font-size: 8px; line-height: 1; font-weight: 600;
+  color: var(--muted); pointer-events: none; letter-spacing: 0;
+}
+.tool-button.active[data-key]::after { color: rgba(255, 255, 255, 0.75); }
 .tool-sep { height: 1px; background: var(--line); margin: 2px 4px; align-self: stretch; }
 /* Fill (primary) / stroke (secondary) swatches, pinned to the bottom of the strip. */
 .tool-spacer { flex: 1 1 auto; }
@@ -331,6 +340,9 @@ button:disabled {
 .insp-title { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 4px; }
 .insp-row { display: grid; grid-template-columns: 70px 1fr; gap: 8px; align-items: center; }
 .insp-row > span { font-size: 12px; color: var(--muted); }
+/* scrubbable number label — drag horizontally to change the value */
+.insp-row > span.scrub { cursor: ew-resize; user-select: none; -webkit-user-select: none; touch-action: none; }
+.insp-row > span.scrub:hover { color: var(--fg); text-decoration: underline dotted; text-underline-offset: 2px; }
 .insp-row input[type="color"] { width: 100%; height: 30px; padding: 0; border: 1px solid var(--line); background: var(--bg); cursor: pointer; }
 .insp-row input[type="number"], .insp-row input[type="text"], .insp-row select {
   width: 100%; border: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 6px 8px; font: inherit; min-width: 0;
@@ -370,13 +382,15 @@ button:disabled {
   background: rgba(0, 0, 0, 0.35);
 }
 .cp-window {
-  width: 300px; background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+  width: 320px; max-width: calc(100vw - 24px); box-sizing: border-box;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--line);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35); padding: 12px; display: flex; flex-direction: column; gap: 10px;
-  font-size: 12px;
+  font-size: 12px; overflow: hidden;
 }
 .cp-head { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
-.cp-body { display: flex; gap: 8px; }
-.cp-field { position: relative; width: 200px; height: 160px; cursor: crosshair; border: 1px solid var(--line); flex: 0 0 auto; }
+.cp-body { display: flex; gap: 8px; min-width: 0; }
+/* field flexes to fill the row so field + hue + preview never overflow the window */
+.cp-field { position: relative; flex: 1 1 auto; width: auto; min-width: 0; height: 160px; cursor: crosshair; border: 1px solid var(--line); }
 .cp-field-sat { position: absolute; inset: 0; background: linear-gradient(to right, #fff, rgba(255,255,255,0)); }
 .cp-field-val { position: absolute; inset: 0; background: linear-gradient(to top, #000, rgba(0,0,0,0)); }
 .cp-field-thumb {
@@ -386,14 +400,15 @@ button:disabled {
 .cp-hue { position: relative; width: 16px; height: 160px; cursor: ns-resize; border: 1px solid var(--line); flex: 0 0 auto;
   background: linear-gradient(to bottom, #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%); }
 .cp-hue-thumb { position: absolute; left: -2px; right: -2px; height: 4px; background: #fff; border: 1px solid #000; transform: translateY(-50%); pointer-events: none; }
-.cp-preview { flex: 1 1 auto; display: flex; flex-direction: column; border: 1px solid var(--line); min-width: 28px; }
-.cp-prev-new, .cp-prev-old { flex: 1 1 0; }
+.cp-preview { flex: 0 0 40px; display: flex; flex-direction: column; border: 1px solid var(--line); }
+.cp-prev-new, .cp-prev-old { flex: 1 1 0; cursor: pointer; }
 .cp-prev-new { border-bottom: 1px solid var(--line); }
 .cp-alpha { position: relative; height: 16px; cursor: ew-resize; border: 1px solid var(--line); }
 .cp-alpha-track { position: absolute; inset: 0; }
 .cp-alpha-thumb { position: absolute; top: -2px; bottom: -2px; width: 4px; background: #fff; border: 1px solid #000; transform: translateX(-50%); pointer-events: none; }
 .cp-fields { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 8px; }
-.cp-inp { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); }
+.cp-inp { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); min-width: 0; cursor: ew-resize; user-select: none; -webkit-user-select: none; touch-action: none; }
+.cp-inp input { cursor: text; }
 .cp-hex { grid-column: span 4; }
 .cp-inp input { flex: 1 1 0; min-width: 0; border: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 4px 5px; font: inherit; }
 .cp-swatches { display: flex; gap: 4px; flex-wrap: wrap; }
