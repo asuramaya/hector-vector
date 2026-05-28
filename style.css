@@ -311,12 +311,16 @@ button:disabled {
   flex: 1 1 50%;
 }
 .rightdock .rail-section.layers {
-  flex: 1 1 45%;
-  min-height: 120px;
-  border-top: 1px solid var(--line);
+  flex: 1 1 auto;
+  min-height: 90px;
 }
 .rightdock .rail-section.layers.collapsed { flex: 0 0 auto; min-height: 0; }
-.rightdock .rail-section.history { flex: 1 1 40%; min-height: 90px; }
+/* History height is set by JS (the drag handle); Layers fills the rest. */
+.rightdock .rail-section.history { flex: 0 0 auto; height: 200px; min-height: 60px; }
+.rightdock .rail-section.history.collapsed { height: auto !important; }   /* collapse beats the dragged height */
+.rightdock .rail-section.history.collapsed + .dock-vresizer { display: none; }
+.dock-vresizer { flex: 0 0 7px; cursor: row-resize; touch-action: none; border-top: 1px solid var(--line); background: var(--bg); }
+.dock-vresizer:hover { background: var(--accent); opacity: 0.3; }
 .history-list { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
 .history-row { text-align: left; padding: 5px 12px; font: inherit; font-size: 12px; line-height: 1.4; background: none; border: 0; border-left: 2px solid transparent; color: #1d1d1f; cursor: pointer; }
 .history-row:hover { background: #f2f2f2; }
@@ -452,14 +456,10 @@ button:disabled {
 .viewport-shell {
   position: relative;
   overflow: hidden;
-  cursor: grab;
+  cursor: default;   /* arrow by default; tools override (crosshair), Hand only with Space */
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.viewport-shell:active {
-  cursor: grabbing;
 }
 
 .viewport-content {
@@ -495,6 +495,8 @@ button:disabled {
 .stage-wrap[data-tool="ellipse"] .viewport-shell, .stage-wrap[data-tool="ellipse"] .inline-svg,
 .stage-wrap[data-tool="line"] .viewport-shell,    .stage-wrap[data-tool="line"] .inline-svg { cursor: crosshair; }
 /* Select / Transform: move cursor over a pickable object, arrow on empty canvas. */
+.stage-wrap[data-tool="select"] .viewport-shell, .stage-wrap[data-tool="node"] .viewport-shell,
+.stage-wrap[data-tool="transform"] .viewport-shell { cursor: default; }
 .stage-wrap[data-tool="select"] .inline-svg [data-hv-id],
 .stage-wrap[data-tool="transform"] .inline-svg [data-hv-id] { cursor: move; }
 .inline-svg [data-hv-locked="1"] { cursor: default; }
@@ -587,7 +589,12 @@ button:disabled {
 .context-panel { width: 240px; padding: 0; background: var(--bg); border: 1px solid var(--line); box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.12); display: flex; flex-direction: column; }
 .context-panel .ctx-head { font-size: 13px; font-weight: 600; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .context-panel .ctx-style { padding: 10px; display: flex; flex-direction: column; gap: 12px; }
-.context-panel .ctx-actions { border-top: 1px solid var(--line); padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.context-panel .ctx-actions { border-top: 1px solid var(--line); padding: 6px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+.grid-item { aspect-ratio: 1 / 1; display: grid; place-items: center; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font-size: 15px; line-height: 1; cursor: pointer; padding: 0; }
+.grid-item:hover { background: #f2f2f2; }
+.grid-item:disabled { opacity: 0.3; cursor: default; }
+.grid-item.text { font-size: 8px; padding: 2px; text-align: center; overflow: hidden; }
+.grid-sep { grid-column: 1 / -1; height: 1px; background: var(--line); margin: 1px 0; }
 
 .menu-item {
   display: flex;

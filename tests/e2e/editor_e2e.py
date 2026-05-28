@@ -799,19 +799,19 @@ def main():
         mount_ctl(page)
         r = node_rect(page, "r2")
         page.mouse.click(r["cx"], r["cy"], button="right"); page.wait_for_timeout(80)
-        ctx = page.evaluate("""() => { const m=document.querySelector('.context-menu'); return m
-            ? { n: m.querySelectorAll('.menu-item').length, labels: [...m.querySelectorAll('.menu-label')].map(l=>l.textContent) } : null; }""")
-        check("object context menu opens with actions", ctx and ctx["n"] >= 8 and "Duplicate" in ctx["labels"] and "Flip Horizontal" in ctx["labels"], str(ctx and ctx["n"]))
+        ctx = page.evaluate("""() => { const m=document.querySelector('.context-panel'); return m
+            ? { n: m.querySelectorAll('.grid-item').length, labels: [...m.querySelectorAll('.grid-item')].map(b=>b.title), style: !!m.querySelector('.ctx-style input') } : null; }""")
+        check("object context panel opens with style + actions", ctx and ctx["n"] >= 8 and ctx["style"] and "Duplicate" in ctx["labels"] and "Flip Horizontal" in ctx["labels"], str(ctx and ctx["n"]))
         check("right-click selects the object", page.evaluate("editor.selection.has('r2')"))
         page.keyboard.press("Escape"); page.wait_for_timeout(40)
         check("Escape closes the context menu", page.evaluate("!document.querySelector('.context-menu')"))
 
-        # right-click empty canvas → artboard menu
+        # right-click empty canvas → artboard panel
         ab = artboard_rect(page)
         page.mouse.click(ab["x"] + ab["w"] * 0.04, ab["y"] + ab["h"] * 0.94, button="right"); page.wait_for_timeout(80)
-        ctx2 = page.evaluate("""() => { const m=document.querySelector('.context-menu'); return m
-            ? [...m.querySelectorAll('.menu-label')].map(l=>l.textContent) : null; }""")
-        check("canvas context menu has Select All + Paste", ctx2 and "Select All" in ctx2 and "Paste" in ctx2, str(ctx2))
+        ctx2 = page.evaluate("""() => { const m=document.querySelector('.context-panel'); return m
+            ? [...m.querySelectorAll('.grid-item')].map(b=>b.title) : null; }""")
+        check("canvas context panel has Select All + Paste", ctx2 and "Select All" in ctx2 and "Paste" in ctx2, str(ctx2))
         page.keyboard.press("Escape")
 
         # ---- Process workspace: backends as first-class inline options ----

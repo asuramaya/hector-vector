@@ -369,7 +369,9 @@ function measureFit(vp) {
     resetViewport(vp);
     return;
   }
-  vp.fitScale = Math.min(fw / mw, fh / mh, 1);
+  // Fit fills the frame (with a small margin) — zooming IN for small artboards as
+  // well as down for big ones, so "Fit" is distinct from "1:1" (actual size).
+  vp.fitScale = Math.min(fw / mw, fh / mh) * 0.95;
   if (!Number.isFinite(vp.fitScale) || vp.fitScale <= 0) vp.fitScale = 1;
   resetViewport(vp);
 }
@@ -1145,6 +1147,31 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       });
     }
   }
+  // Vertical resizer between the History and Layers dock sections.
+  {
+    const hist = document.querySelector(".rail-section.history");
+    const vhandle = document.querySelector("#dock-vresizer");
+    const HKEY = "hector-vector:hist-h";
+    const savedH = parseInt(localStorage.getItem(HKEY) || "", 10);
+    if (hist && savedH >= 60) hist.style.height = savedH + "px";
+    if (hist && vhandle) {
+      vhandle.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        const startY = e.clientY;
+        const startH = hist.getBoundingClientRect().height;
+        const dockH = document.querySelector("#rightdock").getBoundingClientRect().height;
+        vhandle.setPointerCapture(e.pointerId);
+        const move = (ev) => { hist.style.height = Math.max(60, Math.min(dockH - 120, startH + (ev.clientY - startY))) + "px"; };
+        const up = () => {
+          vhandle.removeEventListener("pointermove", move);
+          vhandle.removeEventListener("pointerup", up);
+          try { localStorage.setItem(HKEY, String(Math.round(hist.getBoundingClientRect().height))); } catch {}
+        };
+        vhandle.addEventListener("pointermove", move);
+        vhandle.addEventListener("pointerup", up);
+      });
+    }
+  }
   // Collapsible rail sections (Photopea/Illustrator-style accordion), persisted.
   document.querySelectorAll(".rail-section[data-section] .section-head").forEach((head) => {
     const section = head.closest(".rail-section");
@@ -1316,6 +1343,22 @@ function appendMenuItems(menu, items, afterClick) {
     menu.appendChild(btn);
   }
 }
+// Square icon-button grid for the context-panel actions (icons over text, native
+// tooltips like the toolstrip). Separators span the row as a thin divider.
+function appendActionGrid(container, items, afterClick) {
+  for (const item of items) {
+    if (item.type === "sep") { const s = document.createElement("div"); s.className = "grid-sep"; container.appendChild(s); continue; }
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "grid-item"; btn.disabled = !!item.disabled;
+    btn.title = item.label;
+    if (item.icon) btn.textContent = item.icon; else { btn.textContent = item.label; btn.classList.add("text"); }
+    btn.addEventListener("click", () => {
+      try { item.onClick(); } catch (e) { setStatus(e.message || String(e), 3000); }
+      if (afterClick) afterClick(); else hideContextMenu();
+    });
+    container.appendChild(btn);
+  }
+}
 function placeAt(el, x, y) {
   const r = el.getBoundingClientRect();
   el.style.left = Math.max(2, Math.min(x, window.innerWidth - r.width - 4)) + "px";
@@ -1353,7 +1396,7 @@ function showContextPanel(x, y, kind) {
     }
     panel.appendChild(head); panel.appendChild(style);
     const acts = document.createElement("div"); acts.className = "ctx-actions";
-    appendMenuItems(acts, kind === "object" ? objectMenuItems() : canvasMenuItems(), () => {
+    appendActionGrid(acts, kind === "object" ? objectMenuItems() : canvasMenuItems(), () => {
       if (kind === "object" && !editor.selectedNodes().length) { hideContextMenu(); return; }
       build();
     });
@@ -1369,31 +1412,31 @@ function objectMenuItems() {
   const fillable = sel.filter((n) => shapeToAbsPath(n)).length >= 2;
   const hasGroup = sel.some((n) => n.tagName.toLowerCase() === "g");
   const items = [
-    { label: "Cut", onClick: () => editor.cut() },
-    { label: "Copy", onClick: () => editor.copy() },
-    { label: "Paste", disabled: !editor.clipboard.length, onClick: () => editor.paste() },
-    { label: "Duplicate", onClick: () => editor.duplicate() },
-    { label: "Rename…", disabled: sel.length !== 1, onClick: () => editor.beginRename(sel[0].getAttribute("data-hv-id")) },
-    { label: "Delete", onClick: () => editor.deleteSelection() },
+    { icon: "✂", label: "Cut", onClick: () => editor.cut() },
+    { icon: "⧉", label: "Copy", onClick: () => editor.copy() },
+    { icon: "❏", label: "Paste", disabled: !editor.clipboard.length, onClick: () => editor.paste() },
+    { icon: "⧉⁺", label: "Duplicate", onClick: () => editor.duplicate() },
+    { icon: "✎", label: "Rename…", disabled: sel.length !== 1, onClick: () => editor.beginRename(sel[0].getAttribute("data-hv-id")) },
+    { icon: "✕", label: "Delete", onClick: () => editor.deleteSelection() },
     { type: "sep" },
-    { label: "Bring to Front", onClick: () => editor.reorder("front") },
-    { label: "Bring Forward", onClick: () => editor.reorder("forward") },
-    { label: "Send Backward", onClick: () => editor.reorder("backward") },
-    { label: "Send to Back", onClick: () => editor.reorder("back") },
+    { icon: "⤒", label: "Bring to Front", onClick: () => editor.reorder("front") },
+    { icon: "↑", label: "Bring Forward", onClick: () => editor.reorder("forward") },
+    { icon: "↓", label: "Send Backward", onClick: () => editor.reorder("backward") },
+    { icon: "⤓", label: "Send to Back", onClick: () => editor.reorder("back") },
     { type: "sep" },
-    { label: "Group", disabled: sel.length < 2, onClick: () => editor.group() },
-    { label: "Ungroup", disabled: !hasGroup, onClick: () => editor.ungroup() },
+    { icon: "⊞", label: "Group", disabled: sel.length < 2, onClick: () => editor.group() },
+    { icon: "⊟", label: "Ungroup", disabled: !hasGroup, onClick: () => editor.ungroup() },
   ];
   if (fillable) items.push({ type: "sep" },
-    { label: "Unite", onClick: () => editor.booleanOp("union") },
-    { label: "Subtract", onClick: () => editor.booleanOp("subtract") },
-    { label: "Intersect", onClick: () => editor.booleanOp("intersect") });
+    { icon: "∪", label: "Unite", onClick: () => editor.booleanOp("union") },
+    { icon: "−", label: "Subtract", onClick: () => editor.booleanOp("subtract") },
+    { icon: "∩", label: "Intersect", onClick: () => editor.booleanOp("intersect") });
   items.push({ type: "sep" },
-    { label: "Invert space", onClick: () => editor.invertSpace() },
-    { label: "Rotate 90° CW", onClick: () => editor.transform("rotateCW") },
-    { label: "Rotate 90° CCW", onClick: () => editor.transform("rotateCCW") },
-    { label: "Flip Horizontal", onClick: () => editor.transform("flipH") },
-    { label: "Flip Vertical", onClick: () => editor.transform("flipV") });
+    { icon: "⊠", label: "Invert space", onClick: () => editor.invertSpace() },
+    { icon: "↻", label: "Rotate 90° CW", onClick: () => editor.transform("rotateCW") },
+    { icon: "↺", label: "Rotate 90° CCW", onClick: () => editor.transform("rotateCCW") },
+    { icon: "⇄", label: "Flip Horizontal", onClick: () => editor.transform("flipH") },
+    { icon: "⇅", label: "Flip Vertical", onClick: () => editor.transform("flipV") });
   return items;
 }
 function pointMenuItems() {
@@ -1408,18 +1451,18 @@ function pointMenuItems() {
 }
 function canvasMenuItems() {
   return [
-    { label: "Paste", disabled: !editor.clipboard.length, onClick: () => editor.paste() },
-    { label: "Select All", onClick: () => editor.selectAll() },
+    { icon: "❏", label: "Paste", disabled: !editor.clipboard.length, onClick: () => editor.paste() },
+    { icon: "▦", label: "Select All", onClick: () => editor.selectAll() },
     { type: "sep" },
-    { label: `${editor.smartGuides ? "✓ " : ""}Smart guides`, onClick: () => { editor.smartGuides = !editor.smartGuides; setStatus(`Smart guides ${editor.smartGuides ? "on" : "off"}.`, 1500); } },
-    { label: "Invert space", onClick: () => editor.invertSpace() },
-    { label: "Clean up ghost layers", onClick: () => editor.cleanupLayers() },
-    { label: "Merge same-colour layers", onClick: () => editor.consolidateByColor() },
+    { icon: editor.smartGuides ? "⊹✓" : "⊹", label: "Smart guides", onClick: () => { editor.smartGuides = !editor.smartGuides; setStatus(`Smart guides ${editor.smartGuides ? "on" : "off"}.`, 1500); } },
+    { icon: "⊠", label: "Invert space", onClick: () => editor.invertSpace() },
+    { icon: "⊘", label: "Clean up ghost layers", onClick: () => editor.cleanupLayers() },
+    { icon: "⧉", label: "Merge same-colour layers", onClick: () => editor.consolidateByColor() },
     { type: "sep" },
-    { label: "Rotate artboard 90° CW", onClick: () => editor.transform("rotateCW") },
-    { label: "Rotate artboard 90° CCW", onClick: () => editor.transform("rotateCCW") },
-    { label: "Flip artboard H", onClick: () => editor.transform("flipH") },
-    { label: "Flip artboard V", onClick: () => editor.transform("flipV") },
+    { icon: "↻", label: "Rotate artboard 90° CW", onClick: () => editor.transform("rotateCW") },
+    { icon: "↺", label: "Rotate artboard 90° CCW", onClick: () => editor.transform("rotateCCW") },
+    { icon: "⇄", label: "Flip artboard H", onClick: () => editor.transform("flipH") },
+    { icon: "⇅", label: "Flip artboard V", onClick: () => editor.transform("flipV") },
   ];
 }
 {
