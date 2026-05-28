@@ -1223,10 +1223,11 @@ const editor = {
         if (!pushed && (Math.abs(f.sx - 1) > 1e-4 || Math.abs(f.sy - 1) > 1e-4)) { this.push("Scale"); pushed = true; }
         apply(f.sx, f.sy, ax, ay);
         this._updateXformVisual(spec, f.sx, f.sy, ax, ay);
+        this._showSizeReadout((xf.bb.x1 - xf.bb.x0) * Math.abs(f.sx), (xf.bb.y1 - xf.bb.y0) * Math.abs(f.sy), ev.clientX, ev.clientY);
       };
       const up = () => {
         try { c.releasePointerCapture(e.pointerId); } catch {}
-        c.classList.remove("dragging");
+        c.classList.remove("dragging"); this._hideSizeReadout();
         c.removeEventListener("pointermove", move); c.removeEventListener("pointerup", up);
         if (!pushed) { nodes.forEach((n, i) => setTranslate(n, bases[i].x, bases[i].y)); this._renderSelection(); return; }
         const { sx, sy, ax, ay } = last;
@@ -1661,6 +1662,14 @@ const editor = {
     if (gy != null) mk(vb.x, gy, vb.x + vb.width, gy);
   },
   _clearGuides() { const ov = this._overlayEl(); if (ov) ov.querySelectorAll(".hv-guide").forEach((g) => g.remove()); },
+  // Live W/H px tooltip near the cursor while scaling (Photopea-style).
+  _showSizeReadout(w, h, clientX, clientY) {
+    let el = document.getElementById("xform-readout");
+    if (!el) { el = document.createElement("div"); el.id = "xform-readout"; el.className = "xform-readout"; document.body.appendChild(el); }
+    el.textContent = `W: ${Math.round(w)} px   H: ${Math.round(h)} px`;
+    el.style.left = (clientX + 16) + "px"; el.style.top = (clientY + 16) + "px"; el.hidden = false;
+  },
+  _hideSizeReadout() { const el = document.getElementById("xform-readout"); if (el) el.hidden = true; },
   _unionPath(nodes) {
     const bb = this._pad(this._bboxUnion(nodes), 0.02);
     const mask = this._rasterMask(nodes, bb, 1024);
@@ -1962,8 +1971,12 @@ const editor = {
   },
 
   // ---------- inspector ----------
+  // The dock no longer hosts an Inspector (object style lives in the right-click
+  // panel); this keeps the layers panel + the toolstrip swatches in sync, then
+  // early-returns. `onInspect` is the app's hook (refreshes the colour swatches).
   _renderInspector() {
     this._renderLayers();   // keep the layers panel in sync with structure/selection
+    if (this.onInspect) this.onInspect();
     const body = document.querySelector("#inspector-body");
     const title = document.querySelector("#inspector-title");
     if (!body) return;

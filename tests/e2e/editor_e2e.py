@@ -399,9 +399,9 @@ def main():
             return Math.abs((p.left+p.right)/2 - (h.left+h.right)/2) < 40;   // process button ~centered
         }""")
         check("Process button is centered in the header", proc_centered)
-        # object controls (rotate/flip) moved to the toolstrip; nav-only chin
-        check("transforms live in the toolstrip", page.evaluate("!!document.querySelector('.toolstrip [data-xform]')"))
-        check("bottom chin is navigation-only", page.evaluate("!document.querySelector('.panel-foot [data-xform]')"))
+        # rotate/flip moved into the right-click panel; toolstrip now has colour swatches
+        check("colour swatches in the toolstrip", page.evaluate("!!document.querySelector('.toolstrip #swatch-fill') && !!document.querySelector('.toolstrip #swatch-stroke')"))
+        check("no rotate/flip buttons in the toolstrip", page.evaluate("!document.querySelector('.toolstrip [data-xform]')"))
         # leftover output-variant picker (Upscale/Cutout/SVG/Edited) is gone
         check("output-variant picker removed", page.evaluate("!document.querySelector('#output-picker')"))
         # File menu dropdown opens within the viewport (regression: right:0 pushed it off-screen left)

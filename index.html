@@ -41,12 +41,16 @@
           <button class="tool-button" data-tool="rect" type="button" title="Rectangle (R)">▭</button>
           <button class="tool-button" data-tool="ellipse" type="button" title="Ellipse (E)">◯</button>
           <button class="tool-button" data-tool="line" type="button" title="Line (L)">╱</button>
-          <span class="tool-sep" aria-hidden="true"></span>
-          <!-- Object controls: act on the selection, or the whole artboard when nothing is selected. -->
-          <button class="tool-action" data-xform="rotateCCW" type="button" title="Rotate 90° left (selection or artboard)">↺</button>
-          <button class="tool-action" data-xform="rotateCW" type="button" title="Rotate 90° right (selection or artboard)">↻</button>
-          <button class="tool-action" data-xform="flipH" type="button" title="Flip horizontal (selection or artboard)">⇄</button>
-          <button class="tool-action" data-xform="flipV" type="button" title="Flip vertical (selection or artboard)">⇅</button>
+          <span class="tool-spacer" aria-hidden="true"></span>
+          <!-- Fill (primary) / stroke (secondary) swatches: reflect the selection or
+               the default for new shapes; click to recolour. Rotate/flip moved to the
+               right-click menu. -->
+          <div class="tool-swatches" id="tool-swatches">
+            <button class="swatch swatch-fill" id="swatch-fill" type="button" title="Fill — click to set the fill colour"></button>
+            <button class="swatch swatch-stroke" id="swatch-stroke" type="button" title="Stroke — click to set the stroke colour"></button>
+            <button class="swatch-swap" id="swatch-swap" type="button" title="Swap fill / stroke (Shift+X)">⇄</button>
+            <input type="color" id="swatch-color-input" hidden />
+          </div>
         </nav>
 
         <article class="stage-wrap preview-panel" data-tool="select">

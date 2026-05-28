@@ -1067,7 +1067,44 @@ const MENU_ITEMS = {
 
 // ---------- editor wiring: tools, header buttons, rail, keyboard ----------
 document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("click", () => editor.setTool(b.dataset.tool)));
-document.querySelectorAll("[data-xform]").forEach((b) => b.addEventListener("click", () => editor.transform(b.dataset.xform)));
+// ---------- fill (primary) / stroke (secondary) colour swatches ----------
+{
+  const fillSw = document.querySelector("#swatch-fill");
+  const strokeSw = document.querySelector("#swatch-stroke");
+  const swapBtn = document.querySelector("#swatch-swap");
+  const colorInput = document.querySelector("#swatch-color-input");
+  const firstSel = () => (editor.stage ? editor.selectedNodes()[0] : null);
+  const cur = (which) => { const n = firstSel(); return n ? n.getAttribute(which) : editor.style[which]; };
+  const strokeW = () => { const n = firstSel(); const w = n ? parseFloat(n.getAttribute("stroke-width")) : editor.style.strokeWidth; return w > 0 ? w : 2; };
+  const setSw = (el, color) => { const none = !color || color === "none"; if (el) { el.classList.toggle("none", none); el.style.background = none ? "#fff" : color; } };
+  function refreshSwatches() { setSw(fillSw, cur("fill")); setSw(strokeSw, cur("stroke")); }
+  let target = "fill";
+  const openPicker = (which) => { target = which; colorInput.value = hv.toHexColor(cur(which)) || (which === "fill" ? "#808080" : "#000000"); colorInput.click(); };
+  const doSwap = () => {
+    const f = cur("fill"), s = cur("stroke");
+    editor.push("Swap fill/stroke");
+    editor.applyFill(s && s !== "none" ? hv.toHexColor(s) : null);
+    const ns = f && f !== "none" ? hv.toHexColor(f) : "none";
+    editor.applyStroke(ns, ns === "none" ? 0 : strokeW());
+    refreshSwatches();
+  };
+  if (fillSw) fillSw.addEventListener("click", () => openPicker("fill"));
+  if (strokeSw) strokeSw.addEventListener("click", () => openPicker("stroke"));
+  if (swapBtn) swapBtn.addEventListener("click", doSwap);
+  if (colorInput) {
+    colorInput.addEventListener("input", () => { editor.beginCoalesce(); if (target === "fill") editor.applyFill(colorInput.value); else editor.applyStroke(colorInput.value, strokeW()); refreshSwatches(); });
+    colorInput.addEventListener("change", () => { editor.commitCoalesce(target === "fill" ? "Fill" : "Stroke"); refreshSwatches(); });
+  }
+  if (swapBtn) document.addEventListener("keydown", (e) => {
+    if (e.shiftKey && !e.ctrlKey && !e.metaKey && (e.key === "X" || e.key === "x")) {
+      const t = (e.target?.tagName || "").toLowerCase();
+      if (t === "input" || t === "textarea" || t === "select" || e.target?.isContentEditable || !modalRootEl.hidden) return;
+      e.preventDefault(); doSwap();
+    }
+  });
+  editor.onInspect = refreshSwatches;   // editor pings this on every selection/structure change
+  refreshSwatches();
+}
 {
   const procBtn = document.querySelector("#process-button"); if (procBtn) procBtn.addEventListener("click", () => openProcessModal());
   const undoBtn = document.querySelector("#undo-button"); if (undoBtn) undoBtn.addEventListener("click", () => editor.undo());
@@ -2456,7 +2493,7 @@ function openShortcutsModal() {
   root.appendChild(grid);
   const note = document.createElement("p");
   note.className = "form-hint";
-  note.textContent = "Tip: right-click the canvas for object actions, or empty space for canvas actions. Rotate/flip live on the left toolstrip.";
+  note.textContent = "Tip: right-click an object for its style + actions (fill, stroke, rotate, flip…), or empty canvas for artboard actions.";
   root.appendChild(note);
   modalBodyEl.innerHTML = "";
   modalBodyEl.appendChild(root);

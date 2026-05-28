@@ -271,15 +271,16 @@ button:disabled {
 }
 .tool-button.active { background: #000; color: #fff; }
 .tool-sep { height: 1px; background: var(--line); margin: 2px 4px; align-self: stretch; }
-/* Object controls in the toolstrip (rotate / flip) — actions, not togglable tools. */
-.tool-action {
-  width: 34px; height: 34px;
-  border: 1px solid var(--line);
-  background: var(--bg); color: var(--fg);
-  font-size: 15px; line-height: 1; cursor: pointer;
-  display: grid; place-items: center;
-}
-.tool-action:hover { background: #f2f2f2; }
+/* Fill (primary) / stroke (secondary) swatches, pinned to the bottom of the strip. */
+.tool-spacer { flex: 1 1 auto; }
+.tool-swatches { position: relative; width: 34px; height: 52px; align-self: center; }
+.swatch { position: absolute; width: 22px; height: 22px; padding: 0; cursor: pointer; border: 1px solid #777; box-shadow: 0 0 0 1px #fff; }
+.swatch-fill { left: 0; top: 0; z-index: 2; }
+.swatch-stroke { right: 0; top: 13px; z-index: 1; }
+.swatch.none { background: #fff; }
+.swatch.none::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to top right, transparent 44%, #e0245e 45%, #e0245e 55%, transparent 56%); }
+.swatch-swap { position: absolute; left: 0; bottom: -4px; width: 14px; height: 14px; border: 0; background: none; padding: 0; cursor: pointer; font-size: 11px; line-height: 1; color: var(--muted); }
+.swatch-swap:hover { color: #000; }
 
 /* right dock: Inspector (properties) above, Layers below — resizable + collapsible */
 .rightdock {
@@ -552,6 +553,8 @@ button:disabled {
 /* Drag-select marquee / lasso */
 .hv-marquee { fill: rgba(0, 122, 255, 0.12); stroke: var(--accent); stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
 .hv-guide { stroke: #ff2d92; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
+.xform-readout { position: fixed; z-index: 1100; background: rgba(0, 0, 0, 0.82); color: #fff; font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 3px 7px; pointer-events: none; white-space: nowrap; }
+.xform-readout[hidden] { display: none; }
 
 /* Dropdown menus in the panel heads */
 .menu {
