@@ -1036,6 +1036,21 @@ def main():
         page.evaluate("processSelectEl.value='upscale'; renderProcessWorkspace();"); page.wait_for_timeout(60)
         up_labels = page.evaluate("() => [...document.querySelectorAll('.process-opts .process-opt>span')].map(s=>s.textContent)")
         check("switching pipeline updates the options", up_labels == ["Model", "Scale"], str(up_labels))
+        # gallery polish: no horizontal overflow, square thumbs, compact icon actions that fit the cell
+        page.evaluate("processSelectEl.value='pipeline'; renderProcessWorkspace();"); page.wait_for_timeout(80)
+        poly = page.evaluate("""() => {
+          const body=document.querySelector('.modal-body');
+          const cell=document.querySelector('.gallery-cell');
+          if(!cell) return {skip:true};
+          const t=document.querySelector('.gallery-thumb').getBoundingClientRect();
+          const a=document.querySelector('.gallery-actions');
+          const ab=a.getBoundingClientRect(), cb=cell.getBoundingClientRect();
+          return { overflowX: body.scrollWidth-body.clientWidth, square: Math.abs(t.width-t.height)<2,
+                   contain: getComputedStyle(document.querySelector('.gallery-thumb img')).objectFit,
+                   icons: a.children.length, fit: ab.right<=cb.right+0.5 && ab.left>=cb.left-0.5 };
+        }""")
+        check("process gallery: no overflow, square thumbs, icon actions fit",
+              poly.get("skip") or (poly["overflowX"] <= 0 and poly["square"] and poly["contain"] == "contain" and poly["icons"] >= 1 and poly["fit"]), str(poly))
         page.evaluate("closeModal(); processSelectEl.value='pipeline';")
 
         # serialize cleanliness

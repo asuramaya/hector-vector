@@ -1072,6 +1072,29 @@ function openColorPicker(opts) {
   setTimeout(() => inputs.hex.focus(), 0);
 }
 
+// Compact icon action-row shared by both gallery grids (Open/Place modal and the
+// Process workspace). Icons (not text) so five actions fit a ~130px cell without
+// overflowing — the old text buttons widened the track and clipped on the right.
+function galleryActionRow({ name, absPath, url, onInfo }) {
+  const actions = document.createElement("div");
+  actions.className = "gallery-actions";
+  const mk = (glyph, title, fn) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "gallery-act"; b.textContent = glyph;
+    b.title = title; b.setAttribute("aria-label", title);
+    b.addEventListener("click", (ev) => { ev.stopPropagation(); fn(); });
+    actions.appendChild(b);
+  };
+  if (onInfo) mk("ⓘ", "Info — dimensions, EXIF, in-place transforms", onInfo);
+  if (name) mk("⧉", `Copy filename: ${name}`, () => copyToClipboard(name));
+  if (absPath) {
+    mk("⌖", `Copy path: ${absPath}`, () => copyToClipboard(absPath));
+    mk("⊞", "Reveal in file manager", () => revealInFileManager(absPath));
+  }
+  if (url) mk("↗", "Open in a new tab", () => window.open(url, "_blank", "noopener"));
+  return actions;
+}
+
 function renderGalleryGrid(items, onPick) {
   if (!items.length) {
     modalBodyEl.innerHTML = `<div class="gallery-empty">Nothing to show.</div>`;
@@ -1101,25 +1124,8 @@ function renderGalleryGrid(items, onPick) {
     caption.textContent = item.name;
     cell.appendChild(caption);
 
-    const actions = document.createElement("div");
-    actions.className = "gallery-actions";
     const absPath = item.absPath || item.path || "";
-    const mkBtn = (label, title, onClick) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "ghost-button";
-      b.textContent = label;
-      b.title = title;
-      b.addEventListener("click", (ev) => { ev.stopPropagation(); onClick(); });
-      return b;
-    };
-    actions.appendChild(mkBtn("Copy", `Copy filename: ${item.name}`, () => copyToClipboard(item.name)));
-    if (absPath) {
-      actions.appendChild(mkBtn("Path", `Copy absolute path: ${absPath}`, () => copyToClipboard(absPath)));
-      actions.appendChild(mkBtn("Reveal", `Open containing folder`, () => revealInFileManager(absPath)));
-    }
-    actions.appendChild(mkBtn("Open", "Open in new tab", () => window.open(item.url, "_blank", "noopener")));
-    cell.appendChild(actions);
+    cell.appendChild(galleryActionRow({ name: item.name, absPath, url: item.url }));
 
     grid.appendChild(cell);
   }
@@ -2444,13 +2450,6 @@ function renderProcessGallery() {
     host.appendChild(empty); return;
   }
 
-  const mkBtn = (label, t, onClick) => {
-    const b = document.createElement("button");
-    b.type = "button"; b.className = "ghost-button"; b.textContent = label; b.title = t;
-    b.addEventListener("click", (ev) => { ev.stopPropagation(); onClick(); });
-    return b;
-  };
-
   const grid = document.createElement("div"); grid.className = "gallery-grid";
   for (const item of items) {
     const abs = absInputPath(item);
@@ -2471,15 +2470,7 @@ function renderProcessGallery() {
     cap.textContent = item.name + (itemIsProcessed(item.name) ? " ✓" : "");
     cell.appendChild(cap);
 
-    const actions = document.createElement("div"); actions.className = "gallery-actions";
-    actions.appendChild(mkBtn("Info", "Dimensions, EXIF, in-place transforms", () => openInfoModal(item.name)));
-    actions.appendChild(mkBtn("Copy", `Copy filename: ${item.name}`, () => copyToClipboard(item.name)));
-    if (abs) {
-      actions.appendChild(mkBtn("Path", `Copy absolute path: ${abs}`, () => copyToClipboard(abs)));
-      actions.appendChild(mkBtn("Reveal", "Open containing folder", () => revealInFileManager(abs)));
-    }
-    actions.appendChild(mkBtn("Open", "Open in new tab", () => window.open(item.url, "_blank", "noopener")));
-    cell.appendChild(actions);
+    cell.appendChild(galleryActionRow({ name: item.name, absPath: abs, url: item.url, onInfo: () => openInfoModal(item.name) }));
 
     grid.appendChild(cell);
   }

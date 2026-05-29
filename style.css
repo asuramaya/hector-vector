@@ -1025,8 +1025,8 @@ button:disabled {
 .process-advanced > summary { cursor: pointer; padding: 7px 10px; font-size: 13px; user-select: none; }
 .process-advanced[open] > summary { border-bottom: 1px solid var(--line); }
 .process-advanced .form { padding: 10px; }
-.process-panes { display: grid; grid-template-columns: 2fr 1fr; gap: 10px; flex: 1 1 auto; min-height: 0; }
-.process-gallery, .process-jobs { border: 1px solid var(--line); min-height: 0; overflow-y: auto; padding: 8px; }
+.process-panes { display: grid; grid-template-columns: 2fr minmax(220px, 1fr); gap: 10px; flex: 1 1 auto; min-height: 0; min-width: 0; }
+.process-gallery, .process-jobs { border: 1px solid var(--line); min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: 8px; }
 .process-pane-head { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; position: sticky; top: -8px; background: var(--bg); padding: 4px 0; display: flex; align-items: center; gap: 8px; }
 .process-filter { margin-left: auto; max-width: 180px; text-transform: none; letter-spacing: 0; }
 .gallery-cell.processed .gallery-caption { color: var(--accent); }
@@ -1066,7 +1066,7 @@ button:disabled {
 
 .gallery-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
   gap: 10px;
 }
 
@@ -1074,11 +1074,12 @@ button:disabled {
   border: 1px solid var(--line);
   background: var(--bg);
   display: grid;
-  grid-template-rows: 1fr auto auto;
+  grid-template-rows: auto auto auto;   /* square thumb governs its own height */
   text-align: left;
   padding: 0;
   font: inherit;
   color: var(--fg);
+  min-width: 0;                          /* let the track shrink — don't widen the modal */
   overflow: hidden;
 }
 
@@ -1095,6 +1096,7 @@ button:disabled {
   display: grid;
   place-items: center;
   overflow: hidden;
+  min-width: 0;
 }
 
 .gallery-thumb-button {
@@ -1109,27 +1111,38 @@ button:disabled {
   outline-offset: -2px;
 }
 
+/* compact icon actions — five fit a narrow cell without clipping */
 .gallery-actions {
   display: flex;
-  gap: 4px;
-  padding: 4px 6px 6px;
+  gap: 2px;
+  padding: 4px;
   border-top: 1px solid var(--line);
   background: var(--bg);
 }
 
-.gallery-actions .ghost-button {
+.gallery-act {
   flex: 1 1 0;
-  padding: 4px 6px;
-  font-size: 11px;
-  text-align: center;
-  white-space: nowrap;
+  min-width: 0;
+  height: 24px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
 }
+.gallery-act:hover { background: var(--accent); color: #fff; }
 
+/* the entire object, centred and scaled to fit the square — never cropped */
 .gallery-thumb img,
 .gallery-thumb svg {
-  max-width: 100%;
-  max-height: 100%;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
+  object-position: center;
   display: block;
 }
 
