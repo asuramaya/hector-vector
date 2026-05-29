@@ -458,7 +458,36 @@ def main():
         page.wait_for_timeout(60)
         rotated = page.evaluate("() => { const c = editor.nodeById('m1').transform.baseVal.consolidate(); return c ? Math.abs(c.matrix.b) > 0.05 : false; }")
         check("corner rotator rotates the selection", rotated)
-        page.evaluate("() => editor.enterTransform('scale')")   # back to scale for later tests
+        page.evaluate("() => editor.clearXform()")
+
+        # Regressions: a rotated object must survive move + node-edit (it carries a matrix).
+        page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300">'
+              + '<path data-hv-id="rt" d="M60 60 L140 200 L40 180 Z" fill="#888" transform="rotate(25 100 130)"/></svg>','rt.svg'); }""")
+        page.wait_for_timeout(120)
+        # move it (drag the body) — rotation (matrix b) must survive, not snap to a plain translate
+        page.evaluate("() => { editor.setTool('select'); editor.selection = new Set(['rt']); editor._renderSelection(); }")
+        rr = page.evaluate("() => { const r = editor.nodeById('rt').getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+r.height/2}; }")
+        page.mouse.move(rr["x"], rr["y"]); page.mouse.down(); page.mouse.move(rr["x"]+40, rr["y"]+25, steps=8); page.mouse.up(); page.wait_for_timeout(50)
+        moved_keeps_rot = page.evaluate("() => { const c = editor.nodeById('rt').transform.baseVal.consolidate(); return c ? Math.abs(c.matrix.b) > 0.05 : false; }")
+        check("moving a rotated object preserves its rotation", moved_keeps_rot)
+        # node tool bakes the rotation into geometry so handles line up (transform cleared)
+        page.evaluate("() => editor.setTool('node')"); page.wait_for_timeout(80)
+        baked = page.evaluate("() => !(editor.nodeById('rt').getAttribute('transform') || '').trim()")
+        align = page.evaluate("""() => { const m = editor.stage.getScreenCTM();
+            const a = hv.pathToAnchors(editor.nodeById('rt')).anchors[0];
+            const pt = new DOMPoint(a.x, a.y).matrixTransform(m);
+            const anc = editor._overlayEl().querySelector('.hv-node-anchor'); const r = anc.getBoundingClientRect();
+            return Math.hypot(r.left + r.width/2 - pt.x, r.top + r.height/2 - pt.y); }""")
+        check("node tool flattens rotation; handles align", baked and align is not None and align < 3, f"baked={baked} off={align}")
+        # round + Alt-convert work on the (now flat) path
+        page.evaluate("() => { editor._nodeSel = new Set(['rt#1']); editor.setSelectedAnchorsType('smooth'); }"); page.wait_for_timeout(30)
+        rounded = page.evaluate("() => { const a = hv.pathToAnchors(editor.nodeById('rt')).anchors[1]; return !!(a.in && a.out); }")
+        page.evaluate("() => editor._altClickAnchor({ el: editor.nodeById('rt'), k: 1, kind: 'anchor' })"); page.wait_for_timeout(30)
+        cornered = page.evaluate("""() => { const a = hv.pathToAnchors(editor.nodeById('rt')).anchors[1];
+            const real = (h) => h && Math.hypot(h.x-a.x, h.y-a.y) > 1e-6; return !(real(a.in) || real(a.out)); }""")
+        check("round → smooth and Alt-click → corner both work", rounded and cornered, f"round={rounded} corner={cornered}")
+        page.evaluate("() => editor.setTool('select')")
 
         # ---- F. Process workspace + rail collapse doesn't break the stage ----
         page.click("#process-button"); page.wait_for_timeout(150)

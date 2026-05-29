@@ -9,7 +9,7 @@
 import {
   SVG_NS, MAX_HANDLES, SKIP_TAGS, SHAPE_TOOLS,
   nfmt, penPathD, toHexColor, marchingSquares, rasterMask,
-  currentTranslate, setTranslate, matForOp, bakeMatrixInto,
+  currentTranslate, setTranslate, matForOp, bakeMatrixInto, transformShapeGeometry,
   shapeToAbsPath, makeShapeNode, sizeShape, shapeMeaningful, collectAnchors, pathNodes, pathToAnchors,
   nearestOnPaths, splitCubicInsert, catmullRomAnchors,
 } from "./hv/index.js";
@@ -332,6 +332,8 @@ const editor = {
     const inv = () => this.stage.getScreenCTM().inverse();
     const start = new DOMPoint(startEvent.clientX, startEvent.clientY).matrixTransform(inv());
     let bases = nodes.map((n) => currentTranslate(n));
+    let origs = nodes.map((n) => n.getAttribute("transform"));
+    let flat = nodes.every((n) => this._isTranslateOnly(n));   // matrix/rotate objects compose instead of clobber
     const altDup = startEvent.altKey;        // Alt-drag → drag a duplicate, leave the original
     const snapper = makeAxisSnapper();
     const ref0 = this._bboxUnion(nodes);     // selection bounds at start (for smart-guide refs)
@@ -343,7 +345,7 @@ const editor = {
         this.push(altDup ? "Duplicate" : "Move"); pushed = true;
         if (altDup) {                        // clone at the origin, then drag the copies
           const ids = this._cloneSelection(0, 0);
-          if (ids.length) { this.selection = new Set(ids); nodes = this.selectedNodes(); bases = nodes.map((n) => currentTranslate(n)); duped = true; }
+          if (ids.length) { this.selection = new Set(ids); nodes = this.selectedNodes(); bases = nodes.map((n) => currentTranslate(n)); origs = nodes.map((n) => n.getAttribute("transform")); flat = nodes.every((n) => this._isTranslateOnly(n)); duped = true; }
           this._renderInspector();
         }
       }
@@ -359,17 +361,30 @@ const editor = {
           const s = this._snapMove(rx, ry, dx, dy, cand, 6 / k); dx = s.dx; dy = s.dy; gx = s.gx; gy = s.gy;
         }
       }
-      nodes.forEach((n, i) => setTranslate(n, bases[i].x + dx, bases[i].y + dy));
+      nodes.forEach((n, i) => {
+        if (flat) setTranslate(n, bases[i].x + dx, bases[i].y + dy);   // clean translate-only stays node-editable
+        else n.setAttribute("transform", origs[i] ? `translate(${nfmt(dx)} ${nfmt(dy)}) ${origs[i]}` : `translate(${nfmt(dx)} ${nfmt(dy)})`);   // preserve scale/rotate
+      });
       this._renderSelection();
       if (cand) { if (gx != null || gy != null) this._drawGuides(gx, gy); else this._clearGuides(); }
     };
     const up = () => {
       window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
       this._clearGuides();
+      if (!flat && pushed) nodes.forEach((n) => this._consolidateTransform(n));   // collapse translate·matrix → one matrix (no stacking)
       if (duped) { this._renderLayers(); setStatus(`Duplicated ${this.selection.size} object${this.selection.size > 1 ? "s" : ""}.`, 1500); }
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+  },
+  _isTranslateOnly(n) { const a = (n.getAttribute("transform") || "").trim(); return a === "" || /^translate\([^)]*\)$/.test(a); },
+  _consolidateTransform(n) {
+    try { const c = n.transform.baseVal.consolidate(); if (c) { const m = c.matrix; n.setAttribute("transform", `matrix(${nfmt(m.a)} ${nfmt(m.b)} ${nfmt(m.c)} ${nfmt(m.d)} ${nfmt(m.e)} ${nfmt(m.f)})`); } } catch {}
+  },
+  // Move a node by (dx,dy) in parent space, preserving any scale/rotate (used by nudge).
+  _translateNode(n, dx, dy) {
+    if (this._isTranslateOnly(n)) { const t = currentTranslate(n); setTranslate(n, t.x + dx, t.y + dy); }
+    else { const o = n.getAttribute("transform"); n.setAttribute("transform", `translate(${nfmt(dx)} ${nfmt(dy)}) ${o}`); this._consolidateTransform(n); }
   },
   // Shape tools: click-drag on the canvas to create a primitive. The whole gesture
   // is one undo step — beginCoalesce snapshots the pre-draw doc, commitCoalesce
@@ -841,13 +856,38 @@ const editor = {
   // shape ("ghosting"). Bake those translates into geometry first (render-identical)
   // so anchors/handles line up — deltas are translate-invariant, so this is safe.
   _bakeArtTransforms() {
-    const IDENT = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
     let baked = false;
     for (const n of this._artworkNodes()) {
-      const t = currentTranslate(n);
-      if (Math.abs(t.x) > 1e-9 || Math.abs(t.y) > 1e-9) { bakeMatrixInto(n, IDENT, 0, 0); baked = true; }
+      if ((n.getAttribute("transform") || "").trim()) { this._flattenNode(n); baked = true; }
     }
     return baked;
+  },
+  // Bake a node's FULL transform (translate / scale / rotate / matrix) into its
+  // geometry so the node tool edits clean, transform-free coords (handles line up).
+  // A rotated rect/circle/ellipse can't stay itself → convert to a <path> first.
+  _flattenNode(n) {
+    const tag = n.tagName.toLowerCase();
+    if (tag === "g") {   // groups: only translate groups bake cleanly (rare non-translate groups left as-is)
+      const t = currentTranslate(n);
+      if (Math.abs(t.x) > 1e-9 || Math.abs(t.y) > 1e-9) bakeMatrixInto(n, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, 0, 0);
+      return;
+    }
+    let m; try { const c = n.transform.baseVal.consolidate(); m = c && c.matrix; } catch { m = null; }
+    if (!m) { n.removeAttribute("transform"); return; }
+    let el = n;
+    const rotated = Math.abs(m.b) > 1e-9 || Math.abs(m.c) > 1e-9;
+    if (rotated && (tag === "rect" || tag === "circle" || tag === "ellipse")) {
+      const d = shapeToAbsPath(n);   // local geometry → path (currentTranslate=0 for a matrix node, so purely local)
+      if (d) {
+        const path = document.createElementNS(SVG_NS, "path");
+        for (const at of [...n.attributes]) if (!/^(x|y|width|height|cx|cy|r|rx|ry|d|transform)$/.test(at.name)) path.setAttribute(at.name, at.value);
+        path.setAttribute("d", d); path.setAttribute("transform", n.getAttribute("transform"));
+        n.replaceWith(path); el = path;
+      }
+    }
+    const f = (x, y) => ({ x: m.a * x + m.c * y + m.e, y: m.b * x + m.d * y + m.f });
+    transformShapeGeometry(el, el.tagName.toLowerCase(), f, m);
+    el.removeAttribute("transform");
   },
   mountNodeHandles() {
     this.unmountNodeHandles();
@@ -1639,7 +1679,7 @@ const editor = {
   nudge(dx, dy) {
     const nodes = this.selectedNodes(); if (!nodes.length) return;
     this.push("Move");
-    nodes.forEach((n) => { const t = currentTranslate(n); setTranslate(n, t.x + dx, t.y + dy); });
+    nodes.forEach((n) => this._translateNode(n, dx, dy));   // preserves scale/rotate
     this._renderSelection();
   },
   reorder(mode) {
