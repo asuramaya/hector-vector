@@ -271,6 +271,9 @@ button:disabled {
   display: grid; place-items: center;
 }
 .tool-button.active { background: #000; color: #fff; }
+/* V and A are the two primary tools; the creation tools below read as subcontrols */
+.tool-button.tool-primary { font-size: 17px; }
+.toolstrip .tool-button:not(.tool-primary) { width: 30px; height: 30px; font-size: 14px; }
 /* shortcut badge: a tiny letter in the bottom-right corner (tool buttons,
    viewport controls, the fill/stroke swap — one consistent kind of object) */
 .tool-button[data-key]::after, .vp-btn[data-key]::after, .swatch-swap[data-key]::after {

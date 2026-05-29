@@ -419,7 +419,12 @@ def main():
         badges = page.evaluate("""() => { const tb = [...document.querySelectorAll('.tool-button[data-tool]')];
             return { total: tb.length, keyed: tb.filter(b => (b.getAttribute('data-key') || '').length >= 1).length,
                      pen: document.querySelector('.tool-button[data-tool=pen]').getAttribute('data-key') }; }""")
-        check("tool buttons have shortcut badges", badges["total"] >= 9 and badges["keyed"] == badges["total"] and badges["pen"] == "P", str(badges))
+        check("tool buttons have shortcut badges", badges["total"] >= 7 and badges["keyed"] == badges["total"] and badges["pen"] == "P", str(badges))
+        # V and A are the two primary tools; marquee + transform tool buttons are gone
+        check("toolstrip unified to V/A primaries (no marquee/transform buttons)",
+              page.evaluate("""() => !document.querySelector('.tool-button[data-tool=marquee]')
+                  && !document.querySelector('.tool-button[data-tool=transform]')
+                  && document.querySelectorAll('.tool-button.tool-primary').length === 2 """))
         # viewport controls are standardized badged buttons too
         check("viewport controls have shortcut badges",
               page.evaluate("""() => { const v = [...document.querySelectorAll('.viewport-controls .vp-btn[data-key]')];
@@ -431,7 +436,7 @@ def main():
             mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300">'
               + '<rect data-hv-id="m1" x="10" y="10" width="50" height="50" fill="#888" transform="matrix(1.8 0 0 1.8 60 60)"/></svg>','m.svg'); }""")
         page.wait_for_timeout(120)
-        page.evaluate("() => { editor.selection = new Set(['m1']); editor.setTool('transform'); editor._renderSelection(); }")
+        page.evaluate("() => { editor.setTool('select'); editor.selection = new Set(['m1']); editor.enterTransform('scale'); }")
         page.wait_for_timeout(60)
         mbox = page.evaluate("""() => { const bx = document.querySelector('.hv-xform-box'); const sh = editor.nodeById('m1');
             if (!bx) return null; const r = bx.getBoundingClientRect(), q = sh.getBoundingClientRect();
@@ -678,6 +683,23 @@ def main():
         page.keyboard.press("e"); check("E selects ellipse tool", page.evaluate("editor.tool") == "ellipse")
         page.keyboard.press("l"); check("L selects line tool", page.evaluate("editor.tool") == "line")
         page.keyboard.press("v"); check("V returns to select tool", page.evaluate("editor.tool") == "select")
+
+        # marquee folded into V: dragging empty space rubber-band-selects (no marquee tool)
+        mount_ctl(page); page.evaluate("editor.setTool('select')")
+        ab = artboard_rect(page)
+        page.mouse.move(ab["x"] + ab["w"] * 0.02, ab["y"] + ab["h"] * 0.02); page.mouse.down()
+        page.mouse.move(ab["x"] + ab["w"] * 0.98, ab["y"] + ab["h"] * 0.45, steps=12); page.mouse.up()
+        page.wait_for_timeout(60)
+        msel = page.evaluate("() => [...editor.selection].sort().join(',')")
+        check("empty-drag marquee-selects in V", msel == "r1,r2", f"sel={msel}")
+        # Ctrl+T toggles scale handles within select (transform is a V sub-mode)
+        page.evaluate("() => editor.enterTransform('scale')"); page.wait_for_timeout(40)
+        check("Ctrl+T scale handles in select mode",
+              page.evaluate("() => editor.tool === 'select' && !!document.querySelector('.hv-xform-box') && document.querySelectorAll('.hv-xform-handle').length === 8"))
+        page.evaluate("() => editor.enterTransform('scale')"); page.wait_for_timeout(40)   # toggle off
+        check("Ctrl+T again returns to plain selection",
+              page.evaluate("() => !editor._xformMode && !document.querySelector('.hv-xform-box')"))
+        page.evaluate("editor.setTool('select'); editor.selection = new Set();")
 
         # ---- Phase 4: pen tool ----
         mount_ctl(page)

@@ -1639,15 +1639,17 @@ document.addEventListener("keydown", (e) => {
     if (editor.selection.size) { e.preventDefault(); editor.deleteSelection(); }
     return;
   }
-  if (e.key === "v" || e.key === "V") { editor.setTool("select"); return; }
-  if (e.key === "m" || e.key === "M") { editor.setTool("marquee"); return; }
+  if (e.key === "v" || e.key === "V") { editor.setTool("select"); editor.clearXform(); return; }
   if (e.key === "a" || e.key === "A") { editor.setTool("node"); return; }
   if (e.key === "p" || e.key === "P") { editor.setTool("pen"); return; }
   if (e.key === "c" || e.key === "C") { editor.setTool("curvature"); return; }
   if (e.key === "r" || e.key === "R") { editor.setTool("rect"); return; }
   if (e.key === "e" || e.key === "E") { editor.setTool("ellipse"); return; }
   if (e.key === "l" || e.key === "L") { editor.setTool("line"); return; }
-  if (e.key === "Escape" && editor.stage) { editor.selection = new Set(); editor.artboardSelected = false; editor._renderSelection(); editor._renderInspector(); }
+  if (e.key === "Escape" && editor.stage) {
+    if (editor._xformMode) { editor.clearXform(); return; }   // first Esc exits scale/rotate
+    editor.selection = new Set(); editor.artboardSelected = false; editor._renderSelection(); editor._renderInspector(); editor._showHint();
+  }
 });
 
 

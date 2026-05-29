@@ -36,7 +36,7 @@ const editor = {
   style: { fill: "#808080", stroke: "none", strokeWidth: 0 },
   _pen: null,           // in-progress pen path: { node, pts:[{x,y,in,out}], closed, dragging }
   _xform: null,         // transform-tool handle state during a scale/rotate drag
-  _xformMode: "scale",  // transform tool sub-mode: "scale" (Ctrl+T) or "rotate" (Ctrl+R)
+  _xformMode: null,     // select sub-mode: null (plain), "scale" (Ctrl+T) or "rotate" (Ctrl+R)
   _lastLayerId: null,   // anchor row for Shift-range select in the layers panel
   _nodeSel: new Set(),  // node tool: selected path-anchor keys ("pathId#k")
   _penTempSelect: false,// pen tool: Ctrl/Cmd held → act as Direct-Select (handles mounted)
@@ -297,11 +297,6 @@ const editor = {
       this._beginDraw(e);
       return;
     }
-    if (this.tool === "marquee") {
-      e.stopPropagation(); e.preventDefault();   // rubber-band select, don't pan
-      this._beginMarquee(e, e.altKey);
-      return;
-    }
     if (this.tool === "node") {
       // anchor/handle drags stopPropagation, so reaching here = empty canvas or path
       // body. Over a segment → reshape it; otherwise → marquee-select anchors.
@@ -314,7 +309,7 @@ const editor = {
       else this._beginNodeMarquee(e, e.shiftKey);
       return;
     }
-    if (this.tool !== "select" && this.tool !== "transform") return;
+    if (this.tool !== "select") return;
     let hit = e.target.closest && e.target.closest("[data-hv-id]");
     if (hit && hit.getAttribute("data-hv-locked") === "1") hit = null;   // locked → not selectable
     if (hit && this.stage.contains(hit)) {
@@ -323,12 +318,13 @@ const editor = {
       if (e.shiftKey) { this.selection.has(id) ? this.selection.delete(id) : this.selection.add(id); }
       else if (!this.selection.has(id)) { this.selection = new Set([id]); }
       this.artboardSelected = false; this._lastLayerId = id;
-      this._renderSelection(); this._renderInspector();
+      this._renderSelection(); this._renderInspector(); this._showHint();
       if (this.selection.size) this._beginMove(e);
     } else {
-      this.selection = new Set();      // empty space → select the artboard, let the frame pan
-      this.artboardSelected = true;
-      this._renderSelection(); this._renderInspector();
+      // empty space → rubber-band marquee on drag (Alt = lasso); a no-move click
+      // selects the artboard / clears. Panning is Space-drag. (Marquee folded into V.)
+      e.stopPropagation(); e.preventDefault();
+      this._beginMarquee(e, e.altKey);
     }
   },
   _beginMove(startEvent) {
@@ -784,14 +780,19 @@ const editor = {
       }
     }
     if (this.tool === "node") this.mountNodeHandles();
-    if (this.tool === "transform") this._mountTransformHandles();
+    // Transform is a SELECT sub-mode now (Ctrl+T scale / Ctrl+R rotate), not a tool.
+    if (this.tool === "select" && this._xformMode && this.selection.size && !this.artboardSelected) this._mountTransformHandles();
   },
 
   // ---------- tools ----------
+  // V (select) and A (node) are the two primary tools; pen/curvature/shapes are the
+  // creation sub-tools. Marquee + transform are folded into select (empty-drag
+  // rubber-bands; Ctrl+T/Ctrl+R toggle the scale/rotate sub-mode).
   setTool(t) {
-    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "transform" && t !== "marquee" && !SHAPE_TOOLS.has(t)) return;
+    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && !SHAPE_TOOLS.has(t)) return;
     if (this._pen && t !== "pen") this._finishPen(true);   // keep any in-progress path
     if (this._curv && t !== "curvature") this._curvFinish(true);
+    if (t !== this.tool) this._xformMode = null;           // leaving select drops the transform sub-mode
     if (t !== "node") this._nodeSel = new Set();           // anchor selection is node-tool-only
     this.tool = t;
     document.querySelectorAll(".tool-button").forEach((b) => b.classList.toggle("active", b.dataset.tool === t));
@@ -806,24 +807,32 @@ const editor = {
     }
     if (t === "node") this.mountNodeHandles(); else this.unmountNodeHandles();
     if (this.stage) this._renderSelection();   // show/hide the transform bbox handles
-    const msg = {
-      select: "Select tool. (A = nodes)",
-      node: "Node tool — drag anchors/handles. Shift-click multi-select, Alt converts, Del removes. (V = select)",
-      transform: "Transform — drag the box handles to scale. Shift = keep aspect.",
-      marquee: "Drag-select — drag a box over objects. Alt = lasso. Shift = add.",
-      rect: "Rectangle — drag on the canvas. (V = select)",
-      ellipse: "Ellipse — drag on the canvas. Shift = circle.",
-      line: "Line — drag on the canvas. Shift = 45°.",
-      pen: "Pen — click for corners, drag for curves. Alt-drag = cusp, Shift = 45°. Over a path: + adds a point, over an anchor: − removes it. Enter finishes, click the first point to close.",
-      curvature: "Curvature — click to drop points (auto-smooth). Double-click a point to toggle corner. Click the first point to close, Enter to finish.",
-    };
-    setStatus(msg[t] || "", 2000);
+    this._showHint();
   },
+  // The bottom ready-bar shows a contextual hint for the current tool / state.
+  _hint() {
+    const t = this.tool;
+    if (t === "select") {
+      if (this._xformMode === "scale") return "Scale — drag the box handles · Shift keeps aspect · Alt from centre · Esc to finish";
+      if (this._xformMode === "rotate") return "Rotate — drag the corner rotators · Shift = 15° · Esc to finish";
+      if (this.artboardSelected) return "Artboard — set size/background in the panel · click a shape to select it";
+      if (this.selection.size) return `${this.selection.size} selected — drag to move · Alt-drag duplicates · Ctrl+T scale · Ctrl+R rotate · ⌫ delete`;
+      return "Select (V) — click a shape · drag to marquee (Alt = lasso) · Space-drag pans · A edits points";
+    }
+    if (t === "node") return "Points (A) — drag anchors/handles · Shift multi-selects · Alt converts · drag a segment to reshape · ⌫ deletes";
+    if (t === "pen") return "Pen (P) — click for corners, drag for curves · over a path + adds / − removes · click the first point to close · Enter finishes";
+    if (t === "curvature") return "Curvature (C) — click to drop auto-smooth points · double-click toggles corner · click the first to close · Enter finishes";
+    if (t === "rect") return "Rectangle (R) — drag on the canvas · Shift = square";
+    if (t === "ellipse") return "Ellipse (E) — drag on the canvas · Shift = circle";
+    if (t === "line") return "Line (L) — drag on the canvas · Shift = 45°";
+    return "";
+  },
+  _showHint() { const h = this._hint(); if (h) setStatus(h, 0); },
   unmountNodeHandles() { const ov = this._overlayEl(); if (ov) ov.querySelectorAll(".hv-handles").forEach((g) => g.remove()); },
   onViewportChanged() {
     if (this._handleDragging) return;   // a zoom/pan mid-drag must not re-mount and yank the dragged handle
     if (this.tool === "node" && this.stage) this.mountNodeHandles();
-    if (this.tool === "transform" && this.stage) this._renderSelection();   // handles are constant-screen-size
+    if (this.tool === "select" && this._xformMode && this.stage) this._renderSelection();   // handles are constant-screen-size
     if (this._pen) { this._redrawPen(); this._renderPenMarks(); }
     if (this._curv) { this._curvRedraw(); this._curvMarks(); }
   },
@@ -1176,13 +1185,17 @@ const editor = {
   // 8 handles on the selection bbox; dragging one scales (live, via a temporary
   // matrix transform) about the opposite corner/edge, then bakes the scale into
   // geometry on release so nodes stay translate-only. Shift on a corner keeps aspect.
-  // Enter the transform tool in a given sub-mode: "scale" (Ctrl+T) shows the resize
-  // box; "rotate" (Ctrl+R) shows the corner rotators only. Re-entering re-mounts.
+  // Transform is a sub-mode of Select: Ctrl+T = scale handles, Ctrl+R = rotate
+  // handles. Pressing the same one again toggles back to the plain selection.
   enterTransform(mode) {
-    this._xformMode = mode === "rotate" ? "rotate" : "scale";
-    if (this.tool === "transform") this._renderSelection(); else this.setTool("transform");
-    setStatus(this._xformMode === "rotate" ? "Rotate mode — drag a corner rotator. Shift = 15°." : "Scale mode — drag the box handles. Shift = aspect, Alt = from centre.", 2200);
+    mode = mode === "rotate" ? "rotate" : "scale";
+    if (this.tool !== "select") this.setTool("select");   // switching tools also clears _xformMode
+    this._xformMode = this._xformMode === mode ? null : mode;
+    this._renderSelection();
+    this._showHint();
   },
+  // Drop the transform sub-mode (V pressed again, or Esc) → plain selection.
+  clearXform() { if (this._xformMode) { this._xformMode = null; this._renderSelection(); this._showHint(); } },
   _mountTransformHandles() {
     this.unmountTransformHandles();
     const ov = this._overlayEl(); if (!ov || !this.stage || this.artboardSelected) return;
