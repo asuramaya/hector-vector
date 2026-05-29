@@ -171,6 +171,18 @@ def main():
         # The live library may auto-load a PNG (no editable stage). Guarantee a stage
         # so the suite doesn't depend on what's in the outputs dir.
         page.wait_for_timeout(500)
+        # Default startup (prefs.startup === "blank"): a fresh canvas mounts and the
+        # Process workspace opens over it.
+        boot = page.evaluate("""() => ({
+            stage: !!editor.stage,
+            modal: !document.querySelector('#modal-root').hidden,
+            title: document.querySelector('#modal-title').textContent,
+        })""")
+        check("startup mounts a blank canvas + opens Process",
+              boot["stage"] and boot["modal"] and "Process" in boot["title"], str(boot))
+        # dismiss the modal so it doesn't intercept the suite's clicks.
+        if page.evaluate("!document.querySelector('#modal-root').hidden"):
+            page.keyboard.press("Escape"); page.wait_for_timeout(150)
         if not page.evaluate("!!editor.stage"):
             mount_ctl(page)
 
@@ -525,16 +537,17 @@ def main():
         settings = page.evaluate("""() => ({
             title: document.querySelector('#modal-title').textContent,
             toggles: document.querySelectorAll('#modal-body input[type=checkbox]').length,
+            startup: !![...document.querySelectorAll('#modal-body .form-label')].find(e => e.textContent === 'On launch'),
             about: !!document.querySelector('#modal-body .about-block'),
             install: [...document.querySelectorAll('#modal-body .form-label')].some(e => e.textContent === 'Desktop app'),
         })""")
         check("Settings modal has prefs + install + about",
-              settings["title"] == "Settings" and settings["toggles"] >= 2 and settings["about"] and settings["install"], str(settings))
-        # toggling a pref persists to localStorage
-        page.evaluate("""() => { const c = document.querySelectorAll('#modal-body input[type=checkbox]')[0];
-            c.checked = false; c.dispatchEvent(new Event('change', { bubbles: true })); }""")
-        check("settings toggle persists", page.evaluate("JSON.parse(localStorage.getItem('hector-vector:prefs')).resume") is False)
-        page.evaluate("""() => { localStorage.setItem('hector-vector:prefs', JSON.stringify({resume:true, smartGuides:true})); closeModal(); }""")
+              settings["title"] == "Settings" and settings["toggles"] >= 1 and settings["startup"] and settings["about"] and settings["install"], str(settings))
+        # changing the startup choice persists to localStorage
+        page.evaluate("""() => { const s = document.querySelector('#modal-body select');
+            s.value = 'resume'; s.dispatchEvent(new Event('change', { bubbles: true })); }""")
+        check("settings startup choice persists", page.evaluate("JSON.parse(localStorage.getItem('hector-vector:prefs')).startup") == "resume")
+        page.evaluate("""() => { localStorage.setItem('hector-vector:prefs', JSON.stringify({startup:'blank', smartGuides:true})); closeModal(); }""")
         proc_centered = page.evaluate("""() => {
             const h=document.querySelector('.editor-bar').getBoundingClientRect();
             const p=document.querySelector('#process-button').getBoundingClientRect();

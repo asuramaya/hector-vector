@@ -84,10 +84,17 @@ function persistSettings() {
 
 // General app preferences (distinct from the per-process pipeline `settings`).
 const PREFS_KEY = "hector-vector:prefs";
-const PREFS_DEFAULTS = { resume: true, smartGuides: true };
+// `startup`: what to show on launch — "blank" (a fresh canvas + the Process
+// workspace, the default) or "resume" (reopen the last document). Migrates the
+// old boolean `resume` pref for anyone who had set it.
+const PREFS_DEFAULTS = { startup: "blank", smartGuides: true };
 let prefs = (() => {
-  try { return { ...PREFS_DEFAULTS, ...(JSON.parse(localStorage.getItem(PREFS_KEY) || "{}")) }; }
-  catch { return { ...PREFS_DEFAULTS }; }
+  try {
+    const stored = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
+    if (stored.startup === undefined && typeof stored.resume === "boolean") stored.startup = stored.resume ? "resume" : "blank";
+    delete stored.resume;
+    return { ...PREFS_DEFAULTS, ...stored };
+  } catch { return { ...PREFS_DEFAULTS }; }
 })();
 function persistPrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch {} }
 editor.smartGuides = prefs.smartGuides;   // apply the persisted preference
@@ -112,20 +119,23 @@ function rememberLastDoc() {
     if (d) localStorage.setItem(LAST_DOC_KEY, JSON.stringify(d));
   } catch {}
 }
+// Returns true if it actually restored a document (so the caller can fall back
+// to a blank canvas when there is nothing to resume).
 async function resumeLastDoc() {
-  if (!prefs.resume) return;
   const d = _bootLastDoc;   // the value as it was at launch (see _bootLastDoc)
-  if (!d) return;
+  if (!d) return false;
   try {
     if (d.sel && workItems.some((w) => w.name === d.sel)) {       // a library work item
       editor.pinned = false; selectedName = d.sel; manualOutputName = d.manual || null;
-      renderQueue(); await renderPreviews(); return;
+      renderQueue(); await renderPreviews(); return true;
     }
     if (d.url) {                                                   // a saved canvas / standalone vector on disk
       const out = d.canvas ? { name: d.name, folder: d.folder, url: d.url, kind: "svg", path: null } : null;
       await loadSvgToStage(d.url, d.name || "document.svg", out);
+      return true;
     }
   } catch {}
+  return false;
 }
 
 let workItems = [];
@@ -1155,6 +1165,13 @@ function mountStageFromText(text, name) {
   requestAnimationFrame(() => { measureFit(vp); editor.sync(); });
 }
 
+// Mount a fresh white artboard with no save target (Save → Save-As).
+function mountBlankCanvas(W = 512, H = 512) {
+  selectedOutput = null; manualOutputName = null;
+  const txt = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"><rect class="hv-artboard" x="0" y="0" width="${W}" height="${H}" fill="#ffffff"/></svg>`;
+  mountStageFromText(txt, `untitled-${W}x${H}.svg`);
+}
+
 function newBlankDoc() {
   openModal("New canvas", true);
   modalSearchEl.hidden = true;
@@ -1168,9 +1185,7 @@ function newBlankDoc() {
   actions.appendChild(ghostBtn("Create", () => {
     const W = Math.max(1, parseInt(wInp.value, 10) || 512), H = Math.max(1, parseInt(hInp.value, 10) || 512);
     closeModal();
-    selectedOutput = null; manualOutputName = null;
-    const txt = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"><rect class="hv-artboard" x="0" y="0" width="${W}" height="${H}" fill="#ffffff"/></svg>`;
-    mountStageFromText(txt, `untitled-${W}x${H}.svg`);
+    mountBlankCanvas(W, H);
     setStatus(`New ${W}×${H} canvas.`, 2000);
   }));
   root.appendChild(actions);
@@ -1349,8 +1364,10 @@ function openAppSettings() {
   const root = document.createElement("div"); root.className = "form";
 
   root.appendChild(sectionTitle("General"));
-  root.appendChild(prefToggleRow("Resume last document on launch", prefs.resume,
-    (v) => { prefs.resume = v; persistPrefs(); }, "Reopens whatever was on the canvas when you left."));
+  root.appendChild(fieldRow("On launch",
+    makeSelectRaw(prefs.startup, [["blank", "Blank canvas + Process"], ["resume", "Resume last document"]],
+      (v) => { prefs.startup = v; persistPrefs(); }),
+    "What to show when the app opens. Blank starts fresh and opens the Process workspace."));
   root.appendChild(prefToggleRow("Smart guides", editor.smartGuides,
     (v) => { editor.smartGuides = v; prefs.smartGuides = v; persistPrefs(); }, "Snap to other objects' edges/centres while moving."));
 
@@ -2440,7 +2457,14 @@ function renderProcessJobs() {
 
 api("/api/bootstrap", "POST")
   .then(() => refreshAll())
-  .then(() => resumeLastDoc())   // restore the last document on launch (if enabled)
+  .then(async () => {
+    // Startup: resume the last document only if the user opted in AND there is
+    // one to restore; otherwise fall back to the default — a blank canvas with
+    // the Process workspace open.
+    if (prefs.startup === "resume" && (await resumeLastDoc())) return;
+    mountBlankCanvas();
+    openProcessModal();
+  })
   .catch((error) => setStatus(error.message, 3000));
 
 window.addEventListener("resize", () => {

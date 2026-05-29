@@ -22,11 +22,6 @@
         <div class="panel-actions doc-actions-center">
           <button id="process-button" class="ghost-button" type="button" title="Process & batch images into vectors (gallery + jobs)">Process<span id="process-count" class="menu-count"></span>…</button>
         </div>
-        <div class="panel-actions doc-actions-right">
-          <button id="undo-button" class="ghost-button" type="button" title="Undo (Ctrl/Cmd+Z)" disabled>↶ Undo</button>
-          <button id="redo-button" class="ghost-button" type="button" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>↷ Redo</button>
-          <button id="rail-toggle" class="ghost-button" type="button" title="Collapse the side panel">⊟</button>
-        </div>
       </header>
 
       <section class="editor-grid">
@@ -128,6 +123,13 @@
           <div class="status-progress-track"><div id="status-progress-bar" class="status-progress-bar"></div></div>
           <span id="status-progress-label" class="status-progress-label"></span>
         </div>
+        <div class="status-tools" role="toolbar" aria-label="History & view">
+          <button id="undo-button" class="bar-btn" type="button" title="Undo (Ctrl/Cmd+Z)" disabled>↶</button>
+          <button id="redo-button" class="bar-btn" type="button" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>↷</button>
+          <span class="bar-sep" aria-hidden="true"></span>
+          <button id="shortcut-button" class="bar-btn" type="button" title="Keyboard shortcuts (?)">?</button>
+          <button id="rail-toggle" class="bar-btn" type="button" title="Collapse the side panel">⊟</button>
+        </div>
       </footer>
     </main>
 
@@ -143,10 +145,6 @@
         </header>
         <div id="modal-body" class="modal-body"></div>
       </div>
-    </div>
-
-    <div id="shortcut-hint" class="shortcut-hint" title="Keyboard shortcuts">
-      <button id="shortcut-button" class="ghost-button" type="button">?</button>
     </div>
 
     <script type="module" src="/src/app.js"></script>
