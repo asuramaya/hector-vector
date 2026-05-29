@@ -82,6 +82,52 @@ function persistSettings() {
   } catch {}
 }
 
+// General app preferences (distinct from the per-process pipeline `settings`).
+const PREFS_KEY = "hector-vector:prefs";
+const PREFS_DEFAULTS = { resume: true, smartGuides: true };
+let prefs = (() => {
+  try { return { ...PREFS_DEFAULTS, ...(JSON.parse(localStorage.getItem(PREFS_KEY) || "{}")) }; }
+  catch { return { ...PREFS_DEFAULTS }; }
+})();
+function persistPrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch {} }
+editor.smartGuides = prefs.smartGuides;   // apply the persisted preference
+
+// Resume-to-last-document: remember whichever doc is on the canvas, restore it on launch.
+const LAST_DOC_KEY = "hector-vector:last-doc";
+// Snapshot the saved descriptor NOW, at module load — the boot auto-load mounts a
+// default doc and rememberLastDoc() would overwrite the stored value before
+// resumeLastDoc() gets to read it.
+const _bootLastDoc = (() => { try { return JSON.parse(localStorage.getItem(LAST_DOC_KEY) || "null"); } catch { return null; } })();
+function rememberLastDoc() {
+  try {
+    let d = null;
+    if (editor.stage && selectedOutput) {
+      // library output (reload via its work item) or a saved canvas/standalone file (reload from disk)
+      d = { sel: (!editor.pinned && selectedName) || null, manual: manualOutputName || null,
+            folder: selectedOutput.folder, name: selectedOutput.name, url: selectedOutput.url,
+            canvas: selectedOutput.folder === "canvas" };
+    } else if (editor.stage && !editor.pinned && selectedName) {
+      d = { sel: selectedName };
+    }
+    if (d) localStorage.setItem(LAST_DOC_KEY, JSON.stringify(d));
+  } catch {}
+}
+async function resumeLastDoc() {
+  if (!prefs.resume) return;
+  const d = _bootLastDoc;   // the value as it was at launch (see _bootLastDoc)
+  if (!d) return;
+  try {
+    if (d.sel && workItems.some((w) => w.name === d.sel)) {       // a library work item
+      editor.pinned = false; selectedName = d.sel; manualOutputName = d.manual || null;
+      renderQueue(); await renderPreviews(); return;
+    }
+    if (d.url) {                                                   // a saved canvas / standalone vector on disk
+      const out = d.canvas ? { name: d.name, folder: d.folder, url: d.url, kind: "svg", path: null } : null;
+      await loadSvgToStage(d.url, d.name || "document.svg", out);
+    }
+  } catch {}
+}
+
 let workItems = [];
 let outputs = [];
 let selectedName = null;
@@ -524,6 +570,7 @@ async function renderPreviews() {
       outputLabelEl.textContent = selectedOutput ? `Canvas — ${selectedOutput.name}` : "Canvas";
     }
     editor.sync();
+    rememberLastDoc();
   }
 }
 
@@ -837,6 +884,7 @@ function closeModal() {
   modalRootEl.hidden = true;
   modalBodyEl.innerHTML = "";
   processModalOpen = false;
+  appSettingsOpen = false;
 }
 
 modalRootEl.addEventListener("click", (event) => {
@@ -1139,6 +1187,7 @@ async function loadSvgToStage(url, name, output = null) {
     // A re-opened canvas file keeps its save target so Save overwrites it in place;
     // any other standalone vector opens untracked (Save → Save-As).
     selectedOutput = output;
+    rememberLastDoc();
     setStatus(`Opened ${name}.`, 2000);
   } catch (e) { setStatus(`Open failed: ${e.message}`, 3000); }
 }
@@ -1254,6 +1303,7 @@ function applySavedCanvas(data) {
   };
   viewports.output.name = data.name;
   if (outputLabelEl) outputLabelEl.textContent = `Canvas — ${data.name}`;
+  rememberLastDoc();
   refreshAll();
 }
 
@@ -1264,14 +1314,73 @@ async function exportFlow() {
   openExportModal();
 }
 
-// PWA install prompt is captured lazily (beforeinstallprompt) and surfaced as a
-// File-menu item only when the browser offers it.
+// PWA install prompt is captured lazily (beforeinstallprompt) and surfaced in the
+// general Settings modal (with live install-availability detection).
 let pwaInstallPrompt = null;
 async function installPwa() {
   if (!pwaInstallPrompt) return;
   const p = pwaInstallPrompt; pwaInstallPrompt = null;
   p.prompt();
   try { await p.userChoice; } catch {}
+  if (appSettingsOpen) openAppSettings();   // refresh the Install row
+}
+function isInstalledApp() {
+  try {
+    return (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
+      || window.navigator.standalone === true
+      || document.querySelector(".app.editor")?.classList.contains("app-window");
+  } catch { return false; }
+}
+
+const APP_VERSION = "1.0";
+// General app settings: preferences that don't belong to the pipeline, plus the
+// install affordance and an About section. (The per-process backend "Settings"
+// form lives in the Process workspace.)
+let appSettingsOpen = false;
+function prefToggleRow(label, checked, onChange, hint) {
+  const inp = document.createElement("input"); inp.type = "checkbox"; inp.checked = !!checked;
+  inp.addEventListener("change", () => onChange(inp.checked));
+  return fieldRow(label, inp, hint);
+}
+function openAppSettings() {
+  openModal("Settings", true);
+  modalSearchEl.hidden = true;
+  appSettingsOpen = true;
+  const root = document.createElement("div"); root.className = "form";
+
+  root.appendChild(sectionTitle("General"));
+  root.appendChild(prefToggleRow("Resume last document on launch", prefs.resume,
+    (v) => { prefs.resume = v; persistPrefs(); }, "Reopens whatever was on the canvas when you left."));
+  root.appendChild(prefToggleRow("Smart guides", editor.smartGuides,
+    (v) => { editor.smartGuides = v; prefs.smartGuides = v; persistPrefs(); }, "Snap to other objects' edges/centres while moving."));
+
+  root.appendChild(sectionTitle("Install"));
+  const installWrap = document.createElement("div"); installWrap.className = "form-row";
+  const installLabel = document.createElement("span"); installLabel.className = "form-label"; installLabel.textContent = "Desktop app";
+  installWrap.appendChild(installLabel);
+  if (isInstalledApp()) {
+    const s = document.createElement("span"); s.className = "form-hint"; s.textContent = "Installed — running as an app. ✓"; installWrap.appendChild(s);
+  } else if (pwaInstallPrompt) {
+    installWrap.appendChild(ghostBtn("Install…", () => installPwa()));
+  } else {
+    const b = ghostBtn("Install unavailable", () => {}); b.disabled = true; installWrap.appendChild(b);
+    const s = document.createElement("span"); s.className = "form-hint"; s.textContent = "Your browser hasn't offered an install yet (or it's already installed)."; installWrap.appendChild(s);
+  }
+  root.appendChild(installWrap);
+
+  root.appendChild(sectionTitle("About"));
+  const about = document.createElement("div"); about.className = "about-block";
+  about.innerHTML =
+    `<div class="about-name">hector-vector <span class="about-ver">v${APP_VERSION}</span></div>`
+    + `<div class="about-line">A local, browser-based SVG vector editor + image→vector pipeline.</div>`
+    + `<div class="about-line">Runs against your local server; works offline as an installed app.</div>`;
+  root.appendChild(about);
+
+  const actions = document.createElement("div"); actions.className = "form-actions";
+  actions.appendChild(ghostBtn("Close", () => closeModal()));
+  root.appendChild(actions);
+
+  modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
 }
 
 const MENU_ITEMS = {
@@ -1287,8 +1396,9 @@ const MENU_ITEMS = {
       { type: "sep" },
       { label: "Export PNG…", onClick: exportFlow },
       { label: "Copy SVG markup", onClick: copySvgSource },
+      { type: "sep" },
+      { label: "Settings…", onClick: openAppSettings },
     ];
-    if (pwaInstallPrompt) items.push({ type: "sep" }, { label: "Install as desktop app…", onClick: installPwa });
     return items;
   },
   "layers": () => {
@@ -1452,8 +1562,8 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch(() => {});
   }
-  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); pwaInstallPrompt = e; });
-  window.addEventListener("appinstalled", () => { pwaInstallPrompt = null; });
+  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); pwaInstallPrompt = e; if (appSettingsOpen) openAppSettings(); });
+  window.addEventListener("appinstalled", () => { pwaInstallPrompt = null; if (appSettingsOpen) openAppSettings(); });
 
   // ---- App-window mode (standalone Chromium window launched via launch.sh) ----
   // Adds .app-window so the header acts as the draggable titlebar under the
@@ -1720,7 +1830,7 @@ function canvasMenuItems() {
     { icon: "❏", label: "Paste", disabled: !editor.clipboard.length, onClick: () => editor.paste() },
     { icon: "▦", label: "Select All", onClick: () => editor.selectAll() },
     { type: "sep" },
-    { icon: editor.smartGuides ? "⊹✓" : "⊹", label: "Smart guides", onClick: () => { editor.smartGuides = !editor.smartGuides; setStatus(`Smart guides ${editor.smartGuides ? "on" : "off"}.`, 1500); } },
+    { icon: editor.smartGuides ? "⊹✓" : "⊹", label: "Smart guides", onClick: () => { editor.smartGuides = !editor.smartGuides; prefs.smartGuides = editor.smartGuides; persistPrefs(); setStatus(`Smart guides ${editor.smartGuides ? "on" : "off"}.`, 1500); } },
     { icon: "⊠", label: "Invert space", onClick: () => editor.invertSpace() },
     { icon: "⊘", label: "Clean up ghost layers", onClick: () => editor.cleanupLayers() },
     { icon: "⧉", label: "Merge same-colour layers", onClick: () => editor.consolidateByColor() },
@@ -1767,7 +1877,7 @@ document.addEventListener("pointerdown", (e) => {
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideContextMenu(); });
 window.addEventListener("blur", hideContextMenu);
-window.addEventListener("pagehide", () => editor.dispose());   // free document state when the app closes
+window.addEventListener("pagehide", () => { rememberLastDoc(); editor.dispose(); });   // remember the doc, then free its state on close
 // Pen tool: hold Ctrl/Cmd to temporarily act as Direct-Select (move anchors/handles).
 document.addEventListener("keydown", (e) => { if ((e.key === "Control" || e.key === "Meta") && editor.tool === "pen") editor.enterPenTempSelect(); });
 document.addEventListener("keyup", (e) => { if (e.key === "Control" || e.key === "Meta") editor.exitPenTempSelect(); });
@@ -2328,6 +2438,7 @@ function renderProcessJobs() {
 
 api("/api/bootstrap", "POST")
   .then(() => refreshAll())
+  .then(() => resumeLastDoc())   // restore the last document on launch (if enabled)
   .catch((error) => setStatus(error.message, 3000));
 
 window.addEventListener("resize", () => {

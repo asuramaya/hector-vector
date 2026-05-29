@@ -485,6 +485,22 @@ def main():
         file_menu_click(page, "Open vector")
         check("File menu Open opens the browser", page.evaluate("!document.querySelector('#modal-root').hidden"))
         page.evaluate("closeModal()")
+
+        # File ▸ Settings… opens the general settings (prefs + install + about)
+        file_menu_click(page, "Settings")
+        settings = page.evaluate("""() => ({
+            title: document.querySelector('#modal-title').textContent,
+            toggles: document.querySelectorAll('#modal-body input[type=checkbox]').length,
+            about: !!document.querySelector('#modal-body .about-block'),
+            install: [...document.querySelectorAll('#modal-body .form-label')].some(e => e.textContent === 'Desktop app'),
+        })""")
+        check("Settings modal has prefs + install + about",
+              settings["title"] == "Settings" and settings["toggles"] >= 2 and settings["about"] and settings["install"], str(settings))
+        # toggling a pref persists to localStorage
+        page.evaluate("""() => { const c = document.querySelectorAll('#modal-body input[type=checkbox]')[0];
+            c.checked = false; c.dispatchEvent(new Event('change', { bubbles: true })); }""")
+        check("settings toggle persists", page.evaluate("JSON.parse(localStorage.getItem('hector-vector:prefs')).resume") is False)
+        page.evaluate("""() => { localStorage.setItem('hector-vector:prefs', JSON.stringify({resume:true, smartGuides:true})); closeModal(); }""")
         proc_centered = page.evaluate("""() => {
             const h=document.querySelector('.editor-bar').getBoundingClientRect();
             const p=document.querySelector('#process-button').getBoundingClientRect();
