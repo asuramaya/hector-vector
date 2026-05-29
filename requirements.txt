@@ -1,6 +1,7 @@
-# Core runtime — the server itself only needs these plus the Python stdlib.
+# Core runtime — required for the server to start (engine.py uses scipy.ndimage).
 Pillow>=10.0
 numpy>=1.24
+scipy>=1.10
 
 # Optional, installed on demand from the Settings UI into ./.venv (not required to start):
 #   rembg[cpu] onnxruntime   # AI background removal (Cutout "AI" backend)

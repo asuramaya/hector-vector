@@ -36,4 +36,8 @@ for pid in $pids; do
   fi
 done
 
-exec env PORT="$port" python3 server.py
+# Prefer the project-local venv created by ./install.sh; fall back to system python3.
+py="$(pwd)/.venv/bin/python3"
+[ -x "$py" ] || py=python3
+
+exec env PORT="$port" "$py" server.py

@@ -1,0 +1,37 @@
+name: release
+
+# Cut by pushing a vX.Y.Z tag (see scripts/release.sh). Verifies, then publishes
+# a GitHub Release with auto-generated notes and a source tarball.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime deps
+        run: pip install -r requirements.txt
+
+      - name: Smoke tests
+        run: python3 tests/test_smoke.py
+
+      - name: Build source tarball
+        run: |
+          git archive --format=tar.gz --prefix="hector-vector-${GITHUB_REF_NAME}/" \
+            -o "hector-vector-${GITHUB_REF_NAME}.tar.gz" HEAD
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: hector-vector-*.tar.gz

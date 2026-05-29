@@ -18,8 +18,20 @@ jobs:
       - name: Install runtime deps
         run: pip install -r requirements.txt
 
-      - name: Check frontend parses
-        run: node --check app.js
+      - name: Check frontend ES modules parse
+        run: |
+          set -e
+          for f in $(find src -name '*.js'); do
+            cp "$f" "$f.mjs" && node --check "$f.mjs" && rm "$f.mjs"
+          done
+
+      - name: Check Python sources parse
+        run: |
+          python3 - <<'PY'
+          import ast
+          for f in ("server.py", "engine.py", "mask_trace_prep.py"):
+              ast.parse(open(f).read()); print(f, "OK")
+          PY
 
       - name: Smoke tests (parse + pixelvec + render)
         run: python3 tests/test_smoke.py

@@ -35,6 +35,13 @@ INPUTS_DIR = APP_DIR / "inputs"
 ASSETS_DIR = APP_DIR / "assets"
 SRC_DIR = APP_DIR / "src"          # ES-module tree: hv/ library + editor + app shell
 WORKSPACE_DIR = APP_DIR
+
+# Single source of truth for the version, shared with the frontend via /api/version.
+try:
+    APP_VERSION = (APP_DIR / "VERSION").read_text(encoding="utf-8").strip() or "0.0.0"
+except OSError:
+    APP_VERSION = "0.0.0"
+GITHUB_REPO = "asuramaya/hector-vector"
 MASK_PREP_SCRIPT = APP_DIR / "mask_trace_prep.py"
 STATIC_FILES = {
     "/": "index.html",
@@ -1027,6 +1034,96 @@ def bootstrap_tools() -> dict:
     return {"message": " | ".join(started)}
 
 
+# ---------------------------------------------------------------------------
+# Version + self-update (git-pull based; the app is distributed as a git clone)
+# ---------------------------------------------------------------------------
+def _git(*args: str, timeout: float = 8.0) -> str | None:
+    """Run a git command in APP_DIR; return stripped stdout, or None on any failure."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(APP_DIR), *args],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if out.returncode != 0:
+            return None
+        return out.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _is_git_repo() -> bool:
+    return _git("rev-parse", "--is-inside-work-tree") == "true"
+
+
+def version_info() -> dict:
+    is_git = _is_git_repo()
+    return {
+        "version": APP_VERSION,
+        "isGit": is_git,
+        "commit": (_git("rev-parse", "--short", "HEAD") or "") if is_git else "",
+        "branch": (_git("rev-parse", "--abbrev-ref", "HEAD") or "") if is_git else "",
+        "dirty": bool(_git("status", "--porcelain")) if is_git else False,
+        "repo": GITHUB_REPO,
+    }
+
+
+def _version_tuple(s: str) -> tuple:
+    nums = re.findall(r"\d+", s or "")
+    return tuple(int(n) for n in nums[:3]) or (0,)
+
+
+def check_update(payload: dict | None = None) -> dict:
+    """Compare the local VERSION against the latest GitHub release tag. Network
+    failures degrade to {error} rather than throwing — this is best-effort."""
+    import urllib.request  # stdlib; local import keeps the module top lean
+    info = version_info()
+    api = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+    latest = None
+    url = f"https://github.com/{GITHUB_REPO}/releases"
+    try:
+        req = urllib.request.Request(api, headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "hector-vector-updater",
+        })
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        latest = (data.get("tag_name") or "").lstrip("v") or None
+        url = data.get("html_url") or url
+    except Exception as exc:  # offline, rate-limited, no releases yet, etc.
+        return {"current": info["version"], "latest": None, "behind": False,
+                "url": url, "isGit": info["isGit"], "dirty": info["dirty"],
+                "error": f"Could not reach GitHub ({exc.__class__.__name__})."}
+    behind = bool(latest) and _version_tuple(latest) > _version_tuple(info["version"])
+    return {"current": info["version"], "latest": latest, "behind": behind,
+            "url": url, "isGit": info["isGit"], "dirty": info["dirty"]}
+
+
+def apply_update(payload: dict | None = None) -> dict:
+    """git pull --ff-only, then sync deps into .venv if present. Refuses on a
+    non-git checkout or a dirty working tree (so we never clobber local edits)."""
+    if not _is_git_repo():
+        raise ValueError("Not a git checkout — update with your package manager or re-clone.")
+    if _git("status", "--porcelain"):
+        raise ValueError("Working tree has local changes — commit or stash them before updating.")
+    if has_running_job("update"):
+        return {"message": "Update already running."}
+    pip = VENV_DIR / "bin" / "pip"
+    cmd = [
+        "bash", "-lc",
+        (
+            f"set -euo pipefail; "
+            f"git -C {shlex_quote(str(APP_DIR))} pull --ff-only; "
+            f"if [ -x {shlex_quote(str(pip))} ]; then "
+            f"  {shlex_quote(str(pip))} install -r {shlex_quote(str(APP_DIR / 'requirements.txt'))}; "
+            f"fi; "
+            f"echo 'Update complete — restart hector-vector to finish.'"
+        ),
+    ]
+    result = launch_job("update", cmd, summary="Update hector-vector (git pull)", immediate=True)
+    result["restart"] = True
+    return result
+
+
 def ensure_tools_ready(*required: str) -> None:
     status = tool_status()
     missing = set(status["missing_tools"])
@@ -1979,6 +2076,9 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/status":
             self.send_json(tool_status())
             return
+        if parsed.path == "/api/version":
+            self.send_json(version_info())
+            return
         if parsed.path == "/api/source":
             self.send_json(get_source_info())
             return
@@ -2066,6 +2166,10 @@ class Handler(SimpleHTTPRequestHandler):
                 result = install_rembg()
             elif parsed.path == "/api/bootstrap":
                 result = bootstrap_tools()
+            elif parsed.path == "/api/update/check":
+                result = check_update(payload)
+            elif parsed.path == "/api/update/apply":
+                result = apply_update(payload)
             elif parsed.path == "/api/work-items/remove":
                 result = remove_work_item(payload)
             elif parsed.path == "/api/work-items/clean-derivatives":

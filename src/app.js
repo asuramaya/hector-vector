@@ -1165,6 +1165,55 @@ async function copySvgSource() {
   await copyToClipboard(text, `SVG (${text.length} chars)`);
 }
 
+// Save bytes straight to the user's machine via a synthetic download link — the
+// escape hatch from the server outputs folder (works on any canvas, saved or not).
+function downloadBlob(filename, data, mime) {
+  const blob = data instanceof Blob ? data : new Blob([data], { type: mime || "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function downloadCurrentSvg() {
+  if (!editor.stage) { setStatus("Open or create a canvas first.", 2500); return; }
+  const text = editor.serialize();
+  if (!text) { setStatus("Nothing to download.", 2500); return; }
+  const name = (defaultSaveName() || "untitled") + ".svg";
+  downloadBlob(name, text, "image/svg+xml");
+  setStatus(`Downloaded ${name}.`, 2000);
+}
+
+// Open an .svg straight from disk (browser file picker) — untracked, so Save → Save-As.
+function openFromFile() {
+  const inp = document.querySelector("#open-file-input");
+  if (!inp) return;
+  inp.value = "";
+  inp.onchange = () => {
+    const file = inp.files && inp.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = String(reader.result || "");
+      if (!/<svg[\s>]/i.test(text)) { setStatus("That doesn't look like an SVG file.", 3000); return; }
+      selectedName = null; manualOutputName = null;
+      mountStageFromText(text, file.name);
+      selectedOutput = null;            // disk-opened doc has no server target → Save = Save-As
+      rememberLastDoc();
+      setStatus(`Opened ${file.name}.`, 2000);
+    };
+    reader.onerror = () => setStatus("Could not read that file.", 3000);
+    reader.readAsText(file);
+  };
+  inp.click();
+}
+
+function revealCurrentFile() {
+  if (selectedOutput && selectedOutput.path) return revealInFileManager(selectedOutput.path);
+  setStatus("Save the document first — only saved files can be revealed.", 3000);
+}
+
 
 // ---------- document menu actions ----------
 function mountStageFromText(text, name) {
@@ -1300,7 +1349,7 @@ function defaultSaveName() {
   return stem_(n).replace(/\.edited$/, "");
 }
 
-function saveAsDocument() {
+function saveAsDocument(onDone) {
   if (!editor.stage) { setStatus("Open or create a canvas first, then save it.", 3000); return; }
   openModal("Save as", true);
   modalSearchEl.hidden = true;
@@ -1317,6 +1366,7 @@ function saveAsDocument() {
       const data = await api("/api/save-svg-as", "POST", { name, svg });
       applySavedCanvas(data);
       setStatus(data.message || "Saved.", 2500);
+      if (typeof onDone === "function") onDone();
     } catch (e) { setStatus(`Save failed: ${e.message}`, 4000); }
   };
   const actions = document.createElement("div"); actions.className = "form-actions";
@@ -1345,8 +1395,9 @@ function applySavedCanvas(data) {
 }
 
 async function exportFlow() {
-  if (!editor.stage) return;
-  if (!selectedOutput) { setStatus("Export needs a saved document — use Save first.", 3500); return; }
+  if (!editor.stage) { setStatus("Open or create a canvas first.", 2500); return; }
+  // No save target yet → route through Save-As, then continue to Export (no dead end).
+  if (!selectedOutput) { saveAsDocument(() => openExportModal()); return; }
   if (editor.dirty) await saveDocument();
   openExportModal();
 }
@@ -1369,7 +1420,13 @@ function isInstalledApp() {
   } catch { return false; }
 }
 
-const APP_VERSION = "1.0";
+// Version comes from the server (/api/version, backed by the repo VERSION file) so
+// there's a single source of truth shared with releases. Cached after first fetch.
+let versionInfo = { version: "…", isGit: false, commit: "", branch: "", dirty: false };
+async function loadVersion() {
+  try { versionInfo = { ...versionInfo, ...(await api("/api/version")) }; } catch {}
+  return versionInfo;
+}
 // General app settings: preferences that don't belong to the pipeline, plus the
 // install affordance and an About section. (The per-process backend "Settings"
 // form lives in the Process workspace.)
@@ -1407,13 +1464,48 @@ function openAppSettings() {
   }
   root.appendChild(installWrap);
 
+  root.appendChild(sectionTitle("Updates"));
+  const updWrap = document.createElement("div"); updWrap.className = "form-row";
+  const updLabel = document.createElement("span"); updLabel.className = "form-label"; updLabel.textContent = "Software update";
+  updWrap.appendChild(updLabel);
+  const updBox = document.createElement("div"); updBox.style.display = "flex"; updBox.style.flexDirection = "column"; updBox.style.gap = "6px";
+  const updMsg = document.createElement("span"); updMsg.className = "form-hint";
+  const checkBtn = ghostBtn("Check for updates", async () => {
+    checkBtn.disabled = true; updMsg.textContent = "Checking…";
+    try {
+      const r = await api("/api/update/check", "POST", {});
+      if (r.error) { updMsg.textContent = r.error; }
+      else if (!r.latest) { updMsg.textContent = `On v${r.current}. No published releases yet.`; }
+      else if (r.behind) {
+        updMsg.textContent = `v${r.latest} is available (you're on v${r.current}).`;
+        if (r.isGit && !r.dirty) updBox.appendChild(applyBtn);
+        else updBox.appendChild(linkRow(r.url, r.dirty ? "Local changes present — update via git manually." : "Update via your package manager."));
+      } else { updMsg.textContent = `Up to date — v${r.current}. ✓`; }
+    } catch (e) { updMsg.textContent = `Check failed: ${e.message}`; }
+    finally { checkBtn.disabled = false; }
+  });
+  const applyBtn = ghostBtn("Update & restart", async () => {
+    applyBtn.disabled = true; updMsg.textContent = "Updating…";
+    try {
+      const r = await api("/api/update/apply", "POST", {});
+      updMsg.textContent = (r.message || "Updating…") + " Restart hector-vector to finish.";
+    } catch (e) { updMsg.textContent = `Update failed: ${e.message}`; applyBtn.disabled = false; }
+  });
+  const linkRow = (href, text) => { const a = document.createElement("a"); a.href = href; a.target = "_blank"; a.rel = "noopener"; a.className = "form-hint"; a.textContent = text + " ↗"; return a; };
+  updBox.appendChild(checkBtn); updBox.appendChild(updMsg);
+  updWrap.appendChild(updBox);
+  root.appendChild(updWrap);
+
   root.appendChild(sectionTitle("About"));
   const about = document.createElement("div"); about.className = "about-block";
+  const verStr = versionInfo.commit ? `v${versionInfo.version} · ${versionInfo.commit}${versionInfo.branch ? " (" + versionInfo.branch + ")" : ""}` : `v${versionInfo.version}`;
   about.innerHTML =
-    `<div class="about-name">hector-vector <span class="about-ver">v${APP_VERSION}</span></div>`
+    `<div class="about-name">hector-vector <span class="about-ver"></span></div>`
     + `<div class="about-line">A local, browser-based SVG vector editor + image→vector pipeline.</div>`
     + `<div class="about-line">Runs against your local server; works offline as an installed app.</div>`;
+  about.querySelector(".about-ver").textContent = verStr;
   root.appendChild(about);
+  loadVersion().then(() => { if (appSettingsOpen) { const el = about.querySelector(".about-ver"); if (el) el.textContent = versionInfo.commit ? `v${versionInfo.version} · ${versionInfo.commit}${versionInfo.branch ? " (" + versionInfo.branch + ")" : ""}` : `v${versionInfo.version}`; } });
 
   const actions = document.createElement("div"); actions.className = "form-actions";
   actions.appendChild(ghostBtn("Close", () => closeModal()));
@@ -1425,15 +1517,20 @@ function openAppSettings() {
 const MENU_ITEMS = {
   // Everything that used to be separate header buttons, rolled into one menu.
   "file": () => {
+    const canReveal = !!(selectedOutput && selectedOutput.path);
     const items = [
       { label: "New blank canvas…", onClick: newBlankDoc },
       { type: "sep" },
       { label: "Open vector…", onClick: openOpenModal },
+      { label: "Open from file…", onClick: openFromFile },
       { label: "Place into canvas…", onClick: openPlaceModal },
+      { type: "sep" },
       { label: "Save (.svg)", onClick: saveDocument },
-      { label: "Save as…", onClick: saveAsDocument },
+      { label: "Save as…", onClick: () => saveAsDocument() },
+      { label: "Download .svg", onClick: downloadCurrentSvg },
       { type: "sep" },
       { label: "Export PNG…", onClick: exportFlow },
+      { label: "Reveal current file", onClick: revealCurrentFile, disabled: !canReveal },
       { label: "Copy SVG markup", onClick: copySvgSource },
       { type: "sep" },
       { label: "Settings…", onClick: openAppSettings },
@@ -2043,10 +2140,10 @@ async function openExportModal() {
     } else { payload.width = w; payload.height = h; }
     try {
       const data = await api("/api/render", "POST", payload);
-      closeModal();
       manualOutputName = data.name;
       await refreshAll();
       setStatus(data.message || "Rendered.", 3000);
+      showExportResult(data);   // success step: Download PNG / Reveal / Done — not a dead end
     } catch (e) {
       go.disabled = false;
       go.textContent = "Export PNG";
@@ -2061,6 +2158,32 @@ async function openExportModal() {
 
   modalBodyEl.innerHTML = "";
   modalBodyEl.appendChild(root);
+}
+
+// After a render, give the PNG a real exit: download it to disk, reveal it in the
+// file manager, or close. (Before, the modal just closed and the file was stranded
+// in the outputs folder.)
+function showExportResult(data) {
+  const url = `/outputs/${encodeURIComponent(data.folder)}/${encodeURIComponent(data.name)}`;
+  modalTitleEl.textContent = "Exported";
+  const root = document.createElement("div"); root.className = "form";
+  root.appendChild(sectionTitle("Rendered"));
+  const info = document.createElement("div"); info.className = "form-hint";
+  info.textContent = `${data.name} — ${data.size[0]}×${data.size[1]} px (${data.backend}).`;
+  root.appendChild(info);
+  const actions = document.createElement("div"); actions.className = "form-actions";
+  actions.appendChild(ghostBtn("Download PNG", async () => {
+    try {
+      const blob = await (await fetch(url)).blob();
+      downloadBlob(data.name, blob, "image/png");
+      setStatus(`Downloaded ${data.name}.`, 2000);
+    } catch (e) { setStatus(`Download failed: ${e.message}`, 3000); }
+  }));
+  if (data.output) actions.appendChild(ghostBtn("Reveal", () => revealInFileManager(data.output)));
+  actions.appendChild(ghostBtn("Open", () => window.open(url, "_blank", "noopener")));
+  actions.appendChild(ghostBtn("Done", () => closeModal()));
+  root.appendChild(actions);
+  modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
 }
 
 dropzoneEl.addEventListener("click", () => fileInputEl.click());
@@ -2485,6 +2608,7 @@ function renderProcessJobs() {
   host.appendChild(buildJobsPanel());
 }
 
+loadVersion();   // cache the version early so the About panel shows it instantly
 api("/api/bootstrap", "POST")
   .then(() => refreshAll())
   .then(async () => {
@@ -3125,7 +3249,9 @@ window.settings = settings;
 // reassigned by name from outside the module).
 window.app = {
   viewports, applyViewportState, measureFit, mountStageFromText,
+  openFromFile, downloadCurrentSvg, exportFlow, loadVersion,
   get selectedName() { return selectedName; }, set selectedName(v) { selectedName = v; },
   get selectedOutput() { return selectedOutput; }, set selectedOutput(v) { selectedOutput = v; },
   get manualOutputName() { return manualOutputName; }, set manualOutputName(v) { manualOutputName = v; },
+  get versionInfo() { return versionInfo; },
 };

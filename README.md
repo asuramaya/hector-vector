@@ -20,17 +20,23 @@ A local job queue runs everything in the background with live progress, and a br
 ```bash
 git clone https://github.com/asuramaya/hector-vector
 cd hector-vector
-pip install -r requirements.txt   # Pillow + numpy (the rest auto-installs on demand)
+./install.sh                      # creates .venv, installs deps, runs a smoke test
 ./run.sh                          # serves http://localhost:2002
 ```
+
+`./install.sh --desktop` also installs the app-launcher shortcut; `--app` opens the window when done. Prefer your own environment? `pip install -r requirements.txt` still works — `run.sh` uses `.venv` when present and otherwise falls back to system `python3`.
 
 Open **http://localhost:2002**, drop in some images (or point the source folder at any directory), pick a process, and hit **Run**.
 
 > First run downloads the heavy external tools into `./tools` and `./.venv` automatically — see below. They are **not** vendored in this repo.
 
+### Updating
+
+`hector-vector` updates in place from this repo. In the app: **Settings → Updates → Check for updates**; if a newer release exists and your working tree is clean, hit **Update & restart** (runs `git pull` + re-syncs deps). Or `git pull && ./install.sh` yourself. Maintainers cut a release with `./scripts/release.sh X.Y.Z` (bumps `VERSION`, tags `vX.Y.Z`, pushes — the tag triggers the release workflow).
+
 ## Requirements
 
-- **Python 3.10+** with `pip` (only `Pillow` and `numpy` are required to start).
+- **Python 3.10+** with `pip`. The base runtime (`Pillow`, `numpy`, `scipy`) is installed by `./install.sh` (or `pip install -r requirements.txt`).
 - For **Upscale / Trace**: `curl` + `unzip` (Real-ESRGAN download) and `cargo` (builds VTracer). Installed on first launch or via the Settings buttons.
 - For **AI Cutout**: nothing up front — click *Install rembg* in Settings to pull `rembg[cpu]` into a project-local `./.venv` (~500 MB, one-time).
 - For **Export PNG of curved (VTracer) SVGs**: optional `cairosvg` (`pip install cairosvg`, needs system libcairo). Pixel-art SVG export needs nothing extra — it's pure Pillow.

@@ -9,7 +9,7 @@ Run:  .venv-e2e/bin/python tests/e2e/editor_e2e.py [base_url]
 Needs the app running (default http://localhost:2002).
 """
 from __future__ import annotations
-import json, sys, time
+import json, os, sys, time
 from playwright.sync_api import sync_playwright
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:2002"
@@ -1097,6 +1097,45 @@ def main():
         check("Save-As gives a new canvas a save target",
               "Saved" in saveas["status"] and saveas["folder"] == "canvas"
               and str(saveas["name"]).endswith(".svg"), str(saveas))
+
+        # ---- File surface: version, file menu items, download, open-from-disk, export routing ----
+        ver = page.evaluate("async () => { const r = await fetch('/api/version'); return r.ok ? await r.json() : null; }")
+        check("/api/version returns a version", bool(ver) and bool(ver.get("version")), str(ver))
+
+        page.click('.menu[data-menu="file"] .menu-trigger'); page.wait_for_timeout(60)
+        file_items = page.evaluate("() => [...document.querySelectorAll('.menu[data-menu=\"file\"] .menu-item')].map(b=>b.textContent.trim())")
+        page.keyboard.press("Escape")
+        check("File menu exposes Open-from-file / Download .svg / Reveal",
+              all(any(x in l for l in file_items) for x in ["Open from file", "Download .svg", "Reveal current file"]), str(file_items))
+
+        # Download .svg → a synthetic <a download="*.svg"> click (stub the click to avoid a real download)
+        page.evaluate("""() => { window.__dl=null;
+            const real=HTMLAnchorElement.prototype.click;
+            HTMLAnchorElement.prototype.click=function(){ if(this.download){ window.__dl={name:this.download,blob:this.href.startsWith('blob:')}; return; } return real.call(this); }; }""")
+        page.evaluate("window.app.downloadCurrentSvg()")
+        dl = page.evaluate("window.__dl")
+        check("Download .svg emits an a[download$=.svg] blob", bool(dl) and str(dl.get("name")).endswith(".svg") and dl.get("blob"), str(dl))
+
+        # Open from file (disk) → mounts a stage with no server save target
+        tmp_svg = os.path.join(os.path.expanduser("~"), "hv-e2e-open.svg")
+        with open(tmp_svg, "w") as fh:
+            fh.write('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><circle cx="40" cy="40" r="30" fill="#0a0"/></svg>')
+        with page.expect_file_chooser() as fc:
+            page.evaluate("window.app.openFromFile()")
+        fc.value.set_files(tmp_svg)
+        page.wait_for_function("/Opened hv-e2e-open/.test(document.querySelector('#status-text').textContent)", timeout=4000)
+        opened = page.evaluate("() => ({ stage: !!editor.stage, noTarget: !window.app.selectedOutput })")
+        check("Open-from-file mounts a stage with no save target", opened["stage"] and opened["noTarget"], str(opened))
+        os.remove(tmp_svg)
+
+        # Export on an unsaved canvas routes through Save-As (no dead-end toast)
+        page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60"><rect data-hv-id="rx" x="5" y="5" width="30" height="30" fill="#c33"/></svg>','export-probe.svg'); }""")
+        page.evaluate("window.app.exportFlow()")
+        page.wait_for_function("!document.querySelector('#modal-root').hidden && document.querySelector('#modal-title').textContent === 'Save as'", timeout=4000)
+        check("Export on unsaved canvas opens Save-As (no dead end)",
+              page.evaluate("document.querySelector('#modal-title').textContent") == "Save as")
+        page.evaluate("closeModal()")
 
         # ---- App-window mode (standalone Chromium window) ----
         # Headless can't exercise WCO/AWC, but the ?app=1 gate must engage and make
