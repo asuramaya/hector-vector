@@ -472,7 +472,7 @@ function clearViewport(vp, text) {
 
 function updateLibraryHeader() {
   if (!libraryHeaderEl) return;
-  libraryHeaderEl.textContent = workItems.length ? ` (${workItems.length})` : "";
+  libraryHeaderEl.textContent = workItems.length ? String(workItems.length) : "";   // corner badge on the Process icon
 }
 
 const LIBRARY_GROUPS_KEY = "hector-vector:library-groups";
@@ -895,7 +895,23 @@ function closeModal() {
   modalBodyEl.innerHTML = "";
   processModalOpen = false;
   appSettingsOpen = false;
+  updateViewSwap();
 }
+
+// Reflect the active "view" on the Edit/Process swap (Ableton-style): Process is
+// active only while its workspace is open; otherwise Edit (the canvas) is active.
+function updateViewSwap() {
+  const edit = document.querySelector("#view-edit");
+  const proc = document.querySelector("#process-button");
+  if (edit) edit.classList.toggle("active", !processModalOpen);
+  if (proc) proc.classList.toggle("active", !!processModalOpen);
+}
+
+// Toggle between the two views. Process opens its workspace; Edit closes whatever
+// modal is up and returns to the canvas.
+function showProcessView() { if (!processModalOpen) openProcessModal(); }
+function showEditView() { if (!modalRootEl.hidden) closeModal(); }
+function toggleProcessView() { if (processModalOpen) showEditView(); else if (modalRootEl.hidden) showProcessView(); }
 
 modalRootEl.addEventListener("click", (event) => {
   if (event.target.matches("[data-modal-close]") || event.target.closest("[data-modal-close]")) {
@@ -1499,7 +1515,8 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
   refreshSwatches();
 }
 {
-  const procBtn = document.querySelector("#process-button"); if (procBtn) procBtn.addEventListener("click", () => openProcessModal());
+  const procBtn = document.querySelector("#process-button"); if (procBtn) procBtn.addEventListener("click", () => showProcessView());
+  const editBtn = document.querySelector("#view-edit"); if (editBtn) editBtn.addEventListener("click", () => showEditView());
   const undoBtn = document.querySelector("#undo-button"); if (undoBtn) undoBtn.addEventListener("click", () => editor.undo());
   const redoBtn = document.querySelector("#redo-button"); if (redoBtn) redoBtn.addEventListener("click", () => editor.redoAction());
   const railToggle = document.querySelector("#rail-toggle");
@@ -1719,6 +1736,27 @@ document.addEventListener("click", (event) => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && openMenuEl) closeMenus();
+});
+
+// Header shortcuts: Q / Tab swap Edit ⇄ Process (Ableton-style); Shift+F opens the
+// File menu. Kept here (not in the view/nav handler, which bails while a modal is
+// open) so the swap works *out of* the Process workspace too.
+document.addEventListener("keydown", (event) => {
+  const tag = (event.target?.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select" || event.target?.isContentEditable) return;
+  if (document.querySelector(".cp-window")) return;   // don't hijack keys while the colour picker is open
+  if (event.key === "Tab" || event.key === "q" || event.key === "Q") {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    event.preventDefault();
+    toggleProcessView();
+    return;
+  }
+  if ((event.key === "f" || event.key === "F") && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    if (!modalRootEl.hidden) return;        // don't pop the File menu over a modal
+    event.preventDefault();
+    const m = document.querySelector('.menu[data-menu="file"]');
+    if (m) (openMenuEl === m ? closeMenus() : openMenu(m));
+  }
 });
 
 // ---------- right-click context menu (canvas + objects) ----------
@@ -2317,6 +2355,7 @@ function openProcessModal(focusJobs = false) {
   processModalOpen = true;
   openModal("Process — batch images to vectors");
   modalSearchEl.hidden = true;
+  updateViewSwap();
   renderProcessWorkspace();
   if (focusJobs) { const j = document.querySelector("#process-jobs"); if (j) j.scrollIntoView({ block: "nearest" }); }
   loadJobs().catch(() => {});
@@ -2868,9 +2907,8 @@ function openShortcutsModal() {
   // Mirrors the live keymap in app.js (editor keymap + view/nav keymap + space-pan).
   const rows = [
     ["§", "Tools"],
-    ["V", "Select / move (Shift = 45°, Alt-drag = copy)"],
-    ["M", "Drag-select (Alt = lasso)"],
-    ["T", "Transform / scale"],
+    ["V", "Select / move (drag empty = marquee, Alt = lasso; Shift = 45°, Alt-drag = copy)"],
+    [`${mod} + T / ${mod} + R`, "Scale / rotate the selection (within Select)"],
     ["A", "Edit points (direct select)"],
     ["P", "Pen"],
     ["C", "Curvature (auto-smooth; dbl-click = corner)"],
@@ -2916,7 +2954,8 @@ function openShortcutsModal() {
     ["0", "Actual size (1:1)"],
     ["f", "Fit canvas to window"],
     ["b", "Cycle background"],
-    ["q", "Open the Process workspace"],
+    ["Q / Tab", "Swap Edit ⇄ Process workspace"],
+    ["Shift + F", "Open the File menu"],
     ["?", "This help"],
   ];
   const root = document.createElement("div");
@@ -2999,7 +3038,6 @@ document.addEventListener("keydown", (event) => {
     case "0": event.preventDefault(); actualVp(viewports.output); break;
     case "f": event.preventDefault(); fitVp(viewports.output); break;
     case "b": event.preventDefault(); cycleBg("output"); break;
-    case "q": event.preventDefault(); openProcessModal(true); break;
     case "?": event.preventDefault(); openShortcutsModal(); break;
     case "O": event.preventDefault(); editor.selectArtboard(); break;   // Shift+O — Illustrator's Artboard tool
   }

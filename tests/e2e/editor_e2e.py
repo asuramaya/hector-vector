@@ -548,12 +548,29 @@ def main():
             s.value = 'resume'; s.dispatchEvent(new Event('change', { bubbles: true })); }""")
         check("settings startup choice persists", page.evaluate("JSON.parse(localStorage.getItem('hector-vector:prefs')).startup") == "resume")
         page.evaluate("""() => { localStorage.setItem('hector-vector:prefs', JSON.stringify({startup:'blank', smartGuides:true})); closeModal(); }""")
-        proc_centered = page.evaluate("""() => {
+        # Edit/Process view-swap sits on the right; Process is the right-most, icon-only.
+        swap = page.evaluate("""() => {
             const h=document.querySelector('.editor-bar').getBoundingClientRect();
-            const p=document.querySelector('#process-button').getBoundingClientRect();
-            return Math.abs((p.left+p.right)/2 - (h.left+h.right)/2) < 40;   // process button ~centered
+            const e=document.querySelector('#view-edit'), p=document.querySelector('#process-button');
+            const pr=p.getBoundingClientRect();
+            return {
+              pair: !!e && !!p && !!document.querySelector('.view-swap #process-button'),
+              right: pr.right > h.left + (h.width*0.6),         // process lives on the right half
+              order: e.getBoundingClientRect().left < pr.left,  // Edit before Process
+              iconOnly: p.textContent.replace(/\\d+/g,'').trim() === '▦',  // no "Process…" text (count badge digits stripped)
+            };
         }""")
-        check("Process button is centered in the header", proc_centered)
+        check("Edit/Process view-swap is right-aligned & icon-only",
+              swap["pair"] and swap["right"] and swap["order"] and swap["iconOnly"], str(swap))
+        # the swap reflects the active view: opening Process activates it, Edit deactivates
+        page.click("#process-button"); page.wait_for_timeout(120)
+        active_proc = page.evaluate("document.querySelector('#process-button').classList.contains('active') && !document.querySelector('#view-edit').classList.contains('active')")
+        page.click("#view-edit"); page.wait_for_timeout(120)
+        active_edit = page.evaluate("document.querySelector('#view-edit').classList.contains('active') && !document.querySelector('#process-button').classList.contains('active') && document.querySelector('#modal-root').hidden")
+        check("view-swap reflects + toggles the active view", active_proc and active_edit)
+        # undo/redo moved next to the viewport BG button
+        check("undo/redo sit in the viewport controls",
+              page.evaluate("!!document.querySelector('.viewport-controls #undo-button') && !!document.querySelector('.viewport-controls #redo-button')"))
         # rotate/flip moved into the right-click panel; toolstrip now has colour swatches
         check("colour swatches in the toolstrip", page.evaluate("!!document.querySelector('.toolstrip #swatch-fill') && !!document.querySelector('.toolstrip #swatch-stroke')"))
         check("no rotate/flip buttons in the toolstrip", page.evaluate("!document.querySelector('.toolstrip [data-xform]')"))

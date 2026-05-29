@@ -15,12 +15,14 @@
       <header class="topbar editor-bar">
         <div class="panel-actions doc-actions-left">
           <div class="menu" data-menu="file">
-            <button class="ghost-button menu-trigger" type="button" aria-haspopup="true" aria-expanded="false" title="New / Open / Save / Export">File ▾</button>
+            <button class="icon-btn menu-trigger" data-key="⇧F" type="button" aria-haspopup="true" aria-expanded="false" title="File — New / Open / Save / Export (Shift+F)">≣</button>
             <div class="menu-list" role="menu" hidden></div>
           </div>
         </div>
-        <div class="panel-actions doc-actions-center">
-          <button id="process-button" class="ghost-button" type="button" title="Process & batch images into vectors (gallery + jobs)">Process<span id="process-count" class="menu-count"></span>…</button>
+        <!-- Ableton-style view swap: Edit canvas ⇄ Process workspace -->
+        <div class="panel-actions view-swap" role="group" aria-label="View">
+          <button id="view-edit" class="view-btn active" type="button" title="Edit canvas">⛶</button>
+          <button id="process-button" class="view-btn" data-key="Q" type="button" title="Process — batch images to vectors (Q)">▦<span id="process-count" class="view-count"></span></button>
         </div>
       </header>
 
@@ -59,6 +61,9 @@
               <button class="vp-btn" data-vp="output" data-action="actual" data-key="0" type="button" title="Actual size (0)">1:1</button>
               <button class="vp-btn" data-vp="output" data-action="zoom-in" data-key="+" type="button" title="Zoom in (+)">+</button>
               <button class="vp-btn" data-vp="output" data-action="bg" data-key="B" type="button" title="Cycle background (b)">BG</button>
+              <span class="vp-sep" aria-hidden="true"></span>
+              <button id="undo-button" class="vp-btn" type="button" title="Undo (Ctrl/Cmd+Z)" disabled>↶</button>
+              <button id="redo-button" class="vp-btn" type="button" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>↷</button>
             </div>
           </div>
         </article>
@@ -123,10 +128,7 @@
           <div class="status-progress-track"><div id="status-progress-bar" class="status-progress-bar"></div></div>
           <span id="status-progress-label" class="status-progress-label"></span>
         </div>
-        <div class="status-tools" role="toolbar" aria-label="History & view">
-          <button id="undo-button" class="bar-btn" type="button" title="Undo (Ctrl/Cmd+Z)" disabled>↶</button>
-          <button id="redo-button" class="bar-btn" type="button" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>↷</button>
-          <span class="bar-sep" aria-hidden="true"></span>
+        <div class="status-tools" role="toolbar" aria-label="View">
           <button id="shortcut-button" class="bar-btn" type="button" title="Keyboard shortcuts (?)">?</button>
           <button id="rail-toggle" class="bar-btn" type="button" title="Collapse the side panel">⊟</button>
         </div>
