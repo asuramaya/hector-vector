@@ -503,20 +503,20 @@ button:disabled {
 .insp-row > span.scrub { cursor: ew-resize; user-select: none; -webkit-user-select: none; touch-action: none; }
 .insp-row > span.scrub:hover { color: var(--ink); text-decoration: underline dotted; text-underline-offset: 2px; }
 
-/* Paired number fields (X|Y, W|H) — two label+input pairs share one row so short
-   numeric values stop wasting half the panel width. The centre column holds the W:H
-   aspect-lock magnet; the X/Y row leaves it empty so all four inputs line up. */
-.insp-row.insp-pair { grid-template-columns: 1fr 22px 1fr; gap: 6px; }
-.insp-pair-mid { display: flex; align-items: center; justify-content: center; }
-.insp-link { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
-  padding: 0; border: 1px solid transparent; border-radius: var(--r); background: none; color: var(--label); cursor: pointer; }
-.insp-link:hover { color: var(--ink); background: var(--surface); }
-.insp-link.on { color: #fff; background: var(--ink); border-color: var(--ink); }
-.insp-link svg { display: block; }
-.insp-field { display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 7px; align-items: center; min-width: 0; }
-.insp-field > span { font-size: 11.5px; color: var(--label); text-align: center; white-space: nowrap; }
+/* Paired number fields (X|Y, W|H, Rotate|Corner) — two label+input pairs share one row
+   so short numeric values stop wasting half the panel width. */
+.insp-row.insp-pair { grid-template-columns: 1fr 1fr; gap: 6px; }
+.insp-field { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px; align-items: center; min-width: 0; }
+.insp-field > span { font-size: 11.5px; color: var(--label); text-align: left; white-space: nowrap; }
 .insp-field > span.scrub { cursor: ew-resize; user-select: none; -webkit-user-select: none; touch-action: none; }
 .insp-field > span.scrub:hover { color: var(--ink); text-decoration: underline dotted; text-underline-offset: 2px; }
+.insp-field.is-disabled { opacity: 0.38; }
+.insp-field.is-disabled input { cursor: not-allowed; }
+
+/* No native number spinners — the drag-to-scrub label replaces them. */
+.insp-row input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+.insp-row input[type="number"]::-webkit-outer-spin-button,
+.insp-row input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
 /* text / number / select field — the canonical input */
 .insp-row input[type="number"], .insp-row input[type="text"], .insp-row select {

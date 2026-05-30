@@ -941,38 +941,34 @@ def main():
         # align-to-artboard lives in the panel's pinned bottom chin now (6 buttons)
         check("align-to-artboard buttons sit in the bottom chin",
               page.evaluate("document.querySelectorAll('.context-panel .insp-foot .insp-alignbar .insp-iconbtn').length") == 6)
-        # X/Y and W/H are paired two-up on one row (.insp-pair) — short numeric fields no
-        # longer waste half the panel width on a single full-width field.
-        check("X/Y and W/H are paired two-up (insp-pair rows)",
+        # X/Y, W/H and Rotate/Corner are each paired two-up on one row (.insp-pair) — short
+        # numeric fields no longer waste half the panel width, and Rotate is no longer a
+        # lone full-width row (it's evened out by Corner). No "Lock W:H" row / magnet.
+        check("X/Y, W/H, Rotate/Corner are paired two-up (insp-pair rows)",
               page.evaluate("""() => {
                 const fieldLabel = f => f.querySelector('span') && f.querySelector('span').textContent;
                 const pairs = [...document.querySelectorAll('.context-panel .insp-row.insp-pair')]
                   .map(r => [...r.querySelectorAll('.insp-field')].map(fieldLabel).join(''));
-                const fields = ['X','Y','W','H'].every(l =>
+                const fields = ['X','Y','W','H','Rotate','Corner'].every(l =>
                   [...document.querySelectorAll('.context-panel .insp-field')].some(f => fieldLabel(f) === l));
-                return fields && pairs.includes('XY') && pairs.includes('WH'); }"""))
-        # The W:H aspect lock is now a magnet toggle BETWEEN W and H — no "Lock W:H" row.
-        check("W:H aspect lock is a magnet between W and H (no Lock W:H row)",
-              page.evaluate("""() => {
-                const fieldLabel = f => f.querySelector('span') && f.querySelector('span').textContent;
-                const wh = [...document.querySelectorAll('.context-panel .insp-row.insp-pair')]
-                  .find(r => [...r.querySelectorAll('.insp-field')].map(fieldLabel).join('') === 'WH');
-                const magnet = wh && wh.querySelector('.insp-pair-mid .insp-link');
-                const noLockText = ![...document.querySelectorAll('.context-panel .insp-row > span')]
+                const noLock = ![...document.querySelectorAll('.context-panel .insp-row > span, .context-panel .insp-field > span')]
                   .some(s => s.textContent === 'Lock W:H');
-                return !!magnet && noLockText; }"""))
-        # Toggling the magnet flips the aspect-lock state (aria-pressed + editor flag).
-        check("magnet toggles aspect lock",
+                const noMagnet = !document.querySelector('.context-panel .insp-link');
+                return fields && pairs.includes('XY') && pairs.includes('WH')
+                  && pairs.includes('RotateCorner') && noLock && noMagnet; }"""))
+        # Corner is enabled for a rect (t1) — live-editable radius.
+        check("Corner field is enabled for a rect selection",
               page.evaluate("""() => {
                 const fieldLabel = f => f.querySelector('span') && f.querySelector('span').textContent;
-                const wh = [...document.querySelectorAll('.context-panel .insp-row.insp-pair')]
-                  .find(r => [...r.querySelectorAll('.insp-field')].map(fieldLabel).join('') === 'WH');
-                const m = wh.querySelector('.insp-link'); const before = m.getAttribute('aria-pressed');
-                m.click(); const after = m.getAttribute('aria-pressed');
-                return before !== after && (m.getAttribute('aria-pressed') === 'true') === !!editor._objLockAspect; }"""))
+                const f = [...document.querySelectorAll('.context-panel .insp-field')].find(f => fieldLabel(f) === 'Corner');
+                return !!f && !f.classList.contains('is-disabled') && !f.querySelector('input').disabled; }"""))
+        # Native number spinners are suppressed (scrub label replaces them).
+        check("number inputs drop the native spinner",
+              page.evaluate("""() => { const i = document.querySelector('.context-panel .insp-field input[type=number]');
+                return i && ['textfield','none'].includes(getComputedStyle(i).appearance || getComputedStyle(i).webkitAppearance); }"""))
         # Rotate is a scrub-numeric like X/Y/W/H (a number input in a Transform row), not a button bar
         check("Rotate is a numeric field in Transform",
-              page.evaluate("""() => { const r=[...document.querySelectorAll('.context-panel .insp-row')].find(r=>r.querySelector('span')&&r.querySelector('span').textContent==='Rotate'); return !!r && !!r.querySelector('input[type=number]'); }"""))
+              page.evaluate("""() => { const r=[...document.querySelectorAll('.context-panel .insp-field')].find(r=>r.querySelector('span')&&r.querySelector('span').textContent==='Rotate'); return !!r && !!r.querySelector('input[type=number]'); }"""))
         page.evaluate("editor.setSelectionPos(0,0)")
         bb = page.evaluate("() => { const b = editor.selectionBBox(); return [Math.round(b.x0), Math.round(b.y0)]; }")
         check("Transform X/Y moves the selection to the origin", bb == [0, 0], str(bb))
@@ -989,10 +985,35 @@ def main():
         cen = page.evaluate("""() => { const b=editor.selectionBBox(), vb=editor.stage.viewBox.baseVal;
             return [Math.round((b.x0+b.x1)/2-(vb.x+vb.width/2)), Math.round((b.y0+b.y1)/2-(vb.y+vb.height/2))]; }""")
         check("align centres the selection on the artboard", abs(cen[0]) <= 1 and abs(cen[1]) <= 1, str(cen))
+        # W and Rotate scrub LIVE — the shape changes DURING the drag, not just on release.
+        def field_label_xy(label):
+            return page.evaluate("""(label) => { const f=[...document.querySelectorAll('.context-panel .insp-field')]
+                .find(f=>f.querySelector('span')&&f.querySelector('span').textContent===label); if(!f) return null;
+                f.scrollIntoView({block:'center'}); const r=f.querySelector('span').getBoundingClientRect();
+                return {x:r.left+r.width/2, y:r.top+r.height/2}; }""", label)
+        wxy = field_label_xy("W")
+        w_before = page.evaluate("() => Math.round(editor.selectionBBox().x1 - editor.selectionBBox().x0)")
+        page.mouse.move(wxy["x"], wxy["y"]); page.mouse.down()
+        page.mouse.move(wxy["x"] + 48, wxy["y"], steps=8)
+        w_live = page.evaluate("() => Math.round(editor.selectionBBox().x1 - editor.selectionBBox().x0)")
+        page.mouse.up(); page.wait_for_timeout(40)
+        check("W scrubs the width live (before release)", w_live > w_before, f"{w_before} -> {w_live}")
+        rxy = field_label_xy("Rotate")
+        page.mouse.move(rxy["x"], rxy["y"]); page.mouse.down()
+        page.mouse.move(rxy["x"] + 40, rxy["y"], steps=8)
+        rot_live = page.evaluate("() => { const c=editor.nodeById('t1').transform.baseVal.consolidate(); return c?Math.abs(c.matrix.b)>0.02:false; }")
+        page.mouse.up(); page.wait_for_timeout(40)
+        check("Rotate scrubs live about a fixed centre (before release)", rot_live)
         page.evaluate("editor.selection=new Set(['t2']); editor._renderSelection(); editor._renderInspector();")
         page.wait_for_timeout(30)
         check("Shape section exposes Fill rule for a path",
               page.evaluate("""[...document.querySelectorAll('.context-panel .insp-row > span')].some(s=>s.textContent==='Fill rule')"""))
+        # Corner is disabled (greyed, present) for a non-rect so the Rotate row stays even.
+        check("Corner field is disabled for a non-rect selection",
+              page.evaluate("""() => {
+                const fieldLabel = f => f.querySelector('span') && f.querySelector('span').textContent;
+                const f = [...document.querySelectorAll('.context-panel .insp-field')].find(f => fieldLabel(f) === 'Corner');
+                return !!f && f.classList.contains('is-disabled') && f.querySelector('input').disabled; }"""))
         page.evaluate("editor.setAttrAll('fill-rule','evenodd')")
         check("fill-rule applies to the path", page.evaluate("editor.nodeById('t2').getAttribute('fill-rule')") == "evenodd")
 

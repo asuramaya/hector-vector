@@ -1810,9 +1810,12 @@ const editor = {
     this._renderSelection(); if (!this._coalescing) this._renderInspector();
   },
   // Rotate the selection by `deg` about its bbox centre (composes with any transform).
-  rotateSelectionBy(deg) {
+  // `centre` pins the pivot for live scrubbing — incremental deltas all turn about one
+  // fixed point so the shape doesn't drift as its bbox grows/shifts mid-rotation.
+  rotateSelectionBy(deg, centre) {
     const nodes = this.selectedNodes(); if (!nodes.length || !deg) return;
-    const bb = this._bboxUnion(nodes), cx = (bb.x0 + bb.x1) / 2, cy = (bb.y0 + bb.y1) / 2;
+    const bb = centre ? null : this._bboxUnion(nodes);
+    const cx = centre ? centre.cx : (bb.x0 + bb.x1) / 2, cy = centre ? centre.cy : (bb.y0 + bb.y1) / 2;
     if (!this._coalescing) this.push("Rotate");
     const rot = `rotate(${nfmt(deg)} ${nfmt(cx)} ${nfmt(cy)})`;
     nodes.forEach((n) => { const o = n.getAttribute("transform"); n.setAttribute("transform", o ? `${rot} ${o}` : rot); this._consolidateTransform(n); });
@@ -2571,37 +2574,40 @@ const editor = {
     // intermediate value never collapses the geometry to a sliver and back. ----
     const bb = this.selectionBBox();
     if (bb) {
-      let lock = !!this._objLockAspect, wInp, hInp;
       // X/Y on one row, W/H on the next (Figma/Illustrator two-up) — short numeric
-      // fields shouldn't eat a whole row of whitespace.
+      // fields shouldn't eat a whole row of whitespace. All four scrub LIVE: dragging a
+      // label resizes/moves the shape in real time, not just on release.
       const posRow = numPairRow(
         ["X", r2(bb.x0), null, 1, (v) => { this.beginCoalesce(); this.setSelectionPos(v, null); }, null, () => this.commitCoalesce("Move")],
         ["Y", r2(bb.y0), null, 1, (v) => { this.beginCoalesce(); this.setSelectionPos(null, v); }, null, () => this.commitCoalesce("Move")]);
-      const applySize = (which) => { const wv = parseFloat(wInp.value), hv = parseFloat(hInp.value);
-        this.beginCoalesce(); this.setSelectionSize(which === "w" ? wv : null, which === "h" ? hv : null, lock); this.commitCoalesce("Resize"); this._renderInspector(); };
-      const magnet = lockToggle(lock, "Lock width : height ratio", (on) => { lock = on; this._objLockAspect = on; });
       const sizeRow = numPairRow(
-        ["W", r2(bb.x1 - bb.x0), 0, 1, () => {}, (i) => { wInp = i; }, () => applySize("w")],
-        ["H", r2(bb.y1 - bb.y0), 0, 1, () => {}, (i) => { hInp = i; }, () => applySize("h")],
-        magnet);
-      // Rotation: a scrub-numeric exactly like X/Y/W/H (commit-only, delta-applied) — base
-      // is the absolute angle of a single element, or 0 ("Mixed") for many.
+        ["W", r2(bb.x1 - bb.x0), 0, 1, (v) => { this.beginCoalesce(); this.setSelectionSize(v, null, false); }, null, () => { this.commitCoalesce("Resize"); this._renderInspector(); }],
+        ["H", r2(bb.y1 - bb.y0), 0, 1, (v) => { this.beginCoalesce(); this.setSelectionSize(null, v, false); }, null, () => { this.commitCoalesce("Resize"); this._renderInspector(); }]);
+      // Rotation scrubs live too. Incremental deltas would drift the bbox centre as the
+      // shape turns, so the centre is captured once at scrub start and every step rotates
+      // about that fixed point. Paired with Corner radius to even out the row.
       const ang = this.selectionAngle();
       const baseAng = ang == null ? 0 : r2(ang);
-      let rInp;
-      const rotRow = numRow("Rotate", baseAng, null, 1, () => {}, (i) => { rInp = i; },
-        () => { const nv = parseFloat(rInp.value); if (isNaN(nv)) return; this.rotateSelectionBy(nv - baseAng); }, ang == null);
-      wrap.appendChild(inspGroup("Transform", [posRow, sizeRow, rotRow]));
+      let lastAng = baseAng, rotCentre = null;
+      const rotField = ["Rotate", baseAng, null, 1,
+        (v) => { if (isNaN(v)) return; if (!rotCentre) { const c = this.selectionBBox(); rotCentre = { cx: (c.x0 + c.x1) / 2, cy: (c.y0 + c.y1) / 2 }; }
+          this.beginCoalesce(); this.rotateSelectionBy(v - lastAng, rotCentre); lastAng = v; },
+        null, () => { this.commitCoalesce("Rotate"); rotCentre = null; this._renderInspector(); }, ang == null];
+      // Corner radius — active for rects, otherwise a disabled placeholder that keeps the
+      // Rotate row balanced (Figma-style: the field is always present, greyed when N/A).
+      const hasRect = tags.has("rect");
+      const rxC = hasRect ? common((n) => n.tagName.toLowerCase() === "rect" ? (parseFloat(n.getAttribute("rx")) || 0) : 0) : { value: 0 };
+      const cornerField = ["Corner", hasRect ? (rxC.value || 0) : 0, 0, 1,
+        (v) => { this.beginCoalesce(); this.setRectRadius(v); }, null,
+        () => this.commitCoalesce("Corner radius"), hasRect && !!rxC.mixed, !hasRect];
+      wrap.appendChild(inspGroup("Transform", [posRow, sizeRow, numPairRow(rotField, cornerField)]));
     }
     // (Align → the panel's bottom chin via _alignBar(); Flip + z-order Arrange were removed
-    //  — both are global on the action bar.)
+    //  — both are global on the action bar. Corner radius moved up into the Transform
+    //  row beside Rotate.)
 
-    // ---- SHAPE (contextual) — corner radius for rects, fill-rule for paths/polygons ----
+    // ---- SHAPE (contextual) — fill-rule for paths/polygons (Corner lives in Transform). ----
     const shapeRows = [];
-    if (tags.has("rect")) {
-      const rxC = common((n) => n.tagName.toLowerCase() === "rect" ? (parseFloat(n.getAttribute("rx")) || 0) : 0);
-      shapeRows.push(numRow("Corner", rxC.value || 0, 0, 1, (v) => { this.beginCoalesce(); this.setRectRadius(v); }, null, () => this.commitCoalesce("Corner radius"), !!rxC.mixed));
-    }
     if (tags.has("path") || tags.has("polygon")) {
       const frC = common((n) => n.getAttribute("fill-rule") || "nonzero");
       shapeRows.push(this._segRow("Fill rule", frC.mixed ? null : frC.value,
@@ -2870,8 +2876,6 @@ const ALIGN_ICON = {
   vmiddle: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="7.3" width="13" height="1.4" fill="currentColor"/><rect x="3.2" y="3" width="3" height="10" rx="0.5" fill="currentColor"/><rect x="9.8" y="5" width="3" height="6" rx="0.5" fill="currentColor"/></svg>`,
 };
 const AB_FIT_ICON =`<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.1" stroke-dasharray="2 1.4"/><rect x="5" y="5" width="6" height="6" fill="currentColor"/></svg>`;
-// Horseshoe magnet — the W:H aspect lock that sits between the W and H fields.
-const MAGNET_ICON = `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M4 2.4 V8 a4 4 0 0 0 8 0 V2.4" fill="none" stroke="currentColor" stroke-width="2.3"/><path d="M2.6 2.5 H5.4 M10.6 2.5 H13.4" stroke="currentColor" stroke-width="2.6"/></svg>`;
 const BLEND_MODES = [
   ["normal", "Normal"], ["multiply", "Multiply"], ["screen", "Screen"], ["overlay", "Overlay"],
   ["darken", "Darken"], ["lighten", "Lighten"], ["color-dodge", "Colour dodge"], ["color-burn", "Colour burn"],
@@ -2950,43 +2954,33 @@ function makeScrub(handle, inp, min, step, onLive, onCommit) {
   });
 }
 // One label+number field — the shared building block. `field` is a compact label+input
-// grid; used full-width by numRow and two-up by numPairRow. Returns {field, inp}.
-function numField(label, value, min, step, onLive, capture, onCommit, mixed) {
-  const field = document.createElement("div"); field.className = "insp-field";
+// grid; used full-width by numRow and two-up by numPairRow. `disabled` greys it out and
+// drops the scrub (e.g. Corner on a non-rect, kept present to balance the row). Returns
+// {field, inp}.
+function numField(label, value, min, step, onLive, capture, onCommit, mixed, disabled) {
+  const field = document.createElement("div"); field.className = "insp-field" + (disabled ? " is-disabled" : "");
   const s = document.createElement("span"); s.textContent = label;
   const inp = document.createElement("input"); inp.type = "number";
   if (mixed) { inp.value = ""; inp.placeholder = "Mixed"; } else inp.value = String(value);
   if (min != null) inp.min = String(min);
   inp.step = String(step);
-  inp.addEventListener("input", () => { if (inp.value !== "") onLive(parseFloat(inp.value)); });
-  inp.addEventListener("change", () => { if (inp.value !== "") onLive(parseFloat(inp.value)); if (onCommit) onCommit(); });
+  if (disabled) { inp.disabled = true; }
+  else {
+    inp.addEventListener("input", () => { if (inp.value !== "") onLive(parseFloat(inp.value)); });
+    inp.addEventListener("change", () => { if (inp.value !== "") onLive(parseFloat(inp.value)); if (onCommit) onCommit(); });
+    makeScrub(s, inp, min, step, onLive, onCommit);
+  }
   if (capture) capture(inp);
   field.appendChild(s); field.appendChild(inp);
-  makeScrub(s, inp, min, step, onLive, onCommit);
   return { field, inp };
 }
-// Two number fields on one row (X|Y, W|H) — reclaims the dead horizontal space a single
-// short value left as whitespace. `mid` is an optional control (the aspect-lock magnet)
-// dropped between the pair; rows without one still reserve the centre column so all four
-// inputs stay aligned. Each field arg is a numField argument list (array).
-function numPairRow(a, b, mid) {
+// Two number fields on one row (X|Y, W|H, Rotate|Corner) — reclaims the dead horizontal
+// space a single short value left as whitespace. Each arg is a numField argument list.
+function numPairRow(a, b) {
   const row = document.createElement("div"); row.className = "insp-row insp-pair";
   row.appendChild(numField(...a).field);
-  const m = document.createElement("div"); m.className = "insp-pair-mid";
-  if (mid) m.appendChild(mid);
-  row.appendChild(m);
   row.appendChild(numField(...b).field);
   return row;
-}
-// The magnet aspect-lock toggle that lives between W and H (replaces the "Lock W:H" row).
-function lockToggle(on, title, onToggle) {
-  const b = document.createElement("button"); b.type = "button";
-  b.className = "insp-link" + (on ? " on" : ""); b.title = title;
-  b.setAttribute("aria-pressed", on ? "true" : "false");
-  b.innerHTML = MAGNET_ICON;
-  b.addEventListener("click", () => { const next = b.getAttribute("aria-pressed") !== "true";
-    b.classList.toggle("on", next); b.setAttribute("aria-pressed", next ? "true" : "false"); onToggle(next); });
-  return b;
 }
 function numRow(label, value, min, step, onLive, capture, onCommit, mixed) {
   const inp = document.createElement("input"); inp.type = "number";
