@@ -384,8 +384,13 @@ button:disabled {
    docked rail-section it must fill the column (not the 248px fixed float width). */
 .rail-section.context-panel { width: auto; border: 0; box-shadow: none; }
 /* The × is redundant on a docked panel (you don't "close" dock panels) — show it only
-   while the panel floats. */
+   while the panel floats (incl. when collapsed). */
 .leftdock .panel-x, .rightdock .panel-x { display: none; }
+.dock-window .rail-section.collapsed .panel-actions { display: flex; }   /* keep × reachable on a collapsed float */
+/* Header action slots: a small action + a blank slot (kept to two so the header stays
+   sane at minimum width). The blank slot reads as a placeholder. */
+.section-head .hdr-slot { width: 24px; height: 24px; font-size: 12px; }
+.section-head .hdr-slot-empty { box-sizing: border-box; border: 1px dashed var(--line); background: none; opacity: 0.5; }
 /* Colour panel: the picker editor embedded in a panel body (no backdrop/window chrome). */
 .color .fp-body { padding: 0; }
 .cp-window.cp-embedded { position: static; width: auto; max-width: none; border: 0; box-shadow: none; padding: 8px; gap: 7px; }
@@ -462,6 +467,9 @@ button:disabled {
 .insp-title { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 4px; }
 .insp-row { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; align-items: center; }
 .insp-row > span { font-size: 12px; color: var(--muted); }
+/* compact preset buttons (artboard size presets) */
+.insp-preset-btns { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.insp-preset-btns .ghost-button { padding: 2px 6px; font-size: 11px; }
 /* scrubbable number label — drag horizontally to change the value */
 .insp-row > span.scrub { cursor: ew-resize; user-select: none; -webkit-user-select: none; touch-action: none; }
 .insp-row > span.scrub:hover { color: var(--fg); text-decoration: underline dotted; text-underline-offset: 2px; }
@@ -642,7 +650,9 @@ button:disabled {
 .rightdock .section-head .sec-count { order: 2; margin: 0; }
 .rightdock .section-head .panel-actions { order: 3; margin-left: auto; }
 .rightdock .section-head .caret { order: 4; margin-left: 6px; }
-.rightdock .rail-section.collapsed .section-head .caret { transform: rotate(90deg); }   /* ◄ points inward */
+/* collapsed hides .panel-actions (which carried the auto-margin), so push the caret to
+   the outer edge from the caret itself */
+.rightdock .rail-section.collapsed .section-head .caret { transform: rotate(90deg); margin-left: auto; }   /* ◄ points inward, pinned right */
 /* LEFT dock → caret on the left edge, label grows + right-aligns so its text hugs the
    inner edge, count trailing it. */
 .leftdock .section-head .caret { order: 1; }

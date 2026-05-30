@@ -2642,17 +2642,35 @@ const editor = {
     const ab = this.artboardEl();
     const vb = this.stage.viewBox.baseVal;
     const wrap = document.createElement("div");
-    const bgHex = toHexColor(ab.getAttribute("fill")) || "#ffffff";
+    let wInp, hInp, lockAspect = !!this._abLockAspect;
+    const liveSize = (which) => {
+      this.beginCoalesce();
+      let w = parseFloat(wInp.value) || vb.width, h = parseFloat(hInp.value) || vb.height;
+      if (lockAspect && vb.width && vb.height) {     // keep the starting ratio
+        const r = vb.width / vb.height;
+        if (which === "w") { h = Math.max(1, Math.round(w / r)); hInp.value = String(h); }
+        else if (which === "h") { w = Math.max(1, Math.round(h * r)); wInp.value = String(w); }
+      }
+      this.applyArtboardSize(w, h);
+    };
+    const setSize = (w, h) => { this.push("Artboard size"); wInp.value = String(w); hInp.value = String(h); this.applyArtboardSize(w, h); };
+    const wRow = numRow("Width", Math.round(vb.width), 1, 1, () => liveSize("w"), (i) => { wInp = i; }, () => this.commitCoalesce("Resize artboard"));
+    const hRow = numRow("Height", Math.round(vb.height), 1, 1, () => liveSize("h"), (i) => { hInp = i; }, () => this.commitCoalesce("Resize artboard"));
+    // common-size presets
+    const pbox = document.createElement("div"); pbox.className = "insp-preset-btns";
+    [["512", 512, 512], ["1024", 1024, 1024], ["2048", 2048, 2048], ["16:9", 1920, 1080], ["9:16", 1080, 1920]]
+      .forEach(([lab, w, h]) => pbox.appendChild(ghostBtn(lab, () => setSize(w, h))));
+    const presetRow = inspRow("Presets", pbox);
+    const swapRow = inspRow("Orient", ghostBtn("Swap W ⇄ H", () => setSize(Math.round(vb.height), Math.round(vb.width))));
+    const lockRow = checkRow("Lock aspect", lockAspect, (v) => { lockAspect = v; this._abLockAspect = v; });
+    wrap.appendChild(inspGroup("Size", [wRow, hRow, presetRow, swapRow, lockRow]));
+
+    // Background colour itself lives in the Colour panel (it edits the artboard fill when
+    // the artboard is selected); keep a quick Transparent toggle + a button to open it.
     const bgNone = !ab.getAttribute("fill") || ab.getAttribute("fill") === "none";
-    let wInp, hInp;
-    const liveSize = () => { this.beginCoalesce(); this.applyArtboardSize(parseFloat(wInp.value) || vb.width, parseFloat(hInp.value) || vb.height); };
-    wrap.appendChild(inspGroup("Size", [
-      numRow("Width", Math.round(vb.width), 1, 1, liveSize, (i) => { wInp = i; }, () => this.commitCoalesce("Resize artboard")),
-      numRow("Height", Math.round(vb.height), 1, 1, liveSize, (i) => { hInp = i; }, () => this.commitCoalesce("Resize artboard")),
-    ]));
-    wrap.appendChild(inspGroup("Background", [
-      this._paintRow("Colour", bgNone ? null : bgHex, 1, "Background", (hex) => this.applyArtboardBg(hex), "bg"),
-    ]));
+    const transRow = checkRow("Transparent", bgNone, (v) => { this.push("Artboard background"); this.applyArtboardBg(v ? null : "#ffffff"); });
+    const editRow = inspRow("Colour", ghostBtn("Edit in Colour panel", () => { if (this._summonColor) this._summonColor(); }));
+    wrap.appendChild(inspGroup("Background", [transRow, editRow]));
     return wrap;
   },
 

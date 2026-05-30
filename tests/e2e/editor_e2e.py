@@ -642,11 +642,22 @@ def main():
                 && !document.querySelector('.stage-toolbar #layer-cleanup')
                 && ['layer-cleanup','layer-merge'].every(id => !!document.querySelector('.rail-section.layers .section-head #' + id))
                 && !document.querySelector('.rail-section.layers .menu')"""))
-        # object clipboard/boolean/transform actions live on the right-side action bar (delete/rename moved to Layers)
+        # object clipboard/boolean/transform actions live on the right-side action bar (delete/rename
+        # moved to Layers; invert-space relocated to the Object panel header)
         check("object action bar carries clipboard + transform",
-              page.evaluate("""['act-cut','act-copy','act-paste','act-duplicate','act-union','act-rotate-cw','act-flip-h','act-invert']
+              page.evaluate("""['act-cut','act-copy','act-paste','act-duplicate','act-union','act-rotate-cw','act-flip-h']
                 .every(id => !!document.querySelector('.actionbar #' + id))
-                && !document.querySelector('.actionbar #act-delete')"""))
+                && !document.querySelector('.actionbar #act-delete') && !document.querySelector('.actionbar #act-invert')"""))
+        # the panel headers carry a default action slot: Object → invert-space, Colour → cycle-bg
+        check("Object panel header has the invert-space slot",
+              page.evaluate("""[...document.querySelectorAll('.rail-section.properties .section-head .hdr-slot')].some(b => /invert/i.test(b.title))"""))
+        page.evaluate("window.__docks.showColor()"); page.wait_for_timeout(60)
+        check("Colour panel header has the cycle-background slot",
+              page.evaluate("""[...document.querySelectorAll('.rail-section.color .section-head .hdr-slot')].some(b => /background/i.test(b.title))"""))
+        page.evaluate("window.__docks.close('color')"); page.wait_for_timeout(40)
+        # the cycle-bg control left the viewport bar
+        check("cycle-background no longer in the viewport bar",
+              page.evaluate("!document.querySelector('.viewport-controls [data-action=\"bg\"]')"))
 
         # --- customizable picture-frame layout (Layout header dropdown; auto-save + profiles) ---
         # all four bars share the one .tool-button object so they match

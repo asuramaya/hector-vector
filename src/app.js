@@ -2097,11 +2097,14 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     const key = "hv-sec-" + section.dataset.section;
     if (localStorage.getItem(key) === "1") section.classList.add("collapsed");
     head.addEventListener("click", (e) => {
-      // action clicks, a just-finished drag, or a floating window's titlebar don't collapse
-      if (e.target.closest(".panel-actions") || head._docking || head.closest(".dock-window")) return;
+      // action clicks or a just-finished drag don't collapse — but a plain click does,
+      // whether the panel is docked OR floating (a drag sets head._docking to opt out).
+      if (e.target.closest(".panel-actions") || head._docking) return;
       const c = section.classList.toggle("collapsed");
       try { localStorage.setItem(key, c ? "1" : "0"); } catch {}
-      if (window.__docks) window.__docks.relayout();   // recompute the dock's height split
+      const win = head.closest(".dock-window");
+      if (win) win.style.height = c ? "auto" : "";   // floating: shrink to the header when collapsed
+      if (window.__docks) window.__docks.relayout();   // docked: recompute the height split
     });
   }
   document.querySelectorAll(".rail-section[data-section]").forEach(wireSectionCollapse);
@@ -2121,14 +2124,27 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
 
     // Properties + Colour aren't in the HTML — build their sections once (same chrome as
     // History/Layers: caret-collapsible, drag header to detach/dock, × only while floating).
+    // Two header action slots (kept to two so the header stays sane at minimum width):
+    // Colour → cycle-background, Object → invert-space; the other slot is left blank.
+    const HDR_SLOTS = {
+      color: [{ g: "◧", t: "Cycle background (b)", fn: () => cycleBg("output") }, null],
+      properties: [{ g: "⊠", t: "Invert space — fill the gaps", fn: () => editor.invertSpace() }, null],
+    };
     const mkPanel = (name, label, extraClass) => {
       const s = document.createElement("div");
       s.className = "rail-section " + name + (extraClass ? " " + extraClass : ""); s.dataset.section = name;
       s.innerHTML = `<div class="panel-head section-head"><span class="caret">▾</span>`
         + `<span class="sec-label fp-title">${label}</span><span class="sec-count"></span>`
-        + `<div class="panel-actions"><button type="button" class="tool-button fp-close panel-x" title="Close">×</button></div></div>`
+        + `<div class="panel-actions hdr-slots"></div></div>`
         + `<div class="section-body fp-body"></div>`;
-      s.querySelector(".panel-x").addEventListener("click", (e) => { e.stopPropagation(); close(name); });
+      const actions = s.querySelector(".panel-actions");
+      for (const slot of (HDR_SLOTS[name] || [])) {
+        if (slot) { const b = document.createElement("button"); b.type = "button"; b.className = "tool-button hdr-slot"; b.title = slot.t; b.textContent = slot.g; b.addEventListener("click", (e) => { e.stopPropagation(); slot.fn(); }); actions.appendChild(b); }
+        else { const e = document.createElement("span"); e.className = "hdr-slot hdr-slot-empty"; e.title = "Empty slot"; actions.appendChild(e); }
+      }
+      const x = document.createElement("button"); x.type = "button"; x.className = "tool-button fp-close panel-x"; x.title = "Close"; x.textContent = "×";
+      x.addEventListener("click", (e) => { e.stopPropagation(); close(name); });
+      actions.appendChild(x);
       bindHeaderDrag(s); wireSectionCollapse(s);
       return s;
     };
