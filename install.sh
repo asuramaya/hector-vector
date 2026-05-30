@@ -7,6 +7,7 @@
 # gets the server runnable. Idempotent: safe to re-run.
 #
 #   ./install.sh            # set up .venv + deps, run smoke test
+#   ./install.sh --ai       # ...and install the optional AI deps now (rembg + vtracer)
 #   ./install.sh --desktop  # also install the desktop launcher
 #   ./install.sh --app      # ...and launch the app window when done
 set -euo pipefail
@@ -14,11 +15,13 @@ cd "$(dirname "$(readlink -f "$0")")"
 
 WANT_DESKTOP=0
 WANT_APP=0
+WANT_AI=0
 for arg in "$@"; do
   case "$arg" in
+    --ai)      WANT_AI=1 ;;
     --desktop) WANT_DESKTOP=1 ;;
     --app)     WANT_APP=1 ;;
-    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
     *) echo "install.sh: unknown option '$arg'" >&2; exit 2 ;;
   esac
 done
@@ -66,6 +69,19 @@ if "$PY" tests/test_smoke.py; then
 else
   echo "install.sh: smoke test FAILED — see output above." >&2
   exit 1
+fi
+
+# --- optional AI deps (otherwise these bootstrap on first use / from Settings) ---
+if [ "$WANT_AI" = "1" ]; then
+  echo "install.sh: installing AI deps (rembg + onnxruntime + cairosvg, ~500MB)…"
+  "$PY" -m pip install --upgrade 'rembg[cpu]' onnxruntime cairosvg
+  if command -v cargo >/dev/null 2>&1; then
+    echo "install.sh: building VTracer via cargo (this can take a few minutes)…"
+    cargo install vtracer --root ./tools/cargo
+  else
+    echo "install.sh: cargo not found — skipping VTracer (install Rust, or it builds on first trace)." >&2
+  fi
+  echo "install.sh: Real-ESRGAN auto-downloads on first upscale (or from Settings → AI models)."
 fi
 
 # --- optional extras ---

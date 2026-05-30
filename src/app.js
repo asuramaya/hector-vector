@@ -42,6 +42,9 @@ const SETTINGS_DEFAULTS = {
   splice_threshold: "45",
   path_precision: "2",
   color_precision: "6",
+  trace_colormode: "bw",       // bw = mask trace (1-color); color = full-color trace of the image
+  trace_color_style: "poster", // poster = flat limited palette · photo = smooth gradients
+  trace_hierarchical: "stacked", // stacked = layered fills · cutout = non-overlapping
   target_max_dim: "",
   mask_threshold: "",
   trace_preset: "balanced",
@@ -1720,6 +1723,47 @@ function openAppSettings() {
   }
   root.appendChild(installWrap);
 
+  // One place to see and install the optional heavy deps. Status + endpoints already
+  // exist server-side (tool_status / /api/install/*); installs run as background jobs.
+  root.appendChild(sectionTitle("AI models & tools"));
+  const aiTools = [
+    { key: "rembg_installed",     name: "rembg (AI cutout)",      endpoint: "/api/install/rembg",     size: "~500MB",     note: "High-quality background removal.", ok: () => true },
+    { key: "realesrgan_installed", name: "Real-ESRGAN (upscale)", endpoint: "/api/install/realesrgan", size: "~25MB",      note: "4× photo / anime upscaling.", ok: (w) => w && w.curl_available && w.unzip_available, need: "Needs curl + unzip." },
+    { key: "vtracer_installed",   name: "VTracer (tracing)",      endpoint: "/api/install/vtracer",   size: "cargo build", note: "Raster → vector tracing engine.", ok: (w) => w && w.cargo_available, need: "Needs cargo (Rust toolchain)." },
+  ];
+  for (const t of aiTools) {
+    const row = document.createElement("div"); row.className = "form-row";
+    const label = document.createElement("span"); label.className = "form-label"; label.textContent = t.name;
+    row.appendChild(label);
+    const box = document.createElement("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "6px";
+    if (workspace && workspace[t.key]) {
+      const s = document.createElement("span"); s.className = "form-hint"; s.textContent = "Installed ✓"; box.appendChild(s);
+    } else if (!t.ok(workspace)) {
+      const b = ghostBtn("Install unavailable", () => {}); b.disabled = true; box.appendChild(b);
+      const s = document.createElement("span"); s.className = "form-hint"; s.textContent = t.need; box.appendChild(s);
+    } else {
+      const reset = `Install (${t.size})`;
+      const btn = ghostBtn(reset, async () => {
+        btn.disabled = true; btn.textContent = "Installing…";
+        try {
+          const data = await api(t.endpoint, "POST", {});
+          setStatus(data.message || "Install started.", 3000);
+          await loadJobs();
+        } catch (e) { setStatus(e.message, 3000); btn.disabled = false; btn.textContent = reset; }
+      });
+      box.appendChild(btn);
+      const s = document.createElement("span"); s.className = "form-hint"; s.textContent = `${t.note} Runs in background — watch Jobs.`; box.appendChild(s);
+    }
+    row.appendChild(box);
+    root.appendChild(row);
+  }
+  const refreshWrap = document.createElement("div"); refreshWrap.className = "form-actions";
+  refreshWrap.appendChild(ghostBtn("Refresh status", async () => {
+    try { applyStatusData(await fetchStatus()); if (appSettingsOpen) openAppSettings(); }
+    catch (e) { setStatus(e.message, 2500); }
+  }));
+  root.appendChild(refreshWrap);
+
   root.appendChild(sectionTitle("Updates"));
   const updWrap = document.createElement("div"); updWrap.className = "form-row";
   const updLabel = document.createElement("span"); updLabel.className = "form-label"; updLabel.textContent = "Software update";
@@ -3241,6 +3285,12 @@ function processKeyOptions(proc) {
     add("Scale", makeSelect("scale", [["2", "2×"], ["3", "3×"], ["4", "4×"]]));
   }
   if (proc === "vectorize" || proc === "pipeline") {
+    const out = makeSelect("trace_colormode", [["bw", "B&W"], ["color", "Color"]]);
+    out.addEventListener("change", () => renderProcessWorkspace());
+    add("Output", out);
+    if (settings.trace_colormode === "color") {
+      add("Style", makeSelect("trace_color_style", [["poster", "Poster"], ["photo", "Photo"]]));
+    }
     const preset = makeSelect("trace_preset", [["draft", "Draft"], ["balanced", "Balanced"], ["smooth", "Smooth"], ["sharp", "Sharp"], ["custom", "Custom"]]);
     preset.addEventListener("change", () => { const pre = TRACE_PRESETS[preset.value]; if (pre) { Object.assign(settings, pre); persistSettings(); } });
     add("Trace", preset);
@@ -3318,8 +3368,15 @@ function renderProcessWorkspace() {
   root.appendChild(panes);
 
   modalBodyEl.appendChild(root);
-  renderProcessGallery();
-  renderProcessJobs();
+  // The gallery builds a thumbnail cell (image + action buttons + listeners) for
+  // every library image — O(n) synchronous DOM that stalls the modal's first paint
+  // on big libraries. Defer it one frame so the chrome shows instantly, then fill in.
+  gallery.innerHTML = '<div class="gallery-empty">Loading library…</div>';
+  requestAnimationFrame(() => {
+    if (!processModalOpen) return;
+    renderProcessGallery();
+    renderProcessJobs();
+  });
 }
 
 let processGalleryFilter = "";
@@ -3520,9 +3577,28 @@ function buildSettingsForm(process) {
     root.appendChild(fieldRow("Scale", makeSelect("scale", [["2","2x"],["3","3x"],["4","4x"]])));
   }
   if (process === "vectorize" || process === "pipeline") {
-    root.appendChild(sectionTitle("Mask"));
+    root.appendChild(sectionTitle("Output"));
+    const colorSel = makeSelect("trace_colormode", [
+      ["bw", "Black & white — silhouette mask"],
+      ["color", "Color — full palette"],
+    ]);
+    colorSel.addEventListener("change", () => rerender());
+    root.appendChild(fieldRow("Trace", colorSel, "B&W traces a 1-color silhouette; Color traces the image's real colors."));
+    const isColor = settings.trace_colormode === "color";
+    if (isColor) {
+      root.appendChild(fieldRow("Style", makeSelect("trace_color_style", [
+        ["poster", "Poster — flat, limited palette"],
+        ["photo", "Photo — smooth gradients"],
+      ]), "Poster suits logos/illustration; Photo follows gradients (bigger SVG)."));
+      root.appendChild(fieldRow("Colors", makeRange("color_precision", 1, 8, 1), "Bits per RGB channel. Higher = more distinct colors / detail."));
+      root.appendChild(fieldRow("Layers", makeSelect("trace_hierarchical", [
+        ["stacked", "Stacked — layered fills"],
+        ["cutout", "Cutout — non-overlapping shapes"],
+      ]), "Stacked paints back-to-front; Cutout makes each color its own shape."));
+    }
+    root.appendChild(sectionTitle(isColor ? "Image" : "Mask"));
     root.appendChild(fieldRow("Target max dim", makeNumber("target_max_dim", { min: 0, max: 16384, step: 64, placeholder: "auto (no resize)" }), "Resize the longest side before tracing. Smaller = simpler SVG."));
-    root.appendChild(fieldRow("Black threshold", makeNumber("mask_threshold", { min: 16, max: 240, step: 1, placeholder: "auto (otsu)" }), "0–255 gray cutoff. Higher = more pixels treated as foreground."));
+    if (!isColor) root.appendChild(fieldRow("Black threshold", makeNumber("mask_threshold", { min: 16, max: 240, step: 1, placeholder: "auto (otsu)" }), "0–255 gray cutoff. Higher = more pixels treated as foreground."));
     root.appendChild(sectionTitle("Trace (VTracer)"));
     const presetSel = makeSelect("trace_preset", [
       ["draft", "Draft — fewest points, fastest"],

@@ -398,8 +398,23 @@ def trace_config(payload: dict) -> dict:
     mode = payload.get("trace_mode", "spline")
     if mode not in {"spline", "polygon", "pixel"}:
         mode = "spline"
+    # Color trace runs on the original RGB image (not the monochrome mask). Style
+    # picks the gradient granularity: poster = flat, limited palette (bigger step →
+    # fewer layers); photo = smooth gradients (smaller step → more layers).
+    colormode = "color" if str(payload.get("trace_colormode", "bw")).strip().lower() == "color" else "bw"
+    color_style = payload.get("trace_color_style", "poster")
+    if color_style not in {"poster", "photo"}:
+        color_style = "poster"
+    hierarchical = payload.get("trace_hierarchical", "stacked")
+    if hierarchical not in {"stacked", "cutout"}:
+        hierarchical = "stacked"
+    gradient_step = "16" if color_style == "poster" else "8"
     return {
         "mode": mode,
+        "colormode": colormode,
+        "color_style": color_style,
+        "hierarchical": hierarchical,
+        "gradient_step": gradient_step,
         "filter_speckle": clamp_float(payload.get("filter_speckle", "6"), 0, 32, 6),
         "corner_threshold": clamp_float(payload.get("corner_threshold", "85"), 30, 180, 85),
         "segment_length": clamp_float(payload.get("segment_length", "4.5"), 3.5, 10, 4.5),
@@ -738,6 +753,55 @@ def trace_mask_to_svg(mask_path: Path, svg_path: Path, trace: dict, log) -> None
             trace["path_precision"],
             "--color_precision",
             trace["color_precision"],
+        ]
+    )
+    log_subprocess_lines(log, lines)
+
+
+def flatten_rgba_to_white(src: Path, dest: Path) -> None:
+    """Composite a (possibly transparent) image onto opaque white, drop alpha.
+
+    Color tracing needs a real RGB image: vtracer has no notion of alpha, so a
+    transparent cutout would otherwise trace its zeroed RGB as a black slab. White
+    is the neutral backdrop the trace can later strip."""
+    rgba = Image.open(src).convert("RGBA")
+    bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+    bg.alpha_composite(rgba)
+    bg.convert("RGB").save(dest)
+
+
+def trace_color_to_svg(src_path: Path, svg_path: Path, trace: dict, log) -> None:
+    """Full-color trace straight off the RGB image.
+
+    Flags are set explicitly — never via --preset, whose `bw` variant silently
+    collapses the output to black/white (the same trap that bites the mask path)."""
+    lines = run_subprocess(
+        [
+            str(VTRACER_BIN),
+            "--input",
+            str(src_path),
+            "--output",
+            str(svg_path),
+            "--colormode",
+            "color",
+            "--hierarchical",
+            trace["hierarchical"],
+            "--mode",
+            trace["mode"],
+            "--filter_speckle",
+            trace["filter_speckle"],
+            "--corner_threshold",
+            trace["corner_threshold"],
+            "--segment_length",
+            trace["segment_length"],
+            "--splice_threshold",
+            trace["splice_threshold"],
+            "--path_precision",
+            trace["path_precision"],
+            "--color_precision",
+            trace["color_precision"],
+            "--gradient_step",
+            trace["gradient_step"],
         ]
     )
     log_subprocess_lines(log, lines)
@@ -1283,12 +1347,21 @@ def run_vectorize(payload: dict) -> dict:
                 if staged is not src:
                     log(f"Resized to max dim {mask_cfg['target_max_dim']}.")
                     _register_output(staged_preview)
-            _report_progress(2, 3, "Build mask")
-            build_mask_with_overrides(staged, mask_path, None, mask_cfg)
-            validate_mask_png(mask_path)
-            _register_output(mask_path)
-            _report_progress(3, 3, "Trace SVG")
-            trace_mask_to_svg(mask_path, dest, trace, log)
+            if trace["colormode"] == "color":
+                # Color trace works straight off the image — no monochrome mask step.
+                _report_progress(2, 3, "Flatten")
+                flat = out_dir / f"{src.stem}.flat.png"
+                flatten_rgba_to_white(staged, flat)
+                _register_output(flat)
+                _report_progress(3, 3, f"Trace SVG ({trace['color_style']})")
+                trace_color_to_svg(flat, dest, trace, log)
+            else:
+                _report_progress(2, 3, "Build mask")
+                build_mask_with_overrides(staged, mask_path, None, mask_cfg)
+                validate_mask_png(mask_path)
+                _register_output(mask_path)
+                _report_progress(3, 3, "Trace SVG")
+                trace_mask_to_svg(mask_path, dest, trace, log)
             validate_svg_file(dest)
             _register_output(dest)
 
@@ -1609,8 +1682,17 @@ def run_pipeline(payload: dict) -> dict:
                 validate_cutout_png(cutout_dest)
             _register_output(mask_dest)
             _register_output(cutout_dest)
-            _report_progress(4, 5, "Trace SVG")
-            trace_mask_to_svg(mask_dest, vector_dest, trace, log)
+            if trace["colormode"] == "color":
+                # Trace the isolated subject in full color (flattened on white so the
+                # transparent surround doesn't trace as a black slab).
+                _report_progress(4, 5, f"Trace SVG ({trace['color_style']})")
+                flat_dest = out_dir / f"{src.stem}.flat.png"
+                flatten_rgba_to_white(cutout_dest, flat_dest)
+                _register_output(flat_dest)
+                trace_color_to_svg(flat_dest, vector_dest, trace, log)
+            else:
+                _report_progress(4, 5, "Trace SVG")
+                trace_mask_to_svg(mask_dest, vector_dest, trace, log)
             validate_svg_file(vector_dest)
             _register_output(vector_dest)
             _report_progress(5, 5, "Done")

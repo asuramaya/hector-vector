@@ -1743,7 +1743,47 @@ def main():
         }""")
         check("process gallery: no overflow, square thumbs, icon actions fit",
               poly.get("skip") or (poly["overflowX"] <= 0 and poly["square"] and poly["contain"] == "contain" and poly["icons"] >= 1 and poly["fit"]), str(poly))
-        page.evaluate("closeModal(); processSelectEl.value='pipeline';")
+
+        # ---- Q-menu speed: chrome paints synchronously, the heavy gallery is deferred a frame ----
+        defer = page.evaluate("""() => {
+          renderProcessWorkspace();
+          const chrome = !!document.querySelector('.process-controls') && !!document.querySelector('.process-opts');
+          const g = document.querySelector('#process-gallery');
+          const deferred = !!g && /Loading library/.test(g.textContent) && !g.querySelector('.gallery-grid');
+          return { chrome, deferred };
+        }""")
+        check("Process workspace paints chrome first, defers the gallery", defer["chrome"] and defer["deferred"], str(defer))
+        page.wait_for_timeout(90)
+        filled = page.evaluate("() => !!document.querySelector('#process-gallery .gallery-grid') || !!document.querySelector('#process-gallery .gallery-empty')")
+        check("deferred gallery fills in after a frame", filled)
+
+        # ---- Color trace: Output toggle (first-class) reveals Style/Colors/Layers ----
+        page.evaluate("settings.trace_colormode='bw'; processSelectEl.value='vectorize'; renderProcessWorkspace();"); page.wait_for_timeout(80)
+        opts_bw = page.evaluate("() => [...document.querySelectorAll('.process-opts .process-opt>span')].map(s=>s.textContent)")
+        adv_bw = page.evaluate("() => [...document.querySelectorAll('.process-advanced .form-row .form-label')].map(s=>s.textContent)")
+        check("SVG Trace surfaces an Output (B&W/Color) toggle", "Output" in opts_bw, str(opts_bw))
+        check("B&W shows Black threshold, hides color controls", "Black threshold" in adv_bw and "Colors" not in adv_bw and "Layers" not in adv_bw, str(adv_bw))
+        page.evaluate("settings.trace_colormode='color'; renderProcessWorkspace();"); page.wait_for_timeout(80)
+        opts_col = page.evaluate("() => [...document.querySelectorAll('.process-opts .process-opt>span')].map(s=>s.textContent)")
+        adv_col = page.evaluate("() => [...document.querySelectorAll('.process-advanced .form-row .form-label')].map(s=>s.textContent)")
+        check("Color reveals Style inline + Colors/Layers in advanced, drops Black threshold",
+              "Style" in opts_col and "Colors" in adv_col and "Layers" in adv_col and "Black threshold" not in adv_col,
+              str(opts_col) + " / " + str(adv_col))
+        # the toggle drives the payload-bound setting
+        check("color setting flows to the run payload", page.evaluate("settings.trace_colormode") == "color")
+        page.evaluate("settings.trace_colormode='bw'; closeModal(); processSelectEl.value='pipeline';")
+
+        # ---- Settings: centralized AI models & tools panel (status + install) ----
+        file_menu_click(page, "Settings"); page.wait_for_timeout(100)
+        ai = page.evaluate("""() => {
+          const txt = document.querySelector('#modal-body').textContent;
+          const labels = [...document.querySelectorAll('#modal-body .form-label')].map(s=>s.textContent);
+          return { section: /AI models & tools/.test(txt), rembg: labels.includes('rembg (AI cutout)'),
+                   vtracer: labels.includes('VTracer (tracing)'), esrgan: labels.includes('Real-ESRGAN (upscale)') };
+        }""")
+        check("Settings lists an AI models & tools panel with each dep",
+              ai["section"] and ai["rembg"] and ai["vtracer"] and ai["esrgan"], str(ai))
+        page.evaluate("closeModal();")
 
         # serialize cleanliness
         mount_ctl(page)

@@ -3,7 +3,8 @@ Pillow>=10.0
 numpy>=1.24
 scipy>=1.10
 
-# Optional, installed on demand from the Settings UI into ./.venv (not required to start):
+# Optional — installed on demand from Settings → AI models & tools (or up front with
+# `./install.sh --ai`) into ./.venv; not required to start:
 #   rembg[cpu] onnxruntime   # AI background removal (Cutout "AI" backend)
 #   cairosvg                 # rasterize curved (vtracer) SVGs in Export PNG; needs system libcairo
 #
