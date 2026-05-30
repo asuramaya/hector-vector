@@ -488,12 +488,16 @@ button:disabled {
    structure is hairlines; one --field-h height; one --r radius. No hard black
    boxes, no blue. See also the shared field/seg/btn rules below.
    ============================================================================ */
-.insp-group { display: flex; flex-direction: column; gap: 7px; }
+.insp-group { display: flex; flex-direction: column; gap: 6px; }
+/* Sections are siblings inside one wrap div, so they need an explicit gap — without
+   this they collide (only the title's margin separated them). Tight rows WITHIN a
+   section, a clear break BETWEEN sections. */
+.insp-group + .insp-group { margin-top: 18px; }
 .insp-title {
   font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 600;
-  color: var(--label); padding-bottom: 6px; border-bottom: 1px solid var(--hair); margin: 2px 0 2px;
+  color: var(--label); padding-bottom: 5px; border-bottom: 1px solid var(--ink); margin: 0 0 2px;
 }
-.insp-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; align-items: center; min-height: var(--field-h); }
+.insp-row { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 8px; align-items: center; min-height: var(--field-h); }
 .insp-row > span { font-size: 11.5px; color: var(--label); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* scrubbable number label — drag horizontally to change the value */
 .insp-row > span.scrub { cursor: ew-resize; user-select: none; -webkit-user-select: none; touch-action: none; }

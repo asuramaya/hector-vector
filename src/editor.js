@@ -2815,7 +2815,7 @@ const editor = {
     if (!bgNone) sw.style.background = bgFill; sw.title = bgNone ? "Transparent — click to choose a colour" : bgFill;
     sw.addEventListener("click", () => { if (this._summonColor) this._summonColor(); });
     const swatchRow = inspRow("Fill", sw);
-    const transRow = checkRow("Transparent", bgNone, (v) => { this.push("Artboard background"); this.applyArtboardBg(v ? null : "#ffffff"); this._renderInspector(); });
+    const transRow = checkRow("None", bgNone, (v) => { this.push("Artboard background"); this.applyArtboardBg(v ? null : "#ffffff"); this._renderInspector(); });
     wrap.appendChild(inspGroup("Background", [swatchRow, transRow]));
     return wrap;
   },
