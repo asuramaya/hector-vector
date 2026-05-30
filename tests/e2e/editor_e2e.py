@@ -1771,7 +1771,14 @@ def main():
               str(opts_col) + " / " + str(adv_col))
         # the toggle drives the payload-bound setting
         check("color setting flows to the run payload", page.evaluate("settings.trace_colormode") == "color")
-        page.evaluate("settings.trace_colormode='bw'; closeModal(); processSelectEl.value='pipeline';")
+        # Simplify control: inline + advanced, bound to settings, defaults to medium
+        page.evaluate("settings.trace_colormode='bw'; renderProcessWorkspace();"); page.wait_for_timeout(60)
+        simp_opts = page.evaluate("() => [...document.querySelectorAll('.process-opts .process-opt>span')].map(s=>s.textContent)")
+        simp_adv = page.evaluate("() => [...document.querySelectorAll('.process-advanced .form-row .form-label')].map(s=>s.textContent)")
+        check("Simplify control present inline + in advanced", "Simplify" in simp_opts and "Simplify" in simp_adv, str(simp_opts))
+        page.evaluate("""() => { const s=[...document.querySelectorAll('.process-opts select')].find(x=>x.options[0].value==='off'&&[...x.options].some(o=>o.value==='strong')); s.value='strong'; s.dispatchEvent(new Event('change')); }""")
+        check("Simplify setting flows to the payload", page.evaluate("settings.trace_simplify") == "strong")
+        page.evaluate("settings.trace_simplify='medium'; closeModal(); processSelectEl.value='pipeline';")
 
         # ---- Settings: centralized AI models & tools panel (status + install) ----
         file_menu_click(page, "Settings"); page.wait_for_timeout(100)

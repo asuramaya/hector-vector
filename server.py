@@ -28,6 +28,7 @@ TOOLS_DIR = APP_DIR / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 import pixelvec  # noqa: E402  (pure numpy/PIL, no venv needed)
 import svg_render  # noqa: E402  (pure Pillow for axis-aligned SVGs; cairosvg optional)
+import simplify_svg  # noqa: E402  (pure numpy; refit traced paths to minimal cubics)
 # `.webmanifest` is not in the stdlib mime table; Chromium wants a JSON-ish type.
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 OUTPUTS_DIR = APP_DIR / "outputs"
@@ -384,6 +385,35 @@ def validate_svg_file(path: Path) -> None:
         raise ValueError(f"SVG too small: {path.name}")
 
 
+# Post-trace simplification strength → (per-subpath tolerance fraction, corner angle).
+# Feature-relative tolerance keeps node count stable across resolutions. "off" skips.
+SIMPLIFY_LEVELS = {
+    "off": None,
+    "light": (0.012, 72.0),
+    "medium": (0.025, 70.0),
+    "strong": (0.05, 68.0),
+}
+
+
+def simplify_trace_file(svg_path: Path, level: str, log) -> None:
+    """Refit a freshly-traced SVG to minimal cubics in place (no-op for 'off' or if
+    it wouldn't reduce node count). vtracer over-segments; this is what brings a
+    logo down from thousands of anchors to ~the hundred a human would draw."""
+    params = SIMPLIFY_LEVELS.get(level)
+    if not params:
+        return
+    frac, ang = params
+    try:
+        text = svg_path.read_text(encoding="utf-8", errors="ignore")
+        new, stats = simplify_svg.simplify_svg_text(text, frac=frac, corner_ang=ang)
+    except Exception as exc:  # never let simplification sink an otherwise-good trace
+        log(f"Simplify skipped ({exc.__class__.__name__}: {exc}).")
+        return
+    if stats["nodes_after"] and stats["nodes_after"] < stats["nodes_before"]:
+        svg_path.write_text(new, encoding="utf-8")
+        log(f"Simplified {stats['nodes_before']} → {stats['nodes_after']} nodes ({level}).")
+
+
 def trace_config(payload: dict) -> dict:
     def clamp_float(value: object, low: float, high: float, default: float) -> str:
         try:
@@ -415,6 +445,9 @@ def trace_config(payload: dict) -> dict:
     # maps to an actual palette size; photo style skips this to keep gradients.
     cp_int = int(float(clamp_float(payload.get("color_precision", "6"), 1, 8, 6)))
     poster_colors = {1: 2, 2: 3, 3: 4, 4: 6, 5: 8, 6: 12, 7: 16, 8: 24}[cp_int]
+    simplify = payload.get("trace_simplify", "medium")
+    if simplify not in SIMPLIFY_LEVELS:
+        simplify = "medium"
     return {
         "mode": mode,
         "colormode": colormode,
@@ -422,6 +455,7 @@ def trace_config(payload: dict) -> dict:
         "hierarchical": hierarchical,
         "gradient_step": gradient_step,
         "poster_colors": poster_colors,
+        "simplify": simplify,
         "filter_speckle": clamp_float(payload.get("filter_speckle", "6"), 0, 32, 6),
         "corner_threshold": clamp_float(payload.get("corner_threshold", "85"), 30, 180, 85),
         "segment_length": clamp_float(payload.get("segment_length", "4.5"), 3.5, 10, 4.5),
@@ -1401,6 +1435,7 @@ def run_vectorize(payload: dict) -> dict:
                 _register_output(mask_path)
                 _report_progress(3, 3, "Trace SVG")
                 trace_mask_to_svg(mask_path, dest, trace, log)
+            simplify_trace_file(dest, trace["simplify"], log)
             validate_svg_file(dest)
             _register_output(dest)
 
@@ -1732,6 +1767,7 @@ def run_pipeline(payload: dict) -> dict:
             else:
                 _report_progress(4, 5, "Trace SVG")
                 trace_mask_to_svg(mask_dest, vector_dest, trace, log)
+            simplify_trace_file(vector_dest, trace["simplify"], log)
             validate_svg_file(vector_dest)
             _register_output(vector_dest)
             _report_progress(5, 5, "Done")

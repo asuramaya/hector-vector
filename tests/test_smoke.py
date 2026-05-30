@@ -85,11 +85,36 @@ def check_color_simplify() -> None:
         (ROOT / "tests" / t).unlink(missing_ok=True)
 
 
+def check_path_simplify() -> None:
+    """Post-trace refit collapses over-segmented paths to minimal cubics, preserves
+    structure, and is RESOLUTION-STABLE — the same shape at 3x scale simplifies to
+    the same node count (node density tracks geometry, not pixels). Pure numpy."""
+    import math
+    sys.path.insert(0, str(ROOT / "tools"))
+    import simplify_svg
+
+    def circle_svg(dim, cx, cy, r, n=200):
+        p = [f"{cx + r*math.cos(2*math.pi*i/n):.2f},{cy + r*math.sin(2*math.pi*i/n):.2f}" for i in range(n)]
+        d = "M" + p[0] + " " + " ".join("L" + q for q in p[1:]) + " Z"
+        return f'<svg width="{dim}" height="{dim}"><path d="{d}" fill="#123abc"/></svg>'
+
+    new, st = simplify_svg.simplify_svg_text(circle_svg(1000, 500, 500, 300), frac=0.02)
+    assert st["nodes_after"] <= st["nodes_before"] // 10, f"weak reduction: {st}"
+    assert 2 <= st["nodes_after"] <= 12, f"a circle should need a handful of cubics, got {st['nodes_after']}"
+    assert new.count("<path") == 1 and 'fill="#123abc"' in new, "lost the path or its fill"
+
+    _, st3 = simplify_svg.simplify_svg_text(circle_svg(3000, 1500, 1500, 900), frac=0.02)
+    assert st3["nodes_after"] == st["nodes_after"], \
+        f"not resolution-stable: {st['nodes_after']} at 1x vs {st3['nodes_after']} at 3x"
+    print(f"ok: simplify {st['nodes_before']}->{st['nodes_after']} nodes, resolution-stable across 3x")
+
+
 def main() -> int:
     check_parses()
     svg = check_pixelvec()
     check_render(svg)
     check_color_simplify()
+    check_path_simplify()
     for tmp in ["_out.svg", "_out.png"]:
         (ROOT / "tests" / tmp).unlink(missing_ok=True)
     print("\nALL SMOKE TESTS PASSED")

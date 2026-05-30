@@ -42,6 +42,7 @@ const SETTINGS_DEFAULTS = {
   splice_threshold: "45",
   path_precision: "2",
   color_precision: "6",
+  trace_simplify: "medium",    // post-trace refit to minimal cubics: off/light/medium/strong
   trace_colormode: "bw",       // bw = mask trace (1-color); color = full-color trace of the image
   trace_color_style: "poster", // poster = flat limited palette · photo = smooth gradients
   trace_hierarchical: "stacked", // stacked = layered fills · cutout = non-overlapping
@@ -3295,6 +3296,7 @@ function processKeyOptions(proc) {
     preset.addEventListener("change", () => { const pre = TRACE_PRESETS[preset.value]; if (pre) { Object.assign(settings, pre); persistSettings(); } });
     add("Trace", preset);
     add("Curves", makeSelect("trace_mode", [["spline", "Spline"], ["polygon", "Polygon"], ["pixel", "Pixel"]]));
+    add("Simplify", makeSelect("trace_simplify", [["off", "Off"], ["light", "Light"], ["medium", "Medium"], ["strong", "Strong"]]));
   }
   if (proc === "cutout" || proc === "pipeline") {
     const backend = makeSelect("cutout_backend", [["classical", "Classical (fast)"], ["ai", "AI (rembg)"]]);
@@ -3617,6 +3619,12 @@ function buildSettingsForm(process) {
     });
     root.appendChild(fieldRow("Preset", presetSel, "Tunes the sliders below as a group."));
     root.appendChild(fieldRow("Mode", makeSelect("trace_mode", [["spline","Spline (curves)"],["polygon","Polygon"],["pixel","Pixel (no smoothing)"]])));
+    root.appendChild(fieldRow("Simplify", makeSelect("trace_simplify", [
+      ["off", "Off — raw vtracer output"],
+      ["light", "Light — keep fine detail"],
+      ["medium", "Medium — recommended"],
+      ["strong", "Strong — fewest nodes"],
+    ]), "Refits the trace to the fewest curves that reproduce it. Resolution-independent — node count tracks shape, not pixels."));
     const advToggle = document.createElement("input");
     advToggle.type = "checkbox";
     advToggle.checked = !!settings.trace_advanced;
