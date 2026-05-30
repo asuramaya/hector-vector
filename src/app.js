@@ -1920,6 +1920,11 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       return out;
     }
     const capture = () => { const m = {}; for (const b of BARS) m[b.name] = movable(b).map(slotKey); return m; };
+    // A fresh divider of the right kind for a bar: a thin rule between vertical-stack
+    // bars (toolstrip/actionbar), a vertical rule between horizontal bars; viewport
+    // keeps its own .vp-sep style.
+    const sepClassFor = (bar) => bar.name === "viewport" ? "vp-sep" : (axisY(barOf(bar)) ? "tool-sep" : "tool-vsep");
+    function makeSep(bar) { const s = document.createElement("span"); s.className = sepClassFor(bar); s.setAttribute("aria-hidden", "true"); return s; }
     const DEFAULT = capture();   // authored DOM order — taken before applying any saved layout
 
     function apply(layout) {
@@ -1929,13 +1934,13 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       for (const b of BARS) {
         const cont = barOf(b); if (!cont) continue;
         const tail = tailEl(cont, b);
-        const seps = [...cont.children].filter(isSep);
-        let si = 0;
+        const pool = [...cont.children].filter(isSep);   // reuse existing separators, create more on demand
+        let pi = 0;
         for (const key of (layout[b.name] || [])) {
-          const el = key === SEP ? seps[si++] : tiles.get(key);
+          const el = key === SEP ? (pool[pi++] || makeSep(b)) : tiles.get(key);
           if (el) cont.insertBefore(el, tail);   // insertBefore(el, null) appends
         }
-        for (; si < seps.length; si++) cont.insertBefore(seps[si], tail);   // stray separators
+        for (; pi < pool.length; pi++) pool[pi].remove();   // drop separators the layout no longer wants
       }
       // tiles a saved layout doesn't mention (e.g. added in a newer build) keep their place
     }
@@ -1971,29 +1976,43 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     };
     const onBarDrop = (e) => { e.preventDefault(); persist(); };   // DOM already reflects the move → auto-save it
     const blockClick = (e) => { e.preventDefault(); e.stopPropagation(); };
-    function frameTiles() { const out = []; for (const b of BARS) for (const t of movable(b)) if (isTile(t)) out.push(t); return out; }
+    // Both tiles AND dividers are draggable while customizing; dividers can also be
+    // added/removed via the bar's right-click menu.
+    function frameMovables() { const out = []; for (const b of BARS) for (const m of movable(b)) out.push(m); return out; }
+    function wireMovable(el, on) {
+      el.draggable = on;
+      if (on) {
+        if (isTile(el)) { el.disabled = false; el.addEventListener("click", blockClick, true); }   // disabled buttons can't be dragged
+        el.addEventListener("dragstart", onDragStart);
+        el.addEventListener("dragend", onDragEnd);
+      } else {
+        if (isTile(el)) el.removeEventListener("click", blockClick, true);
+        el.removeEventListener("dragstart", onDragStart);
+        el.removeEventListener("dragend", onDragEnd);
+      }
+    }
+    const sepUnder = (t) => isSep(t) ? t : (t && t.closest ? t.closest(".tool-sep, .tool-vsep, .vp-sep") : null);
+    const onBarContext = (e) => {
+      if (!editing) return;
+      e.preventDefault(); e.stopPropagation();
+      const cont = e.currentTarget, bar = barFor(cont), onSep = sepUnder(e.target);
+      const items = [{ label: "Add divider here", onClick: () => {
+        const ref = insertionRef(cont, e.clientX, e.clientY, bar);
+        const s = makeSep(bar); cont.insertBefore(s, ref === dragEl ? null : ref); wireMovable(s, true); persist();
+      } }];
+      if (onSep) items.push({ label: "Remove divider", onClick: () => { wireMovable(onSep, false); onSep.remove(); persist(); } });
+      showContextMenu(e.clientX, e.clientY, items);
+    };
 
     function setEditing(on) {
       editing = on;
       appEl.classList.toggle("customizing", on);
       if (layoutTrigger) layoutTrigger.classList.toggle("active", on);
-      frameTiles().forEach((t) => {
-        t.draggable = on;
-        if (on) {
-          t.disabled = false;   // disabled buttons can't be dragged — re-enable for arranging
-          t.addEventListener("dragstart", onDragStart);
-          t.addEventListener("dragend", onDragEnd);
-          t.addEventListener("click", blockClick, true);
-        } else {
-          t.removeEventListener("dragstart", onDragStart);
-          t.removeEventListener("dragend", onDragEnd);
-          t.removeEventListener("click", blockClick, true);
-        }
-      });
+      frameMovables().forEach((el) => wireMovable(el, on));
       BARS.forEach((b) => {
         const c = barOf(b); if (!c) return;
-        if (on) { c.addEventListener("dragover", onBarOver); c.addEventListener("drop", onBarDrop); }
-        else { c.removeEventListener("dragover", onBarOver); c.removeEventListener("drop", onBarDrop); }
+        if (on) { c.addEventListener("dragover", onBarOver); c.addEventListener("drop", onBarDrop); c.addEventListener("contextmenu", onBarContext); }
+        else { c.removeEventListener("dragover", onBarOver); c.removeEventListener("drop", onBarDrop); c.removeEventListener("contextmenu", onBarContext); }
       });
       if (!on && editor.onInspect) editor.onInspect();   // restore the correct disabled states (onInspect runs refreshActionButtons)
       setStatus(on ? "Customize layout: drag buttons between bars — changes save automatically." : "Ready.", on ? 6000 : 1500);

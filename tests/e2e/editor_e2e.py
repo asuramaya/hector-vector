@@ -1478,6 +1478,28 @@ def main():
         check("clearGuides empties the layer",
               page.evaluate("editor.guides.length === 0 && editor.stage.querySelectorAll('.hv-guideobj').length === 0"))
 
+        # ---- Customize layout: draggable dividers + right-click add/remove ----
+        page.evaluate("window.__layout.toggleEdit()"); page.wait_for_timeout(80)
+        check("dividers become draggable in customize mode",
+              page.evaluate("() => { const s=document.querySelector('.actionbar .tool-sep'); return !!s && s.draggable === true; }") is True)
+        before = page.evaluate("document.querySelectorAll('.actionbar .tool-sep').length")
+        page.evaluate("() => { const bar=document.querySelector('.actionbar'); const r=bar.getBoundingClientRect();"
+                      "bar.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:Math.round(r.left+6),clientY:Math.round(r.top+6)})); }")
+        page.wait_for_selector('.context-menu', timeout=4000)
+        page.click('.context-menu .menu-item:has-text("Add divider")'); page.wait_for_timeout(80)
+        after = page.evaluate("document.querySelectorAll('.actionbar .tool-sep').length")
+        check("right-click adds a divider", after == before + 1, f"{before}->{after}")
+        check("added divider is auto-saved to the layout",
+              page.evaluate("(JSON.parse(localStorage.getItem('hector-vector:layout')||'{}').actions||[]).filter(k=>k==='|').length") == after)
+        # remove it again via right-click on the divider itself
+        page.evaluate("() => { const s=document.querySelector('.actionbar .tool-sep'); const r=s.getBoundingClientRect();"
+                      "s.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:Math.round(r.left+1),clientY:Math.round(r.top+1)})); }")
+        page.wait_for_selector('.context-menu .menu-item:has-text("Remove divider")', timeout=4000)
+        page.click('.context-menu .menu-item:has-text("Remove divider")'); page.wait_for_timeout(80)
+        check("right-click removes a divider",
+              page.evaluate("document.querySelectorAll('.actionbar .tool-sep').length") == before, f"back to {before}")
+        page.evaluate("window.__layout.toggleEdit(); window.__layout.reset()"); page.wait_for_timeout(60)
+
         # ---- App-window mode (standalone Chromium window) ----
         # Headless can't exercise WCO/AWC, but the ?app=1 gate must engage and make
         # the header a draggable titlebar without disturbing normal layout. Window

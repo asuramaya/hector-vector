@@ -1430,6 +1430,17 @@ button:disabled {
 .app.editor.customizing .tool-button.dragging { opacity: 0.4; outline: 1px solid var(--accent); }
 /* disabled tiles stay draggable in customize mode (you're arranging, not using them) */
 .app.editor.customizing .tool-button:disabled { opacity: 1; cursor: grab; }
+/* dividers become visible, grabbable chips while customizing (drag to move,
+   right-click a bar to add one / a divider to remove it) */
+.app.editor.customizing .tool-sep,
+.app.editor.customizing .tool-vsep,
+.app.editor.customizing .vp-sep { background: var(--accent); opacity: 0.55; cursor: grab; border-radius: 2px; }
+.app.editor.customizing .tool-sep { height: 4px; margin: 2px 4px; }
+.app.editor.customizing .tool-vsep,
+.app.editor.customizing .vp-sep { width: 4px; margin: 3px 2px; }
+.app.editor.customizing .tool-sep.dragging,
+.app.editor.customizing .tool-vsep.dragging,
+.app.editor.customizing .vp-sep.dragging { opacity: 1; }
 
 @media (max-width: 700px) {
   .form-row {
