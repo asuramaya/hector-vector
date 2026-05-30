@@ -80,6 +80,19 @@ def set_inspector_input(page, kind, index, value, event):
             el.dispatchEvent(new Event(event, { bubbles: true }));
         }""", {"kind": kind, "index": index, "value": value, "event": event})
 
+def set_inspector_number_by_label(page, label, value, event="change"):
+    """Set the number input in the context-panel row whose label matches `label`.
+    (Index-based addressing is fragile now the object panel leads with Transform X/Y/W/H.)"""
+    open_ctx_panel(page)
+    page.evaluate(
+        """({label, value, event}) => {
+            const row = [...document.querySelectorAll('.context-panel .insp-row')]
+                .find(r => r.querySelector('span') && r.querySelector('span').textContent === label);
+            const el = row && row.querySelector('input[type=number]');
+            if (!el) throw new Error('no number input for ' + label);
+            el.value = String(value); el.dispatchEvent(new Event(event, { bubbles: true }));
+        }""", {"label": label, "value": value, "event": event})
+
 def pick_color(page, swatch_index, hexes=None, none=False):
     """Summon the live Colour panel via the toolstrip fill/stroke swatch (0=fill, 1=stroke),
     fire each hex (live-applied to the selection), optionally None; edits coalesce into one
@@ -314,9 +327,9 @@ def main():
         check("Shift+X swaps fill/stroke", swapped["fill"] == "#def456" and swapped["stroke"] == "#abc123", f"{swapped}")
         page.wait_for_timeout(320); page.evaluate("window.__docks.close('color')"); page.wait_for_timeout(40)
 
-        # inspector: stroke width (the v0 'stroke not applied' regression). Width is
-        # the first number input in the object panel.
-        set_inspector_input(page, "number", 0, "5", "change")
+        # inspector: stroke width (the v0 'stroke not applied' regression). Addressed by
+        # row label now that Transform (X/Y/W/H) leads the object panel.
+        set_inspector_number_by_label(page, "Width", "5")
         page.wait_for_timeout(60)
         sw = page.evaluate("editor.nodeById('r1').getAttribute('stroke-width')")
         sk = page.evaluate("editor.nodeById('r1').getAttribute('stroke')")
@@ -340,6 +353,7 @@ def main():
         open_ctx_panel(page)
         lbl = page.evaluate("""() => { const sp = [...document.querySelectorAll('.context-panel .insp-row > span')]
             .find(s => s.textContent === 'Width'); if (!sp) return null;
+            sp.scrollIntoView({ block: 'center' });   // Stroke now sits below Transform/Align/Arrange — bring it into the panel's scroll viewport
             const r = sp.getBoundingClientRect(); return { x: r.left + r.width/2, y: r.top + r.height/2 }; }""")
         w0 = page.evaluate("parseFloat(editor.nodeById('r1').getAttribute('stroke-width'))")
         page.mouse.move(lbl["x"], lbl["y"]); page.mouse.down()
@@ -431,8 +445,8 @@ def main():
         pick_color(page, 0, none=True)      # fill → None via the picker
         page.wait_for_timeout(50)
         check("fill none via picker", page.evaluate("editor.nodeById('r3').getAttribute('fill')") == "none")
-        set_inspector_input(page, "number", 0, "4", "change"); page.wait_for_timeout(40)
-        set_inspector_input(page, "number", 0, "0", "change"); page.wait_for_timeout(40)
+        set_inspector_number_by_label(page, "Width", "4"); page.wait_for_timeout(40)
+        set_inspector_number_by_label(page, "Width", "0"); page.wait_for_timeout(40)
         check("stroke width 0 removes stroke", page.evaluate("!editor.nodeById('r3').getAttribute('stroke')"))
 
         # undo consistency: a batch of mixed ops fully undoes back to the baseline document
@@ -883,8 +897,44 @@ def main():
         page.wait_for_timeout(60)
         check("mismatched stroke widths show a Mixed state",
               page.evaluate("""() => { editor.selection=new Set(['mx1','mx2']); editor.artboardSelected=false;
-                const inp = editor._objectPanel(editor.selectedNodes()).querySelector('input[type=number]');
+                const panel = editor._objectPanel(editor.selectedNodes());
+                const row = [...panel.querySelectorAll('.insp-row')].find(r => r.querySelector('span') && r.querySelector('span').textContent === 'Width');
+                const inp = row && row.querySelector('input[type=number]');
                 return !!inp && (inp.placeholder.toLowerCase()==='mixed' || inp.value===''); }"""))
+
+        # ---- redesigned Object panel: Transform / Align / Arrange / Appearance / Shape ----
+        page.evaluate("""() => { app.selectedOutput=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
+              + '<rect data-hv-id="t1" x="20" y="30" width="40" height="20"/>'
+              + '<path data-hv-id="t2" d="M100 100 L140 100 L140 140 Z"/></svg>','obj.svg'); }""")
+        page.wait_for_timeout(60)
+        page.evaluate("editor.selection=new Set(['t1']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector();")
+        page.wait_for_timeout(40)
+        groups = page.evaluate("[...document.querySelectorAll('.context-panel .insp-title')].map(t=>t.textContent)")
+        check("object panel has Transform/Align/Arrange/Appearance sections",
+              all(g in groups for g in ["Transform", "Align to artboard", "Arrange", "Stroke", "Appearance"]), str(groups))
+        page.evaluate("editor.setSelectionPos(0,0)")
+        bb = page.evaluate("() => { const b = editor.selectionBBox(); return [Math.round(b.x0), Math.round(b.y0)]; }")
+        check("Transform X/Y moves the selection to the origin", bb == [0, 0], str(bb))
+        page.evaluate("editor.setSelectionSize(80, null, false)")
+        check("Transform W resizes the selection",
+              page.evaluate("() => Math.round(editor.selectionBBox().x1 - editor.selectionBBox().x0)") == 80)
+        page.evaluate("editor.rotateSelectionBy(90)")
+        check("rotate composes a transform", page.evaluate("!!editor.nodeById('t1').getAttribute('transform')"))
+        page.evaluate("editor.setRectRadius(6)")
+        check("corner radius sets rx on a rect", page.evaluate("editor.nodeById('t1').getAttribute('rx')") == "6")
+        page.evaluate("editor.applyBlendMode('multiply')")
+        check("blend mode applies via inline style", page.evaluate("editor.nodeById('t1').style.mixBlendMode") == "multiply")
+        page.evaluate("editor.setSelectionSize(40,40,false); editor.align('hcenter'); editor.align('vmiddle')")
+        cen = page.evaluate("""() => { const b=editor.selectionBBox(), vb=editor.stage.viewBox.baseVal;
+            return [Math.round((b.x0+b.x1)/2-(vb.x+vb.width/2)), Math.round((b.y0+b.y1)/2-(vb.y+vb.height/2))]; }""")
+        check("align centres the selection on the artboard", abs(cen[0]) <= 1 and abs(cen[1]) <= 1, str(cen))
+        page.evaluate("editor.selection=new Set(['t2']); editor._renderSelection(); editor._renderInspector();")
+        page.wait_for_timeout(30)
+        check("Shape section exposes Fill rule for a path",
+              page.evaluate("""[...document.querySelectorAll('.context-panel .insp-row > span')].some(s=>s.textContent==='Fill rule')"""))
+        page.evaluate("editor.setAttrAll('fill-rule','evenodd')")
+        check("fill-rule applies to the path", page.evaluate("editor.nodeById('t2').getAttribute('fill-rule')") == "evenodd")
 
         # ---- H. Polish pass: handle scaling, panel collapse, modal width, swatch, flatten ----
         # node handles stay a constant screen size under zoom

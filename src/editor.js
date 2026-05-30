@@ -1778,6 +1778,82 @@ const editor = {
     const how = { flipH: "flipped horizontally", flipV: "flipped vertically", rotateCW: "rotated 90° CW", rotateCCW: "rotated 90° CCW" }[op] || op;
     setStatus(`${what} ${how}.`, 1800);
   },
+  // ---------- inspector geometry / appearance (Transform · Align · Arrange) ----------
+  // Selection bounds in artboard/user space, or null when nothing is selected.
+  selectionBBox() { const n = this.selectedNodes(); return n.length ? this._bboxUnion(n) : null; },
+  // Move the selection so its bbox top-left lands at (x,y); null leaves that axis.
+  setSelectionPos(x, y) {
+    const nodes = this.selectedNodes(); if (!nodes.length) return;
+    const bb = this._bboxUnion(nodes);
+    const dx = x == null ? 0 : x - bb.x0, dy = y == null ? 0 : y - bb.y0;
+    if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) return;
+    if (!this._coalescing) this.push("Move");
+    nodes.forEach((n) => this._translateNode(n, dx, dy));
+    this._renderSelection(); if (!this._coalescing) this._renderInspector();
+  },
+  // Resize the selection bbox to w×h, scaling about its top-left. `lock` keeps the
+  // aspect ratio off whichever dimension was edited. Translate-only nodes bake into
+  // geometry (stay clean for node editing); transformed nodes compose + consolidate.
+  setSelectionSize(w, h, lock) {
+    const nodes = this.selectedNodes(); if (!nodes.length) return;
+    const bb = this._bboxUnion(nodes), cw = bb.x1 - bb.x0, ch = bb.y1 - bb.y0;
+    if (cw < 1e-6 || ch < 1e-6) return;
+    let sx = w != null ? Math.max(w, 0.01) / cw : 1, sy = h != null ? Math.max(h, 0.01) / ch : 1;
+    if (lock) { if (w != null) sy = sx; else if (h != null) sx = sy; }
+    if (Math.abs(sx - 1) < 1e-6 && Math.abs(sy - 1) < 1e-6) return;
+    if (!this._coalescing) this.push("Resize");
+    const ax = bb.x0, ay = bb.y0;
+    nodes.forEach((n) => {
+      if (this._isTranslateOnly(n)) bakeMatrixInto(n, { a: sx, b: 0, c: 0, d: sy, e: ax * (1 - sx), f: ay * (1 - sy) }, 0, 0);
+      else { const M = `matrix(${nfmt(sx)} 0 0 ${nfmt(sy)} ${nfmt(ax * (1 - sx))} ${nfmt(ay * (1 - sy))})`; const o = n.getAttribute("transform"); n.setAttribute("transform", o ? `${M} ${o}` : M); this._consolidateTransform(n); }
+    });
+    this._renderSelection(); if (!this._coalescing) this._renderInspector();
+  },
+  // Rotate the selection by `deg` about its bbox centre (composes with any transform).
+  rotateSelectionBy(deg) {
+    const nodes = this.selectedNodes(); if (!nodes.length || !deg) return;
+    const bb = this._bboxUnion(nodes), cx = (bb.x0 + bb.x1) / 2, cy = (bb.y0 + bb.y1) / 2;
+    if (!this._coalescing) this.push("Rotate");
+    const rot = `rotate(${nfmt(deg)} ${nfmt(cx)} ${nfmt(cy)})`;
+    nodes.forEach((n) => { const o = n.getAttribute("transform"); n.setAttribute("transform", o ? `${rot} ${o}` : rot); this._consolidateTransform(n); });
+    this._renderSelection(); if (!this._coalescing) this._renderInspector();
+  },
+  // Absolute rotation of a single selected element from its matrix; null for none/multi.
+  selectionAngle() {
+    const nodes = this.selectedNodes(); if (nodes.length !== 1) return null;
+    try { const c = nodes[0].transform.baseVal.consolidate(); if (!c) return 0; const m = c.matrix; return Math.atan2(m.b, m.a) * 180 / Math.PI; } catch { return 0; }
+  },
+  // Align each selected object to the artboard edges / centre (a predictable default
+  // for icon work — centre-on-canvas, snap-to-edge).
+  align(mode) {
+    const nodes = this.selectedNodes(); if (!nodes.length || !this.stage) return;
+    const vb = this.stage.viewBox.baseVal;
+    const R = { x0: vb.x, y0: vb.y, x1: vb.x + vb.width, y1: vb.y + vb.height };
+    this.push("Align");
+    nodes.forEach((n) => {
+      const b = this._nodeBBoxUser(n); let dx = 0, dy = 0;
+      if (mode === "left") dx = R.x0 - b.x0;
+      else if (mode === "hcenter") dx = (R.x0 + R.x1) / 2 - (b.x0 + b.x1) / 2;
+      else if (mode === "right") dx = R.x1 - b.x1;
+      else if (mode === "top") dy = R.y0 - b.y0;
+      else if (mode === "vmiddle") dy = (R.y0 + R.y1) / 2 - (b.y0 + b.y1) / 2;
+      else if (mode === "bottom") dy = R.y1 - b.y1;
+      if (Math.abs(dx) > 1e-6 || Math.abs(dy) > 1e-6) this._translateNode(n, dx, dy);
+    });
+    this._renderSelection(); this._renderInspector();
+  },
+  // mix-blend-mode via inline style (serialises with the element).
+  applyBlendMode(mode) {
+    this.push("Blend mode");
+    this._eachSel((n) => { if (!mode || mode === "normal") n.style.removeProperty("mix-blend-mode"); else n.style.mixBlendMode = mode; });
+  },
+  // Generic attribute setter across the fillable leaves (fill-rule, etc.).
+  setAttrAll(attr, value) { this.push(attr); this._eachSel((n) => { if (value == null || value === "") n.removeAttribute(attr); else n.setAttribute(attr, String(value)); }); },
+  // Rounded-rect corner radius (rx/ry) on selected <rect>s; 0 squares the corners.
+  setRectRadius(r) {
+    this.push("Corner radius");
+    this._eachSel((n) => { if (n.tagName.toLowerCase() === "rect") { if (r > 0) { n.setAttribute("rx", nfmt(r)); n.setAttribute("ry", nfmt(r)); } else { n.removeAttribute("rx"); n.removeAttribute("ry"); } } });
+  },
   invertSpace() {
     const sel = this._fillableSelection();
     const nodes = sel.length ? sel : this._artworkNodes().filter((n) => shapeToAbsPath(n));
@@ -2467,9 +2543,79 @@ const editor = {
     const first = reads[0];
     const common = (read) => { let v, set = false; for (const n of reads) { const c = read(n); if (!set) { v = c; set = true; } else if (c !== v) return { mixed: true, value: read(first) }; } return { value: v }; };
     const wrap = document.createElement("div");
+    const tags = new Set(reads.map((n) => n.tagName.toLowerCase()));
+    const r2 = (v) => Math.round(v * 100) / 100;
 
     // Fill / stroke COLOUR live in the persistent Colour panel now (summoned from the
     // toolstrip swatches), so the object panel only carries the non-colour style below.
+
+    // ---- TRANSFORM — position / size / rotation / flip (Figma/Illustrator-style). X/Y
+    // translate live (non-destructive); W/H scale on commit only so typing an
+    // intermediate value never collapses the geometry to a sliver and back. ----
+    const bb = this.selectionBBox();
+    if (bb) {
+      let lock = !!this._objLockAspect, wInp, hInp;
+      const xRow = numRow("X", r2(bb.x0), null, 1, (v) => { this.beginCoalesce(); this.setSelectionPos(v, null); }, null, () => this.commitCoalesce("Move"));
+      const yRow = numRow("Y", r2(bb.y0), null, 1, (v) => { this.beginCoalesce(); this.setSelectionPos(null, v); }, null, () => this.commitCoalesce("Move"));
+      const applySize = (which) => { const wv = parseFloat(wInp.value), hv = parseFloat(hInp.value);
+        this.beginCoalesce(); this.setSelectionSize(which === "w" ? wv : null, which === "h" ? hv : null, lock); this.commitCoalesce("Resize"); this._renderInspector(); };
+      const wRow = numRow("W", r2(bb.x1 - bb.x0), 0, 1, () => {}, (i) => { wInp = i; }, () => applySize("w"));
+      const hRow = numRow("H", r2(bb.y1 - bb.y0), 0, 1, () => {}, (i) => { hInp = i; }, () => applySize("h"));
+      const lockRow = checkRow("Lock W:H", lock, (on) => { lock = on; this._objLockAspect = on; });
+      // Rotation: absolute for a single element, blank ("Mixed") for many; applies the
+      // delta on commit (Enter / blur), so it never spins while you type.
+      const ang = this.selectionAngle();
+      const rInp = document.createElement("input"); rInp.type = "number"; rInp.step = "1";
+      if (ang == null) rInp.placeholder = "Mixed"; else rInp.value = String(r2(ang));
+      let shownAng = ang == null ? 0 : ang;
+      rInp.addEventListener("change", () => { const nv = parseFloat(rInp.value); if (isNaN(nv)) return; this.rotateSelectionBy(nv - shownAng); shownAng = nv; });
+      const rotRow = inspRow("Rotate", rInp);
+      const flipRow = inspBtnRow("Flip", [
+        { html: FLIP_ICON.h, title: "Flip horizontal", onClick: () => this.transform("flipH") },
+        { html: FLIP_ICON.v, title: "Flip vertical", onClick: () => this.transform("flipV") },
+        { html: FLIP_ICON.ccw, title: "Rotate 90° CCW", onClick: () => this.transform("rotateCCW") },
+        { html: FLIP_ICON.cw, title: "Rotate 90° CW", onClick: () => this.transform("rotateCW") },
+      ]);
+      wrap.appendChild(inspGroup("Transform", [xRow, yRow, wRow, hRow, lockRow, rotRow, flipRow]));
+
+      // ---- ALIGN to the artboard ----
+      wrap.appendChild(inspGroup("Align to artboard", [
+        inspBtnRow("Horizontal", [
+          { html: ALIGN_ICON.left, title: "Align left edges", onClick: () => this.align("left") },
+          { html: ALIGN_ICON.hcenter, title: "Centre horizontally", onClick: () => this.align("hcenter") },
+          { html: ALIGN_ICON.right, title: "Align right edges", onClick: () => this.align("right") },
+        ]),
+        inspBtnRow("Vertical", [
+          { html: ALIGN_ICON.top, title: "Align top edges", onClick: () => this.align("top") },
+          { html: ALIGN_ICON.vmiddle, title: "Centre vertically", onClick: () => this.align("vmiddle") },
+          { html: ALIGN_ICON.bottom, title: "Align bottom edges", onClick: () => this.align("bottom") },
+        ]),
+      ]));
+
+      // ---- ARRANGE (z-order) ----
+      wrap.appendChild(inspGroup("Arrange", [
+        inspBtnRow("Order", [
+          { html: ARRANGE_ICON.front, title: "Bring to front", onClick: () => this.reorder("front") },
+          { html: ARRANGE_ICON.forward, title: "Bring forward", onClick: () => this.reorder("forward") },
+          { html: ARRANGE_ICON.backward, title: "Send backward", onClick: () => this.reorder("backward") },
+          { html: ARRANGE_ICON.back, title: "Send to back", onClick: () => this.reorder("back") },
+        ]),
+      ]));
+    }
+
+    // ---- SHAPE (contextual) — corner radius for rects, fill-rule for paths/polygons ----
+    const shapeRows = [];
+    if (tags.has("rect")) {
+      const rxC = common((n) => n.tagName.toLowerCase() === "rect" ? (parseFloat(n.getAttribute("rx")) || 0) : 0);
+      shapeRows.push(numRow("Corner", rxC.value || 0, 0, 1, (v) => { this.beginCoalesce(); this.setRectRadius(v); }, null, () => this.commitCoalesce("Corner radius"), !!rxC.mixed));
+    }
+    if (tags.has("path") || tags.has("polygon")) {
+      const frC = common((n) => n.getAttribute("fill-rule") || "nonzero");
+      shapeRows.push(this._segRow("Fill rule", frC.mixed ? null : frC.value,
+        [["nonzero", "NZ"], ["evenodd", "EO"]], { nonzero: "Non-zero winding", evenodd: "Even-odd" },
+        (v) => { this.setAttrAll("fill-rule", v === "nonzero" ? null : v); }));
+    }
+    if (shapeRows.length) wrap.appendChild(inspGroup("Shape", shapeRows));
 
     // STROKE — weight, cap, join, miter limit, dashes. Cap/join/miter/dash are
     // meaningless without a stroke, so they're disabled until one exists.
@@ -2508,9 +2654,12 @@ const editor = {
     setMiterEnabled(join === "miter" && !joinC.mixed);
     wrap.appendChild(inspGroup("Stroke", [widthRow, capRow, joinRow, miterRow, dashRow]));
 
-    // OPACITY — object opacity 0–100% as a slider.
+    // APPEARANCE — blend mode + object opacity.
     const opC = common((n) => (n.hasAttribute("opacity") ? parseFloat(n.getAttribute("opacity")) : 1));
-    wrap.appendChild(inspGroup("Opacity", [
+    const blendC = common((n) => n.style.getPropertyValue("mix-blend-mode") || "normal");
+    const blendRow = selectRow("Blend", blendC.mixed ? "normal" : (blendC.value || "normal"), BLEND_MODES, (v) => this.applyBlendMode(v));
+    wrap.appendChild(inspGroup("Appearance", [
+      blendRow,
       this._sliderRow("Opacity", opC.value == null ? 1 : opC.value, (v) => { this.beginCoalesce(); this.applyOpacity(v); }, () => this.commitCoalesce("Opacity"), !!opC.mixed),
     ]));
     return wrap;
@@ -2653,24 +2802,33 @@ const editor = {
       }
       this.applyArtboardSize(w, h);
     };
-    const setSize = (w, h) => { this.push("Artboard size"); wInp.value = String(w); hInp.value = String(h); this.applyArtboardSize(w, h); };
+    const setSize = (w, h) => { this.push("Artboard size"); if (wInp) wInp.value = String(w); if (hInp) hInp.value = String(h); this.applyArtboardSize(w, h); this._renderInspector(); };
+    const fit = () => { const ns = this._artworkNodes(); if (!ns.length) { setStatus("No artwork to fit.", 1500); return; } const b = this._bboxUnion(ns); setSize(Math.max(1, Math.ceil(b.x1)), Math.max(1, Math.ceil(b.y1))); };
     const wRow = numRow("Width", Math.round(vb.width), 1, 1, () => liveSize("w"), (i) => { wInp = i; }, () => this.commitCoalesce("Resize artboard"));
     const hRow = numRow("Height", Math.round(vb.height), 1, 1, () => liveSize("h"), (i) => { hInp = i; }, () => this.commitCoalesce("Resize artboard"));
-    // common-size presets
+    const lockRow = checkRow("Lock W:H", lockAspect, (v) => { lockAspect = v; this._abLockAspect = v; });
+    const ratio = vb.height ? (vb.width / vb.height) : 1;
+    const orientRow = inspBtnRow("Orient", [
+      { glyph: "⇄", title: "Swap width and height", onClick: () => setSize(Math.round(vb.height), Math.round(vb.width)) },
+      { html: AB_FIT_ICON, title: "Fit artboard to artwork", onClick: fit },
+    ]);
+    orientRow.querySelector(".insp-btns").insertAdjacentHTML("beforeend", `<span class="insp-ratio">${ratio.toFixed(2)}:1</span>`);
+    // common-size presets — compact grid, each captioned with its pixel size
     const pbox = document.createElement("div"); pbox.className = "insp-preset-btns";
-    [["512", 512, 512], ["1024", 1024, 1024], ["2048", 2048, 2048], ["16:9", 1920, 1080], ["9:16", 1080, 1920]]
-      .forEach(([lab, w, h]) => pbox.appendChild(ghostBtn(lab, () => setSize(w, h))));
+    [["512²", 512, 512], ["1024²", 1024, 1024], ["2048²", 2048, 2048], ["16:9", 1920, 1080], ["9:16", 1080, 1920], ["4:3", 1600, 1200]]
+      .forEach(([lab, w, h]) => { const b = ghostBtn(lab, () => setSize(w, h)); b.title = `${w} × ${h}`; pbox.appendChild(b); });
     const presetRow = inspRow("Presets", pbox);
-    const swapRow = inspRow("Orient", ghostBtn("Swap W ⇄ H", () => setSize(Math.round(vb.height), Math.round(vb.width))));
-    const lockRow = checkRow("Lock aspect", lockAspect, (v) => { lockAspect = v; this._abLockAspect = v; });
-    wrap.appendChild(inspGroup("Size", [wRow, hRow, presetRow, swapRow, lockRow]));
+    wrap.appendChild(inspGroup("Size", [wRow, hRow, lockRow, orientRow, presetRow]));
 
-    // Background colour itself lives in the Colour panel (it edits the artboard fill when
-    // the artboard is selected); keep a quick Transparent toggle + a button to open it.
-    const bgNone = !ab.getAttribute("fill") || ab.getAttribute("fill") === "none";
-    const transRow = checkRow("Transparent", bgNone, (v) => { this.push("Artboard background"); this.applyArtboardBg(v ? null : "#ffffff"); });
-    const editRow = inspRow("Colour", ghostBtn("Edit in Colour panel", () => { if (this._summonColor) this._summonColor(); }));
-    wrap.appendChild(inspGroup("Background", [transRow, editRow]));
+    // Background: a live swatch preview (opens the Colour panel) + a Transparent toggle.
+    // The Colour panel edits the artboard fill while the artboard is selected.
+    const bgFill = ab.getAttribute("fill"), bgNone = !bgFill || bgFill === "none";
+    const sw = document.createElement("button"); sw.type = "button"; sw.className = "insp-swatch" + (bgNone ? " none" : "");
+    if (!bgNone) sw.style.background = bgFill; sw.title = bgNone ? "Transparent — click to choose a colour" : bgFill;
+    sw.addEventListener("click", () => { if (this._summonColor) this._summonColor(); });
+    const swatchRow = inspRow("Fill", sw);
+    const transRow = checkRow("Transparent", bgNone, (v) => { this.push("Artboard background"); this.applyArtboardBg(v ? null : "#ffffff"); this._renderInspector(); });
+    wrap.appendChild(inspGroup("Background", [swatchRow, transRow]));
     return wrap;
   },
 
@@ -2708,6 +2866,35 @@ const DASH_GLYPH = {
   dashed: `<svg viewBox="0 0 36 12" width="34" height="11" aria-hidden="true"><line x1="3" y1="6" x2="33" y2="6" stroke="currentColor" stroke-width="2.5" stroke-dasharray="6 4"/></svg>`,
   dotted: `<svg viewBox="0 0 36 12" width="34" height="11" aria-hidden="true"><line x1="3" y1="6" x2="33" y2="6" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="0.1 6"/></svg>`,
 };
+// Align / arrange / flip glyphs — small inline SVGs (same clarity rationale as the
+// cap/join icons: unambiguous, currentColor so the hover/active state still reads).
+const ALIGN_ICON = {
+  left: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1" y="1.5" width="1.4" height="13" fill="currentColor"/><rect x="3.5" y="3.2" width="9.5" height="3" rx="0.5" fill="currentColor"/><rect x="3.5" y="9.8" width="6" height="3" rx="0.5" fill="currentColor"/></svg>`,
+  right: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="13.6" y="1.5" width="1.4" height="13" fill="currentColor"/><rect x="3" y="3.2" width="9.5" height="3" rx="0.5" fill="currentColor"/><rect x="6.5" y="9.8" width="6" height="3" rx="0.5" fill="currentColor"/></svg>`,
+  hcenter: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="7.3" y="1.5" width="1.4" height="13" fill="currentColor"/><rect x="3" y="3.2" width="10" height="3" rx="0.5" fill="currentColor"/><rect x="5" y="9.8" width="6" height="3" rx="0.5" fill="currentColor"/></svg>`,
+  top: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="1" width="13" height="1.4" fill="currentColor"/><rect x="3.2" y="3.5" width="3" height="9.5" rx="0.5" fill="currentColor"/><rect x="9.8" y="3.5" width="3" height="6" rx="0.5" fill="currentColor"/></svg>`,
+  bottom: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="13.6" width="13" height="1.4" fill="currentColor"/><rect x="3.2" y="3" width="3" height="9.5" rx="0.5" fill="currentColor"/><rect x="9.8" y="6.5" width="3" height="6" rx="0.5" fill="currentColor"/></svg>`,
+  vmiddle: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="7.3" width="13" height="1.4" fill="currentColor"/><rect x="3.2" y="3" width="3" height="10" rx="0.5" fill="currentColor"/><rect x="9.8" y="5" width="3" height="6" rx="0.5" fill="currentColor"/></svg>`,
+};
+const ARRANGE_ICON = {
+  front: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="1.5" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="6.5" y="6.5" width="8" height="8" fill="currentColor"/></svg>`,
+  back: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="6.5" y="6.5" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="1.5" y="1.5" width="8" height="8" fill="currentColor"/></svg>`,
+  forward: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="2.5" y="2.5" width="7.5" height="7.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="6" y="6" width="7.5" height="7.5" fill="currentColor"/><path d="M9 2.2 L13.8 2.2 L13.8 7" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`,
+  backward: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="6" y="6" width="7.5" height="7.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2.5" y="2.5" width="7.5" height="7.5" fill="currentColor"/><path d="M7 13.8 L2.2 13.8 L2.2 9" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`,
+};
+const FLIP_ICON = {
+  h: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 1.5v13" stroke="currentColor" stroke-width="1" stroke-dasharray="2 1.5"/><path d="M6.4 3 L1.6 8 L6.4 13 Z" fill="currentColor"/><path d="M9.6 3 L14.4 8 L9.6 13 Z" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`,
+  v: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1.5 8h13" stroke="currentColor" stroke-width="1" stroke-dasharray="2 1.5"/><path d="M3 6.4 L8 1.6 L13 6.4 Z" fill="currentColor"/><path d="M3 9.6 L8 14.4 L13 9.6 Z" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`,
+  cw: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M12.5 8a4.5 4.5 0 1 1-1.3-3.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M11.8 1.5 L11.8 5 L8.3 5 Z" fill="currentColor"/></svg>`,
+  ccw: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 8a4.5 4.5 0 1 0 1.3-3.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M4.2 1.5 L4.2 5 L7.7 5 Z" fill="currentColor"/></svg>`,
+};
+const AB_FIT_ICON = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.1" stroke-dasharray="2 1.4"/><rect x="5" y="5" width="6" height="6" fill="currentColor"/></svg>`;
+const BLEND_MODES = [
+  ["normal", "Normal"], ["multiply", "Multiply"], ["screen", "Screen"], ["overlay", "Overlay"],
+  ["darken", "Darken"], ["lighten", "Lighten"], ["color-dodge", "Colour dodge"], ["color-burn", "Colour burn"],
+  ["hard-light", "Hard light"], ["soft-light", "Soft light"], ["difference", "Difference"], ["exclusion", "Exclusion"],
+  ["hue", "Hue"], ["saturation", "Saturation"], ["color", "Colour"], ["luminosity", "Luminosity"],
+];
 function inspGroup(title, rows) {
   const g = document.createElement("div"); g.className = "insp-group";
   const t = document.createElement("div"); t.className = "insp-title"; t.textContent = title; g.appendChild(t);
@@ -2718,6 +2905,25 @@ function inspRow(label, control) {
   const row = document.createElement("div"); row.className = "insp-row";
   const s = document.createElement("span"); s.textContent = label;
   row.appendChild(s); row.appendChild(control); return row;
+}
+// A row of square icon buttons (align / arrange / flip). `btns`: [{html|glyph, title, onClick, active, disabled}].
+function inspBtnRow(label, btns) {
+  const box = document.createElement("div"); box.className = "insp-btns";
+  for (const b of btns) {
+    const el = document.createElement("button"); el.type = "button"; el.className = "insp-iconbtn" + (b.active ? " on" : "");
+    if (b.html) el.innerHTML = b.html; else el.textContent = b.glyph || "";
+    el.title = b.title || ""; if (b.disabled) el.disabled = true;
+    el.addEventListener("click", () => b.onClick());
+    box.appendChild(el);
+  }
+  return inspRow(label, box);
+}
+// A labelled <select> row (blend mode, etc.). `options`: [[value, text], …].
+function selectRow(label, value, options, onChange) {
+  const sel = document.createElement("select");
+  for (const [v, t] of options) { const o = document.createElement("option"); o.value = v; o.textContent = t; if (v === value) o.selected = true; sel.appendChild(o); }
+  sel.addEventListener("change", () => onChange(sel.value));
+  return inspRow(label, sel);
 }
 function colorRow(label, value, onLive, onCommit) {
   const inp = document.createElement("input"); inp.type = "color"; inp.value = value || "#000000";
