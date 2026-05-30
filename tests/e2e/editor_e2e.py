@@ -1537,6 +1537,23 @@ def main():
         check("drag a toolbar tile INTO a panel header receiver", landed == "in", str(landed))
         check("header receiver arrangement is auto-saved",
               page.evaluate("((JSON.parse(localStorage.getItem('hector-vector:layout')||'{}'))['hdr-properties']||[]).includes('#act-union')"))
+        # no blank-slot placeholder box any more — an empty/partial header just shows its real button(s)
+        check("panel headers render no blank-slot placeholder",
+              page.evaluate("!document.querySelector('.hdr-slot-empty')"))
+        # 3-tile cap on panel headers: header now has hdr-invert + act-union (2); fill to 3, the 4th is refused
+        capped = page.evaluate("""() => {
+            const hdr = document.querySelector('.rail-section.properties .panel-actions');
+            const drop = (id) => { const tile = document.querySelector('.actionbar #'+id); if (!tile) return;
+              const dt = new DataTransfer(); tile.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:dt}));
+              const r = hdr.getBoundingClientRect();
+              hdr.dispatchEvent(new DragEvent('dragover',{bubbles:true,clientX:Math.round(r.right-4),clientY:Math.round(r.top+r.height/2),dataTransfer:dt}));
+              hdr.dispatchEvent(new DragEvent('drop',{bubbles:true,dataTransfer:dt}));
+              tile.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer:dt})); };
+            drop('act-cut');   // -> 3 tiles (at cap)
+            drop('act-copy');  // -> refused (would be 4)
+            const tiles = [...hdr.children].filter(c => c.classList.contains('tool-button') && !c.classList.contains('panel-x'));
+            return { n: tiles.length, copyIn: !!hdr.querySelector('#act-copy') }; }""")
+        check("panel header is capped at 3 action tiles", capped["n"] == 3 and capped["copyIn"] is False, str(capped))
         page.evaluate("window.__layout.toggleEdit(); window.__layout.reset()"); page.wait_for_timeout(60)
         check("Reset returns the moved tile to the action bar",
               page.evaluate("!!document.querySelector('.actionbar #act-union') && !document.querySelector('.rail-section.properties #act-union')"))
