@@ -941,6 +941,35 @@ def main():
         # align-to-artboard lives in the panel's pinned bottom chin now (6 buttons)
         check("align-to-artboard buttons sit in the bottom chin",
               page.evaluate("document.querySelectorAll('.context-panel .insp-foot .insp-alignbar .insp-iconbtn').length") == 6)
+        # X/Y and W/H are paired two-up on one row (.insp-pair) — short numeric fields no
+        # longer waste half the panel width on a single full-width field.
+        check("X/Y and W/H are paired two-up (insp-pair rows)",
+              page.evaluate("""() => {
+                const fieldLabel = f => f.querySelector('span') && f.querySelector('span').textContent;
+                const pairs = [...document.querySelectorAll('.context-panel .insp-row.insp-pair')]
+                  .map(r => [...r.querySelectorAll('.insp-field')].map(fieldLabel).join(''));
+                const fields = ['X','Y','W','H'].every(l =>
+                  [...document.querySelectorAll('.context-panel .insp-field')].some(f => fieldLabel(f) === l));
+                return fields && pairs.includes('XY') && pairs.includes('WH'); }"""))
+        # The W:H aspect lock is now a magnet toggle BETWEEN W and H — no "Lock W:H" row.
+        check("W:H aspect lock is a magnet between W and H (no Lock W:H row)",
+              page.evaluate("""() => {
+                const fieldLabel = f => f.querySelector('span') && f.querySelector('span').textContent;
+                const wh = [...document.querySelectorAll('.context-panel .insp-row.insp-pair')]
+                  .find(r => [...r.querySelectorAll('.insp-field')].map(fieldLabel).join('') === 'WH');
+                const magnet = wh && wh.querySelector('.insp-pair-mid .insp-link');
+                const noLockText = ![...document.querySelectorAll('.context-panel .insp-row > span')]
+                  .some(s => s.textContent === 'Lock W:H');
+                return !!magnet && noLockText; }"""))
+        # Toggling the magnet flips the aspect-lock state (aria-pressed + editor flag).
+        check("magnet toggles aspect lock",
+              page.evaluate("""() => {
+                const fieldLabel = f => f.querySelector('span') && f.querySelector('span').textContent;
+                const wh = [...document.querySelectorAll('.context-panel .insp-row.insp-pair')]
+                  .find(r => [...r.querySelectorAll('.insp-field')].map(fieldLabel).join('') === 'WH');
+                const m = wh.querySelector('.insp-link'); const before = m.getAttribute('aria-pressed');
+                m.click(); const after = m.getAttribute('aria-pressed');
+                return before !== after && (m.getAttribute('aria-pressed') === 'true') === !!editor._objLockAspect; }"""))
         # Rotate is a scrub-numeric like X/Y/W/H (a number input in a Transform row), not a button bar
         check("Rotate is a numeric field in Transform",
               page.evaluate("""() => { const r=[...document.querySelectorAll('.context-panel .insp-row')].find(r=>r.querySelector('span')&&r.querySelector('span').textContent==='Rotate'); return !!r && !!r.querySelector('input[type=number]'); }"""))

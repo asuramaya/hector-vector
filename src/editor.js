@@ -2572,13 +2572,18 @@ const editor = {
     const bb = this.selectionBBox();
     if (bb) {
       let lock = !!this._objLockAspect, wInp, hInp;
-      const xRow = numRow("X", r2(bb.x0), null, 1, (v) => { this.beginCoalesce(); this.setSelectionPos(v, null); }, null, () => this.commitCoalesce("Move"));
-      const yRow = numRow("Y", r2(bb.y0), null, 1, (v) => { this.beginCoalesce(); this.setSelectionPos(null, v); }, null, () => this.commitCoalesce("Move"));
+      // X/Y on one row, W/H on the next (Figma/Illustrator two-up) — short numeric
+      // fields shouldn't eat a whole row of whitespace.
+      const posRow = numPairRow(
+        ["X", r2(bb.x0), null, 1, (v) => { this.beginCoalesce(); this.setSelectionPos(v, null); }, null, () => this.commitCoalesce("Move")],
+        ["Y", r2(bb.y0), null, 1, (v) => { this.beginCoalesce(); this.setSelectionPos(null, v); }, null, () => this.commitCoalesce("Move")]);
       const applySize = (which) => { const wv = parseFloat(wInp.value), hv = parseFloat(hInp.value);
         this.beginCoalesce(); this.setSelectionSize(which === "w" ? wv : null, which === "h" ? hv : null, lock); this.commitCoalesce("Resize"); this._renderInspector(); };
-      const wRow = numRow("W", r2(bb.x1 - bb.x0), 0, 1, () => {}, (i) => { wInp = i; }, () => applySize("w"));
-      const hRow = numRow("H", r2(bb.y1 - bb.y0), 0, 1, () => {}, (i) => { hInp = i; }, () => applySize("h"));
-      const lockRow = checkRow("Lock W:H", lock, (on) => { lock = on; this._objLockAspect = on; });
+      const magnet = lockToggle(lock, "Lock width : height ratio", (on) => { lock = on; this._objLockAspect = on; });
+      const sizeRow = numPairRow(
+        ["W", r2(bb.x1 - bb.x0), 0, 1, () => {}, (i) => { wInp = i; }, () => applySize("w")],
+        ["H", r2(bb.y1 - bb.y0), 0, 1, () => {}, (i) => { hInp = i; }, () => applySize("h")],
+        magnet);
       // Rotation: a scrub-numeric exactly like X/Y/W/H (commit-only, delta-applied) — base
       // is the absolute angle of a single element, or 0 ("Mixed") for many.
       const ang = this.selectionAngle();
@@ -2586,7 +2591,7 @@ const editor = {
       let rInp;
       const rotRow = numRow("Rotate", baseAng, null, 1, () => {}, (i) => { rInp = i; },
         () => { const nv = parseFloat(rInp.value); if (isNaN(nv)) return; this.rotateSelectionBy(nv - baseAng); }, ang == null);
-      wrap.appendChild(inspGroup("Transform", [xRow, yRow, wRow, hRow, lockRow, rotRow]));
+      wrap.appendChild(inspGroup("Transform", [posRow, sizeRow, rotRow]));
     }
     // (Align → the panel's bottom chin via _alignBar(); Flip + z-order Arrange were removed
     //  — both are global on the action bar.)
@@ -2865,6 +2870,8 @@ const ALIGN_ICON = {
   vmiddle: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="7.3" width="13" height="1.4" fill="currentColor"/><rect x="3.2" y="3" width="3" height="10" rx="0.5" fill="currentColor"/><rect x="9.8" y="5" width="3" height="6" rx="0.5" fill="currentColor"/></svg>`,
 };
 const AB_FIT_ICON =`<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.1" stroke-dasharray="2 1.4"/><rect x="5" y="5" width="6" height="6" fill="currentColor"/></svg>`;
+// Horseshoe magnet — the W:H aspect lock that sits between the W and H fields.
+const MAGNET_ICON = `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M4 2.4 V8 a4 4 0 0 0 8 0 V2.4" fill="none" stroke="currentColor" stroke-width="2.3"/><path d="M2.6 2.5 H5.4 M10.6 2.5 H13.4" stroke="currentColor" stroke-width="2.6"/></svg>`;
 const BLEND_MODES = [
   ["normal", "Normal"], ["multiply", "Multiply"], ["screen", "Screen"], ["overlay", "Overlay"],
   ["darken", "Darken"], ["lighten", "Lighten"], ["color-dodge", "Colour dodge"], ["color-burn", "Colour burn"],
@@ -2941,6 +2948,45 @@ function makeScrub(handle, inp, min, step, onLive, onCommit) {
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", up);
   });
+}
+// One label+number field — the shared building block. `field` is a compact label+input
+// grid; used full-width by numRow and two-up by numPairRow. Returns {field, inp}.
+function numField(label, value, min, step, onLive, capture, onCommit, mixed) {
+  const field = document.createElement("div"); field.className = "insp-field";
+  const s = document.createElement("span"); s.textContent = label;
+  const inp = document.createElement("input"); inp.type = "number";
+  if (mixed) { inp.value = ""; inp.placeholder = "Mixed"; } else inp.value = String(value);
+  if (min != null) inp.min = String(min);
+  inp.step = String(step);
+  inp.addEventListener("input", () => { if (inp.value !== "") onLive(parseFloat(inp.value)); });
+  inp.addEventListener("change", () => { if (inp.value !== "") onLive(parseFloat(inp.value)); if (onCommit) onCommit(); });
+  if (capture) capture(inp);
+  field.appendChild(s); field.appendChild(inp);
+  makeScrub(s, inp, min, step, onLive, onCommit);
+  return { field, inp };
+}
+// Two number fields on one row (X|Y, W|H) — reclaims the dead horizontal space a single
+// short value left as whitespace. `mid` is an optional control (the aspect-lock magnet)
+// dropped between the pair; rows without one still reserve the centre column so all four
+// inputs stay aligned. Each field arg is a numField argument list (array).
+function numPairRow(a, b, mid) {
+  const row = document.createElement("div"); row.className = "insp-row insp-pair";
+  row.appendChild(numField(...a).field);
+  const m = document.createElement("div"); m.className = "insp-pair-mid";
+  if (mid) m.appendChild(mid);
+  row.appendChild(m);
+  row.appendChild(numField(...b).field);
+  return row;
+}
+// The magnet aspect-lock toggle that lives between W and H (replaces the "Lock W:H" row).
+function lockToggle(on, title, onToggle) {
+  const b = document.createElement("button"); b.type = "button";
+  b.className = "insp-link" + (on ? " on" : ""); b.title = title;
+  b.setAttribute("aria-pressed", on ? "true" : "false");
+  b.innerHTML = MAGNET_ICON;
+  b.addEventListener("click", () => { const next = b.getAttribute("aria-pressed") !== "true";
+    b.classList.toggle("on", next); b.setAttribute("aria-pressed", next ? "true" : "false"); onToggle(next); });
+  return b;
 }
 function numRow(label, value, min, step, onLive, capture, onCommit, mixed) {
   const inp = document.createElement("input"); inp.type = "number";
