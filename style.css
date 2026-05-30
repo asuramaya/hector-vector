@@ -426,6 +426,9 @@ button:disabled {
 .dock-window > .rail-section > .section-body,
 .dock-window > .rail-section .layers-list { flex: 1 1 auto; }
 .dock-window.dragging { opacity: 0.92; cursor: grabbing; }
+/* A collapsed floating panel hugs its header — drop the window's min-height + resize
+   grabber so there's no empty chin below the folded header. */
+.dock-window:has(> .rail-section.collapsed) { min-height: 0; resize: none; }
 .dock-window.float-panel { z-index: 1000; }   /* Properties window above the docks */
 /* Properties body fills its section (window or dock), not the 248px float max-height. */
 .dock-window .fp-body, .leftdock .properties .fp-body, .rightdock .properties .fp-body { max-height: none; flex: 1 1 auto; }
@@ -1602,6 +1605,9 @@ button:disabled {
 .app.editor.customizing .stage-toolbar,
 .app.editor.customizing .actionbar,
 .app.editor.customizing .viewport-controls { outline: 1px dashed var(--accent); outline-offset: -1px; background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
+/* the bottom bar's viewport cluster is centered inside a wider .panel-foot, so tint the
+   whole foot too — otherwise only the button group turns blue and the bar reads white. */
+.app.editor.customizing .panel-foot { background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
 /* the Layers artboard chin reads as part of the customizable frame too */
 .app.editor.customizing .layers-foot { outline: 1px dashed var(--accent); outline-offset: -1px; background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
 /* tiles become draggable handles; their normal click is suppressed while customizing */

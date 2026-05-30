@@ -2596,9 +2596,10 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); editor._finishPen(true); return; }
     if (e.key === "Escape") { e.preventDefault(); editor._finishPen(false); return; }
   }
-  if (editor._curv) {    // curvature construction owns Enter/Escape too
+  if (editor._curv) {    // curvature construction owns Enter/Escape/Backspace too
     if (e.key === "Enter") { e.preventDefault(); editor._curvFinish(true); return; }
     if (e.key === "Escape") { e.preventDefault(); editor._curvFinish(false); return; }
+    if (e.key === "Backspace" || e.key === "Delete") { e.preventDefault(); editor._curvBack(); return; }
   }
   if (e.key === "Delete" || e.key === "Backspace") {
     if (editor.tool === "node" && editor._nodeSel && editor._nodeSel.size) { e.preventDefault(); editor.deleteNodeSelection(); return; }
@@ -3806,7 +3807,7 @@ function openShortcutsModal() {
     [`${mod} + T / ${mod} + R`, "Scale / rotate the selection (within Select)"],
     ["A", "Edit points (direct select)"],
     ["P", "Pen"],
-    ["C", "Curvature (auto-smooth; dbl-click = corner)"],
+    ["C", "Curvature (Alt = corner, Shift = 45°, drag = move point, ⌫ = remove last)"],
     ["R / E / L", "Rectangle / Ellipse / Line"],
     ["Shift + O", "Select the artboard"],
     ["§", "Edit"],

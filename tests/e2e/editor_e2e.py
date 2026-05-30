@@ -148,6 +148,17 @@ def pen_click(page, fx, fy, drag=None):
     page.mouse.up()
     page.wait_for_timeout(30)
 
+def curv_click(page, fx, fy, alt=False, shift=False):
+    """Curvature-tool click at an artboard fraction, with optional Alt/Shift modifiers."""
+    ab = artboard_rect(page)
+    x, y = ab["x"] + ab["w"] * fx, ab["y"] + ab["h"] * fy
+    if alt: page.keyboard.down("Alt")
+    if shift: page.keyboard.down("Shift")
+    page.mouse.move(x, y); page.mouse.down(); page.mouse.up()
+    if shift: page.keyboard.up("Shift")
+    if alt: page.keyboard.up("Alt")
+    page.wait_for_timeout(30)
+
 BOOL_DOC = """
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
   <rect data-hv-id="ra" x="20" y="20" width="80" height="80" fill="#3366cc"/>
@@ -740,6 +751,12 @@ def main():
         check("customize mode makes frame tiles draggable",
               page.evaluate("""!!document.querySelector('.app.editor.customizing')
                 && document.querySelector('.toolstrip .tool-button').draggable === true"""))
+        # the bottom bar (the full-width .panel-foot, not just its centered button cluster)
+        # turns blue in customize mode — same tint as the top toolstrip
+        check("customize mode tints the whole bottom bar blue (panel-foot, like the toolstrip)",
+              page.evaluate("""() => { const f=getComputedStyle(document.querySelector('.panel-foot')).backgroundColor;
+                const t=getComputedStyle(document.querySelector('.toolstrip')).backgroundColor;
+                return f===t && f!=='rgba(0, 0, 0, 0)' && f!=='transparent'; }"""))
         # move the Pen tile into the action bar; arrangement auto-saves
         page.evaluate("() => { const pen = document.querySelector('.toolstrip [data-tool=pen]'); document.querySelector('.actionbar').appendChild(pen); window.__layout.save(); }")
         check("moved tile auto-saves into the layout",
@@ -1361,6 +1378,47 @@ def main():
         page.keyboard.press("Escape"); page.wait_for_timeout(30)
         check("Escape cancels the pen path", not page.evaluate("!!editor._pen"))
 
+        # ---- Curvature tool: advanced keybinds (Alt corner / Shift 45° / Backspace / drag) ----
+        mount_ctl(page)
+        page.evaluate("editor.setTool('curvature')")
+        curv_click(page, 0.2, 0.3); curv_click(page, 0.5, 0.3); curv_click(page, 0.7, 0.6)
+        check("curvature builds smooth points", page.evaluate("editor._curv && editor._curv.pts.length") == 3)
+        # Backspace drops the last point
+        page.keyboard.press("Backspace"); page.wait_for_timeout(30)
+        check("Backspace removes the last curvature point", page.evaluate("editor._curv.pts.length") == 2)
+        # Alt-click drops a corner point (corner:true)
+        curv_click(page, 0.8, 0.4, alt=True)
+        check("Alt-click drops a corner point",
+              page.evaluate("editor._curv.pts.length===3 && editor._curv.pts[2].corner === true"))
+        # Drag an existing (non-first) point to reposition it. Point 1 sits at (0.5, 0.3);
+        # the first point is reserved for close-path, so drag a middle one.
+        ab = artboard_rect(page)
+        px = page.evaluate("editor._curv.pts[1].x")
+        sx, sy = ab["x"] + ab["w"] * 0.5, ab["y"] + ab["h"] * 0.3
+        dx, dy = ab["x"] + ab["w"] * 0.65, ab["y"] + ab["h"] * 0.3
+        page.mouse.move(sx, sy); page.mouse.down(); page.mouse.move(dx, dy, steps=8); page.mouse.up()
+        page.wait_for_timeout(40)
+        moved_to = page.evaluate("editor._curv && editor._curv.pts[1].x")
+        check("dragging a curvature point repositions it",
+              page.evaluate("!!editor._curv") and (moved_to - px) > 10,   # doc units; drag was ~30
+              f"x moved from {px} to {moved_to}")
+        # Enter finishes → a real curved path with C segments
+        page.keyboard.press("Enter"); page.wait_for_timeout(50)
+        csel = sel_node(page)
+        check("Enter finishes the curvature path (cubic segments)",
+              not page.evaluate("!!editor._curv") and csel and "C" in csel["attrs"].get("d", ""),
+              str(csel and csel["attrs"].get("d")))
+        # Shift constrains a new point to a 45° ray from the previous one
+        mount_ctl(page)
+        page.evaluate("editor.setTool('curvature')")
+        curv_click(page, 0.3, 0.3); curv_click(page, 0.7, 0.5, shift=True)
+        check("Shift constrains the next curvature point to 45°",
+              page.evaluate("""() => { const p=editor._curv.pts; const dx=p[1].x-p[0].x, dy=p[1].y-p[0].y;
+                const a=Math.abs(Math.atan2(dy,dx)*180/Math.PI); const m=Math.min(a%45, 45-(a%45));
+                return m < 0.5; }"""))
+        page.keyboard.press("Escape"); page.wait_for_timeout(30)
+        check("Escape cancels the curvature path", not page.evaluate("!!editor._curv"))
+
         # ---- Phase 4: boolean ops (point-membership on the result path) ----
         # A-only=(30,30), B-only=(130,130), overlap=(80,80), outside=(10,10)
         mount_bool(page)
@@ -1896,6 +1954,17 @@ def main():
               page.evaluate("window.__docks.loc('history') === 'float' && !!document.querySelector('.dock-window[data-dock-window=\"history\"]')"))
         check("no detach buttons in panel headers (drag the header instead)",
               page.evaluate("!document.querySelector('.dock-detach')"))
+        # collapsing a FLOATING panel hugs its header — the window's min-height is dropped so
+        # there's no empty chin below the folded header (was: "floating + collapsed = empty chin")
+        page.evaluate("""() => { const s=document.querySelector('.dock-window[data-dock-window="history"] .rail-section');
+            if (s && !s.classList.contains('collapsed')) s.querySelector('.section-head').click(); }""")
+        page.wait_for_timeout(60)
+        win_h = page.evaluate("document.querySelector('.dock-window[data-dock-window=\"history\"]').getBoundingClientRect().height")
+        head_h = page.evaluate("document.querySelector('.dock-window[data-dock-window=\"history\"] .section-head').getBoundingClientRect().height")
+        check("a collapsed floating panel hugs its header (no empty chin)", win_h - head_h < 16, f"win={win_h} head={head_h}")
+        page.evaluate("""() => { const s=document.querySelector('.dock-window[data-dock-window="history"] .rail-section');
+            if (s && s.classList.contains('collapsed')) s.querySelector('.section-head').click(); }""")
+        page.wait_for_timeout(40)
         # dock Layers LEFT → left dock auto-opens
         page.evaluate("window.__docks.dock('layers','left')"); page.wait_for_timeout(80)
         check("docking left auto-opens the left dock",

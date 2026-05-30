@@ -703,7 +703,7 @@ const editor = {
     if (e.button !== 0) return;
     e.stopPropagation(); e.preventDefault();
     const inv = () => this.stage.getScreenCTM().inverse();
-    const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(inv());
+    let pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(inv());
     if (!this._curv) {
       this.beginCoalesce();
       this.selection = new Set(); this.artboardSelected = false; this._renderSelection();
@@ -715,28 +715,72 @@ const editor = {
       this._curvLastClick = null;
       this._curvHoverBound = (ev) => this._curvHover(ev);
       window.addEventListener("pointermove", this._curvHoverBound);
-      this._curv.pts.push({ x: pt.x, y: pt.y, corner: false });
+      this._curv.pts.push({ x: pt.x, y: pt.y, corner: !!e.altKey });
       this._curvRedraw(); this._curvMarks();
       return;
     }
     if (this._curv.pts.length >= 2 && this._curvNearFirst(pt)) { this._curv.closed = true; this._curvFinish(true); return; }
     const near = this._curvNearPoint(pt);
-    if (near >= 0) {   // clicking an existing point: 2nd click within 350ms toggles corner, else no-op
-      const lc = this._curvLastClick;
-      if (lc && lc.i === near && (e.timeStamp - lc.t) < 350) {
-        this._curv.pts[near].corner = !this._curv.pts[near].corner;
-        this._curvRedraw(); this._curvMarks(); this._curvLastClick = null; return;
-      }
-      this._curvLastClick = { t: e.timeStamp, i: near }; return;
+    if (near >= 0) {
+      // Alt-click toggles smooth⇄corner immediately; a plain press starts a drag-to-move
+      // (falling back to the 2-click-within-350ms corner toggle when it doesn't move).
+      if (e.altKey) { this._curv.pts[near].corner = !this._curv.pts[near].corner; this._curvRedraw(); this._curvMarks(); this._curvLastClick = null; return; }
+      this._curvDragPoint(near, e); return;
     }
+    // New point. Shift constrains it to 45° off the previous one; Alt drops a corner.
+    if (e.shiftKey && this._curv.pts.length) pt = this._constrain45(this._curv.pts[this._curv.pts.length - 1], pt);
     this._curvLastClick = null;
-    this._curv.pts.push({ x: pt.x, y: pt.y, corner: false });
+    this._curv.pts.push({ x: pt.x, y: pt.y, corner: !!e.altKey });
+    this._curvRedraw(); this._curvMarks();
+  },
+  // Drag an existing in-progress point to reposition it; no-move falls through to the
+  // double-click corner toggle so a simple click still flips smooth⇄corner.
+  _curvDragPoint(i, downEv) {
+    if (!this._curv) return;
+    const inv = () => this.stage.getScreenCTM().inverse();
+    const start = new DOMPoint(downEv.clientX, downEv.clientY).matrixTransform(inv());
+    const orig = { x: this._curv.pts[i].x, y: this._curv.pts[i].y };
+    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
+    let moved = false;
+    this._curv._drag = true;   // suspend the hover preview while dragging a point
+    const move = (ev) => {
+      const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
+      if (!moved && Math.hypot(p.x - start.x, p.y - start.y) * k > 3) moved = true;
+      if (!moved) return;
+      this._curv.pts[i].x = orig.x + (p.x - start.x);
+      this._curv.pts[i].y = orig.y + (p.y - start.y);
+      this._curvRedraw(); this._curvMarks();
+    };
+    const up = (ev) => {
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+      if (this._curv) this._curv._drag = false;
+      if (moved) { this._curvLastClick = null; return; }
+      const lc = this._curvLastClick;
+      if (lc && lc.i === i && (ev.timeStamp - lc.t) < 350) {
+        this._curv.pts[i].corner = !this._curv.pts[i].corner; this._curvRedraw(); this._curvMarks(); this._curvLastClick = null;
+      } else this._curvLastClick = { t: ev.timeStamp, i };
+    };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  },
+  // Snap `to` onto the nearest 45° ray out of `from` (Shift-constrain).
+  _constrain45(from, to) {
+    const dx = to.x - from.x, dy = to.y - from.y, len = Math.hypot(dx, dy);
+    if (!len) return { x: to.x, y: to.y };
+    const ang = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+    return { x: from.x + Math.cos(ang) * len, y: from.y + Math.sin(ang) * len };
+  },
+  // Backspace while constructing: drop the last point (or cancel the path if it's the last).
+  _curvBack() {
+    if (!this._curv) return;
+    if (this._curv.pts.length <= 1) { this._curvFinish(false); return; }
+    this._curv.pts.pop(); this._curvLastClick = null;
     this._curvRedraw(); this._curvMarks();
   },
   _curvHover(ev) {
-    if (!this._curv) return;
-    const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(this.stage.getScreenCTM().inverse());
+    if (!this._curv || this._curv._drag) return;
+    let p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(this.stage.getScreenCTM().inverse());
     const closeHover = this._curv.pts.length >= 2 && this._curvNearFirst(p);
+    if (!closeHover && ev.shiftKey && this._curv.pts.length) p = this._constrain45(this._curv.pts[this._curv.pts.length - 1], p);
     this._curvRedraw(closeHover ? null : p);
     this._curvMarks(closeHover);
     this._setPenCloseCursor(closeHover);
@@ -885,7 +929,7 @@ const editor = {
     }
     if (t === "node") return "Points (A) — drag anchors/handles · Shift multi-selects · Alt converts · drag a segment to reshape · ⌫ deletes";
     if (t === "pen") return "Pen (P) — click for corners, drag for curves · over a path + adds / − removes · click the first point to close · Enter finishes";
-    if (t === "curvature") return "Curvature (C) — click to drop auto-smooth points · double-click toggles corner · click the first to close · Enter finishes";
+    if (t === "curvature") return "Curvature (C) — click for smooth points · Alt = corner · Shift = 45° · drag a point to move · ⌫ removes the last · click the first to close · Enter finishes";
     if (t === "rect") return "Rectangle (R) — drag on the canvas · Shift = square";
     if (t === "ellipse") return "Ellipse (E) — drag on the canvas · Shift = circle";
     if (t === "line") return "Line (L) — drag on the canvas · Shift = 45°";
