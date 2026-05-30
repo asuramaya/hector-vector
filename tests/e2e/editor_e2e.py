@@ -378,6 +378,14 @@ def main():
         check("stroke cap via segmented control", page.evaluate("editor.nodeById('r1').getAttribute('stroke-linecap')") == "round")
         # the segmented control updates its OWN active highlight (the 'unresponsive panel' fix)
         check("segmented control reflects the active option", seg_active == "Round", f"active={seg_active}")
+        # Cap sits UNDER Dashes (it shapes the dash/dot ends)
+        order = page.evaluate("""() => { const g=[...document.querySelectorAll('.context-panel .insp-group')]
+            .find(g=>{const t=g.querySelector('.insp-title');return t&&t.textContent==='Stroke';});
+            return [...g.querySelectorAll('.insp-row > span')].map(s=>s.textContent); }""")
+        check("Cap row sits under Dashes", "Dashes" in order and "Cap" in order and order.index("Cap") > order.index("Dashes"), str(order))
+        # Dash/Gap sliders now have a numeric readout
+        check("dash sliders show numeric values",
+              page.evaluate("document.querySelectorAll('.context-panel .insp-dash-val').length") >= 2)
         page.evaluate("editor.setStrokeAttr('stroke-dasharray',null); editor._renderInspector();"); page.wait_for_timeout(40)
         # Miter row is contextual — present for a miter join, gone for round/bevel (it
         # appears/disappears rather than greying out). A new stroke seeds a round join, so
@@ -1281,6 +1289,16 @@ def main():
         check("open pen path has no fill", psel and psel["attrs"].get("fill") == "none")
         page.evaluate("editor.undo()"); page.wait_for_timeout(40)
         check("undo removes the pen path", n_nodes(page) == base and not page.evaluate("!!editor._pen"))
+
+        # Pen tool on a SELECTED object shows its anchor points (so add/remove is obvious)
+        mount_ctl(page)
+        page.evaluate("editor.setTool('select'); editor.selection=new Set(['r2']); editor._renderSelection();")
+        page.evaluate("editor.setTool('pen')"); page.wait_for_timeout(60)
+        check("pen tool shows the selected object's points", page.evaluate("document.querySelectorAll('.hv-pen-point').length") > 0)
+        # …and clears them with nothing selected
+        page.evaluate("editor.setTool('select'); editor.selection=new Set(); editor._renderSelection(); editor.setTool('pen')"); page.wait_for_timeout(40)
+        check("pen points clear when nothing is selected", page.evaluate("document.querySelectorAll('.hv-pen-point').length") == 0)
+        page.evaluate("editor.setTool('select')")
 
         # Click-drag at an anchor yields a curve (cubic segment)
         mount_ctl(page)

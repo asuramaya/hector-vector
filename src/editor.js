@@ -828,6 +828,24 @@ const editor = {
     }
     // Transform is a SELECT sub-mode now (Ctrl+T scale / Ctrl+R rotate), not a tool.
     if (this.tool === "select" && this._xformMode && this.selection.size && !this.artboardSelected) this._mountTransformHandles();
+    // Pen tool: show the selected object's anchors so add/remove is obvious (read-only —
+    // the actual add/delete is the pen's hover+click affordance).
+    if (this.tool === "pen") this._renderPenPoints();
+  },
+  // Read-only anchor dots for the selected path(s) while the pen tool is active, so it's
+  // clear where points sit (and thus where the +/− hover affordance will add/remove them).
+  _renderPenPoints() {
+    const ov = this._overlayEl(); if (!ov) return;
+    ov.querySelectorAll("g.hv-pen-points").forEach((g) => g.remove());
+    if (this.tool !== "pen" || this._pen || this._penTempSelect || !this.stage || !this.selection.size) return;
+    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
+    const r = 3.5 / k;
+    const accept = this._nodeFocusAccept();   // restrict to the selected object(s)
+    const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "hv-pen-points");
+    const dot = (x, y) => { const d = document.createElementNS(SVG_NS, "rect"); d.setAttribute("class", "hv-pen-point"); d.setAttribute("x", nfmt(x - r)); d.setAttribute("y", nfmt(y - r)); d.setAttribute("width", nfmt(r * 2)); d.setAttribute("height", nfmt(r * 2)); g.appendChild(d); };
+    for (const nd of pathNodes(this.stage, accept)) dot(nd.x, nd.y);
+    for (const a of collectAnchors(this.stage, accept)) dot(a.x, a.y);
+    ov.appendChild(g);
   },
 
   // ---------- tools ----------
@@ -879,6 +897,7 @@ const editor = {
     if (this._handleDragging) return;   // a zoom/pan mid-drag must not re-mount and yank the dragged handle
     if (this.tool === "node" && this.stage) this.mountNodeHandles();
     if (this.tool === "select" && this._xformMode && this.stage) this._renderSelection();   // handles are constant-screen-size
+    if (this.tool === "pen" && !this._pen && this.stage) this._renderPenPoints();   // anchor dots stay constant-screen-size
     if (this._pen) { this._redrawPen(); this._renderPenMarks(); }
     if (this._curv) { this._curvRedraw(); this._curvMarks(); }
   },
@@ -2698,13 +2717,6 @@ const editor = {
     const strokeRows = [widthRow];
     if (hasStroke) {
       const dashed = !!(dashC.value && dashC.value !== "none" && /[1-9]/.test(dashC.value));
-      // Cap: only where the stroke has ends to cap (open path, or a dash/dotted pattern).
-      if (hasOpenEnd || dashed) {
-        strokeRows.push(this._segRow("Cap", capC.mixed ? null : (capC.value || "butt"),
-          [["butt", CAP_GLYPH.butt], ["round", CAP_GLYPH.round], ["square", CAP_GLYPH.square]],
-          { butt: "Butt", round: "Round", square: "Projecting" },
-          (v) => { this.push("Stroke cap"); this.setStrokeAttr("stroke-linecap", v); }));
-      }
       // Join: only where the shape has a pointy corner. Changing it re-renders so the
       // Miter row appears only for a miter join.
       if (hasCorner) {
@@ -2717,10 +2729,17 @@ const editor = {
             (v) => { this.beginCoalesce(); this.setStrokeAttr("stroke-miterlimit", nfmt(v)); }, () => this.commitCoalesce("Miter limit"), !!miterC.mixed));
         }
       }
-      // Dashes commit re-renders so the Cap row appears once a dash/dotted pattern exists.
+      // Dashes commit re-renders so the Cap row (just below) appears once a pattern exists.
       strokeRows.push(this._dashRow("Dashes", dashC.value || "", curW(),
         (arr, dotted) => { this.beginCoalesce(); this.setStrokeAttr("stroke-dasharray", arr); if (dotted) this.setStrokeAttr("stroke-linecap", "round"); },
         () => { this.commitCoalesce("Dashes"); this._renderInspector(); }, !!dashC.mixed));
+      // Cap sits UNDER Dashes (it shapes the dash/dot ends) — shown for open ends or a pattern.
+      if (hasOpenEnd || dashed) {
+        strokeRows.push(this._segRow("Cap", capC.mixed ? null : (capC.value || "butt"),
+          [["butt", CAP_GLYPH.butt], ["round", CAP_GLYPH.round], ["square", CAP_GLYPH.square]],
+          { butt: "Butt", round: "Round", square: "Projecting" },
+          (v) => { this.push("Stroke cap"); this.setStrokeAttr("stroke-linecap", v); }));
+      }
     }
     wrap.appendChild(inspGroup("Stroke", strokeRows));
 
@@ -2854,12 +2873,12 @@ const editor = {
     let mode = !parts.length ? "solid" : (parts[0] === 0 ? "dotted" : "dashed");
     let dash = parts.length && parts[0] ? parts[0] : Math.round(w * 3);
     let gap = parts.length > 1 ? parts[1] : Math.round(w * 2);
-    const max = Math.max(8, Math.round(w * 10));
+    const max = Math.max(24, Math.round(w * 10));   // generous enough for visible dashes on any shape
 
     const compose = () => {
       if (mode === "solid") return "";
       if (mode === "dotted") return `${nfmt(0)} ${nfmt(Math.max(gap, 1))}`;
-      return `${nfmt(Math.max(dash, 0.5))} ${nfmt(Math.max(gap, 0.5))}`;
+      return `${nfmt(Math.max(dash, 1))} ${nfmt(Math.max(gap, 1))}`;
     };
     const emit = (final) => { live(compose(), mode === "dotted"); if (final && commit) commit(); };
 
@@ -2867,17 +2886,19 @@ const editor = {
     const seg = document.createElement("div"); seg.className = "insp-seg";
     const sliders = document.createElement("div"); sliders.className = "insp-dash-sliders";
 
-    const mkSlider = (lab, get, set) => {
+    // a labelled range with a live numeric readout (was value-blind — couldn't tell sizes)
+    const mkSlider = (lab, get, set, minV) => {
       const row = document.createElement("label"); row.className = "insp-dash-srow";
       const span = document.createElement("span"); span.textContent = lab;
-      const r = document.createElement("input"); r.type = "range"; r.min = "0"; r.max = String(max); r.step = "1"; r.value = String(get());
-      r.addEventListener("input", () => { set(parseFloat(r.value)); emit(false); });
+      const r = document.createElement("input"); r.type = "range"; r.min = String(minV); r.max = String(max); r.step = "1"; r.value = String(get());
+      const val = document.createElement("span"); val.className = "insp-dash-val"; val.textContent = String(get());
+      r.addEventListener("input", () => { set(parseFloat(r.value)); val.textContent = r.value; emit(false); });
       r.addEventListener("change", () => emit(true));
-      row.appendChild(span); row.appendChild(r); row._range = r;
+      row.appendChild(span); row.appendChild(r); row.appendChild(val); row._range = r; row._val = val;
       return row;
     };
-    const dashSlider = mkSlider("Dash", () => dash, (v) => { dash = v; });
-    const gapSlider = mkSlider("Gap", () => gap, (v) => { gap = v; });
+    const dashSlider = mkSlider("Dash", () => dash, (v) => { dash = v; }, 1);
+    const gapSlider = mkSlider("Gap", () => gap, (v) => { gap = v; }, 1);
     sliders.appendChild(dashSlider); sliders.appendChild(gapSlider);
 
     const syncUI = () => {

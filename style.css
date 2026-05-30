@@ -580,8 +580,10 @@ button:disabled {
 /* dash editor: presets row + dash/gap length sliders */
 .insp-stroke-style { display: flex; flex-direction: column; gap: 7px; }
 .insp-dash-sliders { display: flex; flex-direction: column; gap: 5px; }
-.insp-dash-srow { display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: center; gap: 8px; }
+.insp-dash-srow { display: grid; grid-template-columns: 30px minmax(0, 1fr) 22px; align-items: center; gap: 8px; }
 .insp-dash-srow > span { font-size: 11px; color: var(--label); }
+.insp-dash-srow > .insp-dash-val { text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+.insp-dash-srow.insp-disabled .insp-dash-val { color: var(--label); }
 
 /* a control that doesn't apply yet (cap/join with no stroke, miter on a non-miter join) */
 .insp-row.insp-disabled, .insp-disabled { opacity: 0.4; pointer-events: none; }
@@ -941,6 +943,8 @@ button:disabled {
 .hv-pen-anchor { fill: #fff; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
 .hv-pen-anchor.first { fill: var(--accent); }
 .hv-pen-anchor.close { fill: var(--accent); stroke: #fff; stroke-width: 1.5; }
+/* Read-only anchor dots of the selected path (pen tool) — shows where +/− will act */
+.hv-pen-point { fill: #fff; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
 /* Pen direction handles (bezier tangents shown while drawing) */
 .hv-pen-handle-line { stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; opacity: 0.6; }
 .hv-pen-handle { fill: var(--accent); stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
