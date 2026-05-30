@@ -927,7 +927,7 @@ def main():
                 const inp = row && row.querySelector('input[type=number]');
                 return !!inp && (inp.placeholder.toLowerCase()==='mixed' || inp.value===''); }"""))
 
-        # ---- redesigned Object panel: Transform / Align / Arrange / Appearance / Shape ----
+        # ---- redesigned Object panel: Transform / Shape / Stroke / Appearance + align chin ----
         page.evaluate("""() => { app.selectedOutput=null;
             mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
               + '<rect data-hv-id="t1" x="20" y="30" width="40" height="20"/>'
@@ -936,8 +936,14 @@ def main():
         page.evaluate("editor.selection=new Set(['t1']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector();")
         page.wait_for_timeout(40)
         groups = page.evaluate("[...document.querySelectorAll('.context-panel .insp-title')].map(t=>t.textContent)")
-        check("object panel has Transform/Align/Arrange/Appearance sections",
-              all(g in groups for g in ["Transform", "Align to artboard", "Arrange", "Stroke", "Appearance"]), str(groups))
+        check("object panel has Transform/Stroke/Appearance sections (Flip + Arrange dropped — global)",
+              all(g in groups for g in ["Transform", "Stroke", "Appearance"]) and "Arrange" not in groups and "Align to artboard" not in groups, str(groups))
+        # align-to-artboard lives in the panel's pinned bottom chin now (6 buttons)
+        check("align-to-artboard buttons sit in the bottom chin",
+              page.evaluate("document.querySelectorAll('.context-panel .insp-foot .insp-alignbar .insp-iconbtn').length") == 6)
+        # Rotate is a scrub-numeric like X/Y/W/H (a number input in a Transform row), not a button bar
+        check("Rotate is a numeric field in Transform",
+              page.evaluate("""() => { const r=[...document.querySelectorAll('.context-panel .insp-row')].find(r=>r.querySelector('span')&&r.querySelector('span').textContent==='Rotate'); return !!r && !!r.querySelector('input[type=number]'); }"""))
         page.evaluate("editor.setSelectionPos(0,0)")
         bb = page.evaluate("() => { const b = editor.selectionBBox(); return [Math.round(b.x0), Math.round(b.y0)]; }")
         check("Transform X/Y moves the selection to the origin", bb == [0, 0], str(bb))

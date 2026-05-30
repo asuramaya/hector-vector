@@ -2254,7 +2254,8 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       s.innerHTML = `<div class="panel-head section-head"><span class="caret">▾</span>`
         + `<span class="sec-label fp-title">${label}</span><span class="sec-count"></span>`
         + `<div class="panel-actions hdr-slots"></div></div>`
-        + `<div class="section-body fp-body"></div>`;
+        + `<div class="section-body fp-body"></div>`
+        + (name === "properties" ? `<div class="insp-foot"></div>` : "");   // pinned chin: align-to-artboard bar
       const actions = s.querySelector(".panel-actions");
       const slot = HDR_SLOTS[name];
       if (slot) { const b = document.createElement("button"); b.type = "button"; b.id = slot.id; b.className = "tool-button"; b.title = slot.t; b.textContent = slot.g; b.addEventListener("click", (e) => { e.stopPropagation(); slot.fn(); }); actions.appendChild(b); }
@@ -2287,6 +2288,9 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       if (!propsSection || !propsSection.parentElement || !propsVisible()) return;
       const title = propsSection.querySelector(".fp-title"), body = propsSection.querySelector(".fp-body");
       if (!body) return; body.innerHTML = "";
+      // Bottom chin: the align-to-artboard bar (null unless a non-artboard object is selected).
+      const foot = propsSection.querySelector(".insp-foot");
+      if (foot) { foot.innerHTML = ""; const bar = editor._alignBar && editor._alignBar(); if (bar) foot.appendChild(bar); }
       if (!editor.stage) { title.textContent = "Properties"; body.innerHTML = `<div class="insp-empty">No canvas.</div>`; return; }
       if (editor.artboardSelected) { title.textContent = "Artboard"; body.appendChild(editor._artboardPanel()); return; }
       let nodes = editor._effectiveLeaves(); if (!nodes.length) nodes = editor.selectedNodes();

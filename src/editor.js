@@ -1842,6 +1842,23 @@ const editor = {
     });
     this._renderSelection(); this._renderInspector();
   },
+  // The 6 align-to-artboard buttons as a compact bar for the Properties panel's
+  // bottom chin (always reachable, doesn't scroll away). Returns null when there's
+  // nothing alignable (no non-artboard selection).
+  _alignBar() {
+    if (!this.stage || this.artboardSelected || !this.selectedNodes().length) return null;
+    const bar = document.createElement("div"); bar.className = "insp-alignbar";
+    const mk = (icon, mode, title) => { const b = document.createElement("button"); b.type = "button"; b.className = "insp-iconbtn"; b.title = title; b.innerHTML = icon; b.addEventListener("click", () => this.align(mode)); return b; };
+    bar.append(
+      mk(ALIGN_ICON.left, "left", "Align left edges"),
+      mk(ALIGN_ICON.hcenter, "hcenter", "Centre horizontally"),
+      mk(ALIGN_ICON.right, "right", "Align right edges"),
+      mk(ALIGN_ICON.top, "top", "Align top edges"),
+      mk(ALIGN_ICON.vmiddle, "vmiddle", "Centre vertically"),
+      mk(ALIGN_ICON.bottom, "bottom", "Align bottom edges"),
+    );
+    return bar;
+  },
   // mix-blend-mode via inline style (serialises with the element).
   applyBlendMode(mode) {
     this.push("Blend mode");
@@ -2562,46 +2579,17 @@ const editor = {
       const wRow = numRow("W", r2(bb.x1 - bb.x0), 0, 1, () => {}, (i) => { wInp = i; }, () => applySize("w"));
       const hRow = numRow("H", r2(bb.y1 - bb.y0), 0, 1, () => {}, (i) => { hInp = i; }, () => applySize("h"));
       const lockRow = checkRow("Lock W:H", lock, (on) => { lock = on; this._objLockAspect = on; });
-      // Rotation: absolute for a single element, blank ("Mixed") for many; applies the
-      // delta on commit (Enter / blur), so it never spins while you type.
+      // Rotation: a scrub-numeric exactly like X/Y/W/H (commit-only, delta-applied) — base
+      // is the absolute angle of a single element, or 0 ("Mixed") for many.
       const ang = this.selectionAngle();
-      const rInp = document.createElement("input"); rInp.type = "number"; rInp.step = "1";
-      if (ang == null) rInp.placeholder = "Mixed"; else rInp.value = String(r2(ang));
-      let shownAng = ang == null ? 0 : ang;
-      rInp.addEventListener("change", () => { const nv = parseFloat(rInp.value); if (isNaN(nv)) return; this.rotateSelectionBy(nv - shownAng); shownAng = nv; });
-      const rotRow = inspRow("Rotate", rInp);
-      const flipRow = inspBtnRow("Flip", [
-        { html: FLIP_ICON.h, title: "Flip horizontal", onClick: () => this.transform("flipH") },
-        { html: FLIP_ICON.v, title: "Flip vertical", onClick: () => this.transform("flipV") },
-        { html: FLIP_ICON.ccw, title: "Rotate 90° CCW", onClick: () => this.transform("rotateCCW") },
-        { html: FLIP_ICON.cw, title: "Rotate 90° CW", onClick: () => this.transform("rotateCW") },
-      ]);
-      wrap.appendChild(inspGroup("Transform", [xRow, yRow, wRow, hRow, lockRow, rotRow, flipRow]));
-
-      // ---- ALIGN to the artboard ----
-      wrap.appendChild(inspGroup("Align to artboard", [
-        inspBtnRow("Horizontal", [
-          { html: ALIGN_ICON.left, title: "Align left edges", onClick: () => this.align("left") },
-          { html: ALIGN_ICON.hcenter, title: "Centre horizontally", onClick: () => this.align("hcenter") },
-          { html: ALIGN_ICON.right, title: "Align right edges", onClick: () => this.align("right") },
-        ]),
-        inspBtnRow("Vertical", [
-          { html: ALIGN_ICON.top, title: "Align top edges", onClick: () => this.align("top") },
-          { html: ALIGN_ICON.vmiddle, title: "Centre vertically", onClick: () => this.align("vmiddle") },
-          { html: ALIGN_ICON.bottom, title: "Align bottom edges", onClick: () => this.align("bottom") },
-        ]),
-      ]));
-
-      // ---- ARRANGE (z-order) ----
-      wrap.appendChild(inspGroup("Arrange", [
-        inspBtnRow("Order", [
-          { html: ARRANGE_ICON.front, title: "Bring to front", onClick: () => this.reorder("front") },
-          { html: ARRANGE_ICON.forward, title: "Bring forward", onClick: () => this.reorder("forward") },
-          { html: ARRANGE_ICON.backward, title: "Send backward", onClick: () => this.reorder("backward") },
-          { html: ARRANGE_ICON.back, title: "Send to back", onClick: () => this.reorder("back") },
-        ]),
-      ]));
+      const baseAng = ang == null ? 0 : r2(ang);
+      let rInp;
+      const rotRow = numRow("Rotate", baseAng, null, 1, () => {}, (i) => { rInp = i; },
+        () => { const nv = parseFloat(rInp.value); if (isNaN(nv)) return; this.rotateSelectionBy(nv - baseAng); }, ang == null);
+      wrap.appendChild(inspGroup("Transform", [xRow, yRow, wRow, hRow, lockRow, rotRow]));
     }
+    // (Align → the panel's bottom chin via _alignBar(); Flip + z-order Arrange were removed
+    //  — both are global on the action bar.)
 
     // ---- SHAPE (contextual) — corner radius for rects, fill-rule for paths/polygons ----
     const shapeRows = [];
@@ -2876,19 +2864,7 @@ const ALIGN_ICON = {
   bottom: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="13.6" width="13" height="1.4" fill="currentColor"/><rect x="3.2" y="3" width="3" height="9.5" rx="0.5" fill="currentColor"/><rect x="9.8" y="6.5" width="3" height="6" rx="0.5" fill="currentColor"/></svg>`,
   vmiddle: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="7.3" width="13" height="1.4" fill="currentColor"/><rect x="3.2" y="3" width="3" height="10" rx="0.5" fill="currentColor"/><rect x="9.8" y="5" width="3" height="6" rx="0.5" fill="currentColor"/></svg>`,
 };
-const ARRANGE_ICON = {
-  front: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="1.5" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="6.5" y="6.5" width="8" height="8" fill="currentColor"/></svg>`,
-  back: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="6.5" y="6.5" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="1.5" y="1.5" width="8" height="8" fill="currentColor"/></svg>`,
-  forward: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="2.5" y="2.5" width="7.5" height="7.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="6" y="6" width="7.5" height="7.5" fill="currentColor"/><path d="M9 2.2 L13.8 2.2 L13.8 7" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`,
-  backward: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="6" y="6" width="7.5" height="7.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2.5" y="2.5" width="7.5" height="7.5" fill="currentColor"/><path d="M7 13.8 L2.2 13.8 L2.2 9" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`,
-};
-const FLIP_ICON = {
-  h: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 1.5v13" stroke="currentColor" stroke-width="1" stroke-dasharray="2 1.5"/><path d="M6.4 3 L1.6 8 L6.4 13 Z" fill="currentColor"/><path d="M9.6 3 L14.4 8 L9.6 13 Z" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`,
-  v: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1.5 8h13" stroke="currentColor" stroke-width="1" stroke-dasharray="2 1.5"/><path d="M3 6.4 L8 1.6 L13 6.4 Z" fill="currentColor"/><path d="M3 9.6 L8 14.4 L13 9.6 Z" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`,
-  cw: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M12.5 8a4.5 4.5 0 1 1-1.3-3.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M11.8 1.5 L11.8 5 L8.3 5 Z" fill="currentColor"/></svg>`,
-  ccw: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 8a4.5 4.5 0 1 0 1.3-3.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M4.2 1.5 L4.2 5 L7.7 5 Z" fill="currentColor"/></svg>`,
-};
-const AB_FIT_ICON = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.1" stroke-dasharray="2 1.4"/><rect x="5" y="5" width="6" height="6" fill="currentColor"/></svg>`;
+const AB_FIT_ICON =`<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.1" stroke-dasharray="2 1.4"/><rect x="5" y="5" width="6" height="6" fill="currentColor"/></svg>`;
 const BLEND_MODES = [
   ["normal", "Normal"], ["multiply", "Multiply"], ["screen", "Screen"], ["overlay", "Overlay"],
   ["darken", "Darken"], ["lighten", "Lighten"], ["color-dodge", "Colour dodge"], ["color-burn", "Colour burn"],

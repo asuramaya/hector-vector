@@ -7,16 +7,16 @@
   --checker-b: #dcdcdc;
 
   /* ---- inky monochrome design tokens (panels / inspector / colour) ----
-     A single near-black "ink" carries every active state; structure is drawn
-     in hairlines, not the hard pure-black 1px borders that read as "boxy". */
-  --ink: #161616;          /* active fills + strong text */
-  --ink-2: #3a3a3a;        /* ink hover */
-  --label: #8a8a8a;        /* field labels / section titles */
-  --hair: #e6e6e6;         /* hairline borders inside panels */
-  --hair-2: #d0d0d0;       /* a touch stronger (hover / dividers) */
-  --surface: #f5f5f5;      /* subtle hover / inset fill */
+     Edgy + boxy: pure-black structure and active fills, SHARP corners. One
+     ink, one height. Active = black-on-white; hover punches to black. */
+  --ink: #000;             /* active fills + strong text — deep pure black */
+  --ink-2: #000;           /* ink hover */
+  --label: #555;           /* field labels / section titles */
+  --hair: #000;            /* component borders (pure black, boxy) */
+  --hair-2: #000;          /* dividers */
+  --surface: #f0f0f0;      /* subtle hover tint on fields */
   --field-h: 26px;         /* one control height everywhere in a panel */
-  --r: 3px;                /* component corner radius */
+  --r: 0;                  /* sharp corners — no rounding */
 }
 
 * { box-sizing: border-box; }
@@ -504,8 +504,8 @@ button:disabled {
   width: 100%; height: var(--field-h); min-width: 0; border: 1px solid var(--hair); border-radius: var(--r);
   background: #fff; color: var(--ink); padding: 0 8px; font-size: 12px; font-variant-numeric: tabular-nums; line-height: var(--field-h);
 }
-.insp-row input[type="number"]:hover, .insp-row input[type="text"]:hover, .insp-row select:hover { border-color: var(--hair-2); }
-.insp-row input[type="number"]:focus, .insp-row input[type="text"]:focus, .insp-row select:focus { outline: none; border-color: var(--ink); }
+.insp-row input[type="number"]:hover, .insp-row input[type="text"]:hover, .insp-row select:hover { background: var(--surface); }
+.insp-row input[type="number"]:focus, .insp-row input[type="text"]:focus, .insp-row select:focus { outline: none; border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); background: #fff; }
 .insp-row select { cursor: pointer; padding-right: 4px; }
 .insp-row input[type="color"] { width: 100%; height: var(--field-h); padding: 0; border: 1px solid var(--hair); border-radius: var(--r); background: #fff; cursor: pointer; }
 .insp-empty { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
@@ -516,7 +516,7 @@ button:disabled {
   padding: 0 9px; height: var(--field-h); font-size: 11px; color: var(--ink); border: 1px solid var(--hair);
   border-radius: var(--r); background: #fff; font-variant-numeric: tabular-nums;
 }
-.insp-preset-btns .ghost-button:hover { background: var(--surface); border-color: var(--hair-2); }
+.insp-preset-btns .ghost-button:hover { background: var(--ink); color: #fff; }
 
 /* row of square icon buttons (align / arrange / flip / orient) */
 .insp-btns { display: flex; gap: 5px; min-width: 0; align-items: center; }
@@ -524,11 +524,18 @@ button:disabled {
   flex: 0 0 auto; width: var(--field-h); height: var(--field-h); display: inline-flex; align-items: center; justify-content: center;
   border: 1px solid var(--hair); background: #fff; color: var(--ink); cursor: pointer; border-radius: var(--r); padding: 0;
 }
-.insp-iconbtn:hover:not(:disabled) { background: var(--surface); border-color: var(--hair-2); }
+.insp-iconbtn:hover:not(:disabled) { background: var(--ink); color: #fff; border-color: var(--ink); }
 .insp-iconbtn:disabled { opacity: 0.3; cursor: default; }
 .insp-iconbtn.on { background: var(--ink); color: #fff; border-color: var(--ink); }
 .insp-iconbtn svg { display: block; pointer-events: none; }
 .insp-ratio { margin-left: auto; font-size: 11px; color: var(--label); font-variant-numeric: tabular-nums; }
+
+/* bottom chin of the Properties panel — pinned align-to-artboard bar (never scrolls
+   away). 6 equal-width ink buttons spanning the panel. */
+.insp-foot { flex: 0 0 auto; border-top: 1px solid var(--ink); padding: 7px 10px; }
+.insp-foot:empty { display: none; }
+.insp-alignbar { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; }
+.insp-alignbar .insp-iconbtn { width: 100%; }
 
 /* inspector swatch (opens the colour picker) */
 .insp-swatch {
@@ -562,17 +569,19 @@ button:disabled {
 .insp-slider { display: flex; align-items: center; gap: 9px; min-height: var(--field-h); }
 .insp-slider-val { font-size: 11.5px; color: var(--label); min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
 
-/* monochrome range slider — ink thumb on a hairline track (no native blue) */
+/* monochrome range slider — a black SQUARE thumb (white-bordered so it reads on
+   the black track). No native blue, no round corners. */
 .insp-slider input[type="range"], .insp-dash-srow input[type="range"] { flex: 1 1 0; width: 100%; min-width: 0; -webkit-appearance: none; appearance: none; background: transparent; height: 16px; cursor: pointer; }
-.insp-slider input[type="range"]::-webkit-slider-runnable-track, .insp-dash-srow input[type="range"]::-webkit-slider-runnable-track { height: 2px; background: var(--hair-2); border-radius: 2px; }
-.insp-slider input[type="range"]::-moz-range-track, .insp-dash-srow input[type="range"]::-moz-range-track { height: 2px; background: var(--hair-2); border-radius: 2px; }
-.insp-slider input[type="range"]::-webkit-slider-thumb, .insp-dash-srow input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; margin-top: -5px; border-radius: 50%; background: var(--ink); border: 0; }
-.insp-slider input[type="range"]::-moz-range-thumb, .insp-dash-srow input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--ink); border: 0; }
-.insp-disabled input[type="range"]::-webkit-slider-thumb { background: var(--hair-2); }
+.insp-slider input[type="range"]::-webkit-slider-runnable-track, .insp-dash-srow input[type="range"]::-webkit-slider-runnable-track { height: 2px; background: var(--ink); }
+.insp-slider input[type="range"]::-moz-range-track, .insp-dash-srow input[type="range"]::-moz-range-track { height: 2px; background: var(--ink); }
+.insp-slider input[type="range"]::-webkit-slider-thumb, .insp-dash-srow input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; margin-top: -5px; border-radius: 0; background: var(--ink); border: 2px solid #fff; box-shadow: 0 0 0 1px var(--ink); }
+.insp-slider input[type="range"]::-moz-range-thumb, .insp-dash-srow input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 0; background: var(--ink); border: 2px solid #fff; box-shadow: 0 0 0 1px var(--ink); }
+.insp-disabled input[type="range"]::-webkit-slider-track { background: #bbb; }
+.insp-disabled input[type="range"]::-webkit-slider-thumb { background: #bbb; box-shadow: 0 0 0 1px #bbb; }
 
-/* checkbox — small ink-filled box (no native blue) */
-.insp-row input[type="checkbox"] { -webkit-appearance: none; appearance: none; width: 15px; height: 15px; border: 1px solid var(--hair-2); border-radius: var(--r); background: #fff; cursor: pointer; position: relative; margin: 0; }
-.insp-row input[type="checkbox"]:hover { border-color: var(--ink-2); }
+/* checkbox — small ink-filled SQUARE box (no native blue) */
+.insp-row input[type="checkbox"] { -webkit-appearance: none; appearance: none; width: 15px; height: 15px; border: 1px solid var(--ink); border-radius: var(--r); background: #fff; cursor: pointer; position: relative; margin: 0; }
+.insp-row input[type="checkbox"]:hover { background: var(--surface); }
 .insp-row input[type="checkbox"]:checked { background: var(--ink); border-color: var(--ink); }
 .insp-row input[type="checkbox"]:checked::after { content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
 
