@@ -1354,25 +1354,34 @@ button:disabled {
 .presets-sep { width: 1px; align-self: stretch; background: var(--line); opacity: 0.4; margin: 0 3px; }
 .preset-save { margin-left: auto; font-weight: 600; }
 
-.pipeline-strip { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; padding: 8px; border: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 4%, var(--bg)); }
-.pipeline-stage { display: flex; flex-direction: column; min-width: 156px; border: 1px solid var(--line); background: var(--bg); cursor: grab; }
+.pipeline-strip { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px; border: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 4%, var(--bg)); }
+.pipeline-stage { display: flex; flex-direction: column; flex: 1 1 200px; min-width: 190px; max-width: 320px; border: 1px solid var(--line); background: var(--bg); cursor: grab; }
 .pipeline-stage.dragging { opacity: 0.5; outline: 2px solid var(--accent); cursor: grabbing; }
 .pipeline-stage.off { opacity: 0.55; }
 .pipeline-stage.off .stage-name { text-decoration: line-through; }
-.pipeline-stage-head { display: flex; align-items: center; gap: 7px; padding: 7px 9px; }
+.pipeline-stage.expanded { outline: 2px solid var(--accent); outline-offset: -1px; }
+.pipeline-stage-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px; }
 .stage-toggle { flex: 0 0 auto; width: 15px; height: 15px; cursor: pointer; }
-.pipeline-stage-title { flex: 1 1 auto; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; border: 0; background: none; padding: 0; cursor: pointer; font: inherit; text-align: left; color: var(--fg); }
+.pipeline-stage-title { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; border: 0; background: none; padding: 0; cursor: pointer; font: inherit; text-align: left; color: var(--fg); }
 .stage-name { font-weight: 600; font-size: 13px; }
-.stage-note { font-size: 11px; color: var(--muted); }
+.stage-note { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .stage-method { flex: 0 0 auto; padding: 3px 5px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: inherit; font-size: 11px; cursor: pointer; }
-.stage-body { padding: 8px 9px; border-top: 1px solid var(--line); width: 232px; max-width: 232px; gap: 8px; }
-.stage-body .form-row { grid-template-columns: 1fr; gap: 3px; align-items: stretch; }
-.stage-body .form-section { margin-top: 0; }
-.pipeline-arrow { align-self: center; color: var(--muted); font-size: 15px; padding: 6px 1px 0; }
-.pipeline-out { align-self: flex-start; margin-top: 7px; font-size: 12px; font-weight: 700; padding: 6px 11px; border: 1px solid var(--line); }
+.stage-caret { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
+.pipeline-arrow { flex: 0 0 auto; align-self: center; color: var(--muted); font-size: 15px; }
+.pipeline-out { flex: 0 0 auto; align-self: center; font-size: 12px; font-weight: 700; padding: 6px 11px; border: 1px solid var(--line); }
 .pipeline-out.out-svg { background: var(--ink); color: #fff; border-color: var(--ink); }
 .pipeline-out.out-png { background: var(--bg); color: var(--fg); }
 .pipeline-out.out-none { color: var(--muted); border-style: dashed; }
+
+/* expanded stage settings — full-width panel below the strip, rows in columns */
+.pipeline-detail { border: 1px solid var(--line); }
+.pipeline-detail-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); background: color-mix(in srgb, var(--accent) 4%, var(--bg)); }
+.pipeline-detail-close { margin-left: auto; border: 0; background: none; font-size: 17px; line-height: 1; cursor: pointer; color: var(--muted); padding: 0 2px; }
+.pipeline-detail-close:hover { color: var(--fg); }
+.pipeline-detail-body.form { padding: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px 26px; align-content: start; }
+.pipeline-detail-body .form-row { align-content: start; }
+.pipeline-detail-body .form-section { grid-column: 1 / -1; margin-top: 0; }
+.pipeline-detail-body .form-actions { grid-column: 1 / -1; }
 
 .primary-button {
   border: 1px solid var(--accent); background: var(--accent); color: #fff;

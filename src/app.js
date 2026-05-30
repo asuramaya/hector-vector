@@ -3331,7 +3331,7 @@ function outputChipInfo() {
 // (fieldRow/makeSelect/makeRange/makeNumber) so it matches the Settings modal.
 function stageBody(id) {
   const body = document.createElement("div");
-  body.className = "stage-body form";
+  body.className = "pipeline-detail-body form";
   const rerender = () => renderProcessWorkspace();
   settingsFormRerender = renderProcessWorkspace;
 
@@ -3515,8 +3515,9 @@ const stripDragEl = () => stripDragId && document.querySelector(`.pipeline-stage
 function renderStage(id) {
   const def = STAGE_BY_ID[id];
   const on = stageOn(id);
+  const open = !!stageExpanded[id];
   const card = document.createElement("div");
-  card.className = "pipeline-stage" + (on ? "" : " off");
+  card.className = "pipeline-stage" + (on ? "" : " off") + (open ? " expanded" : "");
   card.dataset.stage = id;
   card.id = `stage-${id}`;
   card.draggable = true;
@@ -3532,6 +3533,7 @@ function renderStage(id) {
   const title = document.createElement("button");
   title.type = "button"; title.className = "pipeline-stage-title";
   title.innerHTML = `<span class="stage-name">${def.label}</span><span class="stage-note">${def.note}</span>`;
+  title.title = open ? "Hide settings" : "Show settings";
   title.addEventListener("click", () => { stageExpanded[id] = !stageExpanded[id]; renderProcessWorkspace(); });
   head.appendChild(toggle);
   head.appendChild(title);
@@ -3548,13 +3550,34 @@ function renderStage(id) {
     });
     pill.className = "stage-method"; pill.title = "Vectorize engine"; head.appendChild(pill);
   }
+  const caret = document.createElement("span");
+  caret.className = "stage-caret"; caret.setAttribute("aria-hidden", "true"); caret.textContent = open ? "▾" : "▸";
+  head.appendChild(caret);
   card.appendChild(head);
-
-  if (stageExpanded[id]) card.appendChild(stageBody(id));
   return card;
 }
 
-// The strip: stages in saved order, → connectors, an output chip, a preset bar.
+// The full-width settings panel for one expanded stage — sits BELOW the strip so
+// the cards stay uniform and the form gets real horizontal room (no tall column).
+function renderStageDetail(id) {
+  const def = STAGE_BY_ID[id];
+  const panel = document.createElement("div");
+  panel.className = "pipeline-detail";
+  panel.dataset.stage = id;
+  const head = document.createElement("div");
+  head.className = "pipeline-detail-head";
+  const h = document.createElement("span"); h.textContent = `${def.label} settings`; head.appendChild(h);
+  const x = document.createElement("button");
+  x.type = "button"; x.className = "pipeline-detail-close"; x.textContent = "×"; x.title = "Hide settings";
+  x.addEventListener("click", () => { stageExpanded[id] = false; renderProcessWorkspace(); });
+  head.appendChild(x);
+  panel.appendChild(head);
+  panel.appendChild(stageBody(id));
+  return panel;
+}
+
+// The strip: stages in saved order, → connectors, an output chip, a preset bar,
+// and (below) a detail panel per expanded stage.
 function renderPipelineStrip() {
   const wrap = document.createElement("div");
   wrap.className = "pipeline-strip-wrap";
@@ -3593,6 +3616,8 @@ function renderPipelineStrip() {
   strip.appendChild(chip);
 
   wrap.appendChild(strip);
+  // Detail panels (in strip order) for whichever stages are expanded.
+  for (const id of order) if (stageExpanded[id]) wrap.appendChild(renderStageDetail(id));
   return wrap;
 }
 

@@ -1742,28 +1742,28 @@ def main():
 
         # Remove-BG method pill folds in Greenscreen; AI reveals the model picker in the stage body
         page.evaluate("""() => { const p=document.querySelector('.pipeline-stage[data-stage=removebg] .stage-method'); p.value='ai'; p.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
-        page.evaluate("""() => { if(!document.querySelector('.pipeline-stage[data-stage=removebg] .stage-body')) document.querySelector('.pipeline-stage[data-stage=removebg] .pipeline-stage-title').click(); }"""); page.wait_for_timeout(40)
+        page.evaluate("""() => { if(!document.querySelector('.pipeline-detail[data-stage=removebg]')) document.querySelector('.pipeline-stage[data-stage=removebg] .pipeline-stage-title').click(); }"""); page.wait_for_timeout(40)
         rb = page.evaluate("""() => ({ method: settings.removebg_method,
-            body: [...document.querySelectorAll('.pipeline-stage[data-stage=removebg] .stage-body .form-label')].map(s=>s.textContent),
+            body: [...document.querySelectorAll('.pipeline-detail[data-stage=removebg] .form-label')].map(s=>s.textContent),
             green: [...document.querySelector('.pipeline-stage[data-stage=removebg] .stage-method').options].some(o=>o.value==='green') })""")
         check("Remove-BG AI method reveals the model picker; Greenscreen is a method option",
               rb["method"] == "ai" and "AI model" in rb["body"] and rb["green"], str(rb))
         page.evaluate("""() => { const p=document.querySelector('.pipeline-stage[data-stage=removebg] .stage-method'); p.value='classical'; p.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
 
         # Vectorize body (expanded by default): Output toggle + Simplify, and Color reveals Style/Colors/Layers
-        vbody = page.evaluate("() => [...document.querySelectorAll('.pipeline-stage[data-stage=vectorize] .stage-body .form-label')].map(s=>s.textContent)")
+        vbody = page.evaluate("() => [...document.querySelectorAll('.pipeline-detail[data-stage=vectorize] .form-label')].map(s=>s.textContent)")
         check("Vectorize body surfaces Output + Simplify", "Output" in vbody and "Simplify" in vbody, str(vbody))
-        page.evaluate("""() => { const s=[...document.querySelectorAll('.pipeline-stage[data-stage=vectorize] .stage-body select')].find(x=>[...x.options].some(o=>o.value==='color')&&[...x.options].some(o=>o.value==='bw')); s.value='color'; s.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
-        col = page.evaluate("() => [...document.querySelectorAll('.pipeline-stage[data-stage=vectorize] .stage-body .form-label')].map(s=>s.textContent)")
+        page.evaluate("""() => { const s=[...document.querySelectorAll('.pipeline-detail[data-stage=vectorize] select')].find(x=>[...x.options].some(o=>o.value==='color')&&[...x.options].some(o=>o.value==='bw')); s.value='color'; s.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
+        col = page.evaluate("() => [...document.querySelectorAll('.pipeline-detail[data-stage=vectorize] .form-label')].map(s=>s.textContent)")
         check("Color output reveals Style/Colors/Layers + flows to the payload",
               all(x in col for x in ["Style", "Colors", "Layers"]) and page.evaluate("settings.trace_colormode") == "color", str(col))
-        page.evaluate("""() => { const s=[...document.querySelectorAll('.pipeline-stage[data-stage=vectorize] .stage-body select')].find(x=>[...x.options].some(o=>o.value==='strong')&&[...x.options].some(o=>o.value==='off')); s.value='strong'; s.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
+        page.evaluate("""() => { const s=[...document.querySelectorAll('.pipeline-detail[data-stage=vectorize] select')].find(x=>[...x.options].some(o=>o.value==='strong')&&[...x.options].some(o=>o.value==='off')); s.value='strong'; s.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
         check("Simplify flows to the payload", page.evaluate("settings.trace_simplify") == "strong")
         page.evaluate("""() => { Object.assign(settings,{trace_simplify:'medium',trace_colormode:'bw'}); renderProcessWorkspace(); }"""); page.wait_for_timeout(40)
         # Vectorize Pixel method folds in Pixel-Art → SVG (maps to the pixelvec kind, swaps the body)
         page.evaluate("""() => { const p=document.querySelector('.pipeline-stage[data-stage=vectorize] .stage-method'); p.value='pixel'; p.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
         pix = page.evaluate("""() => ({ method: settings.vectorize_method, kind: processSelectEl.value,
-            body: [...document.querySelectorAll('.pipeline-stage[data-stage=vectorize] .stage-body .form-label')].map(s=>s.textContent) })""")
+            body: [...document.querySelectorAll('.pipeline-detail[data-stage=vectorize] .form-label')].map(s=>s.textContent) })""")
         check("Vectorize Pixel method maps to pixelvec + shows pixel controls",
               pix["method"] == "pixel" and pix["kind"] == "pixelvec" and "Cell color" in pix["body"] and "Shape mode" in pix["body"], str(pix))
         page.evaluate("""() => { const p=document.querySelector('.pipeline-stage[data-stage=vectorize] .stage-method'); p.value='trace'; p.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
