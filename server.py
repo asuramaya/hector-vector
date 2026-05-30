@@ -409,12 +409,19 @@ def trace_config(payload: dict) -> dict:
     if hierarchical not in {"stacked", "cutout"}:
         hierarchical = "stacked"
     gradient_step = "16" if color_style == "poster" else "8"
+    # Poster style collapses the image to a real palette before tracing (median-cut,
+    # no dither). This is what stops anti-aliasing fringes on near-binary art from
+    # tracing as dozens of thin gray staircase layers. The "Colors" control (1–8)
+    # maps to an actual palette size; photo style skips this to keep gradients.
+    cp_int = int(float(clamp_float(payload.get("color_precision", "6"), 1, 8, 6)))
+    poster_colors = {1: 2, 2: 3, 3: 4, 4: 6, 5: 8, 6: 12, 7: 16, 8: 24}[cp_int]
     return {
         "mode": mode,
         "colormode": colormode,
         "color_style": color_style,
         "hierarchical": hierarchical,
         "gradient_step": gradient_step,
+        "poster_colors": poster_colors,
         "filter_speckle": clamp_float(payload.get("filter_speckle", "6"), 0, 32, 6),
         "corner_threshold": clamp_float(payload.get("corner_threshold", "85"), 30, 180, 85),
         "segment_length": clamp_float(payload.get("segment_length", "4.5"), 3.5, 10, 4.5),
@@ -758,16 +765,46 @@ def trace_mask_to_svg(mask_path: Path, svg_path: Path, trace: dict, log) -> None
     log_subprocess_lines(log, lines)
 
 
-def flatten_rgba_to_white(src: Path, dest: Path) -> None:
+def flatten_rgba_to_white(src: Path, dest: Path) -> Image.Image:
     """Composite a (possibly transparent) image onto opaque white, drop alpha.
 
     Color tracing needs a real RGB image: vtracer has no notion of alpha, so a
     transparent cutout would otherwise trace its zeroed RGB as a black slab. White
-    is the neutral backdrop the trace can later strip."""
+    is the neutral backdrop the trace can later strip. Returns the RGB image."""
     rgba = Image.open(src).convert("RGBA")
     bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
     bg.alpha_composite(rgba)
-    bg.convert("RGB").save(dest)
+    rgb = bg.convert("RGB")
+    rgb.save(dest)
+    return rgb
+
+
+def prepare_color_input(src: Path, dest: Path, trace: dict) -> None:
+    """Flatten to white, then — for poster style — collapse to a small palette.
+
+    The poster pass (median-cut, dither OFF) is the fix for the staircase/fill-spam
+    edge case: anti-aliased near-binary art otherwise spawns one thin gray layer per
+    AA shade, each a pixel staircase. A real palette merges those fringes into clean
+    flat regions. Photo style is left untouched so gradients survive."""
+    rgb = flatten_rgba_to_white(src, dest)
+    if trace.get("color_style") == "poster":
+        k = int(trace.get("poster_colors", 16))
+        posterized = rgb.quantize(colors=max(2, k), method=Image.Quantize.MEDIANCUT,
+                                  dither=Image.Dither.NONE).convert("RGB")
+        posterized.save(dest)
+
+
+def image_is_near_binary(path: Path) -> bool:
+    """True when an image is effectively grayscale and ~2-tone — the case where a
+    Color trace is strictly worse than B&W (far more nodes for no real color)."""
+    im = Image.open(path).convert("RGB")
+    arr = np.asarray(im.resize((128, 128)), dtype=np.float32)
+    # Low chroma (near-grayscale; the loose bound tolerates upscale/JPEG color
+    # fringing) AND most pixels piled at the black/white extremes (2-tone).
+    chroma = float((arr.max(axis=2) - arr.min(axis=2)).mean())
+    luma = 0.299 * arr[..., 0] + 0.587 * arr[..., 1] + 0.114 * arr[..., 2]
+    extremes = float(((luma < 48) | (luma > 208)).mean())
+    return chroma < 40 and extremes > 0.82
 
 
 def trace_color_to_svg(src_path: Path, svg_path: Path, trace: dict, log) -> None:
@@ -1350,8 +1387,10 @@ def run_vectorize(payload: dict) -> dict:
             if trace["colormode"] == "color":
                 # Color trace works straight off the image — no monochrome mask step.
                 _report_progress(2, 3, "Flatten")
+                if image_is_near_binary(staged):
+                    log("Note: source is near-grayscale/2-tone — a B&W trace yields far fewer nodes than Color here.")
                 flat = out_dir / f"{src.stem}.flat.png"
-                flatten_rgba_to_white(staged, flat)
+                prepare_color_input(staged, flat, trace)
                 _register_output(flat)
                 _report_progress(3, 3, f"Trace SVG ({trace['color_style']})")
                 trace_color_to_svg(flat, dest, trace, log)
@@ -1687,7 +1726,7 @@ def run_pipeline(payload: dict) -> dict:
                 # transparent surround doesn't trace as a black slab).
                 _report_progress(4, 5, f"Trace SVG ({trace['color_style']})")
                 flat_dest = out_dir / f"{src.stem}.flat.png"
-                flatten_rgba_to_white(cutout_dest, flat_dest)
+                prepare_color_input(cutout_dest, flat_dest, trace)
                 _register_output(flat_dest)
                 trace_color_to_svg(flat_dest, vector_dest, trace, log)
             else:

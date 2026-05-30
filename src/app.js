@@ -3590,7 +3590,7 @@ function buildSettingsForm(process) {
         ["poster", "Poster — flat, limited palette"],
         ["photo", "Photo — smooth gradients"],
       ]), "Poster suits logos/illustration; Photo follows gradients (bigger SVG)."));
-      root.appendChild(fieldRow("Colors", makeRange("color_precision", 1, 8, 1), "Bits per RGB channel. Higher = more distinct colors / detail."));
+      root.appendChild(fieldRow("Colors", makeRange("color_precision", 1, 8, 1), "Higher = more colours. Poster uses this as the palette size (lower = cleaner, flatter shapes); Photo as gradient precision."));
       root.appendChild(fieldRow("Layers", makeSelect("trace_hierarchical", [
         ["stacked", "Stacked — layered fills"],
         ["cutout", "Cutout — non-overlapping shapes"],
