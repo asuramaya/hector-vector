@@ -1112,9 +1112,15 @@ def main():
         mount_ctl(page)
         draw_shape(page, "line", 0.2, 0.2, 0.8, 0.7)
         lsel = sel_node(page)
-        check("line tool creates a selected line with a stroke",
-              lsel and lsel["tag"] == "line" and lsel["attrs"].get("stroke") not in (None, "none")
-              and lsel["attrs"].get("fill") == "none", str(lsel))
+        # a line is a plain 2-anchor <path> now (pen-editable endpoints), not a native <line>
+        check("line tool creates a selected 2-point path with a stroke",
+              lsel and lsel["tag"] == "path" and lsel["attrs"].get("stroke") not in (None, "none")
+              and lsel["attrs"].get("fill") == "none" and "L" in (lsel["attrs"].get("d") or ""), str(lsel))
+        lid = page.evaluate("[...editor.selection][0]")
+        page.evaluate(f"editor.selection=new Set(['{lid}']); editor.setTool('node');"); page.wait_for_timeout(80)
+        check("line endpoints are 2 pen-style node anchors",
+              page.evaluate("document.querySelectorAll('.hv-node-anchor').length") == 2)
+        page.evaluate("editor.setTool('select')")
 
         # Shift constrains a rect to a square even on a wide drag
         mount_ctl(page)
@@ -1151,7 +1157,8 @@ def main():
         d_sharp = page.evaluate(f"editor.nodeById('{sid}').getAttribute('d')")
         page.evaluate("editor.setRectRadius(8)"); page.wait_for_timeout(30)
         d_round = page.evaluate(f"editor.nodeById('{sid}').getAttribute('d')")
-        check("corner radius regenerates a rounded path", "A" in d_round and d_round != d_sharp and page.evaluate(f"editor.nodeById('{sid}').getAttribute('data-hv-shape')") == "rect", d_round[:50])
+        # rounded corners are CUBIC BÉZIERS (pen-editable), not SVG `A` arcs
+        check("corner radius regenerates rounded cubic-bezier corners", "C" in d_round and "A" not in d_round and d_round != d_sharp and page.evaluate(f"editor.nodeById('{sid}').getAttribute('data-hv-shape')") == "rect", d_round[:50])
         # switch the kind in place: rect -> polygon (sides param), morphs the same box
         page.evaluate("editor.setShapeKind('poly')"); page.wait_for_timeout(30)
         check("rect -> polygon switches kind in place",

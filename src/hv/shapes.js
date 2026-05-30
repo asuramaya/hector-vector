@@ -85,9 +85,10 @@ export function applyShapeStyle(n, style, isLine) {
 
 export function makeShapeNode(tool, p, style) {
   if (tool === "line") {
-    const n = document.createElementNS(SVG_NS, "line");
-    n.setAttribute("x1", nfmt(p.x)); n.setAttribute("y1", nfmt(p.y));
-    n.setAttribute("x2", nfmt(p.x)); n.setAttribute("y2", nfmt(p.y));
+    // A line is a plain 2-anchor <path> (not a native <line>) so its endpoints are
+    // pen-style node anchors, editable like any other path.
+    const n = document.createElementNS(SVG_NS, "path");
+    n.setAttribute("d", `M${nfmt(p.x)} ${nfmt(p.y)} L${nfmt(p.x)} ${nfmt(p.y)}`);
     applyShapeStyle(n, style, true);
     return n;
   }
@@ -113,7 +114,7 @@ export function sizeShape(tool, n, a, b, constrain) {
       const ang = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
       x2 = a.x + Math.cos(ang) * len; y2 = a.y + Math.sin(ang) * len;
     }
-    n.setAttribute("x2", nfmt(x2)); n.setAttribute("y2", nfmt(y2));
+    n.setAttribute("d", `M${nfmt(a.x)} ${nfmt(a.y)} L${nfmt(x2)} ${nfmt(y2)}`);
     return;
   }
   if (constrain) { const m = Math.max(Math.abs(dx), Math.abs(dy)); dx = (dx < 0 ? -1 : 1) * m; dy = (dy < 0 ? -1 : 1) * m; }
@@ -131,9 +132,9 @@ export function sizeShape(tool, n, a, b, constrain) {
 
 export function shapeMeaningful(tool, n) {
   if (tool === "line") {
-    const dx = (+n.getAttribute("x2")) - (+n.getAttribute("x1"));
-    const dy = (+n.getAttribute("y2")) - (+n.getAttribute("y1"));
-    return Math.hypot(dx, dy) > 0.5;
+    const p = (n.getAttribute("d") || "").match(/-?\d*\.?\d+/g) || [];
+    if (p.length < 4) return false;
+    return Math.hypot(p[2] - p[0], p[3] - p[1]) > 0.5;
   }
   if (isLiveShape(n)) { const b = shapeBox(n); return b.w > 0.5 && b.h > 0.5; }
   if (tool === "rect") return (+n.getAttribute("width")) > 0.5 && (+n.getAttribute("height")) > 0.5;

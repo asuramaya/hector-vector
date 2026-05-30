@@ -37,17 +37,26 @@ function roundedRing(pts, corner) {
   return s;
 }
 
-// ---- rounded rectangle with independent corner radii [tl, tr, br, bl] ----
+const KAPPA = 0.5522847498307936;   // 4/3·tan(π/8) — quarter-circle cubic-bézier control offset
+
+// ---- rounded rectangle with independent corner radii [tl, tr, br, bl]. Fillets are
+// CUBIC BÉZIERS (not SVG `A` arcs) so the corner nodes are smooth pen-style anchors with
+// handles and the whole rect is node-editable. ----
 export function roundedRectD(x, y, w, h, radii) {
   const lim = Math.min(Math.abs(w), Math.abs(h)) / 2;
   const r = (radii || [0, 0, 0, 0]).map((v) => Math.max(0, Math.min(v || 0, lim)));
   const [tl, tr, br, bl] = r;
   if (!tl && !tr && !br && !bl) return `M${f(x, y)} L${f(x + w, y)} L${f(x + w, y + h)} L${f(x, y + h)} Z`;
-  const A = (rx, ex, ey) => `A${nfmt(rx)} ${nfmt(rx)} 0 0 1 ${f(ex, ey)}`;
-  return `M${f(x + tl, y)} L${f(x + w - tr, y)} ${A(tr, x + w, y + tr)}` +
-    ` L${f(x + w, y + h - br)} ${A(br, x + w - br, y + h)}` +
-    ` L${f(x + bl, y + h)} ${A(bl, x, y + h - bl)}` +
-    ` L${f(x, y + tl)} ${A(tl, x + tl, y)} Z`;
+  // round a corner: line to the arrival point p0 on the incoming edge, then a cubic
+  // quarter-turn to the departure p1 on the outgoing edge, bulging toward the sharp vertex v.
+  const corner = (p0, v, p1, rr) => rr > 0
+    ? `L${f(p0.x, p0.y)} C${f(p0.x + KAPPA * (v.x - p0.x), p0.y + KAPPA * (v.y - p0.y))} ${f(p1.x + KAPPA * (v.x - p1.x), p1.y + KAPPA * (v.y - p1.y))} ${f(p1.x, p1.y)}`
+    : `L${f(v.x, v.y)}`;
+  return `M${f(x + tl, y)} ` +
+    corner({ x: x + w - tr, y }, { x: x + w, y }, { x: x + w, y: y + tr }, tr) + " " +
+    corner({ x: x + w, y: y + h - br }, { x: x + w, y: y + h }, { x: x + w - br, y: y + h }, br) + " " +
+    corner({ x: x + bl, y: y + h }, { x, y: y + h }, { x, y: y + h - bl }, bl) + " " +
+    corner({ x, y: y + tl }, { x, y }, { x: x + tl, y }, tl) + " Z";
 }
 
 // regular N-gon inscribed in the bbox ellipse (rx=bw/2, ry=bh/2), first vertex at top,
