@@ -9,3 +9,4 @@ export * from "./contour.js";
 export * from "./raster.js";
 export * from "./transform.js";
 export * from "./shapes.js";
+export * from "./shapegen.js";

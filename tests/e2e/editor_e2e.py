@@ -1077,6 +1077,14 @@ def main():
         page.evaluate("editor.rename('r1','My Rect'); editor.toggleLock('r2');")
         meta = page.evaluate("editor.serialize()")
         check("serialize strips editor metadata", ("data-hv-name" not in meta) and ("data-hv-locked" not in meta))
+        # exported SVG carries no live-shape params (data-hv-*) — the `d` is the truth
+        page.evaluate("editor.setTool('rect')")
+        _ab = artboard_rect(page)
+        page.mouse.move(_ab["x"] + _ab["w"]*0.2, _ab["y"] + _ab["h"]*0.2); page.mouse.down()
+        page.mouse.move(_ab["x"] + _ab["w"]*0.5, _ab["y"] + _ab["h"]*0.5, steps=6); page.mouse.up(); page.wait_for_timeout(60)
+        page.evaluate("editor.setTool('select')")
+        check("serialize strips live-shape params, keeps the path d",
+              "data-hv-shape" not in page.evaluate("editor.serialize()") and "data-hv-bx" not in page.evaluate("editor.serialize()"))
 
         # ---- Phase 4: shape tools ----
         mount_ctl(page)
@@ -1084,7 +1092,10 @@ def main():
         page.evaluate("editor.style.fill = '#123456'")   # last-used fill new shapes should inherit
         draw_shape(page, "rect", 0.15, 0.15, 0.55, 0.5)
         rsel = sel_node(page)
-        check("rect tool creates a selected rect", rsel and rsel["tag"] == "rect" and n_nodes(page) == base + 1,
+        # Shapes are now born as parametric "live shape" <path>s (data-hv-shape), never
+        # native <rect>/<ellipse> — so there's never a path-conversion step.
+        check("rect tool creates a selected live-shape path (rect kind)",
+              rsel and rsel["tag"] == "path" and rsel["attrs"].get("data-hv-shape") == "rect" and n_nodes(page) == base + 1,
               f"sel={rsel} n={n_nodes(page)}")
         check("drawn rect inherits last-used fill", rsel and rsel["attrs"].get("fill") == "#123456",
               str(rsel and rsel["attrs"].get("fill")))
@@ -1095,7 +1106,8 @@ def main():
         mount_ctl(page)
         draw_shape(page, "ellipse", 0.2, 0.2, 0.7, 0.6)
         esel = sel_node(page)
-        check("ellipse tool creates a selected ellipse", esel and esel["tag"] == "ellipse")
+        check("ellipse tool creates a selected live-shape path (ellipse kind)",
+              esel and esel["tag"] == "path" and esel["attrs"].get("data-hv-shape") == "ellipse", str(esel))
 
         mount_ctl(page)
         draw_shape(page, "line", 0.2, 0.2, 0.8, 0.7)
@@ -1108,8 +1120,8 @@ def main():
         mount_ctl(page)
         draw_shape(page, "rect", 0.1, 0.4, 0.9, 0.55, shift=True)
         sq = sel_node(page)
-        ok_sq = sq and abs(float(sq["attrs"]["width"]) - float(sq["attrs"]["height"])) < 0.5
-        check("Shift constrains rect to a square", ok_sq, str(sq and (sq["attrs"]["width"], sq["attrs"]["height"])))
+        ok_sq = sq and abs(float(sq["attrs"]["data-hv-bw"]) - float(sq["attrs"]["data-hv-bh"])) < 0.5
+        check("Shift constrains rect to a square", ok_sq, str(sq and (sq["attrs"].get("data-hv-bw"), sq["attrs"].get("data-hv-bh"))))
 
         # A bare click (no drag) creates nothing and leaves no undo entry
         mount_ctl(page)
@@ -1120,6 +1132,66 @@ def main():
         page.mouse.down(); page.mouse.up(); page.wait_for_timeout(40)
         check("bare click draws nothing / no history", n_nodes(page) == base and page.evaluate("editor.history.length") == 0,
               f"n={n_nodes(page)} hist={page.evaluate('editor.history.length')}")
+
+        # ---- parametric "live shapes": rect/poly/star/ellipse as paths + Shape panel ----
+        mount_ctl(page)
+        draw_shape(page, "rect", 0.2, 0.2, 0.7, 0.6)
+        sid = page.evaluate("[...editor.selection][0]")
+        # the Shape panel offers a Type switch + Expand-to-path for a live shape
+        shape_titles = page.evaluate("""() => { const g=[...document.querySelectorAll('.context-panel .insp-group')]
+            .find(g=>{const t=g.querySelector('.insp-title');return t&&t.textContent==='Shape';});
+            return g ? [...g.querySelectorAll('.insp-row > span, .insp-field > span')].map(s=>s.textContent) : []; }""")
+        check("live-shape Shape panel shows Type + corner fields",
+              page.evaluate("""!!document.querySelector('.context-panel .insp-seg')""") and ("C" in shape_titles)
+              and ("TL" in shape_titles) and ("TR" in shape_titles), str(shape_titles))
+        check("live-shape Shape panel offers Expand to path",
+              page.evaluate("""[...document.querySelectorAll('.context-panel .ghost-button')].some(b=>/Expand/.test(b.textContent))"""))
+        # corner radius regenerates the path d with arcs (rounded), keeping it a live rect
+        d_sharp = page.evaluate(f"editor.nodeById('{sid}').getAttribute('d')")
+        page.evaluate("editor.setRectRadius(8)"); page.wait_for_timeout(30)
+        d_round = page.evaluate(f"editor.nodeById('{sid}').getAttribute('d')")
+        check("corner radius regenerates a rounded path", "A" in d_round and d_round != d_sharp and page.evaluate(f"editor.nodeById('{sid}').getAttribute('data-hv-shape')") == "rect", d_round[:50])
+        # switch the kind in place: rect -> polygon (sides param), morphs the same box
+        page.evaluate("editor.setShapeKind('poly')"); page.wait_for_timeout(30)
+        check("rect -> polygon switches kind in place",
+              page.evaluate(f"editor.nodeById('{sid}').getAttribute('data-hv-shape')") == "poly"
+              and page.evaluate(f"!!editor.nodeById('{sid}').getAttribute('data-hv-sides')"))
+        sides_titles = page.evaluate("""() => { const g=[...document.querySelectorAll('.context-panel .insp-group')]
+            .find(g=>{const t=g.querySelector('.insp-title');return t&&t.textContent==='Shape';});
+            return [...g.querySelectorAll('.insp-row > span, .insp-field > span')].map(s=>s.textContent); }""")
+        check("polygon Shape panel shows Sides", "Sides" in sides_titles, str(sides_titles))
+        page.evaluate("editor.setShapeParam('sides', 3, 'poly'); editor._renderSelection();"); page.wait_for_timeout(20)
+        check("polygon sides param regenerates (triangle = 3 corners)",
+              page.evaluate(f"(editor.nodeById('{sid}').getAttribute('d').match(/[ML]/g)||[]).length") == 3)
+        # switch to star -> points + inset params
+        page.evaluate("editor.setShapeKind('star')"); page.wait_for_timeout(30)
+        check("polygon -> star exposes points + inset",
+              page.evaluate(f"editor.nodeById('{sid}').getAttribute('data-hv-shape')") == "star"
+              and page.evaluate(f"!!editor.nodeById('{sid}').getAttribute('data-hv-points')"))
+        # Expand to path: drop the parametric metadata -> a plain freeform path
+        page.evaluate("editor.expandShapes()"); page.wait_for_timeout(30)
+        check("Expand to path drops the parametric metadata",
+              page.evaluate(f"!editor.nodeById('{sid}').hasAttribute('data-hv-shape')")
+              and page.evaluate(f"editor.nodeById('{sid}').tagName.toLowerCase()") == "path")
+
+        # ellipse arc: a span turns the full ellipse into a centre-anchored pie wedge
+        mount_ctl(page)
+        draw_shape(page, "ellipse", 0.25, 0.25, 0.7, 0.7)
+        eid = page.evaluate("[...editor.selection][0]")
+        page.evaluate(f"editor.selection=new Set(['{eid}']); editor.setShapeParam('end', 90, 'ellipse'); editor._renderSelection();"); page.wait_for_timeout(30)
+        check("ellipse arc carves a pie wedge", page.evaluate(f"/^M[\\d.\\s-]+L/.test(editor.nodeById('{eid}').getAttribute('d'))"),
+              page.evaluate(f"editor.nodeById('{eid}').getAttribute('d')")[:30])
+        # node-editing a live shape freezes it to a freeform path
+        mount_ctl(page)
+        draw_shape(page, "rect", 0.2, 0.2, 0.6, 0.6)
+        nid = page.evaluate("[...editor.selection][0]")
+        page.evaluate("editor.setTool('node')"); page.wait_for_timeout(60)
+        # drag the first anchor a touch
+        h = page.evaluate("() => { const c = editor._overlayEl().querySelector('.hv-handle'); const r=c.getBoundingClientRect(); return {x:r.x+r.width/2, y:r.y+r.height/2}; }")
+        page.mouse.move(h["x"], h["y"]); page.mouse.down(); page.mouse.move(h["x"]+12, h["y"]+8, steps=4); page.mouse.up(); page.wait_for_timeout(40)
+        check("node-editing a live shape freezes it to a freeform path",
+              page.evaluate(f"!editor.nodeById('{nid}').hasAttribute('data-hv-shape')"))
+        page.evaluate("editor.setTool('select')")
 
         # Keyboard shortcuts switch tools
         page.evaluate("editor.setTool('select')")

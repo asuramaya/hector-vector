@@ -4,6 +4,7 @@
 import { SVG_NS } from "./constants.js";
 import { nfmt, parsePath, serializeSegs } from "./path.js";
 import { currentTranslate } from "./transform.js";
+import { setShapeBox, isLiveShape, shapeBox, freezeShape } from "./shapegen.js";
 
 // Map an element's LOCAL geometry space ⇄ the overlay/stage viewport space via its
 // CTM. Node-tool anchors live in local (path `d` / attribute) coords but render in the
@@ -90,16 +91,15 @@ export function makeShapeNode(tool, p, style) {
     applyShapeStyle(n, style, true);
     return n;
   }
-  if (tool === "ellipse") {
-    const n = document.createElementNS(SVG_NS, "ellipse");
-    n.setAttribute("cx", nfmt(p.x)); n.setAttribute("cy", nfmt(p.y));
-    n.setAttribute("rx", 0); n.setAttribute("ry", 0);
-    applyShapeStyle(n, style, false);
-    return n;
-  }
-  const n = document.createElementNS(SVG_NS, "rect");
-  n.setAttribute("x", nfmt(p.x)); n.setAttribute("y", nfmt(p.y));
-  n.setAttribute("width", 0); n.setAttribute("height", 0);
+  // Rect + ellipse are born as parametric "live shape" <path>s (data-hv-shape + params),
+  // so they are never special <rect>/<ellipse> objects and need no later path conversion.
+  const n = document.createElementNS(SVG_NS, "path");
+  const kind = tool === "ellipse" ? "ellipse" : "rect";
+  n.setAttribute("data-hv-shape", kind);
+  n.setAttribute("data-hv-bx", nfmt(p.x)); n.setAttribute("data-hv-by", nfmt(p.y));
+  n.setAttribute("data-hv-bw", "0"); n.setAttribute("data-hv-bh", "0");
+  if (kind === "rect") n.setAttribute("data-hv-r", "0");
+  n.setAttribute("d", "");
   applyShapeStyle(n, style, false);
   return n;
 }
@@ -118,7 +118,9 @@ export function sizeShape(tool, n, a, b, constrain) {
   }
   if (constrain) { const m = Math.max(Math.abs(dx), Math.abs(dy)); dx = (dx < 0 ? -1 : 1) * m; dy = (dy < 0 ? -1 : 1) * m; }
   const x = Math.min(a.x, a.x + dx), y = Math.min(a.y, a.y + dy), w = Math.abs(dx), h = Math.abs(dy);
-  if (tool === "rect") {
+  if (isLiveShape(n)) { setShapeBox(n, x, y, w, h); return; }
+  // fallback for native elements (e.g. imported), kept for safety
+  if (n.tagName.toLowerCase() === "rect") {
     n.setAttribute("x", nfmt(x)); n.setAttribute("y", nfmt(y));
     n.setAttribute("width", nfmt(w)); n.setAttribute("height", nfmt(h));
   } else {
@@ -133,6 +135,7 @@ export function shapeMeaningful(tool, n) {
     const dy = (+n.getAttribute("y2")) - (+n.getAttribute("y1"));
     return Math.hypot(dx, dy) > 0.5;
   }
+  if (isLiveShape(n)) { const b = shapeBox(n); return b.w > 0.5 && b.h > 0.5; }
   if (tool === "rect") return (+n.getAttribute("width")) > 0.5 && (+n.getAttribute("height")) > 0.5;
   return (+n.getAttribute("rx")) > 0.25 && (+n.getAttribute("ry")) > 0.25;
 }
@@ -156,7 +159,9 @@ export function pathNodes(svg, accept) {
     const segs = parsePath(el.getAttribute("d") || "");
     el._hvSegs = segs;
     const { toS, toL } = ctmMaps(el);   // local ⇄ stage (identity for top-level/baked)
-    const commit = () => el.setAttribute("d", serializeSegs(el._hvSegs));
+    // Editing anchors hand-edits the geometry: a live parametric shape becomes a plain
+    // freeform path (its data-hv-* params would otherwise regenerate over the edit).
+    const commit = () => { if (isLiveShape(el)) freezeShape(el); el.setAttribute("d", serializeSegs(el._hvSegs)); };
     const draw = segs.filter((s) => s.end);     // M + drawing segments, in order
     const n = draw.length;
     if (!n) return;

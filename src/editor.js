@@ -12,6 +12,7 @@ import {
   currentTranslate, setTranslate, matForOp, bakeMatrixInto, transformShapeGeometry,
   shapeToAbsPath, makeShapeNode, sizeShape, shapeMeaningful, collectAnchors, pathNodes, pathToAnchors,
   nearestOnPaths, splitCubicInsert, catmullRomAnchors,
+  isLiveShape, shapeKind, shapeKindName, shapeBox, rectRadii, regenShape, setShapeParam, setShapeBox, freezeShape,
 } from "./hv/index.js";
 import {
   setStatus, api, refreshAll, viewports, measureFit, outputPreviewEl,
@@ -172,8 +173,10 @@ const editor = {
     const c = this.stage.cloneNode(true);
     c.querySelectorAll("g.hv-overlay, g.hv-guideslayer").forEach((g) => g.remove());
     c.classList.remove("hv-pickable");
-    c.querySelectorAll("[data-hv-id]").forEach((n) => {
-      ["data-hv-id", "data-hv-name", "data-hv-locked"].forEach((a) => n.removeAttribute(a));
+    // Strip ALL editor metadata, including parametric live-shape params (data-hv-shape,
+    // data-hv-bx, …): the `d` is the rendering truth, so exported SVG stays standard.
+    c.querySelectorAll("[data-hv-id], [data-hv-shape]").forEach((n) => {
+      for (const a of [...n.attributes]) if (a.name.startsWith("data-hv-")) n.removeAttribute(a.name);
     });
     const ab = c.querySelector("rect.hv-artboard");
     if (ab) {
@@ -915,6 +918,7 @@ const editor = {
     const f = (x, y) => ({ x: m.a * x + m.c * y + m.e, y: m.b * x + m.d * y + m.f });
     transformShapeGeometry(el, el.tagName.toLowerCase(), f, m);
     el.removeAttribute("transform");
+    if (isLiveShape(el)) freezeShape(el);   // baking geometry desyncs params → make it a plain path
   },
   // Node-edit focus: when objects are selected, only THEIR anchors (incl. group
   // children) are shown — keeps a busy doc legible. Nothing selected → show all so you
@@ -1763,7 +1767,7 @@ const editor = {
     if (whole) { cx = vb.x + vb.width / 2; cy = vb.y + vb.height / 2; }
     else { const bb = this._bboxUnion(nodes); cx = (bb.x0 + bb.x1) / 2; cy = (bb.y0 + bb.y1) / 2; }
     const m = matForOp(op, cx, cy);
-    for (const n of nodes) bakeMatrixInto(n, m, 0, 0);
+    for (const n of nodes) { if (isLiveShape(n)) freezeShape(n); bakeMatrixInto(n, m, 0, 0); }
     if (whole && (op === "rotateCW" || op === "rotateCCW")) {
       const W = vb.width, H = vb.height;                 // content now spans H×W around the centre
       const shiftX = H / 2 - cx, shiftY = W / 2 - cy;    // recentre into a fresh H×W frame at origin
@@ -1804,6 +1808,16 @@ const editor = {
     if (!this._coalescing) this.push("Resize");
     const ax = bb.x0, ay = bb.y0;
     nodes.forEach((n) => {
+      // A live shape resizes by rewriting its bounding-box params (stays parametric) —
+      // but only while unrotated; a rotated one is frozen to a path, then baked normally.
+      if (isLiveShape(n)) {
+        if (this._isTranslateOnly(n)) {
+          const t = currentTranslate(n), b = shapeBox(n);   // params are local; map the stage anchor back through the translate
+          setShapeBox(n, ax - t.x, ay - t.y, b.w * sx, b.h * sy);
+          return;
+        }
+        freezeShape(n);
+      }
       if (this._isTranslateOnly(n)) bakeMatrixInto(n, { a: sx, b: 0, c: 0, d: sy, e: ax * (1 - sx), f: ay * (1 - sy) }, 0, 0);
       else { const M = `matrix(${nfmt(sx)} 0 0 ${nfmt(sy)} ${nfmt(ax * (1 - sx))} ${nfmt(ay * (1 - sy))})`; const o = n.getAttribute("transform"); n.setAttribute("transform", o ? `${M} ${o}` : M); this._consolidateTransform(n); }
     });
@@ -1872,7 +1886,37 @@ const editor = {
   // Rounded-rect corner radius (rx/ry) on selected <rect>s; 0 squares the corners.
   setRectRadius(r) {
     this.push("Corner radius");
-    this._eachSel((n) => { if (n.tagName.toLowerCase() === "rect") { if (r > 0) { n.setAttribute("rx", nfmt(r)); n.setAttribute("ry", nfmt(r)); } else { n.removeAttribute("rx"); n.removeAttribute("ry"); } } });
+    this._eachSel((n) => {
+      if (isLiveShape(n) && shapeKind(n) === "rect") setShapeParam(n, "r", Math.max(0, r));
+      else if (n.tagName.toLowerCase() === "rect") { if (r > 0) { n.setAttribute("rx", nfmt(r)); n.setAttribute("ry", nfmt(r)); } else { n.removeAttribute("rx"); n.removeAttribute("ry"); } }
+    });
+  },
+  // Set one parametric param on the selected live shape(s) of `kind` and regenerate.
+  setShapeParam(key, value, kind) {
+    this._eachSel((n) => { if (isLiveShape(n) && (!kind || shapeKind(n) === kind)) setShapeParam(n, key, value); });
+    this._renderSelection();
+  },
+  // Switch the kind of the selected live shape (rect ⇄ poly ⇄ star) in place, seeding
+  // sensible defaults; the bounding box is preserved so it morphs in place.
+  setShapeKind(kind) {
+    this.push("Shape type");
+    this._eachSel((n) => {
+      if (!isLiveShape(n)) return;
+      n.setAttribute("data-hv-shape", kind);
+      if (kind === "rect" && !n.hasAttribute("data-hv-r")) n.setAttribute("data-hv-r", "0");
+      if (kind === "poly" && !n.hasAttribute("data-hv-sides")) n.setAttribute("data-hv-sides", "5");
+      if (kind === "star") { if (!n.hasAttribute("data-hv-points")) n.setAttribute("data-hv-points", "5"); if (!n.hasAttribute("data-hv-inset")) n.setAttribute("data-hv-inset", "0.5"); }
+      regenShape(n);
+    });
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+  },
+  // Expand a live shape into a plain freeform path (drop its parametric metadata).
+  expandShapes() {
+    const live = this.selectedNodes().filter(isLiveShape); if (!live.length) return;
+    this.push("Expand shape");
+    live.forEach((n) => freezeShape(n));
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+    setStatus(live.length === 1 ? "Expanded to path." : `Expanded ${live.length} shapes.`, 1500);
   },
   invertSpace() {
     const sel = this._fillableSelection();
@@ -2156,6 +2200,7 @@ const editor = {
   },
   nodeName(n) {
     const custom = n.getAttribute("data-hv-name"); if (custom) return custom;
+    if (isLiveShape(n)) return shapeKindName(n) || "Path";
     const map = { path: "Path", rect: "Rectangle", circle: "Circle", ellipse: "Ellipse", polygon: "Polygon", polyline: "Polyline", line: "Line", g: "Group", image: "Image", text: "Text" };
     return map[n.tagName.toLowerCase()] || n.tagName.toLowerCase();
   },
@@ -2598,18 +2643,24 @@ const editor = {
     // (Align → the panel's bottom chin via _alignBar(); Flip + z-order Arrange were removed
     //  — both are global on the action bar.)
 
-    // ---- SHAPE (contextual) — corner radius (C) for rects, fill-rule for paths. Rows
-    //  appear only when they apply (no greyed placeholders), to save vertical space. ----
+    // ---- SHAPE (contextual). A single parametric "live shape" gets the full editor
+    //  (type, corners/sides/arc, Expand to path). Otherwise: corner radius for rects and
+    //  fill-rule for freeform paths. Rows appear only when they apply. ----
     const shapeRows = [];
-    if (tags.has("rect")) {
-      const rxC = common((n) => n.tagName.toLowerCase() === "rect" ? (parseFloat(n.getAttribute("rx")) || 0) : 0);
-      shapeRows.push(numRow("C", rxC.value || 0, 0, 1, (v) => { this.beginCoalesce(); this.setRectRadius(v); }, null, () => this.commitCoalesce("Corner radius"), !!rxC.mixed));
-    }
-    if (tags.has("path") || tags.has("polygon")) {
-      const frC = common((n) => n.getAttribute("fill-rule") || "nonzero");
-      shapeRows.push(this._segRow("Fill rule", frC.mixed ? null : frC.value,
-        [["nonzero", "NZ"], ["evenodd", "EO"]], { nonzero: "Non-zero winding", evenodd: "Even-odd" },
-        (v) => { this.setAttrAll("fill-rule", v === "nonzero" ? null : v); }));
+    if (nodes.length === 1 && isLiveShape(nodes[0])) {
+      shapeRows.push(...this._shapePanel(nodes[0]));
+    } else {
+      if (tags.has("rect") || nodes.some((n) => isLiveShape(n) && shapeKind(n) === "rect")) {
+        const rxC = common((n) => isLiveShape(n) ? (shapeKind(n) === "rect" ? rectRadii(n)[0] : 0) : (n.tagName.toLowerCase() === "rect" ? (parseFloat(n.getAttribute("rx")) || 0) : 0));
+        shapeRows.push(numRow("C", rxC.value || 0, 0, 1, (v) => { this.beginCoalesce(); this.setRectRadius(v); }, null, () => { this.commitCoalesce("Corner radius"); this._renderInspector(); }, !!rxC.mixed));
+      }
+      // fill-rule only for FREEFORM paths/polygons (a live shape is parametric, not freeform)
+      if (reads.some((n) => !isLiveShape(n) && (n.tagName.toLowerCase() === "path" || n.tagName.toLowerCase() === "polygon"))) {
+        const frC = common((n) => n.getAttribute("fill-rule") || "nonzero");
+        shapeRows.push(this._segRow("Fill rule", frC.mixed ? null : frC.value,
+          [["nonzero", "NZ"], ["evenodd", "EO"]], { nonzero: "Non-zero winding", evenodd: "Even-odd" },
+          (v) => { this.setAttrAll("fill-rule", v === "nonzero" ? null : v); }));
+      }
     }
     if (shapeRows.length) wrap.appendChild(inspGroup("Shape", shapeRows));
 
@@ -2663,6 +2714,55 @@ const editor = {
       this._sliderRow("Opacity", opC.value == null ? 1 : opC.value, (v) => { this.beginCoalesce(); this.applyOpacity(v); }, () => this.commitCoalesce("Opacity"), !!opC.mixed),
     ]));
     return wrap;
+  },
+  // Parametric editor for ONE live shape: a Type switch (rect/poly/star), the kind's
+  // params, and Expand-to-path. Param edits coalesce into one undo (begin on live, commit
+  // on release) and never push directly.
+  _shapePanel(n) {
+    const rows = [];
+    const kind = shapeKind(n);
+    const p = (k, d) => { const v = n.getAttribute("data-hv-" + k); return v == null || v === "" ? d : parseFloat(v); };
+    // live param numeric row: scrubs/edits a data-hv-<key> with coalesced undo
+    const paramRow = (label, value, min, step, key, pk, commitLabel) =>
+      numRow(label, value, min, step,
+        (v) => { this.beginCoalesce(); this.setShapeParam(key, v, pk); }, null,
+        () => { this.commitCoalesce(commitLabel || label); this._renderInspector(); });
+    if (kind === "rect" || kind === "poly" || kind === "star") {
+      rows.push(this._segRow("Type", kind,
+        [["rect", "Rect"], ["poly", "Poly"], ["star", "Star"]],
+        { rect: "Rectangle", poly: "Polygon", star: "Star" }, (v) => this.setShapeKind(v)));
+    }
+    if (kind === "rect") {
+      const radii = rectRadii(n), uniform = radii.every((x) => x === radii[0]);
+      rows.push(numRow("C", uniform ? Math.round(radii[0] * 100) / 100 : "", 0, 1,
+        (v) => { this.beginCoalesce(); this.setShapeParam("r", Math.max(0, v), "rect"); }, null,
+        () => { this.commitCoalesce("Corner radius"); this._renderInspector(); }, !uniform));
+      const cf = (lbl, idx) => [lbl, Math.round(radii[idx] * 100) / 100, 0, 1,
+        (v) => { this.beginCoalesce(); this.setRectCorner(idx, v); }, null,
+        () => { this.commitCoalesce("Corner radius"); this._renderInspector(); }];
+      rows.push(numPairRow(cf("TL", 0), cf("TR", 1)));
+      rows.push(numPairRow(cf("BL", 3), cf("BR", 2)));
+    } else if (kind === "poly") {
+      rows.push(paramRow("Sides", Math.round(p("sides", 5)), 3, 1, "sides", "poly"));
+      rows.push(paramRow("Corner", p("corner", 0), 0, 1, "corner", "poly", "Corner radius"));
+    } else if (kind === "star") {
+      rows.push(paramRow("Points", Math.round(p("points", 5)), 3, 1, "points", "star"));
+      rows.push(this._numSliderRow("Inset", p("inset", 0.5), 0.05, 0.95, 0.05,
+        (v) => { this.beginCoalesce(); this.setShapeParam("inset", v, "star"); }, () => { this.commitCoalesce("Star inset"); this._renderInspector(); }));
+      rows.push(paramRow("Corner", p("corner", 0), 0, 1, "corner", "star", "Corner radius"));
+    } else if (kind === "ellipse") {
+      rows.push(paramRow("Start", Math.round(p("start", 0)), null, 1, "start", "ellipse", "Arc"));
+      rows.push(paramRow("End", Math.round(p("end", 0)), null, 1, "end", "ellipse", "Arc"));
+      rows.push(this._numSliderRow("Ring", p("inner", 0), 0, 0.95, 0.05,
+        (v) => { this.beginCoalesce(); this.setShapeParam("inner", v, "ellipse"); }, () => { this.commitCoalesce("Ring"); this._renderInspector(); }));
+    }
+    rows.push(inspRow("", ghostBtn("Expand to path", () => this.expandShapes())));
+    return rows;
+  },
+  // Set one corner radius (index 0..3 = TL,TR,BR,BL) of a live rect — no push (coalesced).
+  setRectCorner(idx, v) {
+    this._eachSel((n) => { if (isLiveShape(n) && shapeKind(n) === "rect") { const r = rectRadii(n); r[idx] = Math.max(0, v); setShapeParam(n, "r", r.join(" ")); } });
+    this._renderSelection();
   },
   // A colour row: a swatch button (None shows a hatched chip) that opens the
   // unified picker. `apply(hex|null, alpha)` is called live; history is coalesced.
