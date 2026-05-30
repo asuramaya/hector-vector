@@ -31,9 +31,13 @@ function roundedRing(pts, corner) {
     enter[i] = lerp(cur, prev, Math.min(corner, dp / 2) / dp);
     exit[i] = lerp(cur, next, Math.min(corner, dn / 2) / dn);
   }
+  // CUBIC corners (was quadratic Q — quads have one control, aren't pen-editable, and
+  // read as "weird" points). q→c: c1 = p0 + ⅔(ctrl−p0), c2 = p1 + ⅔(ctrl−p1).
+  const round = (p0, ctrl, p1) =>
+    `C${f(p0.x + 2 / 3 * (ctrl.x - p0.x), p0.y + 2 / 3 * (ctrl.y - p0.y))} ${f(p1.x + 2 / 3 * (ctrl.x - p1.x), p1.y + 2 / 3 * (ctrl.y - p1.y))} ${f(p1.x, p1.y)}`;
   let s = `M${f(exit[0].x, exit[0].y)}`;
-  for (let i = 1; i < n; i++) s += ` L${f(enter[i].x, enter[i].y)} Q${f(pts[i].x, pts[i].y)} ${f(exit[i].x, exit[i].y)}`;
-  s += ` L${f(enter[0].x, enter[0].y)} Q${f(pts[0].x, pts[0].y)} ${f(exit[0].x, exit[0].y)} Z`;
+  for (let i = 1; i < n; i++) s += ` L${f(enter[i].x, enter[i].y)} ${round(enter[i], pts[i], exit[i])}`;
+  s += ` L${f(enter[0].x, enter[0].y)} ${round(enter[0], pts[0], exit[0])} Z`;
   return s;
 }
 
@@ -145,19 +149,27 @@ export function rectRadii(n) {
   return [raw[0] || 0, raw[1] || 0, raw[2] || 0, raw[3] || 0];
 }
 
-// regenerate `d` from the params; returns the d string (and writes it).
-export function regenShape(n) {
+// compute `d` from the params WITHOUT writing — a live shape's `d` always equals this, so
+// a mismatch means it was hand-edited (node tool) and should be frozen to freeform.
+export function computeShapeD(n) {
   if (!isLiveShape(n)) return n.getAttribute("d") || "";
   const kind = n.getAttribute("data-hv-shape");
   const b = shapeBox(n), cx = b.x + b.w / 2, cy = b.y + b.h / 2, rx = b.w / 2, ry = b.h / 2;
-  let d = "";
-  if (kind === "rect") d = roundedRectD(b.x, b.y, b.w, b.h, rectRadii(n));
-  else if (kind === "poly") d = polygonD(cx, cy, rx, ry, dnum(n, "sides", 5), dnum(n, "rot", 0), dnum(n, "corner", 0));
-  else if (kind === "star") d = starD(cx, cy, rx, ry, dnum(n, "points", 5), dnum(n, "inset", 0.5), dnum(n, "rot", 0), dnum(n, "corner", 0));
-  else if (kind === "ellipse") d = ellipseD(cx, cy, rx, ry, dnum(n, "start", 0), dnum(n, "end", 0), dnum(n, "inner", 0));
+  if (kind === "rect") return roundedRectD(b.x, b.y, b.w, b.h, rectRadii(n));
+  if (kind === "poly") return polygonD(cx, cy, rx, ry, dnum(n, "sides", 5), dnum(n, "rot", 0), dnum(n, "corner", 0));
+  if (kind === "star") return starD(cx, cy, rx, ry, dnum(n, "points", 5), dnum(n, "inset", 0.5), dnum(n, "rot", 0), dnum(n, "corner", 0));
+  if (kind === "ellipse") return ellipseD(cx, cy, rx, ry, dnum(n, "start", 0), dnum(n, "end", 0), dnum(n, "inner", 0));
+  return "";
+}
+// regenerate `d` from the params; returns the d string (and writes it).
+export function regenShape(n) {
+  if (!isLiveShape(n)) return n.getAttribute("d") || "";
+  const d = computeShapeD(n);
   if (d) n.setAttribute("d", d);
   return d;
 }
+// True if a live shape's `d` no longer matches its params (i.e. it was hand-edited).
+export function shapeWasEdited(n) { return isLiveShape(n) && (n.getAttribute("d") || "") !== computeShapeD(n); }
 
 // set one param (data-hv-<key>) and regenerate
 export function setShapeParam(n, key, value) {

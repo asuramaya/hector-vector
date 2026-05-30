@@ -68,6 +68,65 @@ export function serializeSegs(segs) {
   }).join(" ");
 }
 
+// ---- stroke-context geometry: is a Join / Cap control meaningful for this path? ----
+const _sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y });
+function _cornerInSub(items, closed, cosTol) {
+  let last = items.length - 1;
+  const eq = (a, b) => Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) < 1e-6;
+  if (closed && last >= 1) {
+    if (eq(items[last].pt, items[0].pt)) { items[0].in = items[last].in; last -= 1; }   // last pt == start
+    else { const c = _sub(items[0].pt, items[last].pt); items[last].out = c; items[0].in = c; }   // straight close
+  }
+  for (let k = 0; k <= last; k++) {
+    const it = items[k];
+    if (!it.in || !it.out) continue;
+    const li = Math.hypot(it.in.x, it.in.y), lo = Math.hypot(it.out.x, it.out.y);
+    if (li < 1e-9 || lo < 1e-9) continue;
+    if ((it.in.x * it.out.x + it.in.y * it.out.y) / (li * lo) < cosTol) return true;   // tangent break = corner
+  }
+  return false;
+}
+// True if the path has any "pointy" vertex (a tangent discontinuity > tolDeg). A stroke
+// Join only matters where two segments meet at an angle — an all-curves shape has none.
+export function pathHasCorner(d, tolDeg = 8) {
+  const segs = parsePath(d);
+  const cosTol = Math.cos(tolDeg * Math.PI / 180);
+  let i = 0;
+  while (i < segs.length) {
+    if (segs[i].t !== "M") { i++; continue; }
+    const items = [{ pt: segs[i].end, in: null, out: null }];
+    let closed = false, j = i + 1;
+    for (; j < segs.length; j++) {
+      const s = segs[j];
+      if (s.t === "M") break;
+      if (s.t === "Z") { closed = true; j++; break; }
+      const prev = items[items.length - 1];
+      let outD, inD;
+      if (s.t === "C") { outD = _sub(s.c1, prev.pt); inD = _sub(s.end, s.c2); }
+      else if (s.t === "Q") { outD = _sub(s.c1, prev.pt); inD = _sub(s.end, s.c1); }
+      else { outD = _sub(s.end, prev.pt); inD = outD; }   // L / A → chord direction
+      prev.out = outD;
+      items.push({ pt: s.end, in: inD, out: null });
+    }
+    if (_cornerInSub(items, closed, cosTol)) return true;
+    i = j;
+  }
+  return false;
+}
+// True if any subpath is open (no Z). A stroke Cap only shows on open ends / dash ends.
+export function pathOpenEnds(d) {
+  const segs = parsePath(d);
+  let i = 0;
+  while (i < segs.length) {
+    if (segs[i].t !== "M") { i++; continue; }
+    let j = i + 1, closed = false;
+    for (; j < segs.length && segs[j].t !== "M"; j++) if (segs[j].t === "Z") closed = true;
+    if (!closed) return true;
+    i = j;
+  }
+  return false;
+}
+
 // Build a path `d` from pen anchors. Each anchor is {x,y,in,out} where `out` is
 // the outgoing bezier handle and `in` the incoming one (either null for a corner
 // on that side). Smooth points keep `in`/`out` mirrored; a cusp has them

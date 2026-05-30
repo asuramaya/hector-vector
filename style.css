@@ -745,6 +745,7 @@ button:disabled {
 .layers-foot { flex: 0 0 auto; border-top: 1px solid var(--hair); }
 .layers-foot:empty { display: none; }
 .rail-section.collapsed .layers-foot { display: none; }
+.rail-section.collapsed .insp-foot { display: none; }   /* hide the align chin when the panel is folded */
 .rail-section.collapsed .section-head .caret { transform: rotate(-90deg); }
 .rail-section.collapsed .section-body { display: none; }
 /* Dock-aware header: the caret sits on the OUTER (screen) edge and, when collapsed,

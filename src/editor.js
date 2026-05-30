@@ -12,7 +12,8 @@ import {
   currentTranslate, setTranslate, matForOp, bakeMatrixInto, transformShapeGeometry,
   shapeToAbsPath, makeShapeNode, sizeShape, shapeMeaningful, collectAnchors, pathNodes, pathToAnchors,
   nearestOnPaths, splitCubicInsert, catmullRomAnchors,
-  isLiveShape, shapeKind, shapeKindName, shapeBox, rectRadii, regenShape, setShapeParam, setShapeBox, freezeShape,
+  isLiveShape, shapeKind, shapeKindName, shapeBox, rectRadii, regenShape, setShapeParam, setShapeBox, freezeShape, shapeWasEdited,
+  pathHasCorner, pathOpenEnds,
 } from "./hv/index.js";
 import {
   setStatus, api, refreshAll, viewports, measureFit, outputPreviewEl,
@@ -931,6 +932,9 @@ const editor = {
   mountNodeHandles() {
     this.unmountNodeHandles();
     const ov = this._overlayEl(); if (!ov || !this.stage) return;
+    // A live shape whose `d` no longer matches its params was hand-edited in the node tool
+    // (any edit path: drag / reshape / convert / delete) → freeze it to a plain freeform path.
+    this.stage.querySelectorAll("path[data-hv-shape]").forEach((n) => { if (shapeWasEdited(n)) freezeShape(n); });
     this._bakeArtTransforms();                     // normalize translates so handles align with the shapes
     const accept = this._nodeFocusAccept();
     const pnodes = pathNodes(this.stage, accept);  // path anchors carry bezier direction handles
@@ -1083,6 +1087,7 @@ const editor = {
         if (alt && !moved) this._altClickAnchor(nd);                       // Alt-click (no drag) → smooth→corner
         else if (!alt && e.shiftKey && !moved && wasSel) this._nodeSel.delete(key);   // Shift-click (no drag) → deselect
         this.mountNodeHandles();
+        if (moved || alt) this._renderInspector();   // a hand-edited live shape just froze → refresh the panel (Shape → freeform)
       };
       c.addEventListener("pointermove", move);
       c.addEventListener("pointerup", up);
@@ -1233,6 +1238,7 @@ const editor = {
         dot.classList.remove("dragging"); this._handleDragging = false;
         dot.removeEventListener("pointermove", move); dot.removeEventListener("pointerup", up);
         this.mountNodeHandles();
+        if (pushed) this._renderInspector();   // edited a live shape → it froze → refresh the panel
       };
       dot.addEventListener("pointermove", move);
       dot.addEventListener("pointerup", up);
@@ -1255,6 +1261,7 @@ const editor = {
         c.classList.remove("dragging"); this._handleDragging = false;
         c.removeEventListener("pointermove", move); c.removeEventListener("pointerup", up);
         this.mountNodeHandles();
+        if (pushed) this._renderInspector();   // edited a live shape → it froze → refresh the panel
       };
       c.addEventListener("pointermove", move);
       c.addEventListener("pointerup", up);
@@ -1476,6 +1483,7 @@ const editor = {
     const up = () => {
       window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
       this.mountNodeHandles();
+      if (pushed) this._renderInspector();   // reshaped a live shape → it froze → refresh the panel
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -2656,9 +2664,20 @@ const editor = {
     }
     if (shapeRows.length) wrap.appendChild(inspGroup("Shape", shapeRows));
 
-    // STROKE — weight, cap, join, miter limit, dashes. Cap/join/dash are meaningless
-    // without a stroke and miter only applies to a miter join, so those rows APPEAR/
-    // DISAPPEAR with context (rather than greying out) to save vertical space.
+    // STROKE — weight, cap, join, miter limit, dashes. The sub-rows APPEAR/DISAPPEAR with
+    // context (no greying): Cap only where the stroke has visible ENDS (open paths or a
+    // dash/dotted pattern), Join only where the shape has a POINTY corner (an all-curves
+    // shape like a circle has none), Miter only for a miter join.
+    const strokeGeom = (n) => {
+      const tag = n.tagName.toLowerCase();
+      if (tag === "path") { const d = n.getAttribute("d") || ""; return { open: pathOpenEnds(d), corner: pathHasCorner(d) }; }
+      if (tag === "line") return { open: true, corner: false };
+      if (tag === "polyline") return { open: true, corner: true };
+      if (tag === "rect" || tag === "polygon") return { open: false, corner: true };
+      return { open: false, corner: false };   // circle / ellipse — all curves
+    };
+    const hasOpenEnd = reads.some((n) => strokeGeom(n).open);
+    const hasCorner = reads.some((n) => strokeGeom(n).corner);
     const strokeC = common((n) => n.getAttribute("stroke"));
     const strokeWC = common((n) => parseFloat(n.getAttribute("stroke-width")) || 0);
     const strokeVal = strokeC.value;
@@ -2678,22 +2697,30 @@ const editor = {
     const widthRow = numRow("Width", strokeW, 0, 0.5, (v) => { this.beginCoalesce(); this.applyStroke(curC(), v); }, (inp) => { this._strokeWidthInput = inp; }, () => { this.commitCoalesce("Stroke width"); this._renderInspector(); }, !!strokeWC.mixed);
     const strokeRows = [widthRow];
     if (hasStroke) {
-      strokeRows.push(this._segRow("Cap", capC.mixed ? null : (capC.value || "butt"),
-        [["butt", CAP_GLYPH.butt], ["round", CAP_GLYPH.round], ["square", CAP_GLYPH.square]],
-        { butt: "Butt", round: "Round", square: "Projecting" },
-        (v) => { this.push("Stroke cap"); this.setStrokeAttr("stroke-linecap", v); }));
-      // Changing the join re-renders so the Miter row appears only for a miter join.
-      strokeRows.push(this._segRow("Join", joinC.mixed ? null : join,
-        [["miter", JOIN_GLYPH.miter], ["round", JOIN_GLYPH.round], ["bevel", JOIN_GLYPH.bevel]],
-        { miter: "Miter", round: "Round", bevel: "Bevel" },
-        (v) => { this.push("Stroke join"); this.setStrokeAttr("stroke-linejoin", v); this._renderInspector(); }));
-      if (join === "miter" && !joinC.mixed) {
-        strokeRows.push(this._numSliderRow("Miter", miterC.value == null ? 4 : miterC.value, 1, 20, 0.5,
-          (v) => { this.beginCoalesce(); this.setStrokeAttr("stroke-miterlimit", nfmt(v)); }, () => this.commitCoalesce("Miter limit"), !!miterC.mixed));
+      const dashed = !!(dashC.value && dashC.value !== "none" && /[1-9]/.test(dashC.value));
+      // Cap: only where the stroke has ends to cap (open path, or a dash/dotted pattern).
+      if (hasOpenEnd || dashed) {
+        strokeRows.push(this._segRow("Cap", capC.mixed ? null : (capC.value || "butt"),
+          [["butt", CAP_GLYPH.butt], ["round", CAP_GLYPH.round], ["square", CAP_GLYPH.square]],
+          { butt: "Butt", round: "Round", square: "Projecting" },
+          (v) => { this.push("Stroke cap"); this.setStrokeAttr("stroke-linecap", v); }));
       }
+      // Join: only where the shape has a pointy corner. Changing it re-renders so the
+      // Miter row appears only for a miter join.
+      if (hasCorner) {
+        strokeRows.push(this._segRow("Join", joinC.mixed ? null : join,
+          [["miter", JOIN_GLYPH.miter], ["round", JOIN_GLYPH.round], ["bevel", JOIN_GLYPH.bevel]],
+          { miter: "Miter", round: "Round", bevel: "Bevel" },
+          (v) => { this.push("Stroke join"); this.setStrokeAttr("stroke-linejoin", v); this._renderInspector(); }));
+        if (join === "miter" && !joinC.mixed) {
+          strokeRows.push(this._numSliderRow("Miter", miterC.value == null ? 4 : miterC.value, 1, 20, 0.5,
+            (v) => { this.beginCoalesce(); this.setStrokeAttr("stroke-miterlimit", nfmt(v)); }, () => this.commitCoalesce("Miter limit"), !!miterC.mixed));
+        }
+      }
+      // Dashes commit re-renders so the Cap row appears once a dash/dotted pattern exists.
       strokeRows.push(this._dashRow("Dashes", dashC.value || "", curW(),
         (arr, dotted) => { this.beginCoalesce(); this.setStrokeAttr("stroke-dasharray", arr); if (dotted) this.setStrokeAttr("stroke-linecap", "round"); },
-        () => this.commitCoalesce("Dashes"), !!dashC.mixed));
+        () => { this.commitCoalesce("Dashes"); this._renderInspector(); }, !!dashC.mixed));
     }
     wrap.appendChild(inspGroup("Stroke", strokeRows));
 

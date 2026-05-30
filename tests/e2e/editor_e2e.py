@@ -365,15 +365,20 @@ def main():
         page.wait_for_timeout(60)
         check("inspector opacity applies", page.evaluate("editor.nodeById('r1').getAttribute('opacity')") == "0.5")
 
-        # inspector: stroke cap (segmented control) + dashes (r1 has a stroke now)
+        # inspector: stroke cap. Cap is CONTEXTUAL (only with open ends or a dash pattern),
+        # and r1 is a closed solid rect, so apply dashes first to reveal the Cap seg.
         open_ctx_panel(page)
-        seg_active = page.evaluate("""() => { const seg = document.querySelectorAll('.context-panel .insp-seg')[0];
-            const btn = [...seg.querySelectorAll('.insp-seg-btn')].find(b => b.title === 'Round'); btn.click();
+        page.evaluate("editor.setStrokeAttr('stroke-dasharray','6 4'); editor._renderInspector();"); page.wait_for_timeout(50)
+        seg_active = page.evaluate("""() => { const row=[...document.querySelectorAll('.context-panel .insp-row')]
+            .find(r=>r.querySelector('span')&&r.querySelector('span').textContent==='Cap');
+            const seg=row.querySelector('.insp-seg');
+            const btn=[...seg.querySelectorAll('.insp-seg-btn')].find(b => b.title === 'Round'); btn.click();
             const a = seg.querySelector('.insp-seg-btn.active'); return a && a.title; }""")
         page.wait_for_timeout(40)
         check("stroke cap via segmented control", page.evaluate("editor.nodeById('r1').getAttribute('stroke-linecap')") == "round")
         # the segmented control updates its OWN active highlight (the 'unresponsive panel' fix)
         check("segmented control reflects the active option", seg_active == "Round", f"active={seg_active}")
+        page.evaluate("editor.setStrokeAttr('stroke-dasharray',null); editor._renderInspector();"); page.wait_for_timeout(40)
         # Miter row is contextual — present for a miter join, gone for round/bevel (it
         # appears/disappears rather than greying out). A new stroke seeds a round join, so
         # set miter first, then clicking the Join seg to round must re-render it away.
@@ -1199,6 +1204,23 @@ def main():
               page.evaluate("document.querySelectorAll('.hv-node-anchor').length") == 4
               and page.evaluate("document.querySelectorAll('.hv-node-handle').length") > 0)
         page.evaluate("editor.setTool('select')")
+
+        # ---- contextual stroke rows: Join only where a shape has POINTY corners, Cap only
+        #      where the stroke has visible ENDS (open path or dash/dotted pattern). ----
+        def stroke_labels():
+            return page.evaluate("""() => { const g=[...document.querySelectorAll('.context-panel .insp-group')]
+                .find(g=>{const t=g.querySelector('.insp-title');return t&&t.textContent==='Stroke';});
+                return g ? [...g.querySelectorAll('.insp-row > span, .insp-field > span')].map(s=>s.textContent) : []; }""")
+        page.evaluate(f"editor.selection=new Set(['{cid}']); editor.artboardSelected=false; editor.applyStroke('#000000',3); editor._renderInspector();"); page.wait_for_timeout(40)
+        check("circle (all curves, closed) hides Join AND Cap", "Join" not in stroke_labels() and "Cap" not in stroke_labels(), str(stroke_labels()))
+        mount_ctl(page); draw_shape(page, "line", 0.2, 0.2, 0.8, 0.6)
+        page.evaluate("editor.applyStroke('#000000',3); editor._renderInspector();"); page.wait_for_timeout(40)
+        ll = stroke_labels()
+        check("stroked line (open, no corners) shows Cap, hides Join", "Cap" in ll and "Join" not in ll, str(ll))
+        mount_ctl(page); draw_shape(page, "rect", 0.2, 0.2, 0.6, 0.6)
+        page.evaluate("editor.applyStroke('#000000',3); editor._renderInspector();"); page.wait_for_timeout(40)
+        rl = stroke_labels()
+        check("closed solid rect (corners) shows Join, hides Cap", "Join" in rl and "Cap" not in rl, str(rl))
         # FULL POINT CONTROL on shapes: a live polygon exposes one node anchor per vertex
         # in the node tool, and dragging one both moves the geometry and frees it from its
         # params (no "Expand" step needed).
@@ -1216,7 +1238,10 @@ def main():
         check("dragging a vertex edits the geometry and frees it from params",
               page.evaluate(f"!editor.nodeById('{nid}').hasAttribute('data-hv-shape')")
               and page.evaluate(f"editor.nodeById('{nid}').getAttribute('d')") != d_before)
-        page.evaluate("editor.setTool('select')")
+        # the object panel updates INSTANTLY — the parametric Type switch is gone now
+        page.evaluate(f"editor.setTool('select'); editor.selection=new Set(['{nid}']); editor._renderInspector();"); page.wait_for_timeout(40)
+        check("object panel instantly reflects the shape is no longer parametric",
+              not page.evaluate("""[...document.querySelectorAll('.context-panel .insp-row > span, .context-panel .insp-field > span')].some(s=>s.textContent==='Type')"""))
 
         # Keyboard shortcuts switch tools
         page.evaluate("editor.setTool('select')")
