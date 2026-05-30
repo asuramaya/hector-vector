@@ -936,9 +936,16 @@ button:disabled {
   text-align: center;
 }
 .menu-label { flex: 1 1 auto; }
-/* manageable menu row (Layout profiles): label + inline rename / delete buttons */
+.menu-item.checked .menu-check { color: var(--accent); }
+/* "edited" pill: the live arrangement diverges from the selected baseline */
+.menu-badge { flex: 0 0 auto; margin-left: 6px; font-size: 10px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--accent); border: 1px solid var(--accent); border-radius: 3px; padding: 0 4px; line-height: 15px; }
+/* manageable menu row (Layout profiles): label + inline rename / delete buttons.
+   The label carries the same real .menu-check gutter as a plain item (no faked indent). */
 .menu-row { padding: 2px 6px 2px 9px; gap: 2px; }
-.menu-row .menu-rowlabel { flex: 1 1 auto; min-width: 0; text-align: left; padding: 5px 3px 5px 20px; border: 1px solid transparent; background: var(--bg); color: var(--fg); font: inherit; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu-row .menu-rowlabel { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; text-align: left; padding: 5px 5px 5px 9px; border: 1px solid transparent; background: var(--bg); color: var(--fg); font: inherit; cursor: pointer; white-space: nowrap; }
+.menu-row .menu-rowlabel.checked { font-weight: 600; }
+.menu-row .menu-rowlabel.checked .menu-check { color: var(--accent); }
+.menu-row .menu-rowlabel .menu-label { overflow: hidden; text-overflow: ellipsis; }
 .menu-row .menu-rowlabel:hover { border-color: var(--line); }
 .menu-row .menu-rowbtn { flex: 0 0 auto; width: 24px; height: 26px; border: 1px solid transparent; background: var(--bg); color: var(--muted); font-size: 12px; cursor: pointer; }
 .menu-row .menu-rowbtn:hover { color: #fff; background: var(--accent); border-color: var(--accent); }

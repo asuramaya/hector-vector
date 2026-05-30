@@ -707,6 +707,42 @@ def main():
                 const rows=[...document.querySelectorAll('.menu[data-menu=layout] .menu-row')];
                 const ok = rows.some(r => r.querySelector('.menu-rowlabel') && r.querySelectorAll('.menu-rowbtn').length===2);
                 document.body.click(); window.__layout.deleteProfile('Row'); return ok; }"""))
+        # --- active-profile STATE: selection is tracked, divergence shows as "edited" ---
+        page.evaluate("window.__layout.reset()")
+        check("Default is the active baseline after reset",
+              page.evaluate("window.__layout.activeProfile() === null && window.__layout.isDirty() === false"))
+        # save current as a profile → it becomes the active selection (and persists)
+        page.evaluate("window.__layout.saveProfile('StateP')")
+        check("saving a profile makes it the active selection",
+              page.evaluate("""window.__layout.activeProfile() === 'StateP'
+                && window.__layout.isDirty() === false
+                && localStorage.getItem('hector-vector:layout-active') === 'StateP'"""))
+        # mutate the live arrangement → active profile is now dirty ("edited"), selection unchanged
+        page.evaluate("() => { const pen=document.querySelector('.toolstrip [data-tool=pen]'); document.querySelector('.actionbar').appendChild(pen); window.__layout.save(); }")
+        check("editing a selected profile marks it dirty without losing the selection",
+              page.evaluate("window.__layout.activeProfile() === 'StateP' && window.__layout.isDirty() === true"))
+        # the dropdown reflects state: active row checked + an "edited" badge
+        page.evaluate("document.querySelector('.menu[data-menu=layout] .menu-trigger').click()")
+        check("dropdown shows the active profile checked with an edited badge",
+              page.evaluate("""() => { const rows=[...document.querySelectorAll('.menu[data-menu=layout] .menu-row')];
+                const r = rows.find(r => /StateP/.test(r.textContent));
+                const checked = !!r && r.querySelector('.menu-rowlabel.checked') && r.querySelector('.menu-check').textContent.trim()==='✓';
+                const badge = !!r && !!r.querySelector('.menu-badge');
+                const upd = [...document.querySelectorAll('.menu[data-menu=layout] .menu-item')].some(i=>/Update/.test(i.textContent));
+                return checked && badge && upd; }"""))
+        page.evaluate("document.body.click()")
+        # Update folds the live edit back into the profile → clean again
+        page.evaluate("window.__layout.updateActive()")
+        check("Update writes the live arrangement back into the active profile",
+              page.evaluate("window.__layout.activeProfile() === 'StateP' && window.__layout.isDirty() === false"))
+        # renaming the active profile carries the selection across
+        page.evaluate("window.__layout.renameProfile('StateP','StateQ')")
+        check("renaming the active profile keeps it selected under the new name",
+              page.evaluate("window.__layout.activeProfile() === 'StateQ'"))
+        # deleting the active profile drops back to Default (null)
+        page.evaluate("window.__layout.deleteProfile('StateQ')")
+        check("deleting the active profile falls back to Default",
+              page.evaluate("window.__layout.activeProfile() === null && !window.__layout.listProfiles().includes('StateQ')"))
         # clean up: reset to default, exit customize mode
         page.evaluate("() => { window.__layout.reset(); if (window.__layout.isEditing()) window.__layout.toggleEdit(); }")
         # Ctrl/Cmd+R toggles the rulers

@@ -1713,18 +1713,23 @@ const MENU_ITEMS = {
   // Toolbar layout: toggle customize mode, switch/save profiles, reset to default.
   "layout": () => {
     if (!layoutCtl) return [{ label: "Customize layout", disabled: true, onClick: () => {} }];
+    const active = layoutCtl.activeProfile();   // null = the unnamed "Default" working layout
+    const dirty = layoutCtl.isDirty();          // live arrangement diverges from its baseline
     const items = [
       { label: "Customize layout", type: "toggle", checked: layoutCtl.isEditing(), onClick: () => layoutCtl.toggleEdit() },
       { type: "sep" },
-      { label: "Default", onClick: () => layoutCtl.reset() },
+      { label: "Default", checked: active === null, badge: (active === null && dirty) ? "edited" : null, onClick: () => layoutCtl.reset() },
     ];
     for (const name of layoutCtl.listProfiles()) items.push({
       label: name,
+      checked: name === active,
+      badge: (name === active && dirty) ? "edited" : null,
       onClick: () => layoutCtl.applyProfile(name),
       onRename: () => layoutCtl.renamePrompt(name),
       onDelete: () => layoutCtl.deleteProfile(name),
     });
     items.push({ type: "sep" });
+    if (active && dirty) items.push({ label: `Update “${active}”`, onClick: () => layoutCtl.updateActive() });
     items.push({ label: "Save current as profile…", onClick: () => layoutCtl.saveProfilePrompt() });
     return items;
   },
@@ -2071,11 +2076,26 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       if (!on && editor.onInspect) editor.onInspect();   // restore the correct disabled states (onInspect runs refreshActionButtons)
       setStatus(on ? "Customize layout: drag buttons between bars (incl. panel headers) — changes save automatically." : "Ready.", on ? 6000 : 1500);
     }
-    function reset() { try { localStorage.removeItem(LAYOUT_KEY); } catch {} apply(DEFAULT); setStatus("Layout reset to default.", 1500); }
-    function applyProfile(name) { const p = loadProfiles()[name]; if (!p) return; apply(p); persist(); setStatus(`Layout: ${name}.`, 1500); }
-    function saveProfile(name) { const nm = (name || "").trim(); if (!nm) return false; const p = loadProfiles(); p[nm] = capture(); saveProfiles(p); return true; }
-    function deleteProfile(name) { const p = loadProfiles(); if (!(name in p)) return; delete p[name]; saveProfiles(p); }
-    function renameProfile(oldName, newName) { const nm = (newName || "").trim(); if (!nm || nm === oldName) return false; const p = loadProfiles(); if (!(oldName in p)) return false; p[nm] = p[oldName]; delete p[oldName]; saveProfiles(p); return true; }
+    // ---- active-profile state (the source of truth for "which profile is selected") ----
+    // null = the unnamed working layout ("Default"). The live arrangement can DIVERGE from
+    // its baseline (a profile snapshot, or the authored DEFAULT) — that's the "edited" state.
+    const ACTIVE_KEY = "hector-vector:layout-active";
+    let activeProfile = null;
+    try { activeProfile = localStorage.getItem(ACTIVE_KEY) || null; } catch {}
+    if (activeProfile && !(activeProfile in loadProfiles())) activeProfile = null;   // pruned/renamed away
+    const setActive = (name) => { activeProfile = name || null; try { activeProfile ? localStorage.setItem(ACTIVE_KEY, activeProfile) : localStorage.removeItem(ACTIVE_KEY); } catch {} };
+    // Dirty = the live arrangement diverges from its baseline. Compare only the bars the
+    // baseline actually records, so a profile saved before a newer panel existed doesn't
+    // read as "edited" the instant it's applied (its missing bars simply aren't compared).
+    const sameAs = (base) => { if (!base) return false; const now = capture(); return Object.keys(base).every((k) => JSON.stringify(base[k]) === JSON.stringify(now[k])); };
+    const isDirty = () => activeProfile ? !sameAs(loadProfiles()[activeProfile]) : !sameAs(DEFAULT);
+
+    function reset() { try { localStorage.removeItem(LAYOUT_KEY); } catch {} apply(DEFAULT); setActive(null); setStatus("Layout reset to default.", 1500); }
+    function applyProfile(name) { const p = loadProfiles()[name]; if (!p) return; apply(p); persist(); setActive(name); setStatus(`Layout: ${name}.`, 1500); }
+    function saveProfile(name) { const nm = (name || "").trim(); if (!nm) return false; const p = loadProfiles(); p[nm] = capture(); saveProfiles(p); setActive(nm); return true; }
+    function updateActive() { if (!activeProfile) return false; const p = loadProfiles(); if (!(activeProfile in p)) return false; p[activeProfile] = capture(); saveProfiles(p); setStatus(`Updated profile "${activeProfile}".`, 1600); return true; }
+    function deleteProfile(name) { const p = loadProfiles(); if (!(name in p)) return; delete p[name]; saveProfiles(p); if (activeProfile === name) setActive(null); }
+    function renameProfile(oldName, newName) { const nm = (newName || "").trim(); if (!nm || nm === oldName) return false; const p = loadProfiles(); if (!(oldName in p) || nm in p) return false; p[nm] = p[oldName]; delete p[oldName]; saveProfiles(p); if (activeProfile === oldName) setActive(nm); return true; }
 
     // Exposed for the header Layout dropdown (MENU_ITEMS.layout) + E2E.
     layoutCtl = {
@@ -2083,9 +2103,16 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       toggleEdit: () => setEditing(!editing),
       registerBar,
       reset, applyProfile, deleteProfile, renameProfile, save: persist,
-      saveProfile,
-      saveProfilePrompt: () => { const n = window.prompt("Save current layout as a profile:", ""); if (n == null) return; if (saveProfile(n)) setStatus(`Saved layout profile "${n.trim()}".`, 1800); },
-      renamePrompt: (name) => { const n = window.prompt("Rename layout profile:", name); if (n == null) return; renameProfile(name, n); },
+      saveProfile, updateActive,
+      activeProfile: () => activeProfile,
+      isDirty,
+      saveProfilePrompt: () => {
+        const n = window.prompt("Save current layout as a profile:", activeProfile || "");
+        if (n == null) return; const nm = n.trim(); if (!nm) return;
+        if ((nm in loadProfiles()) && !window.confirm(`A profile named "${nm}" exists. Overwrite it?`)) return;
+        if (saveProfile(nm)) setStatus(`Saved layout profile "${nm}".`, 1800);
+      },
+      renamePrompt: (name) => { const n = window.prompt("Rename layout profile:", name); if (n == null) return; if (!renameProfile(name, n) && n.trim() && n.trim() !== name) setStatus(`A profile named "${n.trim()}" already exists.`, 2400); },
       listProfiles: () => Object.keys(loadProfiles()),
     };
     window.__layout = layoutCtl;
@@ -2545,9 +2572,12 @@ function openMenu(menuEl) {
     if (item.type === "sep") { const sep = document.createElement("div"); sep.className = "menu-sep"; list.appendChild(sep); continue; }
     // a manageable row: a label that activates the item + inline rename / delete buttons
     // (used by the Layout profiles). Re-open the menu after a mutation so the list refreshes.
+    const badgeHTML = item.badge ? `<span class="menu-badge">${item.badge}</span>` : "";
     if (item.onRename || item.onDelete) {
-      const row = document.createElement("div"); row.className = "menu-item menu-row";
-      const lab = document.createElement("button"); lab.type = "button"; lab.className = "menu-rowlabel"; lab.setAttribute("role", "menuitem"); lab.textContent = item.label;
+      const row = document.createElement("div"); row.className = "menu-item menu-row" + (item.checked ? " checked" : "");
+      const lab = document.createElement("button"); lab.type = "button"; lab.className = "menu-rowlabel" + (item.checked ? " checked" : ""); lab.setAttribute("role", "menuitemradio"); lab.setAttribute("aria-checked", item.checked ? "true" : "false");
+      lab.innerHTML = `<span class="menu-check">${item.checked ? "✓" : ""}</span><span class="menu-label"></span>${badgeHTML}`;
+      lab.querySelector(".menu-label").textContent = item.label;
       lab.addEventListener("click", async () => { closeMenus(); try { await item.onClick(); } catch (e) { setStatus(e.message || String(e), 3000); } });
       row.appendChild(lab);
       const reopen = (mut) => { const m = openMenuEl; try { mut(); } catch (e) { setStatus(e.message || String(e), 3000); } closeMenus(); if (m) openMenu(m); };
@@ -2560,7 +2590,7 @@ function openMenu(menuEl) {
     btn.className = "menu-item" + (item.type === "toggle" ? " menu-toggle" : "") + (item.checked ? " checked" : "");
     btn.disabled = !!item.disabled;
     btn.setAttribute("role", "menuitem");
-    btn.innerHTML = `<span class="menu-check">${item.checked ? "✓" : ""}</span><span class="menu-label"></span>`;
+    btn.innerHTML = `<span class="menu-check">${item.checked ? "✓" : ""}</span><span class="menu-label"></span>${badgeHTML}`;
     btn.querySelector(".menu-label").textContent = item.label;
     btn.addEventListener("click", async () => {
       closeMenus();
