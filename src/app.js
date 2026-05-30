@@ -1927,10 +1927,12 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     const SEP = "|";
     // each frame bar is a drop zone (swatches now live on the canvas, not the toolstrip).
     const BARS = [
-      { name: "tools",    sel: ".toolstrip",         tail: null },
-      { name: "arrange",  sel: ".stage-toolbar",     tail: null },
-      { name: "actions",  sel: ".actionbar",         tail: null },
-      { name: "viewport", sel: ".viewport-controls", tail: null },
+      { name: "tools",       sel: ".toolstrip",         tail: null },
+      { name: "arrange",     sel: ".stage-toolbar",     tail: null },
+      { name: "actions",     sel: ".actionbar",         tail: null },
+      { name: "viewport",    sel: ".viewport-controls", tail: null },
+      { name: "hdr-history", sel: ".rail-section.history .panel-actions", tail: null },
+      { name: "hdr-layers",  sel: ".rail-section.layers .panel-actions",  tail: null },
     ];
     const barOf = (b) => b.el || document.querySelector(b.sel);   // bars are sel- OR element-based (panel headers)
     const isTile = (el) => !!(el && el.classList && el.classList.contains("tool-button") && !el.classList.contains("panel-x"));   // the × isn't a movable tile
@@ -2048,7 +2050,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     // panel headers are built dynamically (after this module), so they opt in on creation.
     function registerBar(name, el) {
       if (!el || BARS.some((b) => b.name === name)) return;
-      const bar = { name, el, tail: null };
+      const bar = { name, el, tail: el.querySelector(".hdr-slot-empty") ? ".hdr-slot-empty" : null };   // drops land before the blank slot
       BARS.push(bar);
       if (!(name in DEFAULT)) DEFAULT[name] = movable(bar).map(slotKey);   // authored default (for Reset)
       const saved = loadSaved();
@@ -2162,7 +2164,8 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       const actions = s.querySelector(".panel-actions");
       const slot = HDR_SLOTS[name];
       if (slot) { const b = document.createElement("button"); b.type = "button"; b.id = slot.id; b.className = "tool-button"; b.title = slot.t; b.textContent = slot.g; b.addEventListener("click", (e) => { e.stopPropagation(); slot.fn(); }); actions.appendChild(b); }
-      const x = document.createElement("button"); x.type = "button"; x.className = "tool-button fp-close panel-x"; x.title = "Close"; x.textContent = "×";
+      const ph = document.createElement("span"); ph.className = "hdr-slot-empty"; ph.title = "Empty slot — drag a tool here while customising"; actions.appendChild(ph);   // button-sized blank slot (drop target)
+      const x = document.createElement("button"); x.type = "button"; x.className = "tool-button fp-close panel-x"; x.title = "Dock to rail"; x.textContent = "×";
       x.addEventListener("click", (e) => { e.stopPropagation(); close(name); });
       actions.appendChild(x);
       bindHeaderDrag(s); wireSectionCollapse(s);

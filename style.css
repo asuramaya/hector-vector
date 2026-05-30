@@ -387,11 +387,12 @@ button:disabled {
    while the panel floats (incl. when collapsed). */
 .leftdock .panel-x, .rightdock .panel-x { display: none; }
 .dock-window .rail-section.collapsed .panel-actions { display: flex; }   /* keep × reachable on a collapsed float */
-/* Panel header action area = a customize-layout drop RECEIVER. Buttons are smaller here,
-   and a little blank room keeps a visible slot to drop a tool into. */
-.section-head .panel-actions.hdr-slots { min-width: 56px; }
-.section-head .panel-actions.hdr-slots .tool-button { width: 24px; height: 24px; font-size: 12px; }
-.app.editor.customizing .panel-actions.hdr-slots { outline: 1px dashed var(--accent); outline-offset: -1px; background: color-mix(in srgb, var(--accent) 7%, var(--bg)); min-width: 66px; border-radius: 2px; }
+/* Every panel header action area is a customize-layout drop RECEIVER. All header buttons
+   are one consistent size, and the blank slot is a same-size (1:1) box. */
+.section-head .panel-actions .tool-button { width: 26px; height: 26px; font-size: 12px; }
+.section-head .hdr-slot-empty { box-sizing: border-box; width: 26px; height: 26px; flex: 0 0 auto; border: 1px dashed var(--line); background: none; opacity: 0.5; border-radius: 2px; }
+.app.editor.customizing .section-head .panel-actions { outline: 1px dashed var(--accent); outline-offset: -1px; background: color-mix(in srgb, var(--accent) 7%, var(--bg)); border-radius: 2px; }
+.app.editor.customizing .section-head .hdr-slot-empty { opacity: 1; border-color: var(--accent); }
 /* Colour panel: the picker editor embedded in a panel body (no backdrop/window chrome). */
 .color .fp-body { padding: 0; }
 .cp-window.cp-embedded { position: static; width: auto; max-width: none; border: 0; box-shadow: none; padding: 8px; gap: 7px; }
@@ -1486,6 +1487,8 @@ button:disabled {
 .app.editor.customizing .stage-toolbar,
 .app.editor.customizing .actionbar,
 .app.editor.customizing .viewport-controls { outline: 1px dashed var(--accent); outline-offset: -1px; background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
+/* the Layers artboard chin reads as part of the customizable frame too */
+.app.editor.customizing .layers-foot { outline: 1px dashed var(--accent); outline-offset: -1px; background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
 /* tiles become draggable handles; their normal click is suppressed while customizing */
 .app.editor.customizing .tool-button { cursor: grab; }
 .app.editor.customizing .tool-button:active { cursor: grabbing; }
