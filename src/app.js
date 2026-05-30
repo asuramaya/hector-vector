@@ -2268,6 +2268,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       w.dataset.dockWindow = name;
       w.style.left = x + "px"; w.style.top = y + "px"; w.style.width = ww + "px"; w.style.height = wh + "px";
       document.body.appendChild(w); w.appendChild(s);
+      s.style.flex = "";   // shed the docked flex (inline 0 0 Npx) so the section fills the float window instead of staying fixed-height
       s.classList.remove("collapsed");
       w._ro = new ResizeObserver(() => { const b = w.getBoundingClientRect(); state[name].rect = { x: b.left, y: b.top, w: b.width, h: b.height }; persist(); });
       w._ro.observe(w);
@@ -2333,14 +2334,14 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     }
 
     function setLoc(name, loc, beforeName) {
-      if (loc === "float") { state[name].loc = "float"; if (name === "properties") state[name].visible = true; }
+      if (loc === "float") { state[name].loc = "float"; if (SUMMONED.has(name)) state[name].visible = true; }
       else {
         // insert into `side`, ordered: before `beforeName` (or at the end)
         const others = ORDER.filter((n) => n !== name && state[n].loc === loc).sort((a, b) => (state[a].order || 0) - (state[b].order || 0));
         const idx = beforeName ? others.indexOf(beforeName) : others.length;
         others.splice(idx < 0 ? others.length : idx, 0, name);
         others.forEach((n, i) => state[n].order = i);
-        state[name].loc = loc; if (name === "properties") state[name].visible = true;
+        state[name].loc = loc; if (SUMMONED.has(name)) state[name].visible = true;
       }
       reconcile(); persist();
     }
@@ -2389,7 +2390,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
           if (!moved) {
             if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
             moved = true; head._docking = true;
-            if (!win) { win = ensureFloatWin(name, ev.clientX - offX, ev.clientY - offY); state[name].loc = "float"; if (name === "properties") state[name].visible = true; syncChrome(); }
+            if (!win) { win = ensureFloatWin(name, ev.clientX - offX, ev.clientY - offY); state[name].loc = "float"; if (SUMMONED.has(name)) state[name].visible = true; syncChrome(); }
             if (win) win.classList.add("dragging");
           }
           if (!win) return;

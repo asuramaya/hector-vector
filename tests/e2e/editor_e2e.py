@@ -1635,6 +1635,18 @@ def main():
               page.evaluate("window.__docks.loc('color')==='right' && !!document.querySelector('#rightdock .rail-section.color')"))
         check("docked panels hide the × (no close button in a rail)",
               page.evaluate("getComputedStyle(document.querySelector('#rightdock .rail-section.properties .panel-x')).display === 'none'"))
+        # floating the Colour panel must KEEP it (was a disappearing bug: float left it !visible
+        # so reconcile detached it from the DOM)
+        page.evaluate("window.__docks.float('color')"); page.wait_for_timeout(60)
+        check("floating Colour keeps it alive in a window (no vanish)",
+              page.evaluate("window.__docks.loc('color')==='float' && !!document.querySelector('.dock-window[data-dock-window=\"color\"] .rail-section.color')"))
+        # the × is hidden while floating too (re-dock by dragging the header)
+        check("floating panels also hide the × (drag header to re-dock)",
+              page.evaluate("getComputedStyle(document.querySelector('.dock-window[data-dock-window=\"color\"] .panel-x')).display === 'none'"))
+        # detached section sheds its docked flex so it fills the window (no fixed-height gap/clip)
+        check("a detached section fills its window (docked flex shed)",
+              page.evaluate("document.querySelector('.dock-window[data-dock-window=\"color\"] .rail-section.color').style.flex === ''"))
+        page.evaluate("window.__docks.dock('color','right')"); page.wait_for_timeout(40)
         page.evaluate("window.__docks.close('color'); window.__docks.dock('properties','right')"); page.wait_for_timeout(40)
         # fold BOTH side docks with the one toggle
         page.click('#rail-toggle'); page.wait_for_timeout(80)
