@@ -1053,10 +1053,13 @@ function openColorPicker(opts) {
     <div class="cp-actions">
       ${opts.allowNone ? `<button type="button" class="ghost-button cp-none">None</button>` : ""}
       <span class="cp-spacer"></span>
-      <button type="button" class="ghost-button cp-cancel">Cancel</button>
-      <button type="button" class="ghost-button cp-ok">OK</button>
+      ${opts.host ? "" : `<button type="button" class="ghost-button cp-cancel">Cancel</button><button type="button" class="ghost-button cp-ok">OK</button>`}
     </div>`;
-  document.body.appendChild(back);
+  // Embedded (host) mode = a live, persistent panel editor (no backdrop / OK / Cancel);
+  // otherwise the classic transactional floating picker.
+  const host = opts.host || null;
+  if (host) { win.classList.add("cp-embedded"); host.innerHTML = ""; host.appendChild(win); }
+  else document.body.appendChild(back);
 
   const $ = (s) => win.querySelector(s);
   const field = $(".cp-field"), fieldSat = $(".cp-field-sat"), fieldThumb = $(".cp-field-thumb");
@@ -1215,20 +1218,19 @@ function openColorPicker(opts) {
   renderSwatches();
 
   // --- actions ---
-  const close = () => { back.remove(); document.removeEventListener("keydown", onKey, true); _activeColorPicker = null; };
+  const close = () => { if (host) { win.remove(); } else { back.remove(); _activeColorPicker = null; } document.removeEventListener("keydown", onKey, true); };
   const ok = () => { if (opts.onCommit) opts.onCommit(st.none ? null : curHex(), st.a); close(); };
   const cancel = () => {
     if (duo) { duo.apply("fill", hv.toHexColor(orig.fill.color) || null, orig.fill.alpha); duo.apply("stroke", hv.toHexColor(orig.stroke.color) || null, orig.stroke.alpha); }
     else if (opts.onChange) opts.onChange(startHex, startAlpha);
     if (opts.onCancel) opts.onCancel(); close();
   };
-  $(".cp-ok").addEventListener("click", ok);
-  $(".cp-cancel").addEventListener("click", cancel);
-  if (opts.allowNone) $(".cp-none").addEventListener("click", () => { st.none = true; paint(); emit(); });
-  back.addEventListener("pointerdown", (e) => { if (e.target === back) cancel(); });
-  // Movable, panel-style window: drag it by the header (the backdrop no longer dims, so
-  // the canvas stays visible while you pick).
-  {
+  if ($(".cp-ok")) $(".cp-ok").addEventListener("click", ok);
+  if ($(".cp-cancel")) $(".cp-cancel").addEventListener("click", cancel);
+  if (opts.allowNone && $(".cp-none")) $(".cp-none").addEventListener("click", () => { st.none = true; paint(); emit(); });
+  if (!host) {
+    back.addEventListener("pointerdown", (e) => { if (e.target === back) cancel(); });
+    // Movable picker: drag it by the header (the backdrop no longer dims the canvas).
     const head = $(".cp-head"); if (head) {
       head.style.cursor = "move"; head.style.touchAction = "none";
       head.addEventListener("pointerdown", (e) => {
@@ -1244,6 +1246,7 @@ function openColorPicker(opts) {
     }
   }
   const onKey = (e) => {
+    if (host) return;   // panel mode: the toolstrip X/Shift+X handler drives the editor
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel(); }
     else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); ok(); }
     // X toggles fill/stroke, Shift+X swaps — intercepted even while a field is focused
@@ -1254,10 +1257,11 @@ function openColorPicker(opts) {
     }
   };
   document.addEventListener("keydown", onKey, true);
-  _activeColorPicker = { cancel };
+  if (!host) _activeColorPicker = { cancel };
 
   paint(); paintSide();
-  setTimeout(() => inputs.hex.focus(), 0);
+  if (!host) setTimeout(() => inputs.hex.focus(), 0);
+  return { destroy: close, switchTo, swapTargets };   // controller (host/panel mode uses this)
 }
 
 // Compact icon action-row shared by both gallery grids (Open/Place modal and the
@@ -1769,25 +1773,27 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     else { editor.applyStroke(hex || "none", hex ? strokeW() : 0); editor.applyStrokeOpacity(alpha); }
     refreshSwatches();
   };
-  // The main colour picker is a DUO: it edits fill (primary) + stroke (secondary)
-  // together, seeded from the current selection. `active` is which one the field
-  // starts on (X toggles inside the picker, Shift+X swaps); the picker's `apply`
-  // keeps the toolstrip swatches + `active` in sync. One coalesced "Colour" undo.
-  const pickFor = (which) => {
-    active = which; refreshSwatches();
-    editor.beginCoalesce();
-    openColorPicker({
-      title: "Colour", allowNone: true,
+  // The Colour panel is a DUO live editor (fill primary / stroke secondary), seeded from
+  // the selection. It's a dockable panel now (same as Properties), so the toolstrip
+  // swatch click just summons/focuses it; edits apply live and coalesce into one undo.
+  let colorCtl = null, coalescing = false, commitT = null;
+  const scheduleColorCommit = () => { clearTimeout(commitT); commitT = setTimeout(() => { if (coalescing) { editor.commitCoalesce("Colour"); coalescing = false; } }, 280); };
+  const colApply = (w, hex, a) => { if (!coalescing) { editor.beginCoalesce(); coalescing = true; } applyPaint(w, hex, a); active = w; refreshSwatches(); scheduleColorCommit(); };
+  // Build the live editor into a host element (the Colour panel body). Reused on each
+  // selection change (the docks module gates rebuilds to actual selection-set changes).
+  editor._renderColorPanel = (hostEl) => {
+    if (colorCtl) { colorCtl.destroy(); colorCtl = null; }
+    colorCtl = openColorPicker({
+      title: "Colour", allowNone: true, host: hostEl,
       duo: {
-        active: which,
+        active,
         fill: { color: cur("fill"), alpha: curAlpha("fill") },
         stroke: { color: cur("stroke"), alpha: curAlpha("stroke") },
-        apply: (w, hex, a) => { applyPaint(w, hex, a); active = w; refreshSwatches(); },
+        apply: colApply,
       },
-      onCommit: () => editor.commitCoalesce("Colour"),
-      onCancel: () => editor.cancelCoalesce(),
     });
   };
+  const pickFor = (which) => { active = which; refreshSwatches(); if (window.__docks) window.__docks.showColor(which); };
   const doSwap = () => {
     const f = cur("fill"), s = cur("stroke");
     editor.push("Swap fill/stroke");
@@ -1813,7 +1819,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const t = (e.target?.tagName || "").toLowerCase();
     if (t === "input" || t === "textarea" || t === "select" || e.target?.isContentEditable || !modalRootEl.hidden || _activeColorPicker) return;
-    if (e.key === "X" || e.key === "x") { e.preventDefault(); if (e.shiftKey) doSwap(); else { active = active === "fill" ? "stroke" : "fill"; refreshSwatches(); } }
+    if (e.key === "X" || e.key === "x") { e.preventDefault(); if (e.shiftKey) doSwap(); else { active = active === "fill" ? "stroke" : "fill"; refreshSwatches(); if (colorCtl) colorCtl.switchTo(active); } }
     else if (e.key === "d" || e.key === "D") { e.preventDefault(); setDefault(); }
     else if (e.key === "/") { e.preventDefault(); setNone(); }
   });
@@ -2073,9 +2079,11 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
   }
   // (The History/Layers vertical resizer is gone — docked panels share the column
   // height equally now that they're freely reorderable.)
-  // Collapsible rail sections (Photopea/Illustrator-style accordion), persisted.
-  document.querySelectorAll(".rail-section[data-section] .section-head").forEach((head) => {
-    const section = head.closest(".rail-section");
+  // Collapsible rail sections (Photopea/Illustrator-style accordion), persisted. Shared so
+  // dynamically-built panels (Properties, Colour) get a working caret too.
+  function wireSectionCollapse(section) {
+    const head = section.querySelector(".section-head"); if (!head || head._collapseWired) return;
+    head._collapseWired = true;
     const key = "hv-sec-" + section.dataset.section;
     if (localStorage.getItem(key) === "1") section.classList.add("collapsed");
     head.addEventListener("click", (e) => {
@@ -2085,7 +2093,8 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       try { localStorage.setItem(key, c ? "1" : "0"); } catch {}
       if (window.__docks) window.__docks.relayout();   // recompute the dock's height split
     });
-  });
+  }
+  document.querySelectorAll(".rail-section[data-section]").forEach(wireSectionCollapse);
 
   // ---- Dockable panels: drag a panel's header to detach/float, drop on a dock to attach;
   //      panels reorder within a dock; History/Layers/Properties are all the same object;
@@ -2096,33 +2105,37 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     const grid = document.querySelector(".editor-grid");
     const railToggle = document.querySelector("#rail-toggle");
     const DOCKS_KEY = "hector-vector:docks", FOLD_KEY = "hector-vector:sides-folded";
-    const ORDER = ["history", "layers", "properties"];   // home identity order
+    const ORDER = ["history", "layers", "properties", "color"];   // home identity order
     const dockElFor = (side) => (side === "left" ? leftDock : rightDock);
     let folded = localStorage.getItem(FOLD_KEY) === "1";
 
-    // Properties is summoned (not in the HTML) — build its section once.
-    let propsSection = null;
-    function ensureProps() {
-      if (propsSection) return propsSection;
+    // Properties + Colour aren't in the HTML — build their sections once (same chrome as
+    // History/Layers: caret-collapsible, drag header to detach/dock, × only while floating).
+    const mkPanel = (name, label, extraClass) => {
       const s = document.createElement("div");
-      s.className = "rail-section properties context-panel"; s.dataset.section = "properties";
+      s.className = "rail-section " + name + (extraClass ? " " + extraClass : ""); s.dataset.section = name;
       s.innerHTML = `<div class="panel-head section-head"><span class="caret">▾</span>`
-        + `<span class="sec-label fp-title">Properties</span><span class="sec-count"></span>`
-        + `<div class="panel-actions"><button type="button" class="tool-button fp-close props-close" title="Hide properties (Esc)">×</button></div></div>`
+        + `<span class="sec-label fp-title">${label}</span><span class="sec-count"></span>`
+        + `<div class="panel-actions"><button type="button" class="tool-button fp-close panel-x" title="Close">×</button></div></div>`
         + `<div class="section-body fp-body"></div>`;
-      s.querySelector(".props-close").addEventListener("click", (e) => { e.stopPropagation(); closeProps(); });
-      bindHeaderDrag(s);
-      propsSection = s; return s;
-    }
-    const sectionEl = (name) => name === "properties" ? propsSection : document.querySelector(`.rail-section[data-section="${name}"]`);
+      s.querySelector(".panel-x").addEventListener("click", (e) => { e.stopPropagation(); close(name); });
+      bindHeaderDrag(s); wireSectionCollapse(s);
+      return s;
+    };
+    let propsSection = null, colorSection = null;
+    function ensureProps() { if (!propsSection) propsSection = mkPanel("properties", "Properties", "context-panel"); return propsSection; }
+    function ensureColor() { if (!colorSection) colorSection = mkPanel("color", "Colour"); return colorSection; }
+    const sectionEl = (name) => name === "properties" ? propsSection : name === "color" ? colorSection : document.querySelector(`.rail-section[data-section="${name}"]`);
     const isFloat = (name) => { const s = sectionEl(name); return !!(s && s.closest(".dock-window")); };
     const curLoc = (name) => { const s = sectionEl(name); if (!s || !s.parentElement) return null; if (s.closest(".dock-window")) return "float"; return s.parentElement === leftDock ? "left" : "right"; };
 
+    const DEFAULT_LOC = { history: "right", layers: "right", properties: "right", color: "float" };
     let state = {};
-    ORDER.forEach((n, i) => state[n] = { loc: n === "properties" ? "float" : "right", order: i, rect: null, visible: false });
+    ORDER.forEach((n, i) => state[n] = { loc: DEFAULT_LOC[n], order: i, rect: null, visible: false });
     try { const s = JSON.parse(localStorage.getItem(DOCKS_KEY) || "null"); if (s) for (const n of ORDER) if (s[n]) state[n] = { ...state[n], ...s[n] }; } catch {}
     const persist = () => { try { localStorage.setItem(DOCKS_KEY, JSON.stringify(state)); localStorage.setItem(FOLD_KEY, folded ? "1" : "0"); } catch {} };
-    const propsVisible = () => state.properties.loc !== "float" || state.properties.visible;
+    const isShown = (name) => state[name].loc !== "float" || state[name].visible;
+    const propsVisible = () => isShown("properties");
 
     function renderProps() {
       if (!propsSection || !propsSection.parentElement || !propsVisible()) return;
@@ -2135,6 +2148,18 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       title.textContent = nodes.length === 1 ? "Object" : `${nodes.length} objects`;
       body.appendChild(editor._objectPanel(nodes));
     }
+    // Colour panel hosts the live duo editor (built by the swatch block). Only rebuild on a
+    // real selection-SET change — colour edits don't change the set, so the editor isn't
+    // torn down mid-interaction.
+    let lastColorKey = null;
+    function renderColor() {
+      if (!colorSection || !colorSection.parentElement || !isShown("color") || typeof editor._renderColorPanel !== "function") return;
+      const body = colorSection.querySelector(".section-body"); if (!body) return;
+      const key = [...(editor.selection || [])].sort().join(",") + "|" + !!editor.artboardSelected;
+      if (key === lastColorKey && body.querySelector(".cp-window")) return;
+      lastColorKey = key; editor._renderColorPanel(body);
+    }
+    function renderPanels() { renderProps(); renderColor(); }
 
     function detachFromWindow(name) {
       const s = sectionEl(name); if (!s) return;
@@ -2142,8 +2167,10 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       if (w) { if (w._ro) w._ro.disconnect(); s.remove(); w.remove(); }
       else if (s.parentElement) s.remove();
     }
+    const SUMMONED = new Set(["properties", "color"]);   // built on demand, summon/close-able
+    function ensureSection(name) { return name === "properties" ? ensureProps() : name === "color" ? ensureColor() : sectionEl(name); }
     function ensureFloatWin(name, atX, atY) {
-      const s = sectionEl(name) || (name === "properties" ? ensureProps() : null); if (!s) return null;
+      const s = ensureSection(name); if (!s) return null;
       let w = s.closest(".dock-window"); if (w) return w;
       const r = s.getBoundingClientRect(), prev = state[name].rect, detaching = atX != null;
       // Keep the panel's current size when it's dragged out of a dock; otherwise reuse the
@@ -2153,7 +2180,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       const x = atX != null ? atX : (prev?.x ?? Math.max(8, Math.min((r.left || innerWidth - ww - 12), innerWidth - ww - 8)));
       const y = atY != null ? atY : (prev?.y ?? Math.max(64, r.top || 80));
       w = document.createElement("div");
-      w.className = "dock-window" + (name === "properties" ? " float-panel" : "");
+      w.className = "dock-window" + (SUMMONED.has(name) ? " float-panel" : "");
       w.dataset.dockWindow = name;
       w.style.left = x + "px"; w.style.top = y + "px"; w.style.width = ww + "px"; w.style.height = wh + "px";
       document.body.appendChild(w); w.appendChild(s);
@@ -2167,15 +2194,16 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     function reconcile() {
       for (const name of ORDER) {
         const st = state[name];
-        if (name === "properties" && st.loc === "float" && !st.visible) { detachFromWindow(name); continue; }
+        if (SUMMONED.has(name) && st.loc === "float" && !st.visible) { detachFromWindow(name); continue; }
         if (st.loc === "float") ensureFloatWin(name);
       }
       for (const side of ["left", "right"]) {
         const dock = dockElFor(side);
         const items = ORDER.filter((n) => state[n].loc === side && !isFloatWanted(n)).sort((a, b) => (state[a].order || 0) - (state[b].order || 0));
-        for (const n of items) { const s = sectionEl(n) || (n === "properties" ? ensureProps() : null); if (!s) continue; detachWinKeepSection(n); s.style.flex = ""; dock.appendChild(s); }
+        for (const n of items) { const s = ensureSection(n); if (!s) continue; detachWinKeepSection(n); s.style.flex = ""; dock.appendChild(s); }
       }
       syncChrome();
+      renderPanels();   // (re)fill Properties / Colour bodies for their current state
     }
     const isFloatWanted = (n) => state[n].loc === "float";
     function detachWinKeepSection(name) { const s = sectionEl(name); const w = s && s.closest(".dock-window"); if (w) { if (w._ro) w._ro.disconnect(); w.remove(); document.body.appendChild(s); } }
@@ -2298,21 +2326,24 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     }
     document.querySelectorAll(".rail-section[data-section]").forEach(bindHeaderDrag);
 
-    // Properties summon / hide (the right-click panel, now a dockable object).
-    function summonProps(x, y) {
-      ensureProps();
-      if (state.properties.loc === "float") {
-        state.properties.visible = true;
-        if (!propsSection.closest(".dock-window")) ensureFloatWin("properties", (x != null ? x + 6 : null), (y != null ? y + 6 : null));
+    // Summon / close a summoned panel (Properties, Colour). Show makes it visible (floating
+    // it at x,y if it has no home); close fully hides it (undocking if needed).
+    function show(name, x, y) {
+      ensureSection(name);
+      if (state[name].loc === "float") {
+        state[name].visible = true;
+        if (!sectionEl(name).closest(".dock-window")) ensureFloatWin(name, (x != null ? x + 6 : null), (y != null ? y + 6 : null));
         syncChrome();
       }
-      renderProps();
+      if (name === "color") { lastColorKey = null; renderColor(); } else renderProps();
     }
-    function closeProps() {   // the × button: fully hide (undock if needed)
-      state.properties.visible = false; state.properties.loc = "float";
-      detachFromWindow("properties"); persist(); syncChrome();
+    function close(name) {   // the × button: fully hide (undock if needed)
+      state[name].visible = false; state[name].loc = "float";
+      detachFromWindow(name); persist(); syncChrome();
     }
-    function hideProps() { if (state.properties.loc === "float") closeProps(); }   // Esc: only dismiss a FLOATING Properties
+    const summonProps = (x, y) => show("properties", x, y);
+    const hideProps = () => { if (state.properties.loc === "float") close("properties"); };   // Esc: only dismiss a FLOATING Properties
+    const showColor = () => show("color", (window.innerWidth - 300), 110);
 
     // Fold BOTH side docks in/out with one control.
     if (railToggle) railToggle.addEventListener("click", () => { folded = !folded; reconcile(); persist(); });
@@ -2333,7 +2364,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     window.__docks = {
       float: (n) => setLoc(n, "float"), dock: (n, side, before) => setLoc(n, side || "right", before),
       loc: curLoc, isFolded: () => folded, toggleFold: () => { folded = !folded; reconcile(); persist(); },
-      summonProps, hideProps, renderProps, propsVisible,
+      summonProps, hideProps, showColor, close, renderProps, renderPanels, renderColor, propsVisible,
       relayout: () => { relayoutDock("left"); relayoutDock("right"); },
       state: () => state,
     };
@@ -2561,7 +2592,7 @@ function showContextMenu(x, y, items) {
 // floating Properties/Appearance palette. Summon with right-click; close with ×.
 // The Properties panel is now a fully dockable object owned by the Dockable-panels
 // module (window.__docks). These remain as the names the rest of the app calls.
-function renderFloatPanel() { if (window.__docks) window.__docks.renderProps(); }
+function renderFloatPanel() { if (window.__docks) window.__docks.renderPanels(); }
 function hideFloatPanel() { if (window.__docks) window.__docks.hideProps(); }
 // Header middle indicator: append the current selection after the document name
 // ("untitled.svg · Path" / "· 3 objects" / "· Artboard").

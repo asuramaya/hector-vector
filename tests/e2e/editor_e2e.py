@@ -81,8 +81,9 @@ def set_inspector_input(page, kind, index, value, event):
         }""", {"kind": kind, "index": index, "value": value, "event": event})
 
 def pick_color(page, swatch_index, hexes=None, none=False):
-    """Open the context panel, click the index-th colour swatch to launch the unified
-    picker, fire each hex in `hexes` (live), optionally click None, then OK."""
+    """Open the Properties panel, click the index-th colour swatch to summon the live
+    Colour panel, fire each hex (live-applied), optionally None; the edits coalesce into
+    one undo on a short debounce, so wait for that before returning. Then close Colour."""
     open_ctx_panel(page)
     page.evaluate("""(i) => { const s = document.querySelectorAll('.context-panel .insp-swatch')[i];
         if (!s) throw new Error('no swatch #' + i); s.click(); }""", swatch_index)
@@ -92,7 +93,8 @@ def pick_color(page, swatch_index, hexes=None, none=False):
             el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }""", h)
     if none:
         page.click(".cp-window .cp-none")
-    page.click(".cp-window .cp-ok")
+    page.wait_for_timeout(360)   # let the coalesced "Colour" undo entry commit (debounce)
+    page.evaluate("window.__docks && window.__docks.close('color')")
     page.wait_for_timeout(40)
 
 def set_opacity(page, frac):
@@ -267,8 +269,9 @@ def main():
         check("colour picker session coalesces to ONE undo entry", page.evaluate("editor.history.length") == hf + 1,
               f"delta={page.evaluate('editor.history.length')-hf}")
 
-        # colour picker: eyedropper button + persistent swatch system (base palette,
-        # a "+" to save the current colour, click-to-apply, right-click to remove).
+        # Colour panel: eyedropper + persistent swatch system (base palette, "+" to save
+        # the current colour, click-to-apply, right-click to remove). It's a dockable panel
+        # now (the object swatch summons it), not a modal — no OK/Cancel.
         page.evaluate("() => localStorage.removeItem('hector-vector:swatches')")
         open_ctx_panel(page)
         page.evaluate("() => document.querySelectorAll('.context-panel .insp-swatch')[0].click()")
@@ -276,30 +279,28 @@ def main():
         picker = page.evaluate("""() => ({
             eyedropper: !!document.querySelector('.cp-eyedrop'),
             base: document.querySelectorAll('.cp-swatches .cp-sw:not(.cp-sw-add)').length,
-            add: !!document.querySelector('.cp-sw-add') })""")
+            embedded: !!document.querySelector('.cp-window.cp-embedded'),
+            noOk: !document.querySelector('.cp-ok') })""")
+        check("Colour is an embedded panel editor (no OK/Cancel)", picker["embedded"] and picker["noOk"], f"{picker}")
         check("picker exposes an eyedropper button", picker["eyedropper"])
         check("picker shows a base swatch palette", picker["base"] >= 10, f"base={picker['base']}")
-        # set a distinctive colour, save it, and confirm it persists + adds a swatch
         page.evaluate("""() => { const el = document.querySelector('.cp-hex input');
             el.value = '123456'; el.dispatchEvent(new Event('input', { bubbles: true })); }""")
         page.click(".cp-sw-add"); page.wait_for_timeout(40)
         saved = page.evaluate("() => JSON.parse(localStorage.getItem('hector-vector:swatches') || '[]')")
         check("saving a swatch persists it", saved and saved[0].lower() == "#123456", f"saved={saved}")
-        page.click(".cp-window .cp-ok"); page.wait_for_timeout(40)
+        page.evaluate("window.__docks.close('color')"); page.wait_for_timeout(40)
 
-        # MAIN picker = a fill/stroke DUO: the toolstrip fill swatch opens it editing
-        # both; X toggles which target the field edits, Shift+X swaps; Cancel reverts.
-        orig = page.evaluate("""() => ({ fill: editor.nodeById('r1').getAttribute('fill'),
-            stroke: editor.nodeById('r1').getAttribute('stroke') })""")
+        # MAIN colour = a fill/stroke DUO, summoned by the toolstrip fill swatch; X toggles
+        # the field's target, Shift+X swaps. Edits apply LIVE (the panel has no Cancel).
         page.click("#swatch-fill")
         page.wait_for_selector(".cp-window", timeout=4000)
         duo = page.evaluate("""() => ({
             isDuo: !!document.querySelector('.cp-side.duo'),
             targets: [...document.querySelectorAll('.cp-side .cp-target-lab')].map(t => t.textContent),
-            active: document.querySelector('.cp-target.active .cp-target-lab')?.textContent,
-            noNewCurrent: !document.querySelector('.cp-prev-new, .cp-prev-old') })""")
-        check("main picker is a fill/stroke duo (no new/current)",
-              duo["isDuo"] and duo["targets"] == ["Fill", "Stroke"] and duo["active"] == "Fill" and duo["noNewCurrent"], f"{duo}")
+            active: document.querySelector('.cp-target.active .cp-target-lab')?.textContent })""")
+        check("main colour is a fill/stroke duo",
+              duo["isDuo"] and duo["targets"] == ["Fill", "Stroke"] and duo["active"] == "Fill", f"{duo}")
         set_hex = lambda v: page.evaluate("""(v) => { const el = document.querySelector('.cp-hex input');
             el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }""", v)
         set_hex("abc123"); page.wait_for_timeout(30)
@@ -308,16 +309,13 @@ def main():
         set_hex("def456"); page.wait_for_timeout(30)
         mid = page.evaluate("""() => ({ fill: editor.nodeById('r1').getAttribute('fill'),
             stroke: editor.nodeById('r1').getAttribute('stroke') })""")
-        check("X switches the field to the stroke target",
+        check("X switches the field to the stroke target (live apply)",
               active2 == "Stroke" and mid["fill"] == "#abc123" and mid["stroke"] == "#def456", f"active={active2} {mid}")
         page.keyboard.press("Shift+X"); page.wait_for_timeout(30)
         swapped = page.evaluate("""() => ({ fill: editor.nodeById('r1').getAttribute('fill'),
             stroke: editor.nodeById('r1').getAttribute('stroke') })""")
         check("Shift+X swaps fill/stroke", swapped["fill"] == "#def456" and swapped["stroke"] == "#abc123", f"{swapped}")
-        page.click(".cp-window .cp-cancel"); page.wait_for_timeout(40)
-        reverted = page.evaluate("""() => ({ fill: editor.nodeById('r1').getAttribute('fill'),
-            stroke: editor.nodeById('r1').getAttribute('stroke') })""")
-        check("Cancel reverts both targets", reverted["fill"] == orig["fill"] and (reverted["stroke"] or None) == (orig["stroke"] or None), f"{reverted} vs {orig}")
+        page.wait_for_timeout(320); page.evaluate("window.__docks.close('color')"); page.wait_for_timeout(40)
 
         # inspector: stroke width (the v0 'stroke not applied' regression). Width is
         # the first number input in the object panel.
@@ -1220,7 +1218,7 @@ def main():
         page.evaluate("window.hideFloatPanel && window.hideFloatPanel()")   # start closed so the right-click reaches the canvas
         r = node_rect(page, "r2")
         page.mouse.click(r["cx"], r["cy"], button="right"); page.wait_for_timeout(80)
-        ctx = page.evaluate("""() => { const m=document.querySelector('.float-panel:not([hidden])'); return m
+        ctx = page.evaluate("""() => { const m=document.querySelector('.rail-section.properties'); return m
             ? { actions: m.querySelectorAll('.grid-item').length, style: !!m.querySelector('.fp-body input'),
                 hasStrokeSeg: !!m.querySelector('.insp-seg') } : null; }""")
         # object right-click is now STYLE-ONLY (actions moved to the toolbars)
@@ -1255,7 +1253,7 @@ def main():
             child.dispatchEvent(new MouseEvent('contextmenu',{clientX:300,clientY:200,bubbles:true,cancelable:true})); }""")
         page.wait_for_timeout(80)
         check("layer-row right-click opens the object panel + selects nested child",
-              page.evaluate("""!!document.querySelector('.float-panel:not([hidden])') && editor.selection.size===1
+              page.evaluate("""!!document.querySelector('.rail-section.properties') && editor.selection.size===1
                 && [...editor.selection].every(id=>{const n=editor.nodeById(id); return n && n.parentNode.tagName.toLowerCase()==='g';})"""))
         page.evaluate("window.hideFloatPanel && window.hideFloatPanel()"); page.wait_for_timeout(40)
 
@@ -1289,7 +1287,7 @@ def main():
         page.evaluate("window.hideFloatPanel && window.hideFloatPanel()")
         ab = artboard_rect(page)
         page.mouse.click(ab["x"] + ab["w"] * 0.04, ab["y"] + ab["h"] * 0.94, button="right"); page.wait_for_timeout(80)
-        ctx2 = page.evaluate("""() => { const m=document.querySelector('.float-panel:not([hidden])'); return m
+        ctx2 = page.evaluate("""() => { const m=document.querySelector('.rail-section.properties'); return m
             ? { actions: m.querySelectorAll('.grid-item').length, size: !!m.querySelector('.fp-body input') } : null; }""")
         check("artboard context panel is style-only (no actions grid)", ctx2 and ctx2["size"] and ctx2["actions"] == 0, str(ctx2))
         check("Smart-guides + Select-All moved to the viewport bar",
@@ -1310,8 +1308,8 @@ def main():
             r.dispatchEvent(new MouseEvent('contextmenu',{clientX:300,clientY:300,bubbles:true,cancelable:true}));}""")
         page.wait_for_timeout(80)
         check("artboard-row right-click selects artboard + opens its panel",
-              page.evaluate("""editor.artboardSelected && !!document.querySelector('.float-panel:not([hidden])')
-                && document.querySelector('.fp-title').textContent === 'Artboard'"""))
+              page.evaluate("""editor.artboardSelected && !!document.querySelector('.rail-section.properties')
+                && document.querySelector('.rail-section.properties .fp-title').textContent === 'Artboard'"""))
         page.evaluate("window.hideFloatPanel && window.hideFloatPanel()")
         # selected object name shows in the header indicator
         mount_ctl(page); page.evaluate("editor.selection=new Set(['r1']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector();")
@@ -1517,6 +1515,9 @@ def main():
         # leftdock is the leftmost grid child (before the toolstrip)
         check("left dock is the leftmost column",
               page.evaluate("() => document.querySelector('.editor-grid').firstElementChild.id === 'leftdock'"))
+        # Properties defaults docked-right; tuck it away (float-hidden) so the History/Layers
+        # checks below see a clean right dock.
+        page.evaluate("window.__docks.close('properties')"); page.wait_for_timeout(40)
         # float History (no detach button — controller / header-drag does it)
         page.evaluate("window.__docks.float('history')"); page.wait_for_timeout(80)
         check("a panel floats into a dock-window",
@@ -1534,14 +1535,23 @@ def main():
         order = page.evaluate("[...document.querySelectorAll('#rightdock .rail-section')].map(s=>s.dataset.section)")
         check("panels reorder within a dock (Layers above History)", order == ["layers", "history"], f"order={order}")
         page.evaluate("window.__docks.dock('history','right','layers'); window.__docks.dock('layers','right')"); page.wait_for_timeout(40)
-        # Properties is the same kind of object — summon it, then dock it
-        page.evaluate("window.__docks.summonProps(400, 200)"); page.wait_for_timeout(60)
-        check("Properties summons as a floating panel",
-              page.evaluate("!!document.querySelector('.dock-window[data-dock-window=\"properties\"]') && !!document.querySelector('.float-panel:not([hidden]) .fp-body')"))
+        # Properties is the same kind of object — float it, then dock it back
+        page.evaluate("window.__docks.float('properties')"); page.wait_for_timeout(60)
+        check("Properties can float into a window",
+              page.evaluate("window.__docks.loc('properties')==='float' && !!document.querySelector('.dock-window[data-dock-window=\"properties\"] .fp-body')"))
         page.evaluate("window.__docks.dock('properties','right')"); page.wait_for_timeout(60)
         check("Properties docks like any other panel",
               page.evaluate("window.__docks.loc('properties')==='right' && !!document.querySelector('#rightdock .rail-section.properties')"))
-        page.evaluate("window.__docks.hideProps()"); page.wait_for_timeout(40)
+        # Colour is a dockable panel too — summon it and dock it
+        page.evaluate("window.__docks.showColor()"); page.wait_for_timeout(80)
+        check("Colour summons as a panel with the embedded editor",
+              page.evaluate("!!document.querySelector('.rail-section.color .cp-window.cp-embedded')"))
+        page.evaluate("window.__docks.dock('color','right')"); page.wait_for_timeout(60)
+        check("Colour docks like any other panel",
+              page.evaluate("window.__docks.loc('color')==='right' && !!document.querySelector('#rightdock .rail-section.color')"))
+        check("docked panels hide the × (no close button in a rail)",
+              page.evaluate("getComputedStyle(document.querySelector('#rightdock .rail-section.properties .panel-x')).display === 'none'"))
+        page.evaluate("window.__docks.close('color'); window.__docks.dock('properties','right')"); page.wait_for_timeout(40)
         # fold BOTH side docks with the one toggle
         page.click('#rail-toggle'); page.wait_for_timeout(80)
         check("fold toggle hides both side docks",
