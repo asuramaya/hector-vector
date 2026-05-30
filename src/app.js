@@ -98,6 +98,7 @@ let prefs = (() => {
 })();
 function persistPrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch {} }
 editor.smartGuides = prefs.smartGuides;   // apply the persisted preference
+editor.loadGuides();   // restore persisted ruler guides before the first stage mounts
 
 // Resume-to-last-document: remember whichever doc is on the canvas, restore it on launch.
 const LAST_DOC_KEY = "hector-vector:last-doc";
@@ -435,6 +436,39 @@ function drawRulers() {
     }
     g.stroke();
   }
+}
+
+// Drag a guide out of a ruler (Illustrator-style): pointerdown on the horizontal ruler
+// pulls a horizontal guide down into the canvas; the vertical ruler pulls a vertical one
+// in. Release back over a ruler discards it. Right-click a ruler for guide settings.
+function bindRulerGuides(rulersEl) {
+  if (!rulersEl || rulersEl._hvGuidesBound) return;
+  rulersEl._hvGuidesBound = true;
+  const toDoc = (cx, cy) => { const m = editor.stage && editor.stage.getScreenCTM(); return m ? new DOMPoint(cx, cy).matrixTransform(m.inverse()) : null; };
+  const startCreate = (axis) => (e) => {
+    if (!editor.stage || editor.guidesLocked || e.button !== 0) return;
+    e.preventDefault();
+    const p0 = toDoc(e.clientX, e.clientY); if (!p0) return;
+    const gd = { axis, pos: axis === "v" ? p0.x : p0.y };
+    editor.guides.push(gd); editor.renderGuides();
+    const move = (ev) => { const p = toDoc(ev.clientX, ev.clientY); if (!p) return; gd.pos = editor._snapGuide(axis, axis === "v" ? p.x : p.y, ev.shiftKey); editor.renderGuides(); };
+    const up = (ev) => {
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+      if (editor._guideOverRuler(ev)) { const i = editor.guides.indexOf(gd); if (i >= 0) editor.guides.splice(i, 1); editor.renderGuides(); }
+      else editor._persistGuides();
+    };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  };
+  const hC = rulersEl.querySelector(".ruler-h"), vC = rulersEl.querySelector(".ruler-v");
+  if (hC) hC.addEventListener("pointerdown", startCreate("h"));
+  if (vC) vC.addEventListener("pointerdown", startCreate("v"));
+  rulersEl.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY, [
+      { label: editor.guidesLocked ? "Unlock guides" : "Lock guides", onClick: () => editor.toggleGuidesLock() },
+      { label: `Clear guides (${editor.guides.length})`, disabled: !editor.guides.length, onClick: () => editor.clearGuides() },
+    ]);
+  });
 }
 
 function resetViewport(vp) {
@@ -1847,6 +1881,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     const syncRulers = () => { const on = !!prefs.rulers; if (rulersEl) rulersEl.hidden = !on; rulersBtn.classList.toggle("on", on); rulersBtn.setAttribute("aria-pressed", on ? "true" : "false"); if (on) drawRulers(); };
     syncRulers();
     rulersBtn.addEventListener("click", () => { prefs.rulers = !prefs.rulers; persistPrefs(); syncRulers(); setStatus(`Rulers ${prefs.rulers ? "on" : "off"}.`, 1500); });
+    bindRulerGuides(rulersEl);
   }
   const railToggle = document.querySelector("#rail-toggle");
   const RAIL_KEY = "hector-vector:rail-collapsed";
@@ -1863,9 +1898,9 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
   {
     const LAYOUT_KEY = "hector-vector:layout";
     const SEP = "|";
-    // each frame bar is a drop zone; toolstrip keeps its swatches block pinned at the tail.
+    // each frame bar is a drop zone (swatches now live on the canvas, not the toolstrip).
     const BARS = [
-      { name: "tools",    sel: ".toolstrip",         tail: ".tool-spacer" },
+      { name: "tools",    sel: ".toolstrip",         tail: null },
       { name: "arrange",  sel: ".stage-toolbar",     tail: null },
       { name: "actions",  sel: ".actionbar",         tail: null },
       { name: "viewport", sel: ".viewport-controls", tail: null },

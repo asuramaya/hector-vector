@@ -5,6 +5,26 @@ import { SVG_NS } from "./constants.js";
 import { nfmt, parsePath, serializeSegs } from "./path.js";
 import { currentTranslate } from "./transform.js";
 
+// Map an element's LOCAL geometry space ⇄ the overlay/stage viewport space via its
+// CTM. Node-tool anchors live in local (path `d` / attribute) coords but render in the
+// transform-free overlay, so an element under a transformed or grouped ancestor would
+// otherwise scatter its handles. toS maps a local point → stage (for rendering); toL
+// maps a stage point → local (for writing back on drag). Top-level / baked elements have
+// an identity CTM and short-circuit, so the common case is untouched.
+function ctmMaps(el) {
+  const I = { id: true, toS: (p) => ({ x: p.x, y: p.y }), toL: (x, y) => ({ x, y }) };
+  let M = null;
+  try { M = el.getCTM ? el.getCTM() : null; } catch { M = null; }
+  if (!M || (M.a === 1 && M.b === 0 && M.c === 0 && M.d === 1 && M.e === 0 && M.f === 0)) return I;
+  let Mi = null; try { Mi = M.inverse(); } catch { Mi = null; }
+  if (!Mi) return I;
+  return {
+    id: false,
+    toS: (p) => ({ x: M.a * p.x + M.c * p.y + M.e, y: M.b * p.x + M.d * p.y + M.f }),
+    toL: (x, y) => ({ x: Mi.a * x + Mi.c * y + Mi.e, y: Mi.b * x + Mi.d * y + Mi.f }),
+  };
+}
+
 // Convert a shape element to an absolute path `d` (baking in any translate),
 // used to build the fill-test outline for booleans / invert-space.
 export function shapeToAbsPath(el) {
@@ -135,6 +155,7 @@ export function pathNodes(svg, accept) {
     if (accept && !accept(el)) return;   // focus mode: restrict to the in-scope paths
     const segs = parsePath(el.getAttribute("d") || "");
     el._hvSegs = segs;
+    const { toS, toL } = ctmMaps(el);   // local ⇄ stage (identity for top-level/baked)
     const commit = () => el.setAttribute("d", serializeSegs(el._hvSegs));
     const draw = segs.filter((s) => s.end);     // M + drawing segments, in order
     const n = draw.length;
@@ -149,31 +170,42 @@ export function pathNodes(svg, accept) {
       const endSeg = draw[k];
       const inSeg = k >= 1 ? draw[k] : (wrap ? draw[n - 1] : null);
       const outSeg = (k + 1 < n) ? draw[k + 1] : null;
-      const inH = trail(inSeg), outH = lead(outSeg);   // live control-point refs (or null)
-      const a = endSeg.end;
-      out.push({
-        el, id: el.getAttribute("data-hv-id"), k, x: a.x, y: a.y, inH, outH,
+      const inHlive = trail(inSeg), outHlive = lead(outSeg);   // live LOCAL control-point refs (or null)
+      const a = endSeg.end;                                    // live LOCAL anchor point
+      // x/y/inH/outH are STAGE-space snapshots (what the overlay renders); moveTo/setIn/
+      // setOut take stage coords and write back through toL so the geometry stays local.
+      const nd = {
+        el, id: el.getAttribute("data-hv-id"), k, x: 0, y: 0, inH: null, outH: null,
+        _refresh() {
+          const p = toS(a); this.x = p.x; this.y = p.y;
+          this.inH = inHlive ? toS(inHlive) : null;
+          this.outH = outHlive ? toS(outHlive) : null;
+        },
         moveTo(nx, ny) {
-          const dx = nx - a.x, dy = ny - a.y;
-          a.x = nx; a.y = ny;
-          if (k === 0 && wrap) { draw[n - 1].end.x = nx; draw[n - 1].end.y = ny; }
-          if (inH) { inH.x += dx; inH.y += dy; }
-          if (outH) { outH.x += dx; outH.y += dy; }
-          commit();
+          const t = toL(nx, ny), dx = t.x - a.x, dy = t.y - a.y;
+          a.x = t.x; a.y = t.y;
+          if (k === 0 && wrap) { draw[n - 1].end.x = t.x; draw[n - 1].end.y = t.y; }
+          if (inHlive) { inHlive.x += dx; inHlive.y += dy; }
+          if (outHlive) { outHlive.x += dx; outHlive.y += dy; }
+          commit(); this._refresh();
         },
         setIn(nx, ny, mirror) {
-          if (!inH) return;
-          inH.x = nx; inH.y = ny;
-          if (mirror && outH) { outH.x = 2 * a.x - nx; outH.y = 2 * a.y - ny; }
-          commit();
+          if (!inHlive) return;
+          const t = toL(nx, ny);
+          inHlive.x = t.x; inHlive.y = t.y;
+          if (mirror && outHlive) { outHlive.x = 2 * a.x - t.x; outHlive.y = 2 * a.y - t.y; }
+          commit(); this._refresh();
         },
         setOut(nx, ny, mirror) {
-          if (!outH) return;
-          outH.x = nx; outH.y = ny;
-          if (mirror && inH) { inH.x = 2 * a.x - nx; inH.y = 2 * a.y - ny; }
-          commit();
+          if (!outHlive) return;
+          const t = toL(nx, ny);
+          outHlive.x = t.x; outHlive.y = t.y;
+          if (mirror && inHlive) { inHlive.x = 2 * a.x - t.x; inHlive.y = 2 * a.y - t.y; }
+          commit(); this._refresh();
         },
-      });
+      };
+      nd._refresh();
+      out.push(nd);
     }
   });
   return out;
@@ -227,9 +259,13 @@ export function nearestOnPaths(svg, x, y, tol, maxPaths = 300) {
     if (_anchorSkip(el)) return;
     const { anchors, closed, editable } = pathToAnchors(el);
     if (!editable || anchors.length < 2) return;
+    // Anchors are LOCAL; the query (x,y) and tolerance are stage-space. Map the query
+    // into local for the distance test, then report hit coords back in stage space.
+    const { toS, toL } = ctmMaps(el);
+    const q = toL(x, y);
     for (let k = 0; k < anchors.length; k++) {
-      const d = Math.hypot(anchors[k].x - x, anchors[k].y - y);
-      if (d <= tol && (!bestA || d < bestA.dist)) bestA = { el, mode: "anchor", k, x: anchors[k].x, y: anchors[k].y, dist: d, closed, count: anchors.length };
+      const d = Math.hypot(anchors[k].x - q.x, anchors[k].y - q.y);
+      if (d <= tol && (!bestA || d < bestA.dist)) { const sp = toS(anchors[k]); bestA = { el, mode: "anchor", k, x: sp.x, y: sp.y, dist: d, closed, count: anchors.length }; }
     }
     const segCount = closed ? anchors.length : anchors.length - 1;
     for (let i = 0; i < segCount; i++) {
@@ -238,8 +274,8 @@ export function nearestOnPaths(svg, x, y, tol, maxPaths = 300) {
       const N = 24;
       for (let s = 0; s <= N; s++) {
         const t = s / N, pt = _cubicAt(A, P1, P2, B, t);
-        const d = Math.hypot(pt.x - x, pt.y - y);
-        if (d <= tol && (!bestS || d < bestS.dist)) bestS = { el, mode: "segment", i, t, x: pt.x, y: pt.y, dist: d };
+        const d = Math.hypot(pt.x - q.x, pt.y - q.y);
+        if (d <= tol && (!bestS || d < bestS.dist)) { const sp = toS(pt); bestS = { el, mode: "segment", i, t, x: sp.x, y: sp.y, dist: d }; }
       }
     }
   });
@@ -290,8 +326,18 @@ export function catmullRomAnchors(pts, closed) {
 export function collectAnchors(svg, accept) {
   const out = [];
   const skip = (el) => _anchorSkip(el) || (accept && !accept(el));
+  // Per element: push a LOCAL-space anchor as a STAGE-space one — render through toS,
+  // write back through toL — so anchors track elements under transformed ancestors.
+  const pusher = (el) => {
+    const { toS, toL } = ctmMaps(el);
+    return (a) => {
+      const s = toS({ x: a.x, y: a.y }), set = a.set;
+      out.push({ x: s.x, y: s.y, set: (nx, ny) => { const t = toL(nx, ny); set(t.x, t.y); } });
+    };
+  };
   svg.querySelectorAll("rect").forEach((el) => {
     if (skip(el)) return;
+    const push = pusher(el);
     const get = () => ({ x: +el.getAttribute("x") || 0, y: +el.getAttribute("y") || 0, w: +el.getAttribute("width") || 0, h: +el.getAttribute("height") || 0 });
     const corner = (xMin, yMin) => {
       const r = get();
@@ -306,25 +352,28 @@ export function collectAnchors(svg, accept) {
         },
       };
     };
-    out.push(corner(true, true), corner(false, true), corner(true, false), corner(false, false));
+    push(corner(true, true)); push(corner(false, true)); push(corner(true, false)); push(corner(false, false));
   });
   svg.querySelectorAll("polygon, polyline").forEach((el) => {
     if (skip(el)) return;
+    const push = pusher(el);
     const pts = (el.getAttribute("points") || "").trim().split(/[\s,]+/).map(Number).filter((v) => !Number.isNaN(v));
     el._hvPts = pts;
     for (let k = 0; k + 1 < pts.length; k += 2) {
       const idx = k;
-      out.push({ x: pts[idx], y: pts[idx + 1], set: (nx, ny) => { el._hvPts[idx] = nx; el._hvPts[idx + 1] = ny; el.setAttribute("points", el._hvPts.map(nfmt).join(" ")); } });
+      push({ x: pts[idx], y: pts[idx + 1], set: (nx, ny) => { el._hvPts[idx] = nx; el._hvPts[idx + 1] = ny; el.setAttribute("points", el._hvPts.map(nfmt).join(" ")); } });
     }
   });
   svg.querySelectorAll("circle, ellipse").forEach((el) => {
     if (skip(el)) return;
-    out.push({ x: +el.getAttribute("cx") || 0, y: +el.getAttribute("cy") || 0, set: (nx, ny) => { el.setAttribute("cx", nfmt(nx)); el.setAttribute("cy", nfmt(ny)); } });
+    const push = pusher(el);
+    push({ x: +el.getAttribute("cx") || 0, y: +el.getAttribute("cy") || 0, set: (nx, ny) => { el.setAttribute("cx", nfmt(nx)); el.setAttribute("cy", nfmt(ny)); } });
   });
   svg.querySelectorAll("line").forEach((el) => {
     if (skip(el)) return;
-    out.push({ x: +el.getAttribute("x1") || 0, y: +el.getAttribute("y1") || 0, set: (nx, ny) => { el.setAttribute("x1", nfmt(nx)); el.setAttribute("y1", nfmt(ny)); } });
-    out.push({ x: +el.getAttribute("x2") || 0, y: +el.getAttribute("y2") || 0, set: (nx, ny) => { el.setAttribute("x2", nfmt(nx)); el.setAttribute("y2", nfmt(ny)); } });
+    const push = pusher(el);
+    push({ x: +el.getAttribute("x1") || 0, y: +el.getAttribute("y1") || 0, set: (nx, ny) => { el.setAttribute("x1", nfmt(nx)); el.setAttribute("y1", nfmt(ny)); } });
+    push({ x: +el.getAttribute("x2") || 0, y: +el.getAttribute("y2") || 0, set: (nx, ny) => { el.setAttribute("x2", nfmt(nx)); el.setAttribute("y2", nfmt(ny)); } });
   });
   return out;
 }

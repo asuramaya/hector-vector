@@ -42,16 +42,6 @@
           <button class="tool-button" data-tool="rect" data-key="R" type="button" title="Rectangle (R)">▭</button>
           <button class="tool-button" data-tool="ellipse" data-key="E" type="button" title="Ellipse (E)">◯</button>
           <button class="tool-button" data-tool="line" data-key="L" type="button" title="Line (L)">╱</button>
-          <span class="tool-spacer" aria-hidden="true"></span>
-          <!-- Fill (primary) / stroke (secondary) swatches: reflect the selection or
-               the default for new shapes; click to recolour. Rotate/flip moved to the
-               right-click menu. -->
-          <div class="tool-swatches" id="tool-swatches">
-            <button class="swatch swatch-fill" id="swatch-fill" type="button" title="Fill — click to set the fill colour"></button>
-            <button class="swatch swatch-stroke" id="swatch-stroke" type="button" title="Stroke — click to set the stroke colour"></button>
-            <button class="swatch-swap" id="swatch-swap" data-key="⇧X" type="button" title="Swap fill / stroke (Shift+X)">⇄</button>
-            <input type="color" id="swatch-color-input" hidden />
-          </div>
         </nav>
 
         <article class="stage-wrap preview-panel" data-tool="select">
@@ -75,6 +65,15 @@
               <canvas class="ruler ruler-v"></canvas>
             </div>
             <div id="output-preview" class="preview-frame empty-frame">Import or open a vector to start.</div>
+            <!-- Fill (primary) / stroke (secondary) swatches: float in the canvas's
+                 inner bottom-right corner (so all four picture-frame bezels stay
+                 identical). Reflect the selection or the default for new shapes. -->
+            <div class="tool-swatches" id="tool-swatches">
+              <button class="swatch swatch-fill" id="swatch-fill" type="button" title="Fill — click to set the fill colour"></button>
+              <button class="swatch swatch-stroke" id="swatch-stroke" type="button" title="Stroke — click to set the stroke colour"></button>
+              <button class="swatch-swap" id="swatch-swap" data-key="⇧X" type="button" title="Swap fill / stroke (Shift+X)">⇄</button>
+              <input type="color" id="swatch-color-input" hidden />
+            </div>
           </div>
           <div class="panel-foot">
             <!-- Navigation + canvas-level controls (object controls are on the side bars). -->

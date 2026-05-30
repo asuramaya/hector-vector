@@ -267,6 +267,7 @@ button:disabled {
   gap: 6px;
   padding: 6px;
   flex: 0 0 auto;
+  justify-content: center;   /* swatches moved to the canvas → tools centre in the bar */
 }
 /* THE shared button object — every toolbar (tools, arrange, actions, viewport)
    inherits this one class so they all match. Primary tools opt into a larger box. */
@@ -338,9 +339,14 @@ button:disabled {
 }
 .view-count:empty { display: none; }
 .tool-sep { height: 1px; background: var(--line); margin: 2px 4px; align-self: stretch; }
-/* Fill (primary) / stroke (secondary) swatches, pinned to the bottom of the strip. */
+/* Fill (primary) / stroke (secondary) swatches — float in the canvas's inner
+   bottom-right corner (over the stage body, above the rulers). */
 .tool-spacer { flex: 1 1 auto; }
-.tool-swatches { position: relative; width: 34px; height: 60px; align-self: center; }
+.tool-swatches {
+  position: absolute; right: 12px; bottom: 12px; z-index: 8;
+  width: 40px; height: 48px; padding: 0;
+  pointer-events: auto;
+}
 .swatch { position: absolute; width: 22px; height: 22px; padding: 0; cursor: pointer; border: 1px solid #777; box-shadow: 0 0 0 1px #fff; }
 .swatch-fill { left: 0; top: 0; z-index: 2; }
 .swatch-stroke { right: 0; top: 13px; z-index: 1; }
@@ -381,7 +387,9 @@ button:disabled {
    the top + left edges of the stage. pointer-events:none so the canvas stays clickable. */
 .rulers { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
 .rulers[hidden] { display: none; }
-.ruler { position: absolute; background: var(--bg); }
+.ruler { position: absolute; background: var(--bg); pointer-events: auto; }
+.ruler-h { cursor: ns-resize; }
+.ruler-v { cursor: ew-resize; }
 /* explicit width/height: an absolutely-positioned <canvas> (replaced element) uses its
    intrinsic size with left+right:auto, so it won't stretch — size it directly. */
 .ruler-h { top: 0; left: 18px; width: calc(100% - 18px); height: 18px; border-bottom: 1px solid var(--line); }
@@ -788,6 +796,9 @@ button:disabled {
 /* Drag-select marquee / lasso */
 .hv-marquee { fill: rgba(0, 122, 255, 0.12); stroke: var(--accent); stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
 .hv-guide { stroke: #ff2d92; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
+/* Persistent ruler guides: a thin cyan line plus a wide transparent hit target. */
+.hv-guideobj { stroke: #18b6c9; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
+.hv-guidehit { stroke: transparent; stroke-width: 9; vector-effect: non-scaling-stroke; pointer-events: stroke; }
 .xform-readout { position: fixed; z-index: 1100; background: rgba(0, 0, 0, 0.82); color: #fff; font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 3px 7px; pointer-events: none; white-space: nowrap; }
 .xform-readout[hidden] { display: none; }
 

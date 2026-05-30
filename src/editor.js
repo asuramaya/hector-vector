@@ -42,6 +42,8 @@ const editor = {
   _penTempSelect: false,// pen tool: Ctrl/Cmd held → act as Direct-Select (handles mounted)
   _curv: null,          // in-progress curvature path: { node, pts:[{x,y,corner}], closed }
   smartGuides: true,    // snap moves to other objects' bounds + artboard, with guide lines
+  guides: [],           // ruler guides: [{ axis:'v'|'h', pos }] in document coords
+  guidesLocked: false,  // when true, guides render but can't be dragged/deleted
   clipboard: [],        // in-app clipboard: serialized node markup
 
   get dirty() { return this.history.length > 0; },
@@ -99,6 +101,7 @@ const editor = {
       svgEl.addEventListener("pointerdown", (e) => this._onPointerDown(e));
       svgEl._hvBound = true;
     }
+    this.renderGuides();   // re-create the (data-backed) guides layer on this fresh stage
   },
   _ensureStructure(svg) {
     let vb = svg.viewBox && svg.viewBox.baseVal;
@@ -127,7 +130,7 @@ const editor = {
     for (const child of Array.from(svg.children)) {
       const tag = child.tagName.toLowerCase();
       if (SKIP_TAGS.has(tag)) continue;
-      if (child.classList.contains("hv-artboard") || child.classList.contains("hv-overlay")) continue;
+      if (child.classList.contains("hv-artboard") || child.classList.contains("hv-overlay") || child.classList.contains("hv-guideslayer")) continue;
       if (!child.hasAttribute("data-hv-id")) child.setAttribute("data-hv-id", "n" + (++this.idSeq));
     }
     let ov = svg.querySelector("g.hv-overlay");
@@ -139,7 +142,7 @@ const editor = {
   _flattenWrapper(svg) {
     const art = [...svg.children].filter((c) => {
       const t = c.tagName.toLowerCase();
-      return !SKIP_TAGS.has(t) && !c.classList.contains("hv-artboard") && !c.classList.contains("hv-overlay");
+      return !SKIP_TAGS.has(t) && !c.classList.contains("hv-artboard") && !c.classList.contains("hv-overlay") && !c.classList.contains("hv-guideslayer");
     });
     if (art.length !== 1) return;
     const g = art[0];
@@ -159,14 +162,14 @@ const editor = {
   // ---------- serialization ----------
   _historyMarkup() {
     const c = this.stage.cloneNode(true);
-    c.querySelectorAll("g.hv-overlay").forEach((g) => g.remove());
+    c.querySelectorAll("g.hv-overlay, g.hv-guideslayer").forEach((g) => g.remove());
     c.classList.remove("hv-pickable");
     return c.outerHTML;
   },
   serialize() {
     if (!this.stage) return "";
     const c = this.stage.cloneNode(true);
-    c.querySelectorAll("g.hv-overlay").forEach((g) => g.remove());
+    c.querySelectorAll("g.hv-overlay, g.hv-guideslayer").forEach((g) => g.remove());
     c.classList.remove("hv-pickable");
     c.querySelectorAll("[data-hv-id]").forEach((n) => {
       ["data-hv-id", "data-hv-name", "data-hv-locked"].forEach((a) => n.removeAttribute(a));
@@ -1897,6 +1900,86 @@ const editor = {
     if (gy != null) mk(vb.x, gy, vb.x + vb.width, gy);
   },
   _clearGuides() { const ov = this._overlayEl(); if (ov) ov.querySelectorAll(".hv-guide").forEach((g) => g.remove()); },
+
+  // ---------- ruler guides: persistent draggable guide lines (Illustrator-style) ----------
+  // Stored as data on the editor (axis 'v' = vertical line at constant x; 'h' = horizontal
+  // at constant y) and rendered into a dedicated layer that serialize()/history strip, so
+  // guides survive undo / zoom / tool changes without ever polluting the saved document.
+  _guidesLayer() {
+    if (!this.stage) return null;
+    let g = this.stage.querySelector("g.hv-guideslayer");
+    if (!g) {
+      g = document.createElementNS(SVG_NS, "g");
+      g.setAttribute("class", "hv-guideslayer");
+      this.stage.insertBefore(g, this._overlayEl() || null);   // below the overlay so handles draw on top
+    }
+    return g;
+  },
+  _scaleK() { const m = this.stage && this.stage.getScreenCTM(); return m ? (Math.hypot(m.a, m.b) || 1) : 1; },
+  renderGuides() {
+    const layer = this._guidesLayer(); if (!layer) return;
+    layer.innerHTML = "";
+    const vb = this.stage.viewBox.baseVal;
+    for (const gd of this.guides) {
+      const vert = gd.axis === "v";
+      const x1 = vert ? gd.pos : vb.x, x2 = vert ? gd.pos : vb.x + vb.width;
+      const y1 = vert ? vb.y : gd.pos, y2 = vert ? vb.y + vb.height : gd.pos;
+      const mk = (cls) => {
+        const ln = document.createElementNS(SVG_NS, "line");
+        ln.setAttribute("class", cls);
+        ln.setAttribute("x1", nfmt(x1)); ln.setAttribute("y1", nfmt(y1)); ln.setAttribute("x2", nfmt(x2)); ln.setAttribute("y2", nfmt(y2));
+        layer.appendChild(ln); return ln;
+      };
+      mk("hv-guideobj");   // visible 1px non-scaling line (see CSS)
+      if (!this.guidesLocked) this._bindGuideDrag(mk("hv-guidehit"), gd);   // wide transparent hit target
+    }
+  },
+  addGuide(axis, pos) { this.guides.push({ axis, pos }); this._persistGuides(); this.renderGuides(); },
+  removeGuide(gd) { const i = this.guides.indexOf(gd); if (i >= 0) { this.guides.splice(i, 1); this._persistGuides(); this.renderGuides(); } },
+  clearGuides() { this.guides = []; this._persistGuides(); this.renderGuides(); setStatus("Guides cleared.", 1500); },
+  toggleGuidesLock() { this.guidesLocked = !this.guidesLocked; this._persistGuides(); this.renderGuides(); setStatus(`Guides ${this.guidesLocked ? "locked" : "unlocked"}.`, 1500); return this.guidesLocked; },
+  _persistGuides() { try { localStorage.setItem("hector-vector:guides", JSON.stringify({ guides: this.guides, locked: this.guidesLocked })); } catch {} },
+  loadGuides() { try { const s = JSON.parse(localStorage.getItem("hector-vector:guides") || "null"); if (s && Array.isArray(s.guides)) { this.guides = s.guides; this.guidesLocked = !!s.locked; } } catch {} },
+  // Snap a guide coord to artboard / object edges + centres (unless Shift overrides).
+  _snapGuide(axis, v, shift) {
+    if (shift || !this.smartGuides || !this.stage) return v;
+    const tol = 7 / this._scaleK();
+    const cand = this._guideCandidates([]); const arr = axis === "v" ? cand.xs : cand.ys;
+    let best = v, bd = tol;
+    for (const c of arr) { const d = Math.abs(c - v); if (d < bd) { bd = d; best = c; } }
+    return best;
+  },
+  _bindGuideDrag(hl, gd) {
+    hl.style.cursor = gd.axis === "v" ? "ew-resize" : "ns-resize";
+    hl.addEventListener("dblclick", (e) => { e.stopPropagation(); this.removeGuide(gd); });
+    hl.addEventListener("pointerdown", (e) => {
+      if (this.guidesLocked) return;
+      e.stopPropagation(); e.preventDefault();
+      try { hl.setPointerCapture(e.pointerId); } catch {}
+      this._handleDragging = true;
+      const vert = gd.axis === "v";
+      const move = (ev) => {
+        const m = this.stage.getScreenCTM(); if (!m) return;
+        const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
+        gd.pos = this._snapGuide(gd.axis, vert ? p.x : p.y, ev.shiftKey);
+        this.renderGuides();
+      };
+      const up = (ev) => {
+        try { hl.releasePointerCapture(e.pointerId); } catch {}
+        this._handleDragging = false;
+        hl.removeEventListener("pointermove", move); hl.removeEventListener("pointerup", up);
+        if (this._guideOverRuler(ev)) this.removeGuide(gd);   // dragged back onto the ruler → delete
+        else this._persistGuides();
+      };
+      hl.addEventListener("pointermove", move);
+      hl.addEventListener("pointerup", up);
+    });
+  },
+  _guideOverRuler(ev) {
+    const cont = document.querySelector("#rulers"); if (!cont || cont.hidden) return false;
+    const inRect = (sel) => { const el = cont.querySelector(sel); if (!el) return false; const r = el.getBoundingClientRect(); return ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom; };
+    return inRect(".ruler-h") || inRect(".ruler-v");
+  },
   // Live W/H px tooltip near the cursor while scaling (Photopea-style).
   _showSizeReadout(w, h, clientX, clientY) {
     let el = document.getElementById("xform-readout");
@@ -2092,7 +2175,7 @@ const editor = {
     const scrub = (parent) => {
       for (const child of [...parent.children]) {
         const tag = child.tagName.toLowerCase();
-        if (SKIP_TAGS.has(tag) || child.classList.contains("hv-artboard") || child.classList.contains("hv-overlay")) continue;
+        if (SKIP_TAGS.has(tag) || child.classList.contains("hv-artboard") || child.classList.contains("hv-overlay") || child.classList.contains("hv-guideslayer")) continue;
         if (tag === "g") {
           scrub(child);
           const kids = [...child.children].filter((k) => !SKIP_TAGS.has(k.tagName.toLowerCase()));
@@ -2169,7 +2252,7 @@ const editor = {
     const GRAPHIC = new Set(["path", "rect", "circle", "ellipse", "line", "polygon", "polyline", "image", "text", "g"]);
     const walk = (parent) => {
       for (const c of parent.children) {
-        if (c === ov || (c.classList && c.classList.contains("hv-artboard"))) continue;
+        if (c === ov || (c.classList && (c.classList.contains("hv-artboard") || c.classList.contains("hv-guideslayer")))) continue;
         const tag = c.tagName.toLowerCase();
         if (!GRAPHIC.has(tag)) continue;
         if (!c.hasAttribute("data-hv-id")) c.setAttribute("data-hv-id", "n" + (++this.idSeq));

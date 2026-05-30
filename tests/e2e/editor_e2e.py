@@ -706,8 +706,9 @@ def main():
         check("Ctrl+R toggles the rulers",
               page.evaluate("!!document.querySelector('#vp-rulers').classList.contains('on')") != rulers0)
         page.keyboard.press("Control+r"); page.wait_for_timeout(60)   # restore
-        # rotate/flip moved into the right-click panel; toolstrip now has colour swatches
-        check("colour swatches in the toolstrip", page.evaluate("!!document.querySelector('.toolstrip #swatch-fill') && !!document.querySelector('.toolstrip #swatch-stroke')"))
+        # colour swatches moved out of the toolstrip onto the canvas inner bottom-right
+        check("colour swatches float over the stage body (not the toolstrip)",
+              page.evaluate("!!document.querySelector('.stage-body #tool-swatches #swatch-fill') && !document.querySelector('.toolstrip #swatch-fill')"))
         check("no rotate/flip buttons in the toolstrip", page.evaluate("!document.querySelector('.toolstrip [data-xform]')"))
         # leftover output-variant picker (Upscale/Cutout/SVG/Edited) is gone
         check("output-variant picker removed", page.evaluate("!document.querySelector('#output-picker')"))
@@ -1433,6 +1434,49 @@ def main():
         check("Export on unsaved canvas opens Save-As (no dead end)",
               page.evaluate("document.querySelector('#modal-title').textContent") == "Save as")
         page.evaluate("closeModal()")
+
+        # ---- Node tool under a transformed/grouped ancestor (anchors map through the CTM) ----
+        XF_DOC = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300">'
+                  '<g data-hv-id="g1" transform="translate(100 50)">'
+                  '<path data-hv-id="p1" d="M0 0 L40 0 L40 40 Z" fill="#888"/></g></svg>')
+        page.evaluate("svg => { app.selectedOutput=null; app.manualOutputName=null; mountStageFromText(svg,'xf.svg'); }", XF_DOC)
+        page.wait_for_function("editor.nodeById('p1')", timeout=8000)
+        page.evaluate("editor.selection=new Set(['g1']); editor.artboardSelected=false; editor._renderSelection(); editor.setTool('node');")
+        page.wait_for_timeout(140)
+        centers = page.evaluate(
+            "() => [...editor._overlayEl().querySelectorAll('.hv-node-anchor')]"
+            ".map(r => ({x:+r.getAttribute('x')+(+r.getAttribute('width'))/2, y:+r.getAttribute('y')+(+r.getAttribute('height'))/2}))")
+        near = lambda cx, cy: any(abs(c['x']-cx) < 2 and abs(c['y']-cy) < 2 for c in centers)
+        # local anchors (0,0)(40,0)(40,40) + group translate(100,50) → stage (100,50)(140,50)(140,90)
+        check("node anchors render through the ancestor transform",
+              near(100, 50) and near(140, 50) and near(140, 90), str(centers))
+        # writing back: moving an anchor to a stage point lands the LOCAL geometry correctly
+        moved = page.evaluate(
+            "() => { const nd = hv.pathNodes(editor.stage, null).find(n => n.id==='p1' && n.k===0);"
+            "nd.moveTo(110, 60); const d = editor.nodeById('p1').getAttribute('d');"
+            "return /M\\s*10[ ,]+10/.test(d); }")   # stage (110,60) - translate(100,50) = local (10,10)
+        check("node drag writes back into local geometry", moved is True)
+        page.evaluate("editor.setTool('select')")
+
+        # ---- Ruler guides: draggable persistent guides, stripped from output ----
+        mount_ctl(page)
+        page.evaluate("editor.guidesLocked=false; editor.guides=[]; editor.renderGuides(); editor.addGuide('v', 30); editor.addGuide('h', 40);")
+        page.wait_for_timeout(40)
+        check("ruler guides render in their own layer",
+              page.evaluate("editor.stage.querySelectorAll('g.hv-guideslayer .hv-guideobj').length") == 2)
+        ser = page.evaluate("editor.serialize()")
+        check("guides never reach saved output", "hv-guideslayer" not in ser and "hv-guideobj" not in ser)
+        check("guides layer is not artwork (no data-hv-id)",
+              page.evaluate("!editor.stage.querySelector('g.hv-guideslayer[data-hv-id]') && editor._artworkNodes().length === 3"))
+        page.evaluate("editor.push('probe'); editor.undo();"); page.wait_for_timeout(60)
+        check("guides survive an undo restore (re-rendered on install)",
+              page.evaluate("editor.stage.querySelectorAll('.hv-guideobj').length") == 2)
+        page.evaluate("editor.toggleGuidesLock();"); page.wait_for_timeout(20)
+        check("locked guides drop their drag hit-targets",
+              page.evaluate("editor.stage.querySelectorAll('.hv-guidehit').length") == 0)
+        page.evaluate("editor.toggleGuidesLock(); editor.clearGuides();"); page.wait_for_timeout(20)
+        check("clearGuides empties the layer",
+              page.evaluate("editor.guides.length === 0 && editor.stage.querySelectorAll('.hv-guideobj').length === 0"))
 
         # ---- App-window mode (standalone Chromium window) ----
         # Headless can't exercise WCO/AWC, but the ?app=1 gate must engage and make
