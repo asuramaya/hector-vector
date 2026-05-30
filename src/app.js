@@ -1932,8 +1932,8 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       { name: "actions",  sel: ".actionbar",         tail: null },
       { name: "viewport", sel: ".viewport-controls", tail: null },
     ];
-    const barOf = (b) => document.querySelector(b.sel);
-    const isTile = (el) => !!(el && el.classList && el.classList.contains("tool-button"));
+    const barOf = (b) => b.el || document.querySelector(b.sel);   // bars are sel- OR element-based (panel headers)
+    const isTile = (el) => !!(el && el.classList && el.classList.contains("tool-button") && !el.classList.contains("panel-x"));   // the × isn't a movable tile
     const isSep = (el) => !!(el && el.classList && (el.classList.contains("tool-sep") || el.classList.contains("tool-vsep") || el.classList.contains("vp-sep")));
     const tileKey = (b) => b.id ? "#" + b.id : b.dataset.tool ? "tool:" + b.dataset.tool : (b.dataset.vp && b.dataset.action) ? "vp:" + b.dataset.action : "t:" + (b.textContent || "").trim();
     const slotKey = (el) => isSep(el) ? SEP : tileKey(el);
@@ -1954,21 +1954,28 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     function makeSep(bar) { const s = document.createElement("span"); s.className = sepClassFor(bar); s.setAttribute("aria-hidden", "true"); return s; }
     const DEFAULT = capture();   // authored DOM order — taken before applying any saved layout
 
+    // every tile by key, wherever it currently sits (across all registered bars)
+    function collectTiles() {
+      const m = new Map();
+      for (const b of BARS) { const c = barOf(b); if (c) for (const t of c.querySelectorAll(".tool-button")) if (isTile(t)) m.set(tileKey(t), t); }
+      return m;
+    }
+    function applyBar(bar, list, tiles) {
+      const cont = barOf(bar); if (!cont) return;
+      tiles = tiles || collectTiles();
+      const tail = tailEl(cont, bar);
+      const pool = [...cont.children].filter(isSep);   // reuse existing separators, create more on demand
+      let pi = 0;
+      for (const key of (list || [])) {
+        const el = key === SEP ? (pool[pi++] || makeSep(bar)) : tiles.get(key);
+        if (el) cont.insertBefore(el, tail);   // insertBefore(el, null) appends
+      }
+      for (; pi < pool.length; pi++) pool[pi].remove();   // drop separators the layout no longer wants
+    }
     function apply(layout) {
       if (!layout) return;
-      const tiles = new Map();   // every tile by key, wherever it currently sits
-      for (const b of BARS) { const c = barOf(b); if (c) for (const t of c.querySelectorAll(".tool-button")) tiles.set(tileKey(t), t); }
-      for (const b of BARS) {
-        const cont = barOf(b); if (!cont) continue;
-        const tail = tailEl(cont, b);
-        const pool = [...cont.children].filter(isSep);   // reuse existing separators, create more on demand
-        let pi = 0;
-        for (const key of (layout[b.name] || [])) {
-          const el = key === SEP ? (pool[pi++] || makeSep(b)) : tiles.get(key);
-          if (el) cont.insertBefore(el, tail);   // insertBefore(el, null) appends
-        }
-        for (; pi < pool.length; pi++) pool[pi].remove();   // drop separators the layout no longer wants
-      }
+      const tiles = collectTiles();
+      for (const b of BARS) applyBar(b, layout[b.name], tiles);
       // tiles a saved layout doesn't mention (e.g. added in a newer build) keep their place
     }
     const PROFILES_KEY = "hector-vector:layout-profiles";
@@ -2031,18 +2038,31 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       showContextMenu(e.clientX, e.clientY, items);
     };
 
+    function wireBar(bar, on) {
+      const cont = barOf(bar); if (!cont) return;
+      for (const m of movable(bar)) wireMovable(m, on);
+      if (on) { cont.addEventListener("dragover", onBarOver); cont.addEventListener("drop", onBarDrop); cont.addEventListener("contextmenu", onBarContext); }
+      else { cont.removeEventListener("dragover", onBarOver); cont.removeEventListener("drop", onBarDrop); cont.removeEventListener("contextmenu", onBarContext); }
+    }
+    // Register a panel header's action area as a customize-layout bar (drop receiver). The
+    // panel headers are built dynamically (after this module), so they opt in on creation.
+    function registerBar(name, el) {
+      if (!el || BARS.some((b) => b.name === name)) return;
+      const bar = { name, el, tail: null };
+      BARS.push(bar);
+      if (!(name in DEFAULT)) DEFAULT[name] = movable(bar).map(slotKey);   // authored default (for Reset)
+      const saved = loadSaved();
+      if (saved && saved[name]) applyBar(bar, saved[name]);   // restore this bar's saved arrangement
+      if (editing) wireBar(bar, true);
+      el.classList.add("layout-bar");   // CSS hook for the customize drop outline
+    }
     function setEditing(on) {
       editing = on;
       appEl.classList.toggle("customizing", on);
       if (layoutTrigger) layoutTrigger.classList.toggle("active", on);
-      frameMovables().forEach((el) => wireMovable(el, on));
-      BARS.forEach((b) => {
-        const c = barOf(b); if (!c) return;
-        if (on) { c.addEventListener("dragover", onBarOver); c.addEventListener("drop", onBarDrop); c.addEventListener("contextmenu", onBarContext); }
-        else { c.removeEventListener("dragover", onBarOver); c.removeEventListener("drop", onBarDrop); c.removeEventListener("contextmenu", onBarContext); }
-      });
+      BARS.forEach((b) => wireBar(b, on));
       if (!on && editor.onInspect) editor.onInspect();   // restore the correct disabled states (onInspect runs refreshActionButtons)
-      setStatus(on ? "Customize layout: drag buttons between bars — changes save automatically." : "Ready.", on ? 6000 : 1500);
+      setStatus(on ? "Customize layout: drag buttons between bars (incl. panel headers) — changes save automatically." : "Ready.", on ? 6000 : 1500);
     }
     function reset() { try { localStorage.removeItem(LAYOUT_KEY); } catch {} apply(DEFAULT); setStatus("Layout reset to default.", 1500); }
     function applyProfile(name) { const p = loadProfiles()[name]; if (!p) return; apply(p); persist(); setStatus(`Layout: ${name}.`, 1500); }
@@ -2054,6 +2074,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     layoutCtl = {
       isEditing: () => editing,
       toggleEdit: () => setEditing(!editing),
+      registerBar,
       reset, applyProfile, deleteProfile, renameProfile, save: persist,
       saveProfile,
       saveProfilePrompt: () => { const n = window.prompt("Save current layout as a profile:", ""); if (n == null) return; if (saveProfile(n)) setStatus(`Saved layout profile "${n.trim()}".`, 1800); },
@@ -2124,11 +2145,12 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
 
     // Properties + Colour aren't in the HTML — build their sections once (same chrome as
     // History/Layers: caret-collapsible, drag header to detach/dock, × only while floating).
-    // Two header action slots (kept to two so the header stays sane at minimum width):
-    // Colour → cycle-background, Object → invert-space; the other slot is left blank.
+    // Default header action tile: Colour → cycle-background, Object → invert-space. The
+    // header's action area is a customize-layout RECEIVER (drag toolbar tiles into it),
+    // so the remaining width is a blank slot you can drop another tool into.
     const HDR_SLOTS = {
-      color: [{ g: "◧", t: "Cycle background (b)", fn: () => cycleBg("output") }, null],
-      properties: [{ g: "⊠", t: "Invert space — fill the gaps", fn: () => editor.invertSpace() }, null],
+      color: { id: "hdr-bg", g: "◧", t: "Cycle background (b)", fn: () => cycleBg("output") },
+      properties: { id: "hdr-invert", g: "⊠", t: "Invert space — fill the gaps", fn: () => editor.invertSpace() },
     };
     const mkPanel = (name, label, extraClass) => {
       const s = document.createElement("div");
@@ -2138,14 +2160,13 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
         + `<div class="panel-actions hdr-slots"></div></div>`
         + `<div class="section-body fp-body"></div>`;
       const actions = s.querySelector(".panel-actions");
-      for (const slot of (HDR_SLOTS[name] || [])) {
-        if (slot) { const b = document.createElement("button"); b.type = "button"; b.className = "tool-button hdr-slot"; b.title = slot.t; b.textContent = slot.g; b.addEventListener("click", (e) => { e.stopPropagation(); slot.fn(); }); actions.appendChild(b); }
-        else { const e = document.createElement("span"); e.className = "hdr-slot hdr-slot-empty"; e.title = "Empty slot"; actions.appendChild(e); }
-      }
+      const slot = HDR_SLOTS[name];
+      if (slot) { const b = document.createElement("button"); b.type = "button"; b.id = slot.id; b.className = "tool-button"; b.title = slot.t; b.textContent = slot.g; b.addEventListener("click", (e) => { e.stopPropagation(); slot.fn(); }); actions.appendChild(b); }
       const x = document.createElement("button"); x.type = "button"; x.className = "tool-button fp-close panel-x"; x.title = "Close"; x.textContent = "×";
       x.addEventListener("click", (e) => { e.stopPropagation(); close(name); });
       actions.appendChild(x);
       bindHeaderDrag(s); wireSectionCollapse(s);
+      if (window.__layout && window.__layout.registerBar) window.__layout.registerBar("hdr-" + name, actions);
       return s;
     };
     let propsSection = null, colorSection = null;

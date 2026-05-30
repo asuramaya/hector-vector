@@ -387,10 +387,11 @@ button:disabled {
    while the panel floats (incl. when collapsed). */
 .leftdock .panel-x, .rightdock .panel-x { display: none; }
 .dock-window .rail-section.collapsed .panel-actions { display: flex; }   /* keep × reachable on a collapsed float */
-/* Header action slots: a small action + a blank slot (kept to two so the header stays
-   sane at minimum width). The blank slot reads as a placeholder. */
-.section-head .hdr-slot { width: 24px; height: 24px; font-size: 12px; }
-.section-head .hdr-slot-empty { box-sizing: border-box; border: 1px dashed var(--line); background: none; opacity: 0.5; }
+/* Panel header action area = a customize-layout drop RECEIVER. Buttons are smaller here,
+   and a little blank room keeps a visible slot to drop a tool into. */
+.section-head .panel-actions.hdr-slots { min-width: 56px; }
+.section-head .panel-actions.hdr-slots .tool-button { width: 24px; height: 24px; font-size: 12px; }
+.app.editor.customizing .panel-actions.hdr-slots { outline: 1px dashed var(--accent); outline-offset: -1px; background: color-mix(in srgb, var(--accent) 7%, var(--bg)); min-width: 66px; border-radius: 2px; }
 /* Colour panel: the picker editor embedded in a panel body (no backdrop/window chrome). */
 .color .fp-body { padding: 0; }
 .cp-window.cp-embedded { position: static; width: auto; max-width: none; border: 0; box-shadow: none; padding: 8px; gap: 7px; }

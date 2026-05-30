@@ -648,12 +648,15 @@ def main():
               page.evaluate("""['act-cut','act-copy','act-paste','act-duplicate','act-union','act-rotate-cw','act-flip-h']
                 .every(id => !!document.querySelector('.actionbar #' + id))
                 && !document.querySelector('.actionbar #act-delete') && !document.querySelector('.actionbar #act-invert')"""))
-        # the panel headers carry a default action slot: Object → invert-space, Colour → cycle-bg
-        check("Object panel header has the invert-space slot",
-              page.evaluate("""[...document.querySelectorAll('.rail-section.properties .section-head .hdr-slot')].some(b => /invert/i.test(b.title))"""))
+        # the panel headers carry a default action tile: Object → invert-space, Colour → cycle-bg,
+        # and the header action area is a registered customize-layout receiver
+        check("Object panel header has the invert-space tile",
+              page.evaluate("""() => { const b = document.querySelector('.rail-section.properties .section-head #hdr-invert'); return !!b && /invert/i.test(b.title); }"""))
         page.evaluate("window.__docks.showColor()"); page.wait_for_timeout(60)
-        check("Colour panel header has the cycle-background slot",
-              page.evaluate("""[...document.querySelectorAll('.rail-section.color .section-head .hdr-slot')].some(b => /background/i.test(b.title))"""))
+        check("Colour panel header has the cycle-background tile",
+              page.evaluate("""() => { const b = document.querySelector('.rail-section.color .section-head #hdr-bg'); return !!b && /background/i.test(b.title); }"""))
+        check("panel header action areas are layout-bar receivers",
+              page.evaluate("!!document.querySelector('.rail-section.color .panel-actions.hdr-slots.layout-bar')"))
         page.evaluate("window.__docks.close('color')"); page.wait_for_timeout(40)
         # the cycle-bg control left the viewport bar
         check("cycle-background no longer in the viewport bar",
@@ -1519,7 +1522,24 @@ def main():
         page.click('.context-menu .menu-item:has-text("Remove divider")'); page.wait_for_timeout(80)
         check("right-click removes a divider",
               page.evaluate("document.querySelectorAll('.actionbar .tool-sep').length") == before, f"back to {before}")
+        # panel headers are customize-layout receivers: drag a toolbar tile into one
+        landed = page.evaluate("""() => {
+            const tile = document.querySelector('.actionbar #act-union');
+            const hdr = document.querySelector('.rail-section.properties .panel-actions');
+            if (!tile || !hdr) return 'missing';
+            const dt = new DataTransfer();
+            tile.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
+            const r = hdr.getBoundingClientRect();
+            hdr.dispatchEvent(new DragEvent('dragover', { bubbles: true, clientX: Math.round(r.right - 4), clientY: Math.round(r.top + r.height / 2), dataTransfer: dt }));
+            hdr.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: dt }));
+            tile.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
+            return document.querySelector('.rail-section.properties .panel-actions #act-union') ? 'in' : 'out'; }""")
+        check("drag a toolbar tile INTO a panel header receiver", landed == "in", str(landed))
+        check("header receiver arrangement is auto-saved",
+              page.evaluate("((JSON.parse(localStorage.getItem('hector-vector:layout')||'{}'))['hdr-properties']||[]).includes('#act-union')"))
         page.evaluate("window.__layout.toggleEdit(); window.__layout.reset()"); page.wait_for_timeout(60)
+        check("Reset returns the moved tile to the action bar",
+              page.evaluate("!!document.querySelector('.actionbar #act-union') && !document.querySelector('.rail-section.properties #act-union')"))
 
         # ---- Dockable panels: float, dock left/right, reorder, fold, Properties ----
         check("docking controller is exposed", page.evaluate("!!window.__docks") is True)
