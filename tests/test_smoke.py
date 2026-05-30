@@ -109,12 +109,40 @@ def check_path_simplify() -> None:
     print(f"ok: simplify {st['nodes_before']}->{st['nodes_after']} nodes, resolution-stable across 3x")
 
 
+def check_pipeline_stages() -> None:
+    """The generalized pipeline resolves stage flags + methods from a payload, and
+    a flag-less payload stays back-compatible (all three stages). Pure logic."""
+    sys.path.insert(0, str(ROOT))
+    import server
+
+    # explicit flags honored, with method strings
+    st = server._pipeline_stages({"stage_upscale": False, "stage_removebg": True,
+                                  "stage_vectorize": True, "removebg_method": "green",
+                                  "vectorize_method": "pixel"})
+    assert st["upscale"] is False and st["removebg"] and st["vectorize"], st
+    assert st["removebg_method"] == "green" and st["vectorize_method"] == "pixel", st
+
+    # stringy booleans coerce; the bare (legacy) payload is all-three Production SVG
+    assert server._stage_on("true") and server._stage_on(1) and not server._stage_on("0")
+    legacy = server._pipeline_stages({})
+    assert legacy["upscale"] and legacy["removebg"] and legacy["vectorize"], legacy
+
+    # methods fall back to the old single-purpose settings when unspecified
+    fb = server._pipeline_stages({"stage_vectorize": True, "cutout_backend": "ai", "trace_mode": "pixel"})
+    assert fb["removebg_method"] == "ai" and fb["vectorize_method"] == "pixel", fb
+
+    summ = server._pipeline_summary("logo.png", st)
+    assert "Greenscreen" in summ and "Pixel trace" in summ and "logo.png" in summ, summ
+    print("ok: pipeline stage flags resolve (explicit, legacy all-three, method fallbacks)")
+
+
 def main() -> int:
     check_parses()
     svg = check_pixelvec()
     check_render(svg)
     check_color_simplify()
     check_path_simplify()
+    check_pipeline_stages()
     for tmp in ["_out.svg", "_out.png"]:
         (ROOT / "tests" / tmp).unlink(missing_ok=True)
     print("\nALL SMOKE TESTS PASSED")

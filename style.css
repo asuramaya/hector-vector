@@ -1344,6 +1344,36 @@ button:disabled {
 .gallery-cell.processed .gallery-caption { color: var(--accent); }
 .process-jobs .jobs-toolbar { margin-bottom: 8px; }
 
+/* ---- Pipeline stage strip (replaces the old process dropdown) ---- */
+.pipeline-strip-wrap { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; }
+.pipeline-presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.presets-label { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-right: 2px; }
+.preset-chip, .preset-save { font: inherit; font-size: 12px; padding: 4px 9px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
+.preset-chip:hover, .preset-save:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.preset-chip.active { background: var(--ink); color: #fff; border-color: var(--ink); font-weight: 600; }
+.presets-sep { width: 1px; align-self: stretch; background: var(--line); opacity: 0.4; margin: 0 3px; }
+.preset-save { margin-left: auto; font-weight: 600; }
+
+.pipeline-strip { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; padding: 8px; border: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 4%, var(--bg)); }
+.pipeline-stage { display: flex; flex-direction: column; min-width: 156px; border: 1px solid var(--line); background: var(--bg); cursor: grab; }
+.pipeline-stage.dragging { opacity: 0.5; outline: 2px solid var(--accent); cursor: grabbing; }
+.pipeline-stage.off { opacity: 0.55; }
+.pipeline-stage.off .stage-name { text-decoration: line-through; }
+.pipeline-stage-head { display: flex; align-items: center; gap: 7px; padding: 7px 9px; }
+.stage-toggle { flex: 0 0 auto; width: 15px; height: 15px; cursor: pointer; }
+.pipeline-stage-title { flex: 1 1 auto; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; border: 0; background: none; padding: 0; cursor: pointer; font: inherit; text-align: left; color: var(--fg); }
+.stage-name { font-weight: 600; font-size: 13px; }
+.stage-note { font-size: 11px; color: var(--muted); }
+.stage-method { flex: 0 0 auto; padding: 3px 5px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: inherit; font-size: 11px; cursor: pointer; }
+.stage-body { padding: 8px 9px; border-top: 1px solid var(--line); width: 232px; max-width: 232px; gap: 8px; }
+.stage-body .form-row { grid-template-columns: 1fr; gap: 3px; align-items: stretch; }
+.stage-body .form-section { margin-top: 0; }
+.pipeline-arrow { align-self: center; color: var(--muted); font-size: 15px; padding: 6px 1px 0; }
+.pipeline-out { align-self: flex-start; margin-top: 7px; font-size: 12px; font-weight: 700; padding: 6px 11px; border: 1px solid var(--line); }
+.pipeline-out.out-svg { background: var(--ink); color: #fff; border-color: var(--ink); }
+.pipeline-out.out-png { background: var(--bg); color: var(--fg); }
+.pipeline-out.out-none { color: var(--muted); border-style: dashed; }
+
 .primary-button {
   border: 1px solid var(--accent); background: var(--accent); color: #fff;
   padding: 7px 14px; font: inherit; cursor: pointer; font-weight: 600;

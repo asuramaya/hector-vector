@@ -42,6 +42,13 @@ const SETTINGS_DEFAULTS = {
   splice_threshold: "45",
   path_precision: "2",
   color_precision: "6",
+  // --- Pipeline stages (the strip). The 6 old "processes" are just stage subsets. ---
+  stage_upscale: true,         // toggleable stages, default = the old "Production SVG"
+  stage_removebg: true,
+  stage_vectorize: true,
+  removebg_method: "classical", // classical | ai (rembg) | green (chromakey) — folds in Greenscreen
+  vectorize_method: "trace",    // trace (vtracer) | pixel (pixelvec) — folds in Pixel Art → SVG
+  pipeline_order: "upscale,removebg,vectorize",   // visual block order (persisted); flow stays canonical
   trace_simplify: "medium",    // post-trace refit to minimal cubics: off/light/medium/strong
   trace_colormode: "bw",       // bw = mask trace (1-color); color = full-color trace of the image
   trace_color_style: "poster", // poster = flat limited palette · photo = smooth gradients
@@ -3096,18 +3103,25 @@ async function runProcess() {
   const originalLabel = runButtonEl.textContent;
   runButtonEl.textContent = "Starting…";
   try {
+    if (!anyStageEnabled()) {
+      setStatus("Enable at least one pipeline stage to run.", 3000);
+      return;
+    }
+    // The stage strip always drives the generalized pipeline route; the enabled
+    // stage flags travel in the payload (via {...settings}). The legacy kind is
+    // only used for "already processed" skip-detection on the output it produces.
     const payload = { ...settings };
-    const proc = processSelectEl.value;
+    const kind = effectiveProcessKind();
     const force = !!(forceInputEl && forceInputEl.checked);
     if (modeSelectEl.value === "single" && selectedName) {
       payload.inputs = [selectedName];
-      if (!force && alreadyProcessed(selectedName, proc)) {
+      if (!force && alreadyProcessed(selectedName, kind)) {
         setStatus(`“${selectedName}” is already processed — turn on Force to re-run.`, 4000);
         return;   // finally{} restores the button; no wasteful re-run
       }
     }
     if (force) payload.force = true;
-    const data = await api(`/api/run/${proc}`, "POST", payload);
+    const data = await api("/api/run/pipeline", "POST", payload);
     lastBatchFailCount = 0;
     const hold = data.started === 0 ? 4000 : 1800;
     setStatus(data.message || "Started.", hold);
@@ -3265,50 +3279,320 @@ function buildJobsPanel() {
 // ---------- Process workspace: gallery + processing controls + live jobs ----------
 // First-class home for the image→vector pipeline. Opened on demand (header
 // "Process…" / footer Jobs / `q`), so it never eats editor canvas space.
-const PROCESS_OPTIONS = [
-  ["pipeline", "Production SVG"], ["vectorize", "SVG Trace"], ["pixelvec", "Pixel Art → SVG"],
-  ["cutout", "Cutout PNG"], ["upscale", "Upscale PNG"], ["chromakey", "Greenscreen Cutout"],
+// ===== Pipeline stage strip =====================================================
+// The image→vector pipeline is three composable stages — Upscale → Remove BG →
+// Vectorize — each independently toggleable. The 6 old flat "processes" are just
+// stage subsets (Greenscreen folds into Remove-BG's method; Pixel Art folds into
+// Vectorize's method). One generalized `/api/run/pipeline` honors the flags; the
+// strip drives it. Drag to reorder the blocks (shares the customize-layout drag
+// CSS); data flow stays canonical (you always upscale before tracing).
+const PIPELINE_STAGES = [
+  { id: "upscale",   key: "stage_upscale",   label: "Upscale",   note: "Enlarge with Real-ESRGAN" },
+  { id: "removebg",  key: "stage_removebg",  label: "Remove BG", note: "Isolate the subject" },
+  { id: "vectorize", key: "stage_vectorize", label: "Vectorize", note: "Raster → SVG" },
 ];
+const STAGE_BY_ID = Object.fromEntries(PIPELINE_STAGES.map((s) => [s.id, s]));
+const CANON_ORDER = PIPELINE_STAGES.map((s) => s.id);
+// Per-stage body expand/collapse state (survives re-render; Vectorize open first).
+const stageExpanded = { upscale: false, removebg: false, vectorize: true };
 
-// The key backend choices for the selected pipeline, surfaced inline (first-class)
-// instead of buried in Advanced. These bind straight to `settings`, so they drive
-// runProcess directly; the pipeline combines several backends, so it shows all of
-// them. Changing one that gates others (cutout backend) re-renders the workspace.
-function processKeyOptions(proc) {
-  const wrap = document.createElement("div"); wrap.className = "process-opts";
-  const add = (label, control) => {
-    const l = document.createElement("label"); l.className = "process-opt";
-    const s = document.createElement("span"); s.textContent = label;
-    l.appendChild(s); l.appendChild(control); wrap.appendChild(l);
+// Visual block order from settings.pipeline_order, sanitized to the known stages.
+function stageOrder() {
+  const want = String(settings.pipeline_order || "").split(",").map((s) => s.trim()).filter((s) => STAGE_BY_ID[s]);
+  const seen = new Set(want);
+  return [...want, ...CANON_ORDER.filter((id) => !seen.has(id))];
+}
+const stageOn = (id) => !!settings[STAGE_BY_ID[id].key];
+const anyStageEnabled = () => CANON_ORDER.some(stageOn);
+
+// The legacy process kind the current stage-set is equivalent to — used only to
+// keep previews / skip-detection / the Settings-modal label working unchanged.
+// (runProcess always POSTs the generalized /api/run/pipeline with stage flags.)
+function effectiveProcessKind() {
+  if (!anyStageEnabled()) return null;
+  if (stageOn("vectorize")) {
+    // the classic all-three trace is "Production SVG" (pipeline); narrower sets
+    // are the granular svg kinds. All produce an SVG, so preview/skip stay correct.
+    if (stageOn("upscale") && stageOn("removebg") && settings.vectorize_method !== "pixel") return "pipeline";
+    return settings.vectorize_method === "pixel" ? "pixelvec" : "vectorize";
+  }
+  if (stageOn("removebg")) return "cutout";   // pipeline writes {stem}.cutout.png for every method
+  return "upscale";   // upscale-only
+}
+
+// What the pipeline emits: SVG if Vectorize is on, else a PNG, else nothing.
+function outputChipInfo() {
+  if (!anyStageEnabled()) return null;
+  if (stageOn("vectorize")) return { kind: "SVG", label: "SVG" };
+  return { kind: "PNG", label: "PNG" };
+}
+
+// The expandable settings for one stage. Reuses the shared form helpers
+// (fieldRow/makeSelect/makeRange/makeNumber) so it matches the Settings modal.
+function stageBody(id) {
+  const body = document.createElement("div");
+  body.className = "stage-body form";
+  const rerender = () => renderProcessWorkspace();
+  settingsFormRerender = renderProcessWorkspace;
+
+  if (id === "upscale") {
+    body.appendChild(fieldRow("Model", makeSelect("model", [
+      ["realesrgan-x4plus", "ESRGAN x4+ (photo)"],
+      ["realesrnet-x4plus", "ESRNet x4+ (cleaner)"],
+      ["realesr-animevideov3", "Anime / line-art"],
+    ])));
+    body.appendChild(fieldRow("Scale", makeSelect("scale", [["2", "2×"], ["3", "3×"], ["4", "4×"]])));
+  }
+
+  else if (id === "removebg") {
+    if (settings.removebg_method === "ai") {
+      body.appendChild(fieldRow("AI model", makeSelect("cutout_model", [
+        ["u2net", "u2net — default, general (175MB)"],
+        ["u2netp", "u2netp — fast/light (5MB)"],
+        ["u2net_human_seg", "u2net_human_seg — humans"],
+        ["isnet-general-use", "ISNet — sharper general (~170MB)"],
+        ["isnet-anime", "ISNet anime"],
+        ["birefnet-general", "BiRefNet general — OSS SOTA (~440MB)"],
+        ["birefnet-general-lite", "BiRefNet lite"],
+        ["birefnet-portrait", "BiRefNet portrait"],
+        ["silueta", "silueta — quantized U²-Net (~40MB)"],
+      ]), "First run of each model downloads weights to ~/.u2net/"));
+      const am = document.createElement("input");
+      am.type = "checkbox"; am.checked = !!settings.alpha_matting;
+      am.addEventListener("change", () => { settings.alpha_matting = am.checked; persistSettings(); });
+      body.appendChild(fieldRow("Alpha matting", am, "Refines edges (hair). Slower."));
+      if (workspace && !workspace.rembg_installed) {
+        const cta = document.createElement("button");
+        cta.type = "button"; cta.className = "ghost-button"; cta.textContent = "Install rembg (one-time, ~500MB)";
+        cta.addEventListener("click", async () => {
+          cta.disabled = true; cta.textContent = "Installing rembg…";
+          try { const d = await api("/api/install/rembg", "POST", {}); setStatus(d.message || "Install started.", 3000); await loadJobs(); }
+          catch (e) { setStatus(e.message, 3000); cta.disabled = false; cta.textContent = "Install rembg (one-time, ~500MB)"; }
+        });
+        const wrap = document.createElement("div"); wrap.className = "form-actions"; wrap.appendChild(cta); body.appendChild(wrap);
+      }
+    } else if (settings.removebg_method === "green") {
+      const note = document.createElement("div"); note.className = "form-hint";
+      note.textContent = "Greenscreen keys out a green-dominant background (fixed threshold).";
+      body.appendChild(note);
+    } else {
+      const note = document.createElement("div"); note.className = "form-hint";
+      note.textContent = "Classical auto-detects a flat background with numpy — fast, no model download.";
+      body.appendChild(note);
+    }
+  }
+
+  else if (id === "vectorize") {
+    if (settings.vectorize_method === "pixel") {
+      body.appendChild(fieldRow("Native size (cells)", makeNumber("pv_grid", { min: 0, max: 4096, step: 1, placeholder: "auto-detect" }), "Blank = auto-detect the pixel grid; set a number to force it."));
+      body.appendChild(fieldRow("Cell color", makeSelect("pv_sample", [["mode", "Mode — most common"], ["median", "Median — robust to noise"], ["center", "Center pixel — fastest"]])));
+      body.appendChild(fieldRow("Quantize colors", makeNumber("pv_quantize", { min: 0, max: 256, step: 1, placeholder: "keep all" }), "Snap to an N-color palette. Blank/0 keeps every color."));
+      const keyCb = document.createElement("input"); keyCb.type = "checkbox"; keyCb.checked = !!settings.pv_key_corner;
+      keyCb.addEventListener("change", () => { settings.pv_key_corner = keyCb.checked; persistSettings(); });
+      body.appendChild(fieldRow("Key out corner", keyCb, "Make the dominant corner color transparent."));
+      body.appendChild(fieldRow("Shape mode", makeSelect("pv_mode", [["merged", "Merged rects — compact"], ["path", "Per-color paths — fewest nodes"], ["pixels", "One rect per pixel — exact"]])));
+      const note = document.createElement("div"); note.className = "form-hint";
+      note.textContent = "Pixel never smooths — it recovers the grid and emits squares (scales perfectly).";
+      body.appendChild(note);
+    } else {
+      const colorSel = makeSelect("trace_colormode", [["bw", "Black & white — silhouette"], ["color", "Color — full palette"]]);
+      colorSel.addEventListener("change", () => rerender());
+      body.appendChild(fieldRow("Output", colorSel, "B&W traces a 1-color silhouette; Color traces the image's real colors."));
+      const isColor = settings.trace_colormode === "color";
+      if (isColor) {
+        body.appendChild(fieldRow("Style", makeSelect("trace_color_style", [["poster", "Poster — flat, limited palette"], ["photo", "Photo — smooth gradients"]]), "Poster suits logos/illustration; Photo follows gradients."));
+        body.appendChild(fieldRow("Colors", makeRange("color_precision", 1, 8, 1), "Poster uses this as palette size; Photo as gradient precision."));
+        body.appendChild(fieldRow("Layers", makeSelect("trace_hierarchical", [["stacked", "Stacked — layered fills"], ["cutout", "Cutout — non-overlapping"]])));
+      }
+      const presetSel = makeSelect("trace_preset", [["draft", "Draft — fewest points"], ["balanced", "Balanced"], ["smooth", "Smooth — curvier"], ["sharp", "Sharp — keep detail"], ["custom", "Custom — sliders below"]]);
+      presetSel.addEventListener("change", () => { const pre = TRACE_PRESETS[presetSel.value]; if (pre) { Object.assign(settings, pre); persistSettings(); } rerender(); });
+      body.appendChild(fieldRow("Preset", presetSel, "Tunes the sliders below as a group."));
+      body.appendChild(fieldRow("Curves", makeSelect("trace_mode", [["spline", "Spline (curves)"], ["polygon", "Polygon"], ["pixel", "Pixel (no smoothing)"]])));
+      body.appendChild(fieldRow("Simplify", makeSelect("trace_simplify", [["off", "Off — raw vtracer"], ["light", "Light"], ["medium", "Medium — recommended"], ["strong", "Strong — fewest nodes"]]), "Refits to the fewest curves. Resolution-independent."));
+      if (!isColor) body.appendChild(fieldRow("Black threshold", makeNumber("mask_threshold", { min: 16, max: 240, step: 1, placeholder: "auto (otsu)" }), "Gray cutoff. Higher = more pixels as foreground."));
+      body.appendChild(fieldRow("Target max dim", makeNumber("target_max_dim", { min: 0, max: 16384, step: 64, placeholder: "auto (no resize)" }), "Resize the longest side before tracing."));
+      const advToggle = document.createElement("input"); advToggle.type = "checkbox"; advToggle.checked = !!settings.trace_advanced;
+      advToggle.addEventListener("change", () => { settings.trace_advanced = advToggle.checked; persistSettings(); rerender(); });
+      body.appendChild(fieldRow("Show VTracer sliders", advToggle));
+      if (settings.trace_advanced) {
+        const onSlider = () => { settings.trace_preset = "custom"; persistSettings(); };
+        const flag = (row) => { row.querySelectorAll("input").forEach((el) => el.addEventListener("input", onSlider)); return row; };
+        body.appendChild(flag(fieldRow("Smooth (segment_length)", makeRange("segment_length", 3.5, 10, 0.5))));
+        body.appendChild(flag(fieldRow("Filter speckle", makeRange("filter_speckle", 0, 16, 1))));
+        body.appendChild(flag(fieldRow("Corner threshold", makeRange("corner_threshold", 30, 180, 5))));
+        body.appendChild(flag(fieldRow("Splice threshold", makeRange("splice_threshold", 0, 180, 5))));
+        body.appendChild(flag(fieldRow("Path precision", makeRange("path_precision", 0, 10, 1))));
+      }
+    }
+  }
+  return body;
+}
+
+// --- presets: the 6 old processes as built-ins + user-saved sets ----------------
+// A preset is a snapshot of the pipeline-relevant settings. Built-ins reproduce
+// the old flat processes (locked); users save their own. Mirrors the layout-
+// profile verbs (save / apply / delete / "active" highlight) over a dedicated
+// store, so pipeline presets never tangle with the toolbar-layout profiles.
+const PIPELINE_PRESETS_KEY = "hector-vector:pipeline-presets";
+const PRESET_KEYS = [
+  "stage_upscale", "stage_removebg", "stage_vectorize", "removebg_method", "vectorize_method",
+  "pipeline_order", "model", "scale", "cutout_model", "alpha_matting",
+  "trace_colormode", "trace_color_style", "color_precision", "trace_hierarchical",
+  "trace_preset", "trace_mode", "trace_simplify", "mask_threshold", "target_max_dim",
+  "segment_length", "filter_speckle", "corner_threshold", "splice_threshold", "path_precision",
+  "trace_advanced", "pv_grid", "pv_sample", "pv_quantize", "pv_key_corner", "pv_mode",
+];
+// Built-ins list only their discriminating fields, so matching/highlighting is
+// lenient (a built-in stays "active" regardless of secondary tuning).
+const BUILTIN_PRESETS = [
+  { name: "Production SVG", p: { stage_upscale: true,  stage_removebg: true,  stage_vectorize: true,  removebg_method: "classical", vectorize_method: "trace", trace_colormode: "bw" } },
+  { name: "SVG Trace",      p: { stage_upscale: false, stage_removebg: false, stage_vectorize: true,  vectorize_method: "trace" } },
+  { name: "Pixel Art → SVG",p: { stage_upscale: false, stage_removebg: false, stage_vectorize: true,  vectorize_method: "pixel" } },
+  { name: "Cutout PNG",     p: { stage_upscale: false, stage_removebg: true,  stage_vectorize: false, removebg_method: "classical" } },
+  { name: "Upscale PNG",    p: { stage_upscale: true,  stage_removebg: false, stage_vectorize: false } },
+  { name: "Greenscreen",    p: { stage_upscale: false, stage_removebg: true,  stage_vectorize: false, removebg_method: "green" } },
+];
+const loadUserPresets = () => { try { return JSON.parse(localStorage.getItem(PIPELINE_PRESETS_KEY) || "{}") || {}; } catch { return {}; } };
+const saveUserPresets = (p) => { try { localStorage.setItem(PIPELINE_PRESETS_KEY, JSON.stringify(p)); } catch {} };
+const capturePreset = () => Object.fromEntries(PRESET_KEYS.map((k) => [k, settings[k]]));
+const presetMatches = (p) => Object.keys(p).every((k) => String(settings[k]) === String(p[k]));
+function applyPreset(p) { Object.assign(settings, p); persistSettings(); renderProcessWorkspace(); }
+
+function renderPresetBar() {
+  const bar = document.createElement("div");
+  bar.className = "pipeline-presets";
+  const lbl = document.createElement("span"); lbl.className = "presets-label"; lbl.textContent = "Preset"; bar.appendChild(lbl);
+  const chip = (name, active, onClick, builtin) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "preset-chip" + (active ? " active" : "") + (builtin ? " builtin" : "");
+    b.textContent = name; b.addEventListener("click", onClick); return b;
   };
-  if (proc === "upscale" || proc === "pipeline") {
-    add("Model", makeSelect("model", [["realesrgan-x4plus", "ESRGAN x4+ (photo)"], ["realesrnet-x4plus", "ESRNet x4+ (clean)"], ["realesr-animevideov3", "Anime / line-art"]]));
-    add("Scale", makeSelect("scale", [["2", "2×"], ["3", "3×"], ["4", "4×"]]));
+  let matchedBuiltin = false;
+  for (const { name, p } of BUILTIN_PRESETS) {
+    const active = presetMatches(p);
+    if (active) matchedBuiltin = true;
+    bar.appendChild(chip(name, active, () => applyPreset(p), true));
   }
-  if (proc === "vectorize" || proc === "pipeline") {
-    const out = makeSelect("trace_colormode", [["bw", "B&W"], ["color", "Color"]]);
-    out.addEventListener("change", () => renderProcessWorkspace());
-    add("Output", out);
-    if (settings.trace_colormode === "color") {
-      add("Style", makeSelect("trace_color_style", [["poster", "Poster"], ["photo", "Photo"]]));
+  const users = loadUserPresets();
+  const names = Object.keys(users);
+  if (names.length) { const sep = document.createElement("span"); sep.className = "presets-sep"; bar.appendChild(sep); }
+  for (const name of names) {
+    const active = !matchedBuiltin && presetMatches(users[name]);
+    const c = chip(name, active, () => applyPreset(users[name]), false);
+    c.title = "Click to apply · right-click to delete";
+    c.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      if (window.confirm(`Delete preset "${name}"?`)) { const u = loadUserPresets(); delete u[name]; saveUserPresets(u); renderProcessWorkspace(); }
+    });
+    bar.appendChild(c);
+  }
+  const save = document.createElement("button");
+  save.type = "button"; save.className = "preset-save"; save.textContent = "Save…";
+  save.title = "Save the current stage set as a preset";
+  save.addEventListener("click", () => {
+    const n = window.prompt("Save current pipeline as a preset:", "");
+    if (n == null) return; const nm = n.trim(); if (!nm) return;
+    const u = loadUserPresets();
+    if ((nm in u) && !window.confirm(`A preset named "${nm}" exists. Overwrite it?`)) return;
+    u[nm] = capturePreset(); saveUserPresets(u); setStatus(`Saved preset "${nm}".`, 1800); renderProcessWorkspace();
+  });
+  bar.appendChild(save);
+  return bar;
+}
+
+// --- strip drag-reorder (mirrors the customize-layout DnD; shares its CSS) ------
+let stripDragId = null;
+function stripInsertBefore(host, x) {
+  for (const card of host.querySelectorAll(".pipeline-stage")) {
+    if (card === stripDragEl()) continue;
+    const r = card.getBoundingClientRect();
+    if (x < r.left + r.width / 2) return card;
+  }
+  return null;
+}
+const stripDragEl = () => stripDragId && document.querySelector(`.pipeline-stage[data-stage="${stripDragId}"]`);
+
+function renderStage(id) {
+  const def = STAGE_BY_ID[id];
+  const on = stageOn(id);
+  const card = document.createElement("div");
+  card.className = "pipeline-stage" + (on ? "" : " off");
+  card.dataset.stage = id;
+  card.id = `stage-${id}`;
+  card.draggable = true;
+  card.addEventListener("dragstart", (e) => { stripDragId = id; e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", id); } catch {} card.classList.add("dragging"); });
+  card.addEventListener("dragend", () => { card.classList.remove("dragging"); stripDragId = null; });
+
+  const head = document.createElement("div");
+  head.className = "pipeline-stage-head";
+  const toggle = document.createElement("input");
+  toggle.type = "checkbox"; toggle.className = "stage-toggle"; toggle.checked = on;
+  toggle.title = on ? `${def.label} on` : `${def.label} off`;
+  toggle.addEventListener("change", () => { settings[def.key] = toggle.checked; persistSettings(); renderProcessWorkspace(); });
+  const title = document.createElement("button");
+  title.type = "button"; title.className = "pipeline-stage-title";
+  title.innerHTML = `<span class="stage-name">${def.label}</span><span class="stage-note">${def.note}</span>`;
+  title.addEventListener("click", () => { stageExpanded[id] = !stageExpanded[id]; renderProcessWorkspace(); });
+  head.appendChild(toggle);
+  head.appendChild(title);
+
+  // method pill (Remove BG / Vectorize have alternative engines)
+  if (id === "removebg") {
+    const pill = makeSelectRaw(settings.removebg_method, [["classical", "Classical"], ["ai", "AI"], ["green", "Greenscreen"]], (v) => {
+      settings.removebg_method = v; settings.cutout_backend = v === "ai" ? "ai" : "classical"; persistSettings(); renderProcessWorkspace();
+    });
+    pill.className = "stage-method"; pill.title = "Background-removal engine"; head.appendChild(pill);
+  } else if (id === "vectorize") {
+    const pill = makeSelectRaw(settings.vectorize_method, [["trace", "Trace"], ["pixel", "Pixel"]], (v) => {
+      settings.vectorize_method = v; persistSettings(); renderProcessWorkspace();
+    });
+    pill.className = "stage-method"; pill.title = "Vectorize engine"; head.appendChild(pill);
+  }
+  card.appendChild(head);
+
+  if (stageExpanded[id]) card.appendChild(stageBody(id));
+  return card;
+}
+
+// The strip: stages in saved order, → connectors, an output chip, a preset bar.
+function renderPipelineStrip() {
+  const wrap = document.createElement("div");
+  wrap.className = "pipeline-strip-wrap";
+  wrap.appendChild(renderPresetBar());
+
+  const strip = document.createElement("div");
+  strip.className = "pipeline-strip";
+  strip.addEventListener("dragover", (e) => {
+    const el = stripDragEl(); if (!el) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = "move";
+    const ref = stripInsertBefore(strip, e.clientX);
+    if (ref !== el) strip.insertBefore(el, ref);
+  });
+  strip.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const order = [...strip.querySelectorAll(".pipeline-stage")].map((c) => c.dataset.stage);
+    if (order.length === CANON_ORDER.length) { settings.pipeline_order = order.join(","); persistSettings(); }
+    renderProcessWorkspace();
+  });
+
+  const order = stageOrder();
+  order.forEach((id, i) => {
+    strip.appendChild(renderStage(id));
+    if (i < order.length - 1) {
+      const arrow = document.createElement("span"); arrow.className = "pipeline-arrow"; arrow.textContent = "→"; arrow.setAttribute("aria-hidden", "true");
+      strip.appendChild(arrow);
     }
-    const preset = makeSelect("trace_preset", [["draft", "Draft"], ["balanced", "Balanced"], ["smooth", "Smooth"], ["sharp", "Sharp"], ["custom", "Custom"]]);
-    preset.addEventListener("change", () => { const pre = TRACE_PRESETS[preset.value]; if (pre) { Object.assign(settings, pre); persistSettings(); } });
-    add("Trace", preset);
-    add("Curves", makeSelect("trace_mode", [["spline", "Spline"], ["polygon", "Polygon"], ["pixel", "Pixel"]]));
-    add("Simplify", makeSelect("trace_simplify", [["off", "Off"], ["light", "Light"], ["medium", "Medium"], ["strong", "Strong"]]));
-  }
-  if (proc === "cutout" || proc === "pipeline") {
-    const backend = makeSelect("cutout_backend", [["classical", "Classical (fast)"], ["ai", "AI (rembg)"]]);
-    backend.addEventListener("change", () => renderProcessWorkspace());
-    add("Cutout", backend);
-    if (settings.cutout_backend === "ai") {
-      add("AI model", makeSelect("cutout_model", [["u2net", "u2net"], ["isnet-general-use", "ISNet"], ["birefnet-general", "BiRefNet"], ["u2netp", "u2netp (fast)"], ["silueta", "silueta"]]));
-    }
-  }
-  if (proc === "pixelvec") {
-    add("Sample", makeSelect("pv_sample", [["mode", "Mode"], ["mean", "Mean"], ["median", "Median"]]));
-  }
+  });
+  const out = outputChipInfo();
+  const arrow = document.createElement("span"); arrow.className = "pipeline-arrow"; arrow.textContent = "→"; arrow.setAttribute("aria-hidden", "true");
+  strip.appendChild(arrow);
+  const chip = document.createElement("span");
+  chip.className = "pipeline-out" + (out ? ` out-${out.kind.toLowerCase()}` : " out-none");
+  chip.textContent = out ? out.label : "—";
+  chip.title = out ? `Output: ${out.kind}` : "No stages enabled";
+  strip.appendChild(chip);
+
+  wrap.appendChild(strip);
   return wrap;
 }
 
@@ -3329,19 +3613,26 @@ function renderProcessWorkspace() {
   const root = document.createElement("div");
   root.className = "process-workspace";
 
+  // Keep the hidden #process-select in sync with the stage set so previews,
+  // skip-detection and the Settings-modal label keep working unchanged.
+  const effKind = effectiveProcessKind();
+  if (effKind && processSelectEl.value !== effKind) processSelectEl.value = effKind;
+
+  // --- the pipeline stage strip (replaces the old process dropdown) ---
+  root.appendChild(renderPipelineStrip());
+
   // --- controls bar ---
   const bar = document.createElement("div");
   bar.className = "process-controls";
-  const procSel = makeSelectRaw(processSelectEl.value, PROCESS_OPTIONS, (v) => { processSelectEl.value = v; processSelectEl.dispatchEvent(new Event("change")); renderProcessWorkspace(); });
-  procSel.title = "Pipeline to run";
   const modeSel = makeSelectRaw(modeSelectEl.value, [["batch", "Batch — whole library"], ["single", "Single — selected image"]], (v) => { modeSelectEl.value = v; modeSelectEl.dispatchEvent(new Event("change")); });
   const force = document.createElement("label"); force.className = "process-force";
   const forceBox = document.createElement("input"); forceBox.type = "checkbox"; forceBox.checked = forceInputEl.checked;
   forceBox.addEventListener("change", () => { forceInputEl.checked = forceBox.checked; });
   force.appendChild(forceBox); force.appendChild(document.createTextNode(" Force re-run"));
   const runBtn = document.createElement("button"); runBtn.type = "button"; runBtn.className = "primary-button"; runBtn.textContent = "Run → canvas";
+  runBtn.disabled = !anyStageEnabled();
+  if (runBtn.disabled) runBtn.title = "Enable at least one pipeline stage";
   runBtn.addEventListener("click", () => runProcess());
-  bar.appendChild(procSel);
   bar.appendChild(modeSel);
   bar.appendChild(force);
   bar.appendChild(ghostBtn("Add images", () => fileInputEl.click()));
@@ -3349,16 +3640,7 @@ function renderProcessWorkspace() {
   bar.appendChild(runBtn);
   root.appendChild(bar);
 
-  // --- key backend options for this pipeline, inline (first-class) ---
-  root.appendChild(processKeyOptions(processSelectEl.value));
-
-  // --- advanced settings (collapsible, inline so it stays in one place) ---
-  const adv = document.createElement("details");
-  adv.className = "process-advanced";
-  const sum = document.createElement("summary"); sum.textContent = "Advanced settings"; adv.appendChild(sum);
-  settingsFormRerender = renderProcessWorkspace;   // keep changes inside the workspace, not the Settings modal
-  adv.appendChild(buildSettingsForm(processSelectEl.value));
-  root.appendChild(adv);
+  settingsFormRerender = renderProcessWorkspace;   // keep stage edits inside the workspace
 
   // --- gallery (left) + jobs (right) ---
   const panes = document.createElement("div");

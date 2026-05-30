@@ -1691,21 +1691,81 @@ def derive_mask_from_alpha(cutout_path: Path, mask_path: Path, threshold: int = 
     binary.convert("L").save(mask_path)
 
 
+def _stage_on(value: object) -> bool:
+    """Coerce a stage flag (JSON bool, or a stringy "true"/"1"/"on") to bool."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return False
+
+
+def _pipeline_stages(payload: dict) -> dict:
+    """Resolve the enabled stages + their methods from a pipeline payload.
+
+    A payload with NO `stage_*` keys is the classic all-three Production SVG
+    pipeline (back-compat for `/api/run/pipeline` callers that predate the strip).
+    Methods fall back to the legacy single-purpose settings so an old payload
+    still routes the way it used to."""
+    stage_keys = ("stage_upscale", "stage_removebg", "stage_vectorize")
+    explicit = any(k in payload for k in stage_keys)
+    up = _stage_on(payload.get("stage_upscale")) if explicit else True
+    rb = _stage_on(payload.get("stage_removebg")) if explicit else True
+    vec = _stage_on(payload.get("stage_vectorize")) if explicit else True
+
+    rb_method = (payload.get("removebg_method") or "").strip().lower()
+    if rb_method not in ("classical", "ai", "green"):
+        rb_method = "ai" if (payload.get("cutout_backend") == "ai") else "classical"
+    vec_method = (payload.get("vectorize_method") or "").strip().lower()
+    if vec_method not in ("trace", "pixel"):
+        vec_method = "pixel" if (payload.get("trace_mode") == "pixel") else "trace"
+    return {"upscale": up, "removebg": rb, "vectorize": vec,
+            "removebg_method": rb_method, "vectorize_method": vec_method}
+
+
+def _pipeline_summary(name: str, st: dict) -> str:
+    parts = []
+    if st["upscale"]:
+        parts.append("Upscale")
+    if st["removebg"]:
+        parts.append({"green": "Greenscreen", "ai": "AI cutout"}.get(st["removebg_method"], "Cutout"))
+    if st["vectorize"]:
+        parts.append("Pixel trace" if st["vectorize_method"] == "pixel" else "Trace")
+    return f"{' + '.join(parts) or 'Pipeline'} {name}"
+
+
 def run_pipeline(payload: dict) -> dict:
-    ensure_tools_ready("vtracer")
+    """Generalized pipeline: upscale → remove-bg → vectorize, each stage
+    independently toggleable. The 6 old processes are just stage subsets of this
+    one route (see `_pipeline_stages`). Disabled trailing stages early-stop the
+    job at a PNG; the legacy single-purpose endpoints remain for back-compat."""
+    st = _pipeline_stages(payload)
+    up, rb, vec = st["upscale"], st["removebg"], st["vectorize"]
+    rb_method, vec_method = st["removebg_method"], st["vectorize_method"]
+    if not (up or rb or vec):
+        return {"message": "Enable at least one pipeline stage.", "started": 0, "skipped": []}
+
     model = payload.get("model", "realesrgan-x4plus")
     scale = int(payload.get("scale", "4"))
-    cutout_backend = (payload.get("cutout_backend") or "classical").strip()
     cutout_model = (payload.get("cutout_model") or "u2net").strip()
     alpha_matting = bool(payload.get("alpha_matting"))
-    if cutout_backend == "ai" and not rembg_installed():
-        raise ValueError("AI cutout requested but rembg is not installed. Install it from Settings, or set cutout backend to classical.")
     trace = trace_config(payload)
     mask_cfg = mask_config(payload)
+    pv_cfg = pixelvec_config(payload)
+
+    # Fail fast on missing prerequisites for the stages that are actually on.
+    if vec and vec_method == "trace":
+        ensure_tools_ready("vtracer")
+    if rb and rb_method == "ai" and not rembg_installed():
+        raise ValueError("AI cutout requested but rembg is not installed. Install it from Settings, or use the classical method.")
+
     targets, skipped = select_inputs(payload, "pipeline")
     if not targets:
         return {"message": _skip_message("run pipeline on", skipped), "started": 0, "skipped": skipped}
     out_dir = output_dir("pipeline")
+    total = sum((up, rb, vec)) + 1   # +1 for the closing "Done" tick
     jobs_started = []
     for src in targets:
         upscale_dest = out_dir / f"{src.stem}.png"
@@ -1713,68 +1773,97 @@ def run_pipeline(payload: dict) -> dict:
         cutout_dest = out_dir / f"{src.stem}.cutout.png"
         vector_dest = out_dir / f"{src.stem}.svg"
         def worker(log, src=src, upscale_dest=upscale_dest, mask_dest=mask_dest, cutout_dest=cutout_dest, vector_dest=vector_dest) -> None:
-            _report_progress(1, 5, "Upscale")
-            if source_has_alpha(src):
-                log(f"Alpha-aware source detected for {src.name}; using deterministic upscale.")
-                deterministic_upscale(src, upscale_dest, scale)
-            else:
-                ensure_tools_ready("realesrgan", "vtracer")
-                lines = run_subprocess(
-                    [
-                        str(REALESRGAN_BIN),
-                        "-i",
-                        str(src),
-                        "-o",
-                        str(upscale_dest),
-                        "-n",
-                        model,
-                        "-s",
-                        str(scale),
-                    ],
-                    cwd=REALESRGAN_DIR,
-                )
-                log_subprocess_lines(log, lines)
-            _register_output(upscale_dest)
-            _report_progress(2, 5, "Preprocess")
-            staged = upscale_dest
-            if mask_cfg["target_max_dim"] is not None:
+            step = {"n": 0}
+            def tick(label):
+                step["n"] += 1
+                _report_progress(step["n"], total, label)
+            current = src   # the image flowing between stages
+
+            # --- 1) Upscale ---
+            if up:
+                tick("Upscale")
+                if source_has_alpha(src):
+                    log(f"Alpha-aware source detected for {src.name}; using deterministic upscale.")
+                    deterministic_upscale(src, upscale_dest, scale)
+                else:
+                    ensure_tools_ready("realesrgan")
+                    lines = run_subprocess(
+                        [str(REALESRGAN_BIN), "-i", str(src), "-o", str(upscale_dest),
+                         "-n", model, "-s", str(scale)],
+                        cwd=REALESRGAN_DIR,
+                    )
+                    log_subprocess_lines(log, lines)
+                _register_output(upscale_dest)
+                current = upscale_dest
+
+            # Optional downscale before the heavier stages, on whatever's current.
+            if mask_cfg["target_max_dim"] is not None and (rb or vec):
                 preview_path = out_dir / f"{src.stem}.preview.png"
-                staged = apply_preprocess(upscale_dest, preview_path, target_max_dim=mask_cfg["target_max_dim"])
-                if staged is not upscale_dest:
+                staged = apply_preprocess(current, preview_path, target_max_dim=mask_cfg["target_max_dim"])
+                if staged is not current:
                     log(f"Resized intermediate to max dim {mask_cfg['target_max_dim']}.")
                     _register_output(preview_path)
-            _report_progress(3, 5, "Build mask + cutout")
-            if cutout_backend == "ai":
-                log(f"AI cutout via rembg ({cutout_model}).")
-                build_ai_cutout(staged, cutout_dest, cutout_model, alpha_matting, log)
-                validate_cutout_png(cutout_dest)
-                derive_mask_from_alpha(cutout_dest, mask_dest)
-                validate_mask_png(mask_dest)
-            else:
-                build_mask_with_overrides(staged, mask_dest, cutout_dest, mask_cfg)
-                validate_mask_png(mask_dest)
-                validate_cutout_png(cutout_dest)
-            _register_output(mask_dest)
-            _register_output(cutout_dest)
-            if trace["colormode"] == "color":
-                # Trace the isolated subject in full color (flattened on white so the
-                # transparent surround doesn't trace as a black slab).
-                _report_progress(4, 5, f"Trace SVG ({trace['color_style']})")
-                flat_dest = out_dir / f"{src.stem}.flat.png"
-                prepare_color_input(cutout_dest, flat_dest, trace)
-                _register_output(flat_dest)
-                trace_color_to_svg(flat_dest, vector_dest, trace, log)
-            else:
-                _report_progress(4, 5, "Trace SVG")
-                trace_mask_to_svg(mask_dest, vector_dest, trace, log)
-            simplify_trace_file(vector_dest, trace["simplify"], log)
-            validate_svg_file(vector_dest)
-            _register_output(vector_dest)
-            _report_progress(5, 5, "Done")
+                    current = staged
+
+            # --- 2) Remove background ---
+            if rb:
+                tick({"green": "Greenscreen key", "ai": "AI cutout"}.get(rb_method, "Build mask + cutout"))
+                if rb_method == "green":
+                    build_chromakey_cutout(current, cutout_dest)
+                    validate_cutout_png(cutout_dest)
+                    derive_mask_from_alpha(cutout_dest, mask_dest)
+                    validate_mask_png(mask_dest)
+                elif rb_method == "ai":
+                    log(f"AI cutout via rembg ({cutout_model}).")
+                    build_ai_cutout(current, cutout_dest, cutout_model, alpha_matting, log)
+                    validate_cutout_png(cutout_dest)
+                    derive_mask_from_alpha(cutout_dest, mask_dest)
+                    validate_mask_png(mask_dest)
+                else:   # classical (writes both mask + cutout off `current`)
+                    build_mask_with_overrides(current, mask_dest, cutout_dest, mask_cfg)
+                    validate_mask_png(mask_dest)
+                    validate_cutout_png(cutout_dest)
+                _register_output(mask_dest)
+                _register_output(cutout_dest)
+                current = cutout_dest
+
+            # --- 3) Vectorize (or early-stop at the PNG) ---
+            if vec:
+                if vec_method == "pixel":
+                    tick("Pixel trace")
+                    pixelvec.vectorize_pixel_art(
+                        current, vector_dest,
+                        mode=pv_cfg["mode"], sample=pv_cfg["sample"],
+                        gridx=pv_cfg["gridx"], gridy=pv_cfg["gridy"],
+                        quantize=pv_cfg["quantize"], key_corner=pv_cfg["key_corner"],
+                    )
+                    validate_pixelvec_svg(vector_dest)
+                elif trace["colormode"] == "color":
+                    tick(f"Trace SVG ({trace['color_style']})")
+                    flat_dest = out_dir / f"{src.stem}.flat.png"
+                    prepare_color_input(current, flat_dest, trace)
+                    _register_output(flat_dest)
+                    trace_color_to_svg(flat_dest, vector_dest, trace, log)
+                    simplify_trace_file(vector_dest, trace["simplify"], log)
+                    validate_svg_file(vector_dest)
+                else:
+                    tick("Trace SVG")
+                    # B&W trace needs a silhouette mask. Remove-BG already made one;
+                    # otherwise build it from the current image here.
+                    if not rb:
+                        build_mask_with_overrides(current, mask_dest, None, mask_cfg)
+                        validate_mask_png(mask_dest)
+                        _register_output(mask_dest)
+                    trace_mask_to_svg(mask_dest, vector_dest, trace, log)
+                    simplify_trace_file(vector_dest, trace["simplify"], log)
+                    validate_svg_file(vector_dest)
+                _register_output(vector_dest)
+
+            _report_progress(total, total, "Done")
 
         jobs_started.append(
             launch_internal_job(
-                "pipeline", f"Production SVG {src.name}", worker,
+                "pipeline", _pipeline_summary(src.name, st), worker,
                 source_name=src.name, output_dir=str(out_dir),
             )
         )

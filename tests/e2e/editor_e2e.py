@@ -1711,25 +1711,80 @@ def main():
         mount_ctl(page); page.evaluate("editor.selection=new Set(['r1']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector();")
         check("header shows the selected object name", "Rectangle" in page.evaluate("document.querySelector('#sel-label').textContent"))
 
-        # ---- Process workspace: backends as first-class inline options ----
-        page.evaluate("processSelectEl.value='pipeline';")
+        # ---- Process workspace: the pipeline stage strip (replaces the dropdown) ----
+        page.evaluate("""() => { Object.assign(settings, {stage_upscale:true, stage_removebg:true, stage_vectorize:true,
+            removebg_method:'classical', vectorize_method:'trace', trace_colormode:'bw',
+            pipeline_order:'upscale,removebg,vectorize'}); }""")
         page.click("#process-button"); page.wait_for_timeout(150)
-        opt_labels = page.evaluate("() => [...document.querySelectorAll('.process-opts .process-opt>span')].map(s=>s.textContent)")
-        check("pipeline surfaces backend options inline", all(x in opt_labels for x in ["Model", "Scale", "Trace", "Curves", "Cutout"]), str(opt_labels))
-        # an inline option drives settings directly
-        page.evaluate("""() => { const s=[...document.querySelectorAll('.process-opts select')].find(x=>x.options[0].value==='spline'); s.value='polygon'; s.dispatchEvent(new Event('change')); }""")
-        check("inline backend option updates settings", page.evaluate("settings.trace_mode") == "polygon")
-        # AI cutout reveals the model picker and re-renders the workspace (not the Settings modal)
-        page.evaluate("settings.cutout_backend='ai'; renderProcessWorkspace();"); page.wait_for_timeout(60)
-        ws_labels = page.evaluate("() => [...document.querySelectorAll('.process-opts .process-opt>span')].map(s=>s.textContent)")
-        check("AI cutout reveals model picker in-place", page.evaluate("!!document.querySelector('.process-workspace')") and "AI model" in ws_labels, str(ws_labels))
-        page.evaluate("settings.cutout_backend='classical';")
-        # switching pipeline narrows the options
-        page.evaluate("processSelectEl.value='upscale'; renderProcessWorkspace();"); page.wait_for_timeout(60)
-        up_labels = page.evaluate("() => [...document.querySelectorAll('.process-opts .process-opt>span')].map(s=>s.textContent)")
-        check("switching pipeline updates the options", up_labels == ["Model", "Scale"], str(up_labels))
+        strip = page.evaluate("""() => ({
+            stages: [...document.querySelectorAll('.pipeline-strip .pipeline-stage')].map(s=>s.dataset.stage),
+            names: [...document.querySelectorAll('.pipeline-stage .stage-name')].map(s=>s.textContent),
+            out: (document.querySelector('.pipeline-out')||{}).textContent,
+            draggable: (document.querySelector('.pipeline-stage')||{}).draggable === true,
+        })""")
+        check("stage strip shows Upscale → Remove BG → Vectorize in order, output SVG, draggable",
+              strip["stages"] == ["upscale", "removebg", "vectorize"] and strip["out"] == "SVG" and strip["draggable"], str(strip))
+        # the hidden #process-select tracks the stage set (all three on == pipeline) so previews/skip still work
+        check("all-three stage set maps to the pipeline kind", page.evaluate("processSelectEl.value") == "pipeline")
+        # toggling Vectorize off flips the output chip to PNG and remaps the effective kind to cutout
+        page.evaluate("""() => { const t=document.querySelector('.pipeline-stage[data-stage=vectorize] .stage-toggle');
+            t.checked=false; t.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
+        png_state = page.evaluate("() => ({chip:(document.querySelector('.pipeline-out')||{}).textContent, kind:processSelectEl.value})")
+        check("disabling Vectorize → PNG output + cutout kind", png_state["chip"] == "PNG" and png_state["kind"] == "cutout", str(png_state))
+        page.evaluate("""() => { const t=document.querySelector('.pipeline-stage[data-stage=vectorize] .stage-toggle');
+            t.checked=true; t.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
+        # all stages off disables Run and shows a dashed empty chip
+        page.evaluate("""() => { ['upscale','removebg','vectorize'].forEach(id=>{ const t=document.querySelector('.pipeline-stage[data-stage='+id+'] .stage-toggle'); t.checked=false; t.dispatchEvent(new Event('change')); }); }"""); page.wait_for_timeout(40)
+        off = page.evaluate("""() => ({ run: [...document.querySelectorAll('.process-controls .primary-button')][0].disabled,
+            chip: (document.querySelector('.pipeline-out')||{}).className })""")
+        check("no stages enabled disables Run + empties the output chip", off["run"] and "out-none" in off["chip"], str(off))
+        page.evaluate("""() => { ['upscale','removebg','vectorize'].forEach(id=>{ const t=document.querySelector('.pipeline-stage[data-stage='+id+'] .stage-toggle'); t.checked=true; t.dispatchEvent(new Event('change')); }); }"""); page.wait_for_timeout(40)
+
+        # Remove-BG method pill folds in Greenscreen; AI reveals the model picker in the stage body
+        page.evaluate("""() => { const p=document.querySelector('.pipeline-stage[data-stage=removebg] .stage-method'); p.value='ai'; p.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
+        page.evaluate("""() => { if(!document.querySelector('.pipeline-stage[data-stage=removebg] .stage-body')) document.querySelector('.pipeline-stage[data-stage=removebg] .pipeline-stage-title').click(); }"""); page.wait_for_timeout(40)
+        rb = page.evaluate("""() => ({ method: settings.removebg_method,
+            body: [...document.querySelectorAll('.pipeline-stage[data-stage=removebg] .stage-body .form-label')].map(s=>s.textContent),
+            green: [...document.querySelector('.pipeline-stage[data-stage=removebg] .stage-method').options].some(o=>o.value==='green') })""")
+        check("Remove-BG AI method reveals the model picker; Greenscreen is a method option",
+              rb["method"] == "ai" and "AI model" in rb["body"] and rb["green"], str(rb))
+        page.evaluate("""() => { const p=document.querySelector('.pipeline-stage[data-stage=removebg] .stage-method'); p.value='classical'; p.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
+
+        # Vectorize body (expanded by default): Output toggle + Simplify, and Color reveals Style/Colors/Layers
+        vbody = page.evaluate("() => [...document.querySelectorAll('.pipeline-stage[data-stage=vectorize] .stage-body .form-label')].map(s=>s.textContent)")
+        check("Vectorize body surfaces Output + Simplify", "Output" in vbody and "Simplify" in vbody, str(vbody))
+        page.evaluate("""() => { const s=[...document.querySelectorAll('.pipeline-stage[data-stage=vectorize] .stage-body select')].find(x=>[...x.options].some(o=>o.value==='color')&&[...x.options].some(o=>o.value==='bw')); s.value='color'; s.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
+        col = page.evaluate("() => [...document.querySelectorAll('.pipeline-stage[data-stage=vectorize] .stage-body .form-label')].map(s=>s.textContent)")
+        check("Color output reveals Style/Colors/Layers + flows to the payload",
+              all(x in col for x in ["Style", "Colors", "Layers"]) and page.evaluate("settings.trace_colormode") == "color", str(col))
+        page.evaluate("""() => { const s=[...document.querySelectorAll('.pipeline-stage[data-stage=vectorize] .stage-body select')].find(x=>[...x.options].some(o=>o.value==='strong')&&[...x.options].some(o=>o.value==='off')); s.value='strong'; s.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
+        check("Simplify flows to the payload", page.evaluate("settings.trace_simplify") == "strong")
+        page.evaluate("""() => { Object.assign(settings,{trace_simplify:'medium',trace_colormode:'bw'}); renderProcessWorkspace(); }"""); page.wait_for_timeout(40)
+        # Vectorize Pixel method folds in Pixel-Art → SVG (maps to the pixelvec kind, swaps the body)
+        page.evaluate("""() => { const p=document.querySelector('.pipeline-stage[data-stage=vectorize] .stage-method'); p.value='pixel'; p.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
+        pix = page.evaluate("""() => ({ method: settings.vectorize_method, kind: processSelectEl.value,
+            body: [...document.querySelectorAll('.pipeline-stage[data-stage=vectorize] .stage-body .form-label')].map(s=>s.textContent) })""")
+        check("Vectorize Pixel method maps to pixelvec + shows pixel controls",
+              pix["method"] == "pixel" and pix["kind"] == "pixelvec" and "Cell color" in pix["body"] and "Shape mode" in pix["body"], str(pix))
+        page.evaluate("""() => { const p=document.querySelector('.pipeline-stage[data-stage=vectorize] .stage-method'); p.value='trace'; p.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
+
+        # Presets: the 6 old processes are built-ins; applying one sets the stage set; user presets round-trip
+        presets = page.evaluate("() => [...document.querySelectorAll('.pipeline-presets .preset-chip')].map(b=>b.textContent)")
+        check("built-in presets reproduce the 6 old processes",
+              all(x in presets for x in ["Production SVG", "SVG Trace", "Pixel Art → SVG", "Cutout PNG", "Upscale PNG", "Greenscreen"]), str(presets))
+        page.evaluate("""() => { [...document.querySelectorAll('.pipeline-presets .preset-chip')].find(b=>b.textContent==='Cutout PNG').click(); }"""); page.wait_for_timeout(40)
+        cut = page.evaluate("() => ({u:settings.stage_upscale, r:settings.stage_removebg, v:settings.stage_vectorize, active: !!document.querySelector('.pipeline-presets .preset-chip.active')})")
+        check("applying a built-in preset sets its stages + highlights active",
+              cut["r"] and not cut["u"] and not cut["v"] and cut["active"], str(cut))
+        page.evaluate("""() => { localStorage.removeItem('hector-vector:pipeline-presets');
+            const u = { MyPipe: { stage_upscale:true, stage_removebg:false, stage_vectorize:true, vectorize_method:'trace' } };
+            localStorage.setItem('hector-vector:pipeline-presets', JSON.stringify(u)); renderProcessWorkspace(); }"""); page.wait_for_timeout(40)
+        check("user-saved presets render alongside built-ins",
+              page.evaluate("() => [...document.querySelectorAll('.pipeline-presets .preset-chip')].some(b=>b.textContent==='MyPipe')"))
+        page.evaluate("""() => { localStorage.removeItem('hector-vector:pipeline-presets');
+            [...document.querySelectorAll('.pipeline-presets .preset-chip')].find(b=>b.textContent==='Production SVG').click(); }"""); page.wait_for_timeout(40)
         # gallery polish: no horizontal overflow, square thumbs, compact icon actions that fit the cell
-        page.evaluate("processSelectEl.value='pipeline'; renderProcessWorkspace();"); page.wait_for_timeout(80)
+        page.evaluate("renderProcessWorkspace();"); page.wait_for_timeout(80)
         poly = page.evaluate("""() => {
           const body=document.querySelector('.modal-body');
           const cell=document.querySelector('.gallery-cell');
@@ -1747,7 +1802,7 @@ def main():
         # ---- Q-menu speed: chrome paints synchronously, the heavy gallery is deferred a frame ----
         defer = page.evaluate("""() => {
           renderProcessWorkspace();
-          const chrome = !!document.querySelector('.process-controls') && !!document.querySelector('.process-opts');
+          const chrome = !!document.querySelector('.process-controls') && !!document.querySelector('.pipeline-strip');
           const g = document.querySelector('#process-gallery');
           const deferred = !!g && /Loading library/.test(g.textContent) && !g.querySelector('.gallery-grid');
           return { chrome, deferred };
@@ -1756,29 +1811,7 @@ def main():
         page.wait_for_timeout(90)
         filled = page.evaluate("() => !!document.querySelector('#process-gallery .gallery-grid') || !!document.querySelector('#process-gallery .gallery-empty')")
         check("deferred gallery fills in after a frame", filled)
-
-        # ---- Color trace: Output toggle (first-class) reveals Style/Colors/Layers ----
-        page.evaluate("settings.trace_colormode='bw'; processSelectEl.value='vectorize'; renderProcessWorkspace();"); page.wait_for_timeout(80)
-        opts_bw = page.evaluate("() => [...document.querySelectorAll('.process-opts .process-opt>span')].map(s=>s.textContent)")
-        adv_bw = page.evaluate("() => [...document.querySelectorAll('.process-advanced .form-row .form-label')].map(s=>s.textContent)")
-        check("SVG Trace surfaces an Output (B&W/Color) toggle", "Output" in opts_bw, str(opts_bw))
-        check("B&W shows Black threshold, hides color controls", "Black threshold" in adv_bw and "Colors" not in adv_bw and "Layers" not in adv_bw, str(adv_bw))
-        page.evaluate("settings.trace_colormode='color'; renderProcessWorkspace();"); page.wait_for_timeout(80)
-        opts_col = page.evaluate("() => [...document.querySelectorAll('.process-opts .process-opt>span')].map(s=>s.textContent)")
-        adv_col = page.evaluate("() => [...document.querySelectorAll('.process-advanced .form-row .form-label')].map(s=>s.textContent)")
-        check("Color reveals Style inline + Colors/Layers in advanced, drops Black threshold",
-              "Style" in opts_col and "Colors" in adv_col and "Layers" in adv_col and "Black threshold" not in adv_col,
-              str(opts_col) + " / " + str(adv_col))
-        # the toggle drives the payload-bound setting
-        check("color setting flows to the run payload", page.evaluate("settings.trace_colormode") == "color")
-        # Simplify control: inline + advanced, bound to settings, defaults to medium
-        page.evaluate("settings.trace_colormode='bw'; renderProcessWorkspace();"); page.wait_for_timeout(60)
-        simp_opts = page.evaluate("() => [...document.querySelectorAll('.process-opts .process-opt>span')].map(s=>s.textContent)")
-        simp_adv = page.evaluate("() => [...document.querySelectorAll('.process-advanced .form-row .form-label')].map(s=>s.textContent)")
-        check("Simplify control present inline + in advanced", "Simplify" in simp_opts and "Simplify" in simp_adv, str(simp_opts))
-        page.evaluate("""() => { const s=[...document.querySelectorAll('.process-opts select')].find(x=>x.options[0].value==='off'&&[...x.options].some(o=>o.value==='strong')); s.value='strong'; s.dispatchEvent(new Event('change')); }""")
-        check("Simplify setting flows to the payload", page.evaluate("settings.trace_simplify") == "strong")
-        page.evaluate("settings.trace_simplify='medium'; closeModal(); processSelectEl.value='pipeline';")
+        page.evaluate("() => { Object.assign(settings,{trace_simplify:'medium',trace_colormode:'bw'}); closeModal(); }")
 
         # ---- Settings: centralized AI models & tools panel (status + install) ----
         file_menu_click(page, "Settings"); page.wait_for_timeout(100)
