@@ -651,9 +651,7 @@ button:disabled {
 .rightdock .section-head .sec-count { order: 2; margin: 0; }
 .rightdock .section-head .panel-actions { order: 3; margin-left: auto; }
 .rightdock .section-head .caret { order: 4; margin-left: 6px; }
-/* collapsed hides .panel-actions (which carried the auto-margin), so push the caret to
-   the outer edge from the caret itself */
-.rightdock .rail-section.collapsed .section-head .caret { transform: rotate(90deg); margin-left: auto; }   /* ◄ points inward, pinned right */
+.rightdock .rail-section.collapsed .section-head .caret { transform: rotate(90deg); }   /* ◄ points inward (actions stay visible + carry the auto-margin) */
 /* LEFT dock → caret on the left edge, label grows + right-aligns so its text hugs the
    inner edge, count trailing it. */
 .leftdock .section-head .caret { order: 1; }
@@ -661,9 +659,8 @@ button:disabled {
 .leftdock .section-head .sec-label { order: 3; flex: 1 1 auto; text-align: right; }
 .leftdock .section-head .sec-count { order: 4; margin: 0 0 0 4px; }
 .leftdock .rail-section.collapsed .section-head .caret { transform: rotate(-90deg); }   /* ► points inward */
-/* collapsed → just the caret + label; the header action buttons (which can wrap to a
-   second row) would otherwise leave a tall block with no list under it */
-.rail-section.collapsed .panel-actions { display: none; }
+/* collapsed keeps the header action buttons reachable (single row, no wrap) */
+.rail-section.collapsed .panel-actions { display: flex; flex-wrap: nowrap; }
 .rail-section.collapsed { flex: 0 0 auto; min-height: 0; }   /* must not reserve flex/min space */
 
 @media (max-width: 900px) {

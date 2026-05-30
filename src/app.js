@@ -2176,10 +2176,13 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     const isFloat = (name) => { const s = sectionEl(name); return !!(s && s.closest(".dock-window")); };
     const curLoc = (name) => { const s = sectionEl(name); if (!s || !s.parentElement) return null; if (s.closest(".dock-window")) return "float"; return s.parentElement === leftDock ? "left" : "right"; };
 
-    const DEFAULT_LOC = { history: "right", layers: "right", properties: "right", color: "float" };
+    const DEFAULT_LOC = { history: "right", layers: "right", properties: "right", color: "right" };
     let state = {};
     ORDER.forEach((n, i) => state[n] = { loc: DEFAULT_LOC[n], order: i, rect: null, visible: false });
     try { const s = JSON.parse(localStorage.getItem(DOCKS_KEY) || "null"); if (s) for (const n of ORDER) if (s[n]) state[n] = { ...state[n], ...s[n] }; } catch {}
+    // Properties + Colour are permanent panel items now — a previously CLOSED one (float +
+    // invisible) returns to its dock so panels can never go missing.
+    for (const n of ["properties", "color"]) if (state[n].loc === "float" && !state[n].visible) state[n].loc = DEFAULT_LOC[n] || "right";
     const persist = () => { try { localStorage.setItem(DOCKS_KEY, JSON.stringify(state)); localStorage.setItem(FOLD_KEY, folded ? "1" : "0"); } catch {} };
     const isShown = (name) => state[name].loc !== "float" || state[name].visible;
     const propsVisible = () => isShown("properties");
@@ -2382,17 +2385,18 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       if (state[name].loc === "float") {
         state[name].visible = true;
         if (!sectionEl(name).closest(".dock-window")) ensureFloatWin(name, (x != null ? x + 6 : null), (y != null ? y + 6 : null));
-        syncChrome();
       }
+      const sec = sectionEl(name);
+      if (sec) { sec.classList.remove("collapsed"); try { localStorage.setItem("hv-sec-" + name, "0"); } catch {} }   // focusing a panel expands it
+      syncChrome();
       if (name === "color") { lastColorKey = null; renderColor(); } else renderProps();
+      if (sec && sec.scrollIntoView) sec.scrollIntoView({ block: "nearest" });
     }
-    function close(name) {   // the × button: fully hide (undock if needed)
-      state[name].visible = false; state[name].loc = "float";
-      detachFromWindow(name); persist(); syncChrome();
-    }
+    // The × on a floating panel re-docks it (panels are permanent items — never orphaned).
+    function close(name) { setLoc(name, "right"); }
     const summonProps = (x, y) => show("properties", x, y);
-    const hideProps = () => { if (state.properties.loc === "float") close("properties"); };   // Esc: only dismiss a FLOATING Properties
-    const showColor = () => show("color", (window.innerWidth - 300), 110);
+    const hideProps = () => {};   // panels are permanent now; Esc no longer dismisses them
+    const showColor = () => show("color");
 
     // Fold BOTH side docks in/out with one control.
     if (railToggle) railToggle.addEventListener("click", () => { folded = !folded; reconcile(); persist(); });
@@ -2583,7 +2587,7 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("keydown", (event) => {
   const tag = (event.target?.tagName || "").toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select" || event.target?.isContentEditable) return;
-  if (document.querySelector(".cp-window")) return;   // don't hijack keys while the colour picker is open
+  if (document.querySelector(".cp-window:not(.cp-embedded)")) return;   // pause keys only for the MODAL picker, not the docked Colour panel
   if (event.key === "Tab" || event.key === "q" || event.key === "Q") {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     event.preventDefault();

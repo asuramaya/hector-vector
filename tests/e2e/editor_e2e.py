@@ -1546,9 +1546,9 @@ def main():
         # leftdock is the leftmost grid child (before the toolstrip)
         check("left dock is the leftmost column",
               page.evaluate("() => document.querySelector('.editor-grid').firstElementChild.id === 'leftdock'"))
-        # Properties defaults docked-right; tuck it away (float-hidden) so the History/Layers
-        # checks below see a clean right dock.
-        page.evaluate("window.__docks.close('properties')"); page.wait_for_timeout(40)
+        # Properties + Colour default docked-right (permanent panels); float them out so the
+        # History/Layers checks below see a clean right dock.
+        page.evaluate("window.__docks.float('properties'); window.__docks.float('color')"); page.wait_for_timeout(60)
         # float History (no detach button — controller / header-drag does it)
         page.evaluate("window.__docks.float('history')"); page.wait_for_timeout(80)
         check("a panel floats into a dock-window",
