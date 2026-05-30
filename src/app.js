@@ -87,7 +87,7 @@ const PREFS_KEY = "hector-vector:prefs";
 // `startup`: what to show on launch — "blank" (a fresh canvas + the Process
 // workspace, the default) or "resume" (reopen the last document). Migrates the
 // old boolean `resume` pref for anyone who had set it.
-const PREFS_DEFAULTS = { startup: "blank", smartGuides: true };
+const PREFS_DEFAULTS = { startup: "blank", smartGuides: true, rulers: false };
 let prefs = (() => {
   try {
     const stored = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
@@ -397,6 +397,44 @@ function applyViewportState(vp) {
   content.style.willChange = "transform";
   clearTimeout(_willChangeTimer);
   _willChangeTimer = setTimeout(() => { content.style.willChange = "auto"; }, 220);
+  if (vp === viewports.output) drawRulers();   // keep the rulers in sync with zoom/pan
+}
+
+// Illustrator-style rulers: canvas-drawn ticks + labels in document units, mapped via
+// the stage's screen CTM so they track zoom/pan exactly. No-op while hidden.
+function drawRulers() {
+  const cont = document.querySelector("#rulers");
+  if (!cont || cont.hidden || !editor.stage) return;
+  const ctm = editor.stage.getScreenCTM(); if (!ctm) return;
+  const sx = ctm.a || 1, sy = ctm.d || 1;            // screen px per doc unit (no canvas rotation)
+  const dpr = window.devicePixelRatio || 1;
+  const INK = "#9a9aa0", LINE = "#c8c8cc";
+  const niceStep = (per) => { const raw = 64 / Math.abs(per || 1); const p = Math.pow(10, Math.floor(Math.log10(raw))); return [1, 2, 5, 10].map((m) => m * p).find((s) => s * Math.abs(per) >= 44) || 10 * p; };
+  const fmt = (v) => { const r = Math.round(v * 100) / 100; return String(Math.abs(r) < 1e-9 ? 0 : r); };
+  const prep = (cv, w, h) => { cv.width = Math.max(1, Math.round(w * dpr)); cv.height = Math.max(1, Math.round(h * dpr)); const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h); g.font = "9px ui-sans-serif, system-ui, sans-serif"; return g; };
+  const hC = cont.querySelector(".ruler-h"), vC = cont.querySelector(".ruler-v");
+  const hr = hC.getBoundingClientRect(), vr = vC.getBoundingClientRect();
+  if (hr.width > 1) {
+    const w = hr.width, h = hr.height, g = prep(hC, w, h), step = niceStep(sx);
+    const at = (lx) => (hr.left + lx - ctm.e) / sx, lo = Math.min(at(0), at(w)), hi = Math.max(at(0), at(w));
+    g.strokeStyle = LINE; g.fillStyle = INK; g.beginPath();
+    for (let d = Math.ceil(lo / step) * step; d <= hi; d += step) {
+      const lx = Math.round(sx * d + ctm.e - hr.left) + 0.5;
+      g.moveTo(lx, h); g.lineTo(lx, h - 7); g.fillText(fmt(d), lx + 2, 8);
+    }
+    g.stroke();
+  }
+  if (vr.height > 1) {
+    const w = vr.width, h = vr.height, g = prep(vC, w, h), step = niceStep(sy);
+    const at = (ly) => (vr.top + ly - ctm.f) / sy, lo = Math.min(at(0), at(h)), hi = Math.max(at(0), at(h));
+    g.strokeStyle = LINE; g.fillStyle = INK; g.beginPath();
+    for (let d = Math.ceil(lo / step) * step; d <= hi; d += step) {
+      const ly = Math.round(sy * d + ctm.f - vr.top) + 0.5;
+      g.moveTo(w, ly); g.lineTo(w - 7, ly);
+      g.save(); g.translate(8, ly - 2); g.rotate(-Math.PI / 2); g.fillText(fmt(d), 0, 0); g.restore();
+    }
+    g.stroke();
+  }
 }
 
 function resetViewport(vp) {
@@ -928,36 +966,54 @@ document.addEventListener("keydown", (event) => {
 // new-vs-previous preview. Live-applies through onChange; OK commits, Cancel
 // (or backdrop / Esc) reverts to the colour it opened with.
 //   opts: { color, alpha=1, allowNone=false, title, onChange(hex|null, alpha), onCommit(hex|null, alpha) }
+const CP_BASE_SWATCHES = ["#000000", "#ffffff", "#808080", "#e23b3b", "#f6a623", "#f8e71c", "#38b24a", "#2f7fe0", "#7d4fd0", "#e0529c"];
+const CP_PIPETTE_SVG = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M10.5 1.8a1.7 1.7 0 0 1 2.4 2.4l-1.2 1.2 1 1-1.1 1.1-1-1-5 5L3 13l-1.8.6.6-1.8.5-1.6 5-5-1-1L7.4 4.2l1 1 1.1-1.1z" fill="currentColor"/></svg>`;
+const CP_SWATCH_KEY = "hector-vector:swatches";
+function loadSwatches() { try { const a = JSON.parse(localStorage.getItem(CP_SWATCH_KEY)); return Array.isArray(a) ? a.filter((c) => typeof c === "string") : []; } catch (_) { return []; } }
+function saveSwatches(arr) { try { localStorage.setItem(CP_SWATCH_KEY, JSON.stringify(arr.slice(0, 24))); } catch (_) {} }
 let _activeColorPicker = null;
 function openColorPicker(opts) {
   if (_activeColorPicker) _activeColorPicker.cancel();
+  const clamp01 = (n) => Math.max(0, Math.min(1, n));
   const startHex = hv.toHexColor(opts.color) || (opts.allowNone && (!opts.color || opts.color === "none") ? null : "#000000");
-  const startAlpha = opts.alpha == null ? 1 : Math.max(0, Math.min(1, opts.alpha));
+  const startAlpha = opts.alpha == null ? 1 : clamp01(opts.alpha);
   // working state in HSV (+ a) so dragging the field doesn't drift the hue at S/V=0
   const seed = hv.hexToRgb(startHex || "#000000") || { r: 0, g: 0, b: 0 };
-  const st = Object.assign({ a: startAlpha, none: startHex === null }, hv.rgbToHsv(seed.r, seed.g, seed.b));
-  let other = { a: st.a, none: st.none, h: st.h, s: st.s, v: st.v };   // the alternate (previous) colour for the preview toggle
+  // Duo (Illustrator primary/secondary): when opened from the toolstrip swatches the
+  // picker edits BOTH fill + stroke — the side shows the two targets, click or press X
+  // to switch which one the field edits, Shift+X swaps them. Single-target callers
+  // (artboard bg, etc.) omit `duo` and get a solo live preview.
+  const duo = opts.duo || null;
+  const mkState = (color, alpha) => {
+    const hex0 = hv.toHexColor(color) || (color === "none" || color == null ? null : "#000000");
+    const s = hv.hexToRgb(hex0 || "#000000") || { r: 0, g: 0, b: 0 };
+    return Object.assign({ a: alpha == null ? 1 : clamp01(alpha), none: hex0 === null }, hv.rgbToHsv(s.r, s.g, s.b));
+  };
+  const targets = duo ? { fill: mkState(duo.fill.color, duo.fill.alpha), stroke: mkState(duo.stroke.color, duo.stroke.alpha) } : null;
+  const orig = duo ? { fill: { color: duo.fill.color, alpha: duo.fill.alpha }, stroke: { color: duo.stroke.color, alpha: duo.stroke.alpha } } : null;
+  let active = duo ? (duo.active === "stroke" ? "stroke" : "fill") : null;
+  const st = duo ? Object.assign({}, targets[active]) : Object.assign({ a: startAlpha, none: startHex === null }, hv.rgbToHsv(seed.r, seed.g, seed.b));
 
   const back = document.createElement("div"); back.className = "cp-backdrop";
   const win = document.createElement("div"); win.className = "cp-window";
   back.appendChild(win);
   win.innerHTML = `
-    <div class="cp-head">${opts.title || "Colour"}</div>
+    <div class="cp-head"><span>${opts.title || "Colour"}</span></div>
     <div class="cp-body">
       <div class="cp-field" tabindex="-1"><div class="cp-field-sat"></div><div class="cp-field-val"></div><div class="cp-field-thumb"></div></div>
       <div class="cp-hue"><div class="cp-hue-thumb"></div></div>
-      <div class="cp-preview"><div class="cp-prev-new"></div><div class="cp-prev-old"></div></div>
+      <div class="cp-side"></div>
     </div>
     <div class="cp-alpha"><div class="cp-alpha-track"></div><div class="cp-alpha-thumb"></div></div>
     <div class="cp-fields">
       <label class="cp-inp cp-hex">#<input data-k="hex" maxlength="7" /></label>
       <label class="cp-inp">R<input data-k="r" type="number" min="0" max="255" /></label>
-      <label class="cp-inp">G<input data-k="g" type="number" min="0" max="255" /></label>
-      <label class="cp-inp">B<input data-k="b" type="number" min="0" max="255" /></label>
       <label class="cp-inp">H<input data-k="h" type="number" min="0" max="360" /></label>
+      <label class="cp-inp">G<input data-k="g" type="number" min="0" max="255" /></label>
       <label class="cp-inp">S<input data-k="s" type="number" min="0" max="100" /></label>
+      <label class="cp-inp">B<input data-k="b" type="number" min="0" max="255" /></label>
       <label class="cp-inp">Bv<input data-k="v" type="number" min="0" max="100" /></label>
-      <label class="cp-inp">A%<input data-k="a" type="number" min="0" max="100" /></label>
+      <label class="cp-inp cp-alpha-num">A<input data-k="a" type="number" min="0" max="100" /></label>
     </div>
     <div class="cp-swatches"></div>
     <div class="cp-actions">
@@ -972,10 +1028,11 @@ function openColorPicker(opts) {
   const field = $(".cp-field"), fieldSat = $(".cp-field-sat"), fieldThumb = $(".cp-field-thumb");
   const hue = $(".cp-hue"), hueThumb = $(".cp-hue-thumb");
   const alphaEl = $(".cp-alpha"), alphaTrack = $(".cp-alpha-track"), alphaThumb = $(".cp-alpha-thumb");
-  const prevNew = $(".cp-prev-new"), prevOld = $(".cp-prev-old");
+  const side = $(".cp-side");
   const inputs = {}; win.querySelectorAll(".cp-fields input").forEach((i) => (inputs[i.dataset.k] = i));
 
   const curHex = () => { const c = hv.hsvToRgb(st.h, st.s, st.v); return hv.rgbToHex(c.r, c.g, c.b); };
+  const stHexOf = (t) => { const c = hv.hsvToRgb(t.h, t.s, t.v); return hv.rgbToHex(c.r, c.g, c.b); };
   const checker = "repeating-conic-gradient(#bbb 0% 25%, #fff 0% 50%) 50% / 12px 12px";
 
   function paint() {
@@ -987,23 +1044,69 @@ function openColorPicker(opts) {
     hueThumb.style.top = (st.h / 360 * 100) + "%";
     alphaTrack.style.background = `linear-gradient(to right, transparent, ${hex}), ${checker}`;
     alphaThumb.style.left = (st.a * 100) + "%";
-    prevNew.style.background = st.none ? checker : hex;
-    prevNew.style.opacity = st.none ? 1 : st.a;
-    const oHex = other.none ? null : (() => { const c = hv.hsvToRgb(other.h, other.s, other.v); return hv.rgbToHex(c.r, c.g, c.b); })();
-    prevOld.style.background = oHex == null ? checker : oHex;
-    prevOld.style.opacity = oHex == null ? 1 : other.a;
     inputs.hex.value = hex.slice(1); inputs.r.value = rgb.r; inputs.g.value = rgb.g; inputs.b.value = rgb.b;
     inputs.h.value = Math.round(st.h); inputs.s.value = Math.round(st.s); inputs.v.value = Math.round(st.v);
     inputs.a.value = Math.round(st.a * 100);
     win.classList.toggle("cp-is-none", st.none);
   }
-  function emit() { if (opts.onChange) opts.onChange(st.none ? null : curHex(), st.a); }
+  // --- fill/stroke side (duo) or a solo live preview (single) ---
+  const chipBg = (none, hex, a) => {
+    if (none) return checker;
+    const rgb = hv.hexToRgb(hex);
+    return a < 1 ? `linear-gradient(rgba(${rgb.r},${rgb.g},${rgb.b},${a}),rgba(${rgb.r},${rgb.g},${rgb.b},${a})), ${checker}` : hex;
+  };
+  let sideEls = null;
+  function buildSide() {
+    side.innerHTML = ""; side.classList.toggle("duo", !!duo);
+    if (duo) {
+      const mk = (which, label) => {
+        const b = document.createElement("button"); b.type = "button"; b.className = "cp-target"; b.dataset.which = which;
+        b.title = `${label} — click or press X to edit${which === "fill" ? " · Shift+X swaps" : ""}`;
+        const lab = document.createElement("span"); lab.className = "cp-target-lab"; lab.textContent = label; b.appendChild(lab);
+        b.addEventListener("click", () => switchTo(which));
+        return b;
+      };
+      const f = mk("fill", "Fill"), s = mk("stroke", "Stroke");
+      side.append(f, s); sideEls = { fill: f, stroke: s };
+    } else {
+      const solo = document.createElement("div"); solo.className = "cp-target solo"; side.appendChild(solo); sideEls = { solo };
+    }
+  }
+  function paintSide() {
+    if (!sideEls) return;
+    if (duo) {
+      sideEls.fill.style.background = chipBg(targets.fill.none, stHexOf(targets.fill), targets.fill.a);
+      sideEls.stroke.style.background = chipBg(targets.stroke.none, stHexOf(targets.stroke), targets.stroke.a);
+      sideEls.fill.classList.toggle("active", active === "fill");
+      sideEls.stroke.classList.toggle("active", active === "stroke");
+    } else {
+      sideEls.solo.style.background = chipBg(st.none, curHex(), st.a);
+    }
+  }
+  function emit() {
+    const hex = st.none ? null : curHex();
+    if (duo) { targets[active] = { a: st.a, none: st.none, h: st.h, s: st.s, v: st.v }; duo.apply(active, hex, st.a); }
+    else if (opts.onChange) opts.onChange(hex, st.a);
+    paintSide();
+  }
   function changed() { st.none = false; paint(); emit(); }
-  // Click either preview square to alternate between the two colours (the working
-  // pick and the previous one) — applies live so you can A/B compare.
-  const swapPreview = () => { const cur = { a: st.a, none: st.none, h: st.h, s: st.s, v: st.v }; Object.assign(st, other); other = cur; paint(); emit(); };
-  prevNew.addEventListener("click", swapPreview);
-  prevOld.addEventListener("click", swapPreview);
+  // Switch which target the field edits — pure focus change, no colour applied (so it
+  // never reads as an undo). Save the live edit back into the outgoing target first.
+  function switchTo(which) {
+    if (!duo || which === active) return;
+    targets[active] = { a: st.a, none: st.none, h: st.h, s: st.s, v: st.v };
+    active = which; Object.assign(st, targets[which]); paint(); paintSide();
+  }
+  function swapTargets() {
+    if (!duo) return;
+    targets[active] = { a: st.a, none: st.none, h: st.h, s: st.s, v: st.v };
+    const f = targets.fill; targets.fill = targets.stroke; targets.stroke = f;
+    Object.assign(st, targets[active]);
+    duo.apply("fill", targets.fill.none ? null : stHexOf(targets.fill), targets.fill.a);
+    duo.apply("stroke", targets.stroke.none ? null : stHexOf(targets.stroke), targets.stroke.a);
+    paint(); paintSide();
+  }
+  buildSide();
 
   // --- drag helpers ---
   function bindDrag(el, onMove) {
@@ -1017,7 +1120,6 @@ function openColorPicker(opts) {
       el.addEventListener("pointermove", mv); el.addEventListener("pointerup", up);
     });
   }
-  const clamp01 = (n) => Math.max(0, Math.min(1, n));
   bindDrag(field, (x, y, w, h) => { st.s = clamp01(x / w) * 100; st.v = (1 - clamp01(y / h)) * 100; changed(); });
   bindDrag(hue, (x, y, w, h) => { st.h = clamp01(y / h) * 360; changed(); });
   bindDrag(alphaEl, (x, y, w) => { st.a = clamp01(x / w); paint(); emit(); });
@@ -1047,16 +1149,45 @@ function openColorPicker(opts) {
     });
   });
 
-  // --- quick swatches ---
+  // --- eyedropper + swatches row. Eyedropper (native EyeDropper API) is the first,
+  // clearly-bordered item so it's unmistakable; it samples the screen into the active
+  // target. Then the fixed base palette + a persistent user palette (localStorage):
+  // click applies, "+" saves the current colour, right-click removes a saved one.
   const sw = $(".cp-swatches");
-  ["#000000", "#ffffff", "#808080", "#e23b3b", "#f6a623", "#f8e71c", "#38b24a", "#2f7fe0", "#7d4fd0", "#e0529c"]
-    .forEach((c) => { const b = document.createElement("button"); b.type = "button"; b.className = "cp-sw"; b.style.background = c;
-      b.title = c; b.addEventListener("click", () => { const rgb = hv.hexToRgb(c); setFromRgb(rgb.r, rgb.g, rgb.b); changed(); }); sw.appendChild(b); });
+  const renderSwatches = () => {
+    sw.innerHTML = "";
+    if (window.EyeDropper) {
+      const eye = document.createElement("button");
+      eye.type = "button"; eye.className = "cp-sw cp-eyedrop"; eye.innerHTML = CP_PIPETTE_SVG;
+      eye.title = "Eyedropper — pick a colour from the screen"; eye.setAttribute("aria-label", "Eyedropper");
+      eye.addEventListener("click", async () => {
+        try { const res = await new window.EyeDropper().open(); const rgb = hv.hexToRgb(res.sRGBHex); if (rgb) { setFromRgb(rgb.r, rgb.g, rgb.b); changed(); } }
+        catch (_) { /* user pressed Esc — ignore */ }
+      });
+      sw.appendChild(eye);
+    }
+    const mk = (c, removable) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "cp-sw"; b.style.background = c; b.title = removable ? `${c} — right-click to remove` : c;
+      b.addEventListener("click", () => { const rgb = hv.hexToRgb(c); if (rgb) { setFromRgb(rgb.r, rgb.g, rgb.b); changed(); } });
+      if (removable) b.addEventListener("contextmenu", (e) => { e.preventDefault(); saveSwatches(loadSwatches().filter((x) => x !== c)); renderSwatches(); });
+      sw.appendChild(b);
+    };
+    CP_BASE_SWATCHES.forEach((c) => mk(c, false));
+    loadSwatches().forEach((c) => mk(c, true));
+    const add = document.createElement("button"); add.type = "button"; add.className = "cp-sw cp-sw-add"; add.textContent = "+"; add.title = "Save current colour";
+    add.addEventListener("click", () => { const hex = curHex(); const u = loadSwatches().filter((x) => x.toLowerCase() !== hex.toLowerCase()); u.unshift(hex); saveSwatches(u); renderSwatches(); });
+    sw.appendChild(add);
+  };
+  renderSwatches();
 
   // --- actions ---
   const close = () => { back.remove(); document.removeEventListener("keydown", onKey, true); _activeColorPicker = null; };
   const ok = () => { if (opts.onCommit) opts.onCommit(st.none ? null : curHex(), st.a); close(); };
-  const cancel = () => { if (opts.onChange) opts.onChange(startHex, startAlpha); if (opts.onCancel) opts.onCancel(); close(); };
+  const cancel = () => {
+    if (duo) { duo.apply("fill", hv.toHexColor(orig.fill.color) || null, orig.fill.alpha); duo.apply("stroke", hv.toHexColor(orig.stroke.color) || null, orig.stroke.alpha); }
+    else if (opts.onChange) opts.onChange(startHex, startAlpha);
+    if (opts.onCancel) opts.onCancel(); close();
+  };
   $(".cp-ok").addEventListener("click", ok);
   $(".cp-cancel").addEventListener("click", cancel);
   if (opts.allowNone) $(".cp-none").addEventListener("click", () => { st.none = true; paint(); emit(); });
@@ -1064,11 +1195,17 @@ function openColorPicker(opts) {
   const onKey = (e) => {
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel(); }
     else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); ok(); }
+    // X toggles fill/stroke, Shift+X swaps — intercepted even while a field is focused
+    // (x isn't a meaningful hex/number char, so it's safe to claim it for the toggle).
+    else if (duo && (e.key === "x" || e.key === "X")) {
+      e.preventDefault(); e.stopPropagation();
+      if (e.shiftKey) swapTargets(); else switchTo(active === "fill" ? "stroke" : "fill");
+    }
   };
   document.addEventListener("keydown", onKey, true);
   _activeColorPicker = { cancel };
 
-  paint();
+  paint(); paintSide();
   setTimeout(() => inputs.hex.focus(), 0);
 }
 
@@ -1514,7 +1651,26 @@ function openAppSettings() {
   modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
 }
 
+let layoutCtl = null;   // set by the layout-customize module; drives the header Layout dropdown
 const MENU_ITEMS = {
+  // Toolbar layout: toggle customize mode, switch/save profiles, reset to default.
+  "layout": () => {
+    if (!layoutCtl) return [{ label: "Customize layout", disabled: true, onClick: () => {} }];
+    const items = [
+      { label: "Customize layout", type: "toggle", checked: layoutCtl.isEditing(), onClick: () => layoutCtl.toggleEdit() },
+      { type: "sep" },
+      { label: "Default", onClick: () => layoutCtl.reset() },
+    ];
+    for (const name of layoutCtl.listProfiles()) items.push({
+      label: name,
+      onClick: () => layoutCtl.applyProfile(name),
+      onRename: () => layoutCtl.renamePrompt(name),
+      onDelete: () => layoutCtl.deleteProfile(name),
+    });
+    items.push({ type: "sep" });
+    items.push({ label: "Save current as profile…", onClick: () => layoutCtl.saveProfilePrompt() });
+    return items;
+  },
   // Everything that used to be separate header buttons, rolled into one menu.
   "file": () => {
     const canReveal = !!(selectedOutput && selectedOutput.path);
@@ -1536,17 +1692,6 @@ const MENU_ITEMS = {
       { label: "Settings…", onClick: openAppSettings },
     ];
     return items;
-  },
-  "layers": () => {
-    const sel = editor.selectedNodes();
-    const hasGroup = sel.some((n) => n.tagName.toLowerCase() === "g");
-    return [
-      { label: "Group", disabled: sel.length < 2, onClick: () => editor.group() },
-      { label: "Ungroup", disabled: !hasGroup, onClick: () => editor.ungroup() },
-      { type: "sep" },
-      { label: "Clean up ghost layers", onClick: () => editor.cleanupLayers() },
-      { label: "Merge same-colour layers", onClick: () => editor.consolidateByColor() },
-    ];
   },
 };
 
@@ -1573,14 +1718,22 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     else { editor.applyStroke(hex || "none", hex ? strokeW() : 0); editor.applyStrokeOpacity(alpha); }
     refreshSwatches();
   };
+  // The main colour picker is a DUO: it edits fill (primary) + stroke (secondary)
+  // together, seeded from the current selection. `active` is which one the field
+  // starts on (X toggles inside the picker, Shift+X swaps); the picker's `apply`
+  // keeps the toolstrip swatches + `active` in sync. One coalesced "Colour" undo.
   const pickFor = (which) => {
     active = which; refreshSwatches();
     editor.beginCoalesce();
     openColorPicker({
-      title: which === "fill" ? "Fill colour" : "Stroke colour",
-      color: cur(which), alpha: curAlpha(which), allowNone: true,
-      onChange: (hex, a) => applyPaint(which, hex, a),
-      onCommit: () => editor.commitCoalesce(which === "fill" ? "Fill" : "Stroke"),
+      title: "Colour", allowNone: true,
+      duo: {
+        active: which,
+        fill: { color: cur("fill"), alpha: curAlpha("fill") },
+        stroke: { color: cur("stroke"), alpha: curAlpha("stroke") },
+        apply: (w, hex, a) => { applyPaint(w, hex, a); active = w; refreshSwatches(); },
+      },
+      onCommit: () => editor.commitCoalesce("Colour"),
       onCancel: () => editor.cancelCoalesce(),
     });
   };
@@ -1614,14 +1767,87 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     else if (e.key === "/") { e.preventDefault(); setNone(); }
   });
   editor.onInspect = refreshSwatches;   // editor pings this on every selection/structure change
-  editor.pickColor = openColorPicker;   // the inspector reuses the same modal
+  editor.pickColor = openColorPicker;   // single-target callers (artboard bg, object rows) reuse the same modal
+  editor.pickPaint = pickFor;           // duo fill/stroke picker (the "main" colour picker + X)
+  editor.openContextPanel = showContextPanel;   // layers-row right-click → same object panel as the canvas
   refreshSwatches();
+}
+// ---------- object action bar (right) + Layers-header structure controls ----------
+// The clipboard/boolean/transform actions and the reorder/group controls moved out of
+// the right-click panel into always-visible toolbars; enable-state tracks the
+// selection (refreshed via editor.onInspect + after each action).
+{
+  const wire = (id, fn) => {
+    const b = document.querySelector(id);
+    if (b) b.addEventListener("click", () => { try { fn(); } catch (e) { setStatus(e.message || String(e), 3000); } refreshActionButtons(); });
+  };
+  wire("#act-cut", () => editor.cut());
+  wire("#act-copy", () => editor.copy());
+  wire("#act-paste", () => editor.paste());
+  wire("#act-duplicate", () => editor.duplicate());
+  wire("#act-union", () => editor.booleanOp("union"));
+  wire("#act-subtract", () => editor.booleanOp("subtract"));
+  wire("#act-intersect", () => editor.booleanOp("intersect"));
+  wire("#act-rotate-cw", () => editor.transform("rotateCW"));
+  wire("#act-rotate-ccw", () => editor.transform("rotateCCW"));
+  wire("#act-flip-h", () => editor.transform("flipH"));
+  wire("#act-flip-v", () => editor.transform("flipV"));
+  wire("#act-invert", () => editor.invertSpace());
+  wire("#layer-front", () => editor.reorder("front"));
+  wire("#layer-forward", () => editor.reorder("forward"));
+  wire("#layer-backward", () => editor.reorder("backward"));
+  wire("#layer-back", () => editor.reorder("back"));
+  wire("#layer-group", () => editor.group());
+  wire("#layer-ungroup", () => editor.ungroup());
+  wire("#layer-rename", () => { const s = editor.selectedNodes(); if (s.length === 1) editor.beginRename(s[0].getAttribute("data-hv-id")); });
+  wire("#layer-delete", () => editor.deleteSelection());
+  wire("#layer-cleanup", () => editor.cleanupLayers());
+  wire("#layer-merge", () => editor.consolidateByColor());
+
+  const set = (id, on) => { const b = document.querySelector(id); if (b) b.disabled = !on; };
+  const refreshActionButtons = function () {
+    const has = !!editor.stage;
+    const sel = has ? editor.selectedNodes() : [];
+    const n = sel.length, hasSel = n > 0;
+    const fillable = (hasSel ? editor._effectiveLeaves() : []).filter((s) => shapeToAbsPath(s)).length >= 2;
+    const hasGroup = sel.some((s) => s.tagName.toLowerCase() === "g");
+    const hasClip = !!(editor.clipboard && editor.clipboard.length);
+    set("#act-cut", hasSel); set("#act-copy", hasSel); set("#act-duplicate", hasSel);
+    set("#act-paste", has && hasClip);
+    set("#act-union", fillable); set("#act-subtract", fillable); set("#act-intersect", fillable);
+    // rotate/flip/invert act on the selection, or on the artboard itself when it's selected;
+    // grey when nothing is selected (no objects, no artboard)
+    const canXform = hasSel || (has && editor.artboardSelected);
+    ["#act-rotate-cw", "#act-rotate-ccw", "#act-flip-h", "#act-flip-v", "#act-invert"].forEach((id) => set(id, canXform));
+    // Layers header: reorder/group/ungroup/rename/delete (selection-gated) + cleanup/merge (whole doc)
+    ["#layer-front", "#layer-forward", "#layer-backward", "#layer-back", "#layer-delete"].forEach((id) => set(id, hasSel));
+    set("#layer-group", n >= 2); set("#layer-ungroup", hasGroup); set("#layer-rename", n === 1);
+    set("#layer-cleanup", has); set("#layer-merge", has);
+  };
+  const prevOnInspect = editor.onInspect;
+  editor.onInspect = () => { if (prevOnInspect) prevOnInspect(); refreshActionButtons(); renderFloatPanel(); updateSelLabel(); };
+  refreshActionButtons();
 }
 {
   const procBtn = document.querySelector("#process-button"); if (procBtn) procBtn.addEventListener("click", () => showProcessView());
   const editBtn = document.querySelector("#view-edit"); if (editBtn) editBtn.addEventListener("click", () => showEditView());
   const undoBtn = document.querySelector("#undo-button"); if (undoBtn) undoBtn.addEventListener("click", () => editor.undo());
   const redoBtn = document.querySelector("#redo-button"); if (redoBtn) redoBtn.addEventListener("click", () => editor.redoAction());
+  // Canvas-level controls in the bottom viewport bar (moved off the artboard right-click).
+  const selAllBtn = document.querySelector("#vp-selectall"); if (selAllBtn) selAllBtn.addEventListener("click", () => editor.selectAll());
+  const guidesBtn = document.querySelector("#vp-guides");
+  if (guidesBtn) {
+    const syncGuides = () => { guidesBtn.classList.toggle("on", !!editor.smartGuides); guidesBtn.setAttribute("aria-pressed", editor.smartGuides ? "true" : "false"); };
+    syncGuides();
+    guidesBtn.addEventListener("click", () => { editor.smartGuides = !editor.smartGuides; prefs.smartGuides = editor.smartGuides; persistPrefs(); syncGuides(); setStatus(`Smart guides ${editor.smartGuides ? "on" : "off"}.`, 1500); });
+  }
+  const rulersBtn = document.querySelector("#vp-rulers");
+  if (rulersBtn) {
+    const rulersEl = document.querySelector("#rulers");
+    const syncRulers = () => { const on = !!prefs.rulers; if (rulersEl) rulersEl.hidden = !on; rulersBtn.classList.toggle("on", on); rulersBtn.setAttribute("aria-pressed", on ? "true" : "false"); if (on) drawRulers(); };
+    syncRulers();
+    rulersBtn.addEventListener("click", () => { prefs.rulers = !prefs.rulers; persistPrefs(); syncRulers(); setStatus(`Rulers ${prefs.rulers ? "on" : "off"}.`, 1500); });
+  }
   const railToggle = document.querySelector("#rail-toggle");
   const RAIL_KEY = "hector-vector:rail-collapsed";
   const appEl = document.querySelector(".app.editor");
@@ -1632,6 +1858,128 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       try { localStorage.setItem(RAIL_KEY, c ? "1" : "0"); } catch {}
       requestAnimationFrame(() => measureFit(viewports.output));
     });
+  }
+  // ---- Customizable picture-frame layout: drag toolbar tiles between bars; Default / Save / Reset ----
+  {
+    const LAYOUT_KEY = "hector-vector:layout";
+    const SEP = "|";
+    // each frame bar is a drop zone; toolstrip keeps its swatches block pinned at the tail.
+    const BARS = [
+      { name: "tools",    sel: ".toolstrip",         tail: ".tool-spacer" },
+      { name: "arrange",  sel: ".stage-toolbar",     tail: null },
+      { name: "actions",  sel: ".actionbar",         tail: null },
+      { name: "viewport", sel: ".viewport-controls", tail: null },
+    ];
+    const barOf = (b) => document.querySelector(b.sel);
+    const isTile = (el) => !!(el && el.classList && el.classList.contains("tool-button"));
+    const isSep = (el) => !!(el && el.classList && (el.classList.contains("tool-sep") || el.classList.contains("tool-vsep") || el.classList.contains("vp-sep")));
+    const tileKey = (b) => b.id ? "#" + b.id : b.dataset.tool ? "tool:" + b.dataset.tool : (b.dataset.vp && b.dataset.action) ? "vp:" + b.dataset.action : "t:" + (b.textContent || "").trim();
+    const slotKey = (el) => isSep(el) ? SEP : tileKey(el);
+    const tailEl = (cont, bar) => bar.tail ? cont.querySelector(bar.tail) : null;
+    const axisY = (cont) => cont.classList.contains("toolstrip") || cont.classList.contains("actionbar");
+    // movable children of a bar (tiles + separators that sit before the pinned tail)
+    function movable(bar) {
+      const cont = barOf(bar); if (!cont) return [];
+      const tail = tailEl(cont, bar), out = [];
+      for (const ch of cont.children) { if (tail && ch === tail) break; if (isTile(ch) || isSep(ch)) out.push(ch); }
+      return out;
+    }
+    const capture = () => { const m = {}; for (const b of BARS) m[b.name] = movable(b).map(slotKey); return m; };
+    const DEFAULT = capture();   // authored DOM order — taken before applying any saved layout
+
+    function apply(layout) {
+      if (!layout) return;
+      const tiles = new Map();   // every tile by key, wherever it currently sits
+      for (const b of BARS) { const c = barOf(b); if (c) for (const t of c.querySelectorAll(".tool-button")) tiles.set(tileKey(t), t); }
+      for (const b of BARS) {
+        const cont = barOf(b); if (!cont) continue;
+        const tail = tailEl(cont, b);
+        const seps = [...cont.children].filter(isSep);
+        let si = 0;
+        for (const key of (layout[b.name] || [])) {
+          const el = key === SEP ? seps[si++] : tiles.get(key);
+          if (el) cont.insertBefore(el, tail);   // insertBefore(el, null) appends
+        }
+        for (; si < seps.length; si++) cont.insertBefore(seps[si], tail);   // stray separators
+      }
+      // tiles a saved layout doesn't mention (e.g. added in a newer build) keep their place
+    }
+    const PROFILES_KEY = "hector-vector:layout-profiles";
+    const loadSaved = () => { try { return JSON.parse(localStorage.getItem(LAYOUT_KEY) || "null"); } catch { return null; } };
+    const persist = () => { try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(capture())); } catch {} };   // auto-save
+    const loadProfiles = () => { try { return JSON.parse(localStorage.getItem(PROFILES_KEY) || "{}") || {}; } catch { return {}; } };
+    const saveProfiles = (p) => { try { localStorage.setItem(PROFILES_KEY, JSON.stringify(p)); } catch {} };
+    apply(loadSaved());   // restore the auto-saved arrangement at boot
+
+    // ---- drag tiles between bars (only while customizing) ----
+    let editing = false, dragEl = null;
+    const layoutMenu = document.querySelector('.menu[data-menu="layout"]');
+    const layoutTrigger = layoutMenu && layoutMenu.querySelector(".menu-trigger");
+    const barFor = (cont) => BARS.find((b) => barOf(b) === cont);
+    function insertionRef(cont, x, y, bar) {
+      const tail = tailEl(cont, bar), useY = axisY(cont);
+      for (const ch of cont.children) {
+        if (tail && ch === tail) break;
+        if ((!isTile(ch) && !isSep(ch)) || ch === dragEl) continue;
+        const r = ch.getBoundingClientRect();
+        if ((useY ? y : x) < (useY ? r.top + r.height / 2 : r.left + r.width / 2)) return ch;
+      }
+      return tail;   // before the pinned tail, or null => append
+    }
+    const onDragStart = (e) => { dragEl = e.currentTarget; e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", ""); } catch {} dragEl.classList.add("dragging"); };
+    const onDragEnd = () => { if (dragEl) dragEl.classList.remove("dragging"); dragEl = null; };
+    const onBarOver = (e) => {
+      if (!dragEl) return;
+      e.preventDefault(); e.dataTransfer.dropEffect = "move";
+      const cont = e.currentTarget, ref = insertionRef(cont, e.clientX, e.clientY, barFor(cont));
+      if (ref !== dragEl) cont.insertBefore(dragEl, ref);   // live reflow while dragging
+    };
+    const onBarDrop = (e) => { e.preventDefault(); persist(); };   // DOM already reflects the move → auto-save it
+    const blockClick = (e) => { e.preventDefault(); e.stopPropagation(); };
+    function frameTiles() { const out = []; for (const b of BARS) for (const t of movable(b)) if (isTile(t)) out.push(t); return out; }
+
+    function setEditing(on) {
+      editing = on;
+      appEl.classList.toggle("customizing", on);
+      if (layoutTrigger) layoutTrigger.classList.toggle("active", on);
+      frameTiles().forEach((t) => {
+        t.draggable = on;
+        if (on) {
+          t.disabled = false;   // disabled buttons can't be dragged — re-enable for arranging
+          t.addEventListener("dragstart", onDragStart);
+          t.addEventListener("dragend", onDragEnd);
+          t.addEventListener("click", blockClick, true);
+        } else {
+          t.removeEventListener("dragstart", onDragStart);
+          t.removeEventListener("dragend", onDragEnd);
+          t.removeEventListener("click", blockClick, true);
+        }
+      });
+      BARS.forEach((b) => {
+        const c = barOf(b); if (!c) return;
+        if (on) { c.addEventListener("dragover", onBarOver); c.addEventListener("drop", onBarDrop); }
+        else { c.removeEventListener("dragover", onBarOver); c.removeEventListener("drop", onBarDrop); }
+      });
+      if (!on && editor.onInspect) editor.onInspect();   // restore the correct disabled states (onInspect runs refreshActionButtons)
+      setStatus(on ? "Customize layout: drag buttons between bars — changes save automatically." : "Ready.", on ? 6000 : 1500);
+    }
+    function reset() { try { localStorage.removeItem(LAYOUT_KEY); } catch {} apply(DEFAULT); setStatus("Layout reset to default.", 1500); }
+    function applyProfile(name) { const p = loadProfiles()[name]; if (!p) return; apply(p); persist(); setStatus(`Layout: ${name}.`, 1500); }
+    function saveProfile(name) { const nm = (name || "").trim(); if (!nm) return false; const p = loadProfiles(); p[nm] = capture(); saveProfiles(p); return true; }
+    function deleteProfile(name) { const p = loadProfiles(); if (!(name in p)) return; delete p[name]; saveProfiles(p); }
+    function renameProfile(oldName, newName) { const nm = (newName || "").trim(); if (!nm || nm === oldName) return false; const p = loadProfiles(); if (!(oldName in p)) return false; p[nm] = p[oldName]; delete p[oldName]; saveProfiles(p); return true; }
+
+    // Exposed for the header Layout dropdown (MENU_ITEMS.layout) + E2E.
+    layoutCtl = {
+      isEditing: () => editing,
+      toggleEdit: () => setEditing(!editing),
+      reset, applyProfile, deleteProfile, renameProfile, save: persist,
+      saveProfile,
+      saveProfilePrompt: () => { const n = window.prompt("Save current layout as a profile:", ""); if (n == null) return; if (saveProfile(n)) setStatus(`Saved layout profile "${n.trim()}".`, 1800); },
+      renamePrompt: (name) => { const n = window.prompt("Rename layout profile:", name); if (n == null) return; renameProfile(name, n); },
+      listProfiles: () => Object.keys(loadProfiles()),
+    };
+    window.__layout = layoutCtl;
   }
   // Right dock is resizable — drag the handle on its left edge (width persisted).
   {
@@ -1752,7 +2100,7 @@ document.addEventListener("keydown", (e) => {
   if (mod && (e.key === "v" || e.key === "V")) { e.preventDefault(); editor.paste(); return; }
   if (mod && (e.key === "a" || e.key === "A")) { e.preventDefault(); editor.selectAll(); return; }
   if (mod && (e.key === "t" || e.key === "T")) { e.preventDefault(); editor.enterTransform("scale"); return; }   // Ctrl/Cmd+T — scale mode
-  if (mod && (e.key === "r" || e.key === "R")) { e.preventDefault(); editor.enterTransform("rotate"); return; }  // Ctrl/Cmd+R — rotate mode
+  if (mod && (e.key === "r" || e.key === "R")) { e.preventDefault(); const rb = document.querySelector("#vp-rulers"); if (rb) rb.click(); return; }  // Ctrl/Cmd+R — toggle rulers
   if (mod) return;
   if (!modalRootEl.hidden) return;
   if (e.key.startsWith("Arrow")) {       // nudge selection (Shift = ×10)
@@ -1808,6 +2156,18 @@ function openMenu(menuEl) {
   list.innerHTML = "";
   for (const item of itemsFn()) {
     if (item.type === "sep") { const sep = document.createElement("div"); sep.className = "menu-sep"; list.appendChild(sep); continue; }
+    // a manageable row: a label that activates the item + inline rename / delete buttons
+    // (used by the Layout profiles). Re-open the menu after a mutation so the list refreshes.
+    if (item.onRename || item.onDelete) {
+      const row = document.createElement("div"); row.className = "menu-item menu-row";
+      const lab = document.createElement("button"); lab.type = "button"; lab.className = "menu-rowlabel"; lab.setAttribute("role", "menuitem"); lab.textContent = item.label;
+      lab.addEventListener("click", async () => { closeMenus(); try { await item.onClick(); } catch (e) { setStatus(e.message || String(e), 3000); } });
+      row.appendChild(lab);
+      const reopen = (mut) => { const m = openMenuEl; try { mut(); } catch (e) { setStatus(e.message || String(e), 3000); } closeMenus(); if (m) openMenu(m); };
+      if (item.onRename) { const r = document.createElement("button"); r.type = "button"; r.className = "menu-rowbtn"; r.textContent = "✎"; r.title = "Rename"; r.addEventListener("click", (e) => { e.stopPropagation(); reopen(item.onRename); }); row.appendChild(r); }
+      if (item.onDelete) { const d = document.createElement("button"); d.type = "button"; d.className = "menu-rowbtn"; d.textContent = "✕"; d.title = "Delete"; d.addEventListener("click", (e) => { e.stopPropagation(); reopen(item.onDelete); }); row.appendChild(d); }
+      list.appendChild(row); continue;
+    }
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "menu-item" + (item.type === "toggle" ? " menu-toggle" : "") + (item.checked ? " checked" : "");
@@ -1879,22 +2239,6 @@ function appendMenuItems(menu, items, afterClick) {
     menu.appendChild(btn);
   }
 }
-// Square icon-button grid for the context-panel actions (icons over text, native
-// tooltips like the toolstrip). Separators span the row as a thin divider.
-function appendActionGrid(container, items, afterClick) {
-  for (const item of items) {
-    if (item.type === "sep") { const s = document.createElement("div"); s.className = "grid-sep"; container.appendChild(s); continue; }
-    const btn = document.createElement("button");
-    btn.type = "button"; btn.className = "grid-item"; btn.disabled = !!item.disabled;
-    btn.title = item.label;
-    if (item.icon) btn.textContent = item.icon; else { btn.textContent = item.label; btn.classList.add("text"); }
-    btn.addEventListener("click", () => {
-      try { item.onClick(); } catch (e) { setStatus(e.message || String(e), 3000); }
-      if (afterClick) afterClick(); else hideContextMenu();
-    });
-    container.appendChild(btn);
-  }
-}
 function placeAt(el, x, y) {
   const r = el.getBoundingClientRect();
   el.style.left = Math.max(2, Math.min(x, window.innerWidth - r.width - 4)) + "px";
@@ -1914,66 +2258,66 @@ function showContextMenu(x, y, items) {
 // (fill/stroke/opacity, or artboard size/background) plus all the actions in one
 // place. Style edits are live; actions execute and rebuild the panel in place
 // (closing if the selection empties). Dismiss with Esc or a click on the canvas.
-function showContextPanel(x, y, kind) {
-  hideContextMenu();
-  const panel = document.createElement("div");
-  panel.className = "context-menu context-panel";
-  const build = () => {
-    panel.innerHTML = "";
-    const head = document.createElement("div"); head.className = "ctx-head";
-    const style = document.createElement("div"); style.className = "ctx-style";
-    if (kind === "object") {
-      const nodes = editor.selectedNodes();
-      head.textContent = nodes.length === 1 ? "Object" : `${nodes.length} objects`;
-      style.appendChild(editor._objectPanel(nodes));
-    } else {
-      head.textContent = "Artboard";
-      style.appendChild(editor._artboardPanel());
-    }
-    panel.appendChild(head); panel.appendChild(style);
-    const acts = document.createElement("div"); acts.className = "ctx-actions";
-    appendActionGrid(acts, kind === "object" ? objectMenuItems() : canvasMenuItems(), () => {
-      if (kind === "object" && !editor.selectedNodes().length) { hideContextMenu(); return; }
-      build();
-    });
-    panel.appendChild(acts);
-  };
-  build();
-  document.body.appendChild(panel);
-  placeAt(panel, x, y);
-  ctxMenuEl = panel;
+// ---------- floating Properties panel (persistent, summoned on right-click) ----------
+// One reusable window: a draggable titlebar (context title + close ×) over a live body
+// that mirrors the selection (object style / artboard / empty). It PERSISTS — no
+// click-away dismiss — and re-renders on every selection change, so it doubles as a
+// floating Properties/Appearance palette. Summon with right-click; close with ×.
+let floatPanel = null, floatPos = null;
+const _clampX = (x, el) => Math.max(2, Math.min(x, window.innerWidth - el.offsetWidth - 4));
+const _clampY = (y, el) => Math.max(2, Math.min(y, window.innerHeight - el.offsetHeight - 4));
+function ensureFloatPanel() {
+  if (floatPanel) return floatPanel;
+  const p = document.createElement("div");
+  p.className = "context-panel float-panel"; p.hidden = true;
+  p.innerHTML = `<div class="fp-head"><span class="fp-title"></span><button type="button" class="fp-close" title="Close (Esc)" aria-label="Close">×</button></div><div class="fp-body"></div>`;
+  document.body.appendChild(p);
+  p.querySelector(".fp-close").addEventListener("click", () => hideFloatPanel());
+  const head = p.querySelector(".fp-head");
+  head.addEventListener("pointerdown", (e) => {           // drag by the titlebar
+    if (e.target.closest(".fp-close")) return;
+    e.preventDefault(); head.setPointerCapture(e.pointerId);
+    const r = p.getBoundingClientRect(), ox = e.clientX - r.left, oy = e.clientY - r.top;
+    const mv = (ev) => { floatPos = { x: _clampX(ev.clientX - ox, p), y: _clampY(ev.clientY - oy, p) }; p.style.left = floatPos.x + "px"; p.style.top = floatPos.y + "px"; };
+    const up = () => { head.removeEventListener("pointermove", mv); head.removeEventListener("pointerup", up); };
+    head.addEventListener("pointermove", mv); head.addEventListener("pointerup", up);
+  });
+  floatPanel = p; return p;
 }
-function objectMenuItems() {
+function renderFloatPanel() {
+  if (!floatPanel || floatPanel.hidden) return;
+  const title = floatPanel.querySelector(".fp-title");
+  const body = floatPanel.querySelector(".fp-body"); body.innerHTML = "";
+  if (!editor.stage) { title.textContent = "Properties"; body.innerHTML = `<div class="insp-empty">No canvas.</div>`; return; }
+  if (editor.artboardSelected) { title.textContent = "Artboard"; body.appendChild(editor._artboardPanel()); return; }
+  let nodes = editor._effectiveLeaves(); if (!nodes.length) nodes = editor.selectedNodes();
+  if (!nodes.length) { title.textContent = "Properties"; body.innerHTML = `<div class="insp-empty">Select an object, or right-click the canvas for the artboard.</div>`; return; }
+  title.textContent = nodes.length === 1 ? "Object" : `${nodes.length} objects`;
+  body.appendChild(editor._objectPanel(nodes));
+}
+function hideFloatPanel() { if (floatPanel) floatPanel.hidden = true; }
+// Header middle indicator: append the current selection after the document name
+// ("untitled.svg · Path" / "· 3 objects" / "· Artboard").
+function updateSelLabel() {
+  const el = document.querySelector("#sel-label"); if (!el) return;
+  if (!editor.stage) { el.textContent = ""; return; }
+  if (editor.artboardSelected) { el.textContent = " · Artboard"; return; }
   const sel = editor.selectedNodes();
-  const fillable = sel.filter((n) => shapeToAbsPath(n)).length >= 2;
-  const hasGroup = sel.some((n) => n.tagName.toLowerCase() === "g");
-  const items = [
-    { icon: "✂", label: "Cut", onClick: () => editor.cut() },
-    { icon: "⧉", label: "Copy", onClick: () => editor.copy() },
-    { icon: "❏", label: "Paste", disabled: !editor.clipboard.length, onClick: () => editor.paste() },
-    { icon: "⧉⁺", label: "Duplicate", onClick: () => editor.duplicate() },
-    { icon: "✎", label: "Rename…", disabled: sel.length !== 1, onClick: () => editor.beginRename(sel[0].getAttribute("data-hv-id")) },
-    { icon: "✕", label: "Delete", onClick: () => editor.deleteSelection() },
-    { type: "sep" },
-    { icon: "⤒", label: "Bring to Front", onClick: () => editor.reorder("front") },
-    { icon: "↑", label: "Bring Forward", onClick: () => editor.reorder("forward") },
-    { icon: "↓", label: "Send Backward", onClick: () => editor.reorder("backward") },
-    { icon: "⤓", label: "Send to Back", onClick: () => editor.reorder("back") },
-    { type: "sep" },
-    { icon: "⊞", label: "Group", disabled: sel.length < 2, onClick: () => editor.group() },
-    { icon: "⊟", label: "Ungroup", disabled: !hasGroup, onClick: () => editor.ungroup() },
-  ];
-  if (fillable) items.push({ type: "sep" },
-    { icon: "∪", label: "Unite", onClick: () => editor.booleanOp("union") },
-    { icon: "−", label: "Subtract", onClick: () => editor.booleanOp("subtract") },
-    { icon: "∩", label: "Intersect", onClick: () => editor.booleanOp("intersect") });
-  items.push({ type: "sep" },
-    { icon: "⊠", label: "Invert space", onClick: () => editor.invertSpace() },
-    { icon: "↻", label: "Rotate 90° CW", onClick: () => editor.transform("rotateCW") },
-    { icon: "↺", label: "Rotate 90° CCW", onClick: () => editor.transform("rotateCCW") },
-    { icon: "⇄", label: "Flip Horizontal", onClick: () => editor.transform("flipH") },
-    { icon: "⇅", label: "Flip Vertical", onClick: () => editor.transform("flipV") });
-  return items;
+  if (!sel.length) { el.textContent = ""; return; }
+  el.textContent = " · " + (sel.length === 1 ? editor.nodeName(sel[0]) : `${sel.length} objects`);
+}
+function showContextPanel(x, y, _kind) {
+  hideContextMenu();
+  const p = ensureFloatPanel();
+  const firstShow = p.hidden;
+  p.hidden = false;
+  renderFloatPanel();
+  if (firstShow || !floatPos) floatPos = { x: _clampX((x || 0) + 4, p), y: _clampY((y || 0) + 4, p) };
+  p.style.left = floatPos.x + "px"; p.style.top = floatPos.y + "px";
+}
+function toggleFloatPanel() {
+  if (floatPanel && !floatPanel.hidden) hideFloatPanel();
+  else showContextPanel(window.innerWidth - 270, 96);
 }
 function pointMenuItems() {
   const n = editor._nodeSel.size;
@@ -1983,22 +2327,6 @@ function pointMenuItems() {
     { type: "sep" },
     { label: n === 2 ? "Join / close" : "Join (select 2 ends)", disabled: n !== 2, onClick: () => editor.joinNodes() },
     { label: n > 1 ? `Delete ${n} points` : "Delete point", onClick: () => editor.deleteNodeSelection() },
-  ];
-}
-function canvasMenuItems() {
-  return [
-    { icon: "❏", label: "Paste", disabled: !editor.clipboard.length, onClick: () => editor.paste() },
-    { icon: "▦", label: "Select All", onClick: () => editor.selectAll() },
-    { type: "sep" },
-    { icon: editor.smartGuides ? "⊹✓" : "⊹", label: "Smart guides", onClick: () => { editor.smartGuides = !editor.smartGuides; prefs.smartGuides = editor.smartGuides; persistPrefs(); setStatus(`Smart guides ${editor.smartGuides ? "on" : "off"}.`, 1500); } },
-    { icon: "⊠", label: "Invert space", onClick: () => editor.invertSpace() },
-    { icon: "⊘", label: "Clean up ghost layers", onClick: () => editor.cleanupLayers() },
-    { icon: "⧉", label: "Merge same-colour layers", onClick: () => editor.consolidateByColor() },
-    { type: "sep" },
-    { icon: "↻", label: "Rotate artboard 90° CW", onClick: () => editor.transform("rotateCW") },
-    { icon: "↺", label: "Rotate artboard 90° CCW", onClick: () => editor.transform("rotateCCW") },
-    { icon: "⇄", label: "Flip artboard H", onClick: () => editor.transform("flipH") },
-    { icon: "⇅", label: "Flip artboard V", onClick: () => editor.transform("flipV") },
   ];
 }
 {
@@ -2035,7 +2363,7 @@ function canvasMenuItems() {
 document.addEventListener("pointerdown", (e) => {
   if (ctxMenuEl && !e.target.closest(".context-menu") && !e.target.closest(".cp-backdrop")) hideContextMenu();
 });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideContextMenu(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { hideContextMenu(); hideFloatPanel(); } });
 window.addEventListener("blur", hideContextMenu);
 window.addEventListener("pagehide", () => { rememberLastDoc(); editor.dispose(); });   // remember the doc, then free its state on close
 // Pen tool: hold Ctrl/Cmd to temporarily act as Direct-Select (move anchors/handles).
@@ -2625,6 +2953,7 @@ window.addEventListener("resize", () => {
   Object.values(viewports).forEach((vp) => {
     if (vp.el.querySelector(".viewport-content")) measureFit(vp);
   });
+  drawRulers();
 });
 
 function fieldRow(label, control, hint) {
@@ -3245,6 +3574,8 @@ window.zoomVp = zoomVp;
 window.fitVp = fitVp;
 window.processSelectEl = processSelectEl;
 window.settings = settings;
+window.hideFloatPanel = hideFloatPanel;
+window.toggleFloatPanel = toggleFloatPanel;
 // Mutable selection state goes through accessors (ESM module bindings can't be
 // reassigned by name from outside the module).
 window.app = {

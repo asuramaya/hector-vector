@@ -65,6 +65,7 @@ const editor = {
     this.redo = [];
     this._curLabel = "Open";
     this._install(svgEl);
+    this._syncBoardBg();
     this._renderSelection();
     this._renderInspector();
     this._renderHistory();
@@ -247,6 +248,7 @@ const editor = {
     if (!this.stage) return;
     const all = [...this.history, this._state(), ...this.redo.slice().reverse()];
     const cur = this.history.length;
+    const hc = document.querySelector("#history-count"); if (hc) hc.textContent = this.history.length ? String(this.history.length) : "";
     all.forEach((s, i) => {
       const row = document.createElement("button");
       row.type = "button";
@@ -280,6 +282,9 @@ const editor = {
   // ---------- selection ----------
   nodeById(id) { return this.stage && this.stage.querySelector(`[data-hv-id="${CSS.escape(id)}"]`); },
   selectedNodes() { return [...this.selection].map((id) => this.nodeById(id)).filter(Boolean); },
+  // Drop any node that's a descendant of another selected node — moving/transforming both
+  // a group AND one of its children would translate the child twice. Keeps moves atomic.
+  _topSelection(nodes) { return nodes.filter((n) => !nodes.some((o) => o !== n && o.contains(n))); },
   selectArtboard() {
     if (!this.stage) return;
     this.selection = new Set();
@@ -305,12 +310,27 @@ const editor = {
       const sp = m ? new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse()) : null;
       const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
       const hit = sp ? nearestOnPaths(this.stage, sp.x, sp.y, 6 / k) : null;
+      // Focus mode: in node editing only the selected object's anchors are shown, but
+      // clicking on/near another object switches focus to it (its handles then appear),
+      // so you can still reach any object's points.
+      if (this.selection.size) {
+        const overEl = (hit && hit.el) || (e.target && e.target.closest && e.target.closest("[data-hv-id]"));
+        if (overEl && overEl.hasAttribute("data-hv-id") && overEl.getAttribute("data-hv-locked") !== "1" && !this.selection.has(overEl.getAttribute("data-hv-id"))) {
+          this.selection = new Set([overEl.getAttribute("data-hv-id")]); this.artboardSelected = false; this._nodeSel = new Set();
+          this._renderSelection(); this._renderInspector(); this.mountNodeHandles();
+          return;
+        }
+      }
       if (hit && hit.mode === "segment") this._beginSegmentDrag(e, hit.el, hit.i, hit.t);
       else this._beginNodeMarquee(e, e.shiftKey);
       return;
     }
     if (this.tool !== "select") return;
     let hit = e.target.closest && e.target.closest("[data-hv-id]");
+    // Clicking a shape inside a group selects/moves the WHOLE group — ascend to the
+    // top-level object (the stage's direct child). Reach individual children via the
+    // layers panel. (Was selecting the leaf, so dragging a group only moved one child.)
+    if (hit && this.stage.contains(hit)) { let top = hit; while (top.parentNode && top.parentNode !== this.stage) top = top.parentNode; if (top.nodeType === 1 && top.hasAttribute && top.hasAttribute("data-hv-id")) hit = top; }
     if (hit && hit.getAttribute("data-hv-locked") === "1") hit = null;   // locked → not selectable
     if (hit && this.stage.contains(hit)) {
       e.stopPropagation();
@@ -328,12 +348,12 @@ const editor = {
     }
   },
   _beginMove(startEvent) {
-    let nodes = this.selectedNodes(); if (!nodes.length) return;
+    let nodes = this._topSelection(this.selectedNodes()); if (!nodes.length) return;
     const inv = () => this.stage.getScreenCTM().inverse();
     const start = new DOMPoint(startEvent.clientX, startEvent.clientY).matrixTransform(inv());
     let bases = nodes.map((n) => currentTranslate(n));
     let origs = nodes.map((n) => n.getAttribute("transform"));
-    let flat = nodes.every((n) => this._isTranslateOnly(n));   // matrix/rotate objects compose instead of clobber
+    let flats = nodes.map((n) => this._isTranslateOnly(n));   // per node: translate-only stays clean, matrix/rotate composes
     const altDup = startEvent.altKey;        // Alt-drag → drag a duplicate, leave the original
     const snapper = makeAxisSnapper();
     const ref0 = this._bboxUnion(nodes);     // selection bounds at start (for smart-guide refs)
@@ -345,14 +365,14 @@ const editor = {
         this.push(altDup ? "Duplicate" : "Move"); pushed = true;
         if (altDup) {                        // clone at the origin, then drag the copies
           const ids = this._cloneSelection(0, 0);
-          if (ids.length) { this.selection = new Set(ids); nodes = this.selectedNodes(); bases = nodes.map((n) => currentTranslate(n)); origs = nodes.map((n) => n.getAttribute("transform")); flat = nodes.every((n) => this._isTranslateOnly(n)); duped = true; }
+          if (ids.length) { this.selection = new Set(ids); nodes = this._topSelection(this.selectedNodes()); bases = nodes.map((n) => currentTranslate(n)); origs = nodes.map((n) => n.getAttribute("transform")); flats = nodes.map((n) => this._isTranslateOnly(n)); duped = true; }
           this._renderInspector();
         }
       }
       const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
       let dx = p.x - start.x, dy = p.y - start.y;
       let gx = null, gy = null;
-      if (ev.shiftKey) { const s = snapper.snap(dx, dy); dx = s.x; dy = s.y; }   // sticky 45° move
+      if (ev.shiftKey) { if (Math.abs(dx) >= Math.abs(dy)) dy = 0; else dx = 0; }   // lock to the H/V axis
       else {
         snapper.reset();
         if (cand) {                          // smart-guide snap (skipped while Shift-constraining)
@@ -362,7 +382,7 @@ const editor = {
         }
       }
       nodes.forEach((n, i) => {
-        if (flat) setTranslate(n, bases[i].x + dx, bases[i].y + dy);   // clean translate-only stays node-editable
+        if (flats[i]) setTranslate(n, bases[i].x + dx, bases[i].y + dy);   // clean translate-only stays node-editable
         else n.setAttribute("transform", origs[i] ? `translate(${nfmt(dx)} ${nfmt(dy)}) ${origs[i]}` : `translate(${nfmt(dx)} ${nfmt(dy)})`);   // preserve scale/rotate
       });
       this._renderSelection();
@@ -371,7 +391,7 @@ const editor = {
     const up = () => {
       window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
       this._clearGuides();
-      if (!flat && pushed) nodes.forEach((n) => this._consolidateTransform(n));   // collapse translate·matrix → one matrix (no stacking)
+      if (pushed) nodes.forEach((n, i) => { if (!flats[i]) this._consolidateTransform(n); });   // collapse translate·matrix → one matrix (no stacking)
       if (duped) { this._renderLayers(); setStatus(`Duplicated ${this.selection.size} object${this.selection.size > 1 ? "s" : ""}.`, 1500); }
     };
     window.addEventListener("pointermove", move);
@@ -776,6 +796,9 @@ const editor = {
   _renderSelection() {
     const ov = this._overlayEl(); if (!ov) return;
     ov.innerHTML = ""; this._xform = null;
+    // Node tool shows anchors, not the object's bounding box — drawing the select bbox
+    // on top of the handles (esp. degenerate on a thin line) just clutters the edit.
+    if (this.tool === "node") { this.mountNodeHandles(); return; }
     const targets = this.artboardSelected
       ? [this.artboardEl()].filter(Boolean)
       : this.selectedNodes();
@@ -794,7 +817,6 @@ const editor = {
         ov.appendChild(box);
       }
     }
-    if (this.tool === "node") this.mountNodeHandles();
     // Transform is a SELECT sub-mode now (Ctrl+T scale / Ctrl+R rotate), not a tool.
     if (this.tool === "select" && this._xformMode && this.selection.size && !this.artboardSelected) this._mountTransformHandles();
   },
@@ -889,12 +911,21 @@ const editor = {
     transformShapeGeometry(el, el.tagName.toLowerCase(), f, m);
     el.removeAttribute("transform");
   },
+  // Node-edit focus: when objects are selected, only THEIR anchors (incl. group
+  // children) are shown — keeps a busy doc legible. Nothing selected → show all so you
+  // can grab anything. You still switch focus by clicking another object (see _onPointerDown).
+  _nodeFocusAccept() {
+    if (!this.selection.size) return null;
+    const sel = this.selectedNodes();
+    return (el) => sel.some((s) => s === el || (s.contains && s.contains(el)));
+  },
   mountNodeHandles() {
     this.unmountNodeHandles();
     const ov = this._overlayEl(); if (!ov || !this.stage) return;
     this._bakeArtTransforms();                     // normalize translates so handles align with the shapes
-    const pnodes = pathNodes(this.stage);          // path anchors carry bezier direction handles
-    const anchors = collectAnchors(this.stage);    // rect/ellipse/line/polygon corner points
+    const accept = this._nodeFocusAccept();
+    const pnodes = pathNodes(this.stage, accept);  // path anchors carry bezier direction handles
+    const anchors = collectAnchors(this.stage, accept);   // rect/ellipse/line/polygon corner points
     const total = pnodes.length + anchors.length;
     if (!total) return;
     if (total > MAX_HANDLES) { setStatus(`Too many anchors (${total}) to edit. Works best on traced paths.`, 4000); return; }
@@ -1027,7 +1058,7 @@ const editor = {
           return;
         }
         let dx = p.x - sp.x, dy = p.y - sp.y, gx = null, gy = null;
-        if (ev.shiftKey) { const s = snapper.snap(dx, dy); dx = s.x; dy = s.y; }   // sticky 45° move
+        if (ev.shiftKey) { if (Math.abs(dx) >= Math.abs(dy)) dy = 0; else dx = 0; }   // lock to the H/V axis
         else {
           snapper.reset();
           if (cand) { const k = Math.hypot(m.a, m.b) || 1; const s = this._snapMove([nd.x], [nd.y], dx, dy, cand, 6 / k); dx = s.dx; dy = s.dy; gx = s.gx; gy = s.gy; }
@@ -1424,7 +1455,7 @@ const editor = {
       if (!pushed) { this.push("Reshape"); pushed = true; }
       const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
       let dx = p.x - start.x, dy = p.y - start.y;
-      if (ev.shiftKey) { const s = snapper.snap(dx, dy); dx = s.x; dy = s.y; } else snapper.reset();
+      if (ev.shiftKey) { if (Math.abs(dx) >= Math.abs(dy)) dy = 0; else dx = 0; }   // lock to the H/V axis
       if (straight) { A.x = A0.x + dx; A.y = A0.y + dy; B.x = B0.x + dx; B.y = B0.y + dy; }
       else {
         const u = 1 - t, a = 3 * u * u * t, b = 3 * u * t * t, denom = a * a + b * b || 1;
@@ -1457,7 +1488,7 @@ const editor = {
       const x0 = Math.min(start.x, p.x), y0 = Math.min(start.y, p.y), x1 = Math.max(start.x, p.x), y1 = Math.max(start.y, p.y);
       box.setAttribute("x", nfmt(x0)); box.setAttribute("y", nfmt(y0)); box.setAttribute("width", nfmt(x1 - x0)); box.setAttribute("height", nfmt(y1 - y0));
       const sel = new Set(base);
-      for (const nd of pathNodes(this.stage)) if (nd.x >= x0 && nd.x <= x1 && nd.y >= y0 && nd.y <= y1) sel.add(this._nodeKey(nd));
+      for (const nd of pathNodes(this.stage, this._nodeFocusAccept())) if (nd.x >= x0 && nd.x <= x1 && nd.y >= y0 && nd.y <= y1) sel.add(this._nodeKey(nd));
       this._nodeSel = sel; this._refreshNodeSelHighlight();
     };
     const up = () => {
@@ -1538,7 +1569,19 @@ const editor = {
   },
 
   // ---------- property edits — apply* do NOT push; wrap with beginCoalesce/commitCoalesce ----------
-  _eachSel(fn) { this.selectedNodes().forEach(fn); this._renderSelection(); },
+  // The leaf graphical elements a style edit should touch: groups expand to their
+  // children (recursively), so recolouring a selected group hits its N objects rather
+  // than setting an inert fill on the <g>. Non-groups map to themselves.
+  _effectiveLeaves(nodes) {
+    const out = [];
+    const walk = (n) => {
+      if (n.tagName.toLowerCase() === "g") { for (const c of n.children) if (c.hasAttribute && c.hasAttribute("data-hv-id")) walk(c); }
+      else out.push(n);
+    };
+    (nodes || this.selectedNodes()).forEach(walk);
+    return out;
+  },
+  _eachSel(fn) { this._effectiveLeaves().forEach(fn); this._renderSelection(); },
   applyFill(color) { this.style.fill = color || "none"; this._eachSel((n) => n.setAttribute("fill", color || "none")); },
   applyStroke(color, width) {
     this.style.stroke = width > 0 ? color : "none"; this.style.strokeWidth = width > 0 ? width : 0;
@@ -1562,7 +1605,16 @@ const editor = {
   setStrokeAttr(attr, value) {
     this._eachSel((n) => { if (value === "" || value == null) n.removeAttribute(attr); else n.setAttribute(attr, String(value)); });
   },
-  applyArtboardBg(color) { const ab = this.artboardEl(); if (ab) ab.setAttribute("fill", color || "none"); },
+  applyArtboardBg(color) { const ab = this.artboardEl(); if (ab) ab.setAttribute("fill", color || "none"); this._syncBoardBg(); },
+  // The stage <svg> carries a white CSS background so the sheet reads on the checker
+  // pasteboard — but that hid transparency. When the artboard fill is none, swap the
+  // white for a checker so a transparent artboard actually looks transparent.
+  _syncBoardBg() {
+    if (!this.stage) return;
+    const ab = this.artboardEl();
+    const f = ab && ab.getAttribute("fill");
+    this.stage.classList.toggle("transparent-board", !f || f === "none");
+  },
   applyArtboardSize(w, h) {
     const ab = this.artboardEl(); if (!ab || !this.stage) return;
     this.stage.setAttribute("viewBox", `0 0 ${nfmt(w)} ${nfmt(h)}`);
@@ -1751,7 +1803,9 @@ const editor = {
   // ---------- boolean ops (Phase 4) ----------
   // Shapes convertible to a fillable outline (rect/ellipse/circle/poly/path); lines
   // and groups have no area and are skipped.
-  _fillableSelection() { return this._artworkNodes().filter((n) => this.selection.has(n.getAttribute("data-hv-id")) && shapeToAbsPath(n)); },
+  // Boolean ops work on the selected fillable shapes — flattening selected groups to
+  // their leaf children so a grouped selection is usable (was top-level only → "unusable").
+  _fillableSelection() { return this._effectiveLeaves().filter((n) => shapeToAbsPath(n)); },
   _nodeBBoxUser(n) {
     // getBBox() is the element's LOCAL geometry bbox; map its corners through the
     // element's full consolidated transform so the box is correct for ANY transform
@@ -1879,7 +1933,7 @@ const editor = {
     if (fillRule) path.setAttribute("fill-rule", fillRule);
     path.setAttribute("fill", fillOverride || (src && src.getAttribute("fill")) || "#000000");
     if (src) ["stroke", "stroke-width", "vector-effect", "stroke-linejoin", "stroke-linecap", "opacity"].forEach((a) => { const v = src.getAttribute(a); if (v) path.setAttribute(a, v); });
-    this.stage.insertBefore(path, anchor);
+    (anchor.parentNode || this.stage).insertBefore(path, anchor);   // land beside the inputs (inside their group if grouped)
     nodes.forEach((n) => n.remove());
     this.selection = new Set([id]); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector(); this._renderLayers();
@@ -1891,7 +1945,7 @@ const editor = {
   // plain = single, Cmd/Ctrl = toggle one, Shift = contiguous range from the last
   // anchor (in panel order, which is front-first). Locked rows never join a range.
   _layerClick(id, e) {
-    const order = this._artworkNodes().map((n) => n.getAttribute("data-hv-id")).reverse();   // front-first, like the panel
+    const order = this._visibleLayerOrder || this._artworkNodes().map((n) => n.getAttribute("data-hv-id")).reverse();   // flattened front-first, like the panel
     const additive = e.ctrlKey || e.metaKey;
     if (e.shiftKey && this._lastLayerId && order.includes(this._lastLayerId)) {
       const a = order.indexOf(this._lastLayerId), b = order.indexOf(id);
@@ -1935,26 +1989,64 @@ const editor = {
     if (name) n.setAttribute("data-hv-name", name); else n.removeAttribute("data-hv-name");
     this._renderLayers();
   },
-  reorderTo(srcId, tgtId) {
-    const src = this.nodeById(srcId), tgt = this.nodeById(tgtId);
-    if (!src || !tgt || src === tgt) return;
+  reorderTo(srcId, tgtId) {   // simple API: nest into a group target, else land in front of it
+    const tgt = this.nodeById(tgtId);
+    this._reorderDrop([srcId], tgtId, tgt && tgt.tagName.toLowerCase() === "g" ? "into" : "after");
+  },
+  // Move one or more layers relative to a target row. pos: "before" | "after" | "into"
+  // (into = nest as the group's children). Multi-node drags keep their z-order.
+  _reorderDrop(srcIds, tgtId, pos) {
+    const tgt = this.nodeById(tgtId); if (!tgt) return;
+    let srcs = (srcIds || []).map((id) => this.nodeById(id)).filter((s) => s && s !== tgt && !s.contains(tgt));
+    if (!srcs.length) return;
+    const all = [...this.stage.querySelectorAll("[data-hv-id]")];
+    srcs.sort((a, b) => all.indexOf(a) - all.indexOf(b));
     this.push("Reorder");
-    this.stage.insertBefore(src, tgt.nextSibling);   // src lands just in front of tgt
+    if (pos === "into" && tgt.tagName.toLowerCase() === "g") {
+      srcs.forEach((s) => tgt.appendChild(s));            // nest as frontmost children
+      this._collapsedGroups && this._collapsedGroups.delete(tgtId);   // reveal where they landed
+    } else if (pos === "before") {
+      srcs.forEach((s) => tgt.parentNode.insertBefore(s, tgt));
+    } else {                                              // after
+      [...srcs].reverse().forEach((s) => tgt.parentNode.insertBefore(s, tgt.nextSibling));
+    }
     this._renderSelection(); this._renderLayers();
   },
+  // Move layers out to the top level (drop on the Artboard chin or empty list space).
+  reorderToRoot(srcId) { this._reorderManyToRoot([srcId]); },
+  _reorderManyToRoot(srcIds) {
+    const ov = this._overlayEl();
+    let srcs = (srcIds || []).map((id) => this.nodeById(id)).filter((s) => s && s.parentNode !== this.stage);
+    if (!srcs.length) return;
+    const all = [...this.stage.querySelectorAll("[data-hv-id]")];
+    srcs.sort((a, b) => all.indexOf(a) - all.indexOf(b));
+    this.push("Reorder");
+    srcs.forEach((s) => { if (ov && ov.parentNode === this.stage) this.stage.insertBefore(s, ov); else this.stage.appendChild(s); });
+    this._renderSelection(); this._renderLayers();
+  },
+  _clearDropMarks() {
+    document.querySelectorAll("#layers-list .drop-before, #layers-list .drop-after, #layers-list .drop-into, #layers-foot .drop-into, #layers-list.drop-root")
+      .forEach((r) => r.classList.remove("drop-before", "drop-after", "drop-into", "drop-root"));
+  },
   group() {
-    const ordered = this._artworkNodes().filter((n) => this.selection.has(n.getAttribute("data-hv-id")));
-    if (ordered.length < 2) { setStatus("Select 2 or more objects to group.", 2500); return; }
+    // Group the selected objects at the frontmost one's parent — so selecting shapes
+    // INSIDE a group and hitting Group makes a NESTED group (was top-level only).
+    const sel = this._topSelection(this.selectedNodes()).filter((n) => n.hasAttribute && n.hasAttribute("data-hv-id"));
+    if (sel.length < 2) { setStatus("Select 2 or more objects to group.", 2500); return; }
     this.push("Group");
     const ov = this._overlayEl();
+    const all = [...this.stage.querySelectorAll("[data-hv-id]")];
+    sel.sort((a, b) => all.indexOf(a) - all.indexOf(b));   // preserve z-order
+    const front = sel[sel.length - 1], parent = front.parentNode, anchor = front.nextSibling;
     const g = document.createElementNS(SVG_NS, "g");
     const id = "n" + (++this.idSeq); g.setAttribute("data-hv-id", id);
-    const anchor = ordered[ordered.length - 1].nextSibling;
-    ordered.forEach((n) => { n.removeAttribute("data-hv-id"); g.appendChild(n); });
-    this.stage.insertBefore(g, anchor && anchor !== ov ? anchor : ov);
+    sel.forEach((n) => g.appendChild(n));   // keep child ids so the layers tree can address them
+    if (anchor && anchor.parentNode === parent && anchor !== ov) parent.insertBefore(g, anchor);
+    else if (parent === this.stage && ov && ov.parentNode === this.stage) this.stage.insertBefore(g, ov);
+    else parent.appendChild(g);
     this.selection = new Set([id]); this.artboardSelected = false;
-    this._renderSelection(); this._renderInspector();
-    setStatus(`Grouped ${ordered.length} objects.`, 1500);
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+    setStatus(`Grouped ${sel.length} objects.`, 1500);
   },
   ungroup() {
     const groups = this.selectedNodes().filter((n) => n.tagName.toLowerCase() === "g");
@@ -2067,54 +2159,52 @@ const editor = {
     this._renderSelection(); this._renderInspector(); this._renderLayers();
     setStatus(`Merged ${mergedAway + into} layers into ${into} by colour.`, 3000);
   },
+  // Ensure every graphical artwork element (incl. nested group children) carries a
+  // data-hv-id so the layers tree can show + address them. group() no longer strips
+  // child ids, but legacy/imported groups may lack them — this backfills, idempotently.
+  // serialize() strips data-hv-id, so these never reach saved output.
+  _ensureIds() {
+    if (!this.stage) return;
+    const ov = this._overlayEl();
+    const GRAPHIC = new Set(["path", "rect", "circle", "ellipse", "line", "polygon", "polyline", "image", "text", "g"]);
+    const walk = (parent) => {
+      for (const c of parent.children) {
+        if (c === ov || (c.classList && c.classList.contains("hv-artboard"))) continue;
+        const tag = c.tagName.toLowerCase();
+        if (!GRAPHIC.has(tag)) continue;
+        if (!c.hasAttribute("data-hv-id")) c.setAttribute("data-hv-id", "n" + (++this.idSeq));
+        if (tag === "g") walk(c);
+      }
+    };
+    walk(this.stage);
+  },
   _renderLayers() {
     const list = document.querySelector("#layers-list");
     if (!list) return;
     list.innerHTML = "";
     if (!this.stage) return;
-    const nodes = this._artworkNodes().slice().reverse();   // top of list = frontmost
-    for (const n of nodes) {
-      const id = n.getAttribute("data-hv-id");
-      const row = document.createElement("div");
-      row.className = "layer-row" + (this.selection.has(id) ? " active" : "");
-      row.draggable = true; row.dataset.id = id;
-
-      const eye = document.createElement("button");
-      eye.type = "button"; eye.className = "layer-btn";
-      const hidden = n.getAttribute("display") === "none";
-      eye.textContent = hidden ? "○" : "●"; eye.title = hidden ? "Show" : "Hide";
-      eye.addEventListener("click", (e) => { e.stopPropagation(); this.setVisibility(id, hidden); });
-
-      const swatch = document.createElement("span");
-      swatch.className = "layer-swatch";
-      const fill = toHexColor(n.getAttribute("fill"));
-      if (fill && n.getAttribute("fill") !== "none") { swatch.style.background = fill; swatch.style.backgroundImage = "none"; }
-      swatch.title = n.getAttribute("fill") || "no fill";
-
-      const name = document.createElement("span");
-      name.className = "layer-name"; name.textContent = this.nodeName(n);
-      name.title = "Double-click to rename";
-      name.addEventListener("dblclick", (e) => { e.stopPropagation(); this._renameInline(n, name); });
-
-      const lock = document.createElement("button");
-      lock.type = "button"; lock.className = "layer-btn";
-      const locked = n.getAttribute("data-hv-locked") === "1";
-      lock.textContent = locked ? "L" : "·"; lock.title = locked ? "Unlock" : "Lock"; lock.classList.toggle("on", locked);
-      lock.addEventListener("click", (e) => { e.stopPropagation(); this.toggleLock(id); });
-
-      row.append(eye, swatch, name, lock);
-      row.addEventListener("click", (e) => {
-        if (n.getAttribute("data-hv-locked") === "1") return;
-        this._layerClick(id, e);
-      });
-      row.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", id); e.dataTransfer.effectAllowed = "move"; row.classList.add("dragging"); });
-      row.addEventListener("dragend", () => row.classList.remove("dragging"));
-      row.addEventListener("dragover", (e) => { e.preventDefault(); });
-      row.addEventListener("drop", (e) => { e.preventDefault(); const src = e.dataTransfer.getData("text/plain"); if (src && src !== id) this.reorderTo(src, id); });
-      list.appendChild(row);
-    }
-    // Artboard row, pinned at the bottom like a background — a reliable click
-    // target for selecting the canvas even when artwork covers every pixel.
+    this._ensureIds();
+    if (!this._collapsedGroups) this._collapsedGroups = new Set();
+    this._visibleLayerOrder = [];   // flattened, front-first — drives shift-range selection
+    const renderLevel = (parent, depth) => {
+      const kids = [...parent.children].filter((c) => c.hasAttribute && c.hasAttribute("data-hv-id"));
+      for (const n of kids.reverse()) {                       // top of the list = frontmost
+        const id = n.getAttribute("data-hv-id");
+        const isGroup = n.tagName.toLowerCase() === "g";
+        const collapsed = this._collapsedGroups.has(id);
+        this._visibleLayerOrder.push(id);
+        list.appendChild(this._buildLayerRow(n, id, depth, isGroup, collapsed));
+        if (isGroup && !collapsed) renderLevel(n, depth + 1);  // nested children, indented
+      }
+    };
+    renderLevel(this.stage, 0);
+    const lc = document.querySelector("#layers-count");
+    if (lc) { const n = this._artworkNodes().length; lc.textContent = n ? String(n) : ""; }
+    // Artboard row, pinned to the Layers chin (#layers-foot, below the scrolling list) so
+    // it never scrolls away — a reliable click target for the canvas, and a drop target
+    // that pulls a layer back out to the top level.
+    const foot = document.querySelector("#layers-foot");
+    if (foot) foot.innerHTML = "";
     const abRow = document.createElement("div");
     abRow.className = "layer-row artboard-row" + (this.artboardSelected ? " active" : "");
     const abSwatch = document.createElement("span");
@@ -2128,7 +2218,113 @@ const editor = {
     abName.title = "The canvas (Shift+O)";
     abRow.append(abSwatch, abName);
     abRow.addEventListener("click", () => this.selectArtboard());
-    list.appendChild(abRow);
+    // Right-click the Artboard row → same artboard panel as right-clicking the canvas.
+    abRow.addEventListener("contextmenu", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      this.selectArtboard();
+      if (this.openContextPanel) this.openContextPanel(e.clientX, e.clientY, "canvas");
+    });
+    // Drop layer(s) onto the Artboard row → move them out to the top level (out of any group).
+    const rootDrop = (e) => {
+      e.preventDefault(); this._clearDropMarks();
+      const ids = (this._dragLayerIds && this._dragLayerIds.length) ? this._dragLayerIds : (e.dataTransfer.getData("text/plain") || "").split(",").filter(Boolean);
+      if (ids.length) this._reorderManyToRoot(ids);
+    };
+    abRow.addEventListener("dragover", (e) => { e.preventDefault(); this._clearDropMarks(); abRow.classList.add("drop-into"); });
+    abRow.addEventListener("dragleave", () => abRow.classList.remove("drop-into"));
+    abRow.addEventListener("drop", rootDrop);
+    (foot || list).appendChild(abRow);
+    // Drop in the empty space of the list (below all rows) → also pull out to the top level.
+    if (!list._dropWired) {
+      list.addEventListener("dragover", (e) => { if (e.target !== list) return; e.preventDefault(); this._clearDropMarks(); list.classList.add("drop-root"); });
+      list.addEventListener("drop", (e) => { if (e.target !== list) return; rootDrop(e); });
+      list._dropWired = true;
+    }
+    // Orient the panel to the selection: scroll the (first) active row into view.
+    const act = list.querySelector(".layer-row.active:not(.artboard-row)");
+    if (act) act.scrollIntoView({ block: "nearest" });
+  },
+  _buildLayerRow(n, id, depth, isGroup, collapsed) {
+    const row = document.createElement("div");
+    row.className = "layer-row" + (this.selection.has(id) ? " active" : "") + (isGroup ? " is-group" : "");
+    row.draggable = true; row.dataset.id = id;
+    row.style.paddingLeft = (6 + depth * 14) + "px";
+
+    // group expand/collapse twisty (a hidden spacer keeps leaf rows aligned)
+    const twist = document.createElement("button");
+    twist.type = "button"; twist.className = "layer-twist" + (isGroup ? "" : " leaf");
+    if (isGroup) {
+      twist.textContent = collapsed ? "▸" : "▾";
+      twist.title = collapsed ? "Expand group" : "Collapse group";
+      twist.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (this._collapsedGroups.has(id)) this._collapsedGroups.delete(id); else this._collapsedGroups.add(id);
+        this._renderLayers();
+      });
+    }
+
+    const eye = document.createElement("button");
+    eye.type = "button"; eye.className = "layer-btn";
+    const hidden = n.getAttribute("display") === "none";
+    eye.textContent = hidden ? "○" : "●"; eye.title = hidden ? "Show" : "Hide";
+    eye.addEventListener("click", (e) => { e.stopPropagation(); this.setVisibility(id, hidden); });
+
+    const swatch = document.createElement("span");
+    swatch.className = "layer-swatch" + (isGroup ? " group" : "");
+    if (isGroup) { swatch.textContent = "▤"; swatch.title = "Group"; }
+    else {
+      const fill = toHexColor(n.getAttribute("fill"));
+      if (fill && n.getAttribute("fill") !== "none") { swatch.style.background = fill; swatch.style.backgroundImage = "none"; }
+      swatch.title = n.getAttribute("fill") || "no fill";
+    }
+
+    const name = document.createElement("span");
+    name.className = "layer-name"; name.textContent = this.nodeName(n);
+    name.title = "Double-click to rename";
+
+    const lock = document.createElement("button");
+    lock.type = "button"; lock.className = "layer-btn";
+    const locked = n.getAttribute("data-hv-locked") === "1";
+    lock.textContent = locked ? "L" : "·"; lock.title = locked ? "Unlock" : "Lock"; lock.classList.toggle("on", locked);
+    lock.addEventListener("click", (e) => { e.stopPropagation(); this.toggleLock(id); });
+
+    row.append(twist, eye, swatch, name, lock);
+    row.addEventListener("click", (e) => { if (n.getAttribute("data-hv-locked") === "1") return; this._layerClick(id, e); });
+    row.addEventListener("dblclick", (e) => { e.stopPropagation(); this._renameInline(n, name); });
+    // Right-click a row → the same object context panel as right-clicking on canvas
+    // (one consistent route for right-click actions).
+    row.addEventListener("contextmenu", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (n.getAttribute("data-hv-locked") === "1") return;
+      if (!this.selection.has(id)) { this.selection = new Set([id]); this.artboardSelected = false; this._renderSelection(); this._renderInspector(); }
+      if (this.openContextPanel) this.openContextPanel(e.clientX, e.clientY, "object");
+    });
+    row.addEventListener("dragstart", (e) => {
+      // grab the whole multi-selection together when the dragged row is part of it
+      const ids = (this.selection.has(id) && this.selection.size > 1) ? [...this.selection] : [id];
+      this._dragLayerIds = ids;
+      e.dataTransfer.setData("text/plain", ids.join(",")); e.dataTransfer.effectAllowed = "move";
+      ids.forEach((d) => { const r = document.querySelector(`#layers-list .layer-row[data-id="${CSS.escape(d)}"]`); if (r) r.classList.add("dragging"); });
+    });
+    row.addEventListener("dragend", () => { this._dragLayerIds = null; this._dropPos = null; document.querySelectorAll("#layers-list .layer-row.dragging").forEach((r) => r.classList.remove("dragging")); this._clearDropMarks(); });
+    row.addEventListener("dragover", (e) => {
+      e.preventDefault(); e.dataTransfer.dropEffect = "move";
+      const r = row.getBoundingClientRect(), y = e.clientY - r.top;
+      // group rows have 3 zones (before / nest-into / after) — the "crevices" decide
+      // whether you're adding INTO the group or BETWEEN rows; leaf rows split in half.
+      const pos = isGroup ? (y < r.height * 0.3 ? "before" : y > r.height * 0.7 ? "after" : "into") : (y < r.height / 2 ? "before" : "after");
+      this._clearDropMarks();
+      row.classList.add(pos === "into" ? "drop-into" : pos === "before" ? "drop-before" : "drop-after");
+      this._dropPos = pos;
+    });
+    row.addEventListener("drop", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const ids = (this._dragLayerIds && this._dragLayerIds.length) ? this._dragLayerIds : (e.dataTransfer.getData("text/plain") || "").split(",").filter(Boolean);
+      const pos = this._dropPos || "after";
+      this._clearDropMarks();
+      if (ids.length) this._reorderDrop(ids, id, pos);
+    });
+    return row;
   },
   _renameInline(node, span) {
     const input = document.createElement("input");
@@ -2170,59 +2366,83 @@ const editor = {
     body.appendChild(this._objectPanel(nodes));
   },
   _objectPanel(nodes) {
-    const first = nodes[0];
+    // Read style from the leaf shapes (a selected group carries none of its own), and
+    // detect mismatches: `common(read)` returns {value} when every leaf agrees, else
+    // {mixed:true, value:<first>} — so a multi-selection with different fills/widths
+    // shows an indeterminate "Mixed" state instead of silently showing just the first.
+    const reads = (() => { const l = this._effectiveLeaves(nodes); return l.length ? l : nodes; })();
+    const first = reads[0];
+    const common = (read) => { let v, set = false; for (const n of reads) { const c = read(n); if (!set) { v = c; set = true; } else if (c !== v) return { mixed: true, value: read(first) }; } return { value: v }; };
     const wrap = document.createElement("div");
 
     // FILL — swatch opens the unified colour picker (colour + alpha + None).
-    const fillVal = first.getAttribute("fill");
+    const fillC = common((n) => n.getAttribute("fill"));
+    const fillAC = common((n) => (n.hasAttribute("fill-opacity") ? parseFloat(n.getAttribute("fill-opacity")) : 1));
+    const fillVal = fillC.value;
     const fillNone = fillVal === "none";
     const fillHex = toHexColor(fillVal) || "#000000";
-    const fillA = first.hasAttribute("fill-opacity") ? parseFloat(first.getAttribute("fill-opacity")) : 1;
+    const fillA = fillAC.value == null ? 1 : fillAC.value;
     wrap.appendChild(inspGroup("Fill", [
       this._paintRow("Colour", fillNone ? null : fillHex, fillA, "Fill",
-        (hex, a) => { this.applyFill(hex); this.applyFillOpacity(a); }),
+        (hex, a) => { this.applyFill(hex); this.applyFillOpacity(a); }, "fill", !!(fillC.mixed || fillAC.mixed)),
     ]));
 
-    // STROKE — colour/alpha, weight, cap, join, miter limit, dashes.
-    const strokeVal = first.getAttribute("stroke");
+    // STROKE — colour/alpha, weight, cap, join, miter limit, dashes. Cap/join/miter/
+    // dash are meaningless without a stroke, so they're disabled until one exists.
+    const strokeC = common((n) => n.getAttribute("stroke"));
+    const strokeAC = common((n) => (n.hasAttribute("stroke-opacity") ? parseFloat(n.getAttribute("stroke-opacity")) : 1));
+    const strokeWC = common((n) => parseFloat(n.getAttribute("stroke-width")) || 0);
+    const strokeVal = strokeC.value;
     const strokeNone = !strokeVal || strokeVal === "none";
     const strokeHex = toHexColor(strokeVal) || "#000000";
-    const strokeA = first.hasAttribute("stroke-opacity") ? parseFloat(first.getAttribute("stroke-opacity")) : 1;
-    const strokeW = parseFloat(first.getAttribute("stroke-width")) || 0;
+    const strokeA = strokeAC.value == null ? 1 : strokeAC.value;
+    const strokeW = strokeWC.value || 0;
+    const hasStroke = reads.some((n) => { const s = n.getAttribute("stroke"); return s && s !== "none" && (parseFloat(n.getAttribute("stroke-width")) || 0) > 0; });
     this._strokeWidthInput = null;
     const curW = () => Math.max(parseFloat(this._strokeWidthInput && this._strokeWidthInput.value) || strokeW || 1, 0.01);
     const curC = () => toHexColor(first.getAttribute("stroke")) || strokeHex;
-    const strokeRows = [
-      this._paintRow("Colour", strokeNone ? null : strokeHex, strokeA, "Stroke",
-        (hex, a) => { this.applyStroke(hex || "none", hex ? curW() : 0); this.applyStrokeOpacity(a); }),
-      numRow("Width", strokeW, 0, 0.5, (v) => { this.beginCoalesce(); this.applyStroke(curC(), v); }, (inp) => { this._strokeWidthInput = inp; }, () => this.commitCoalesce("Stroke width")),
-      this._segRow("Cap", first.getAttribute("stroke-linecap") || "butt",
-        [["butt", "▭"], ["round", "▢"], ["square", "■"]], { butt: "Butt", round: "Round", square: "Projecting" },
-        (v) => { this.push("Stroke cap"); this.setStrokeAttr("stroke-linecap", v); }),
-      this._segRow("Join", first.getAttribute("stroke-linejoin") || "miter",
-        [["miter", "⌐"], ["round", "◜"], ["bevel", "◹"]], { miter: "Miter", round: "Round", bevel: "Bevel" },
-        (v) => { this.push("Stroke join"); this.setStrokeAttr("stroke-linejoin", v); }),
-      numRow("Miter", parseFloat(first.getAttribute("stroke-miterlimit")) || 4, 1, 1,
-        (v) => { this.beginCoalesce(); this.setStrokeAttr("stroke-miterlimit", v); }, null, () => this.commitCoalesce("Miter limit")),
-      this._dashRow("Dashes", first.getAttribute("stroke-dasharray") || "",
-        (v) => { this.push("Dashes"); this.setStrokeAttr("stroke-dasharray", v.trim()); }),
-    ];
-    wrap.appendChild(inspGroup("Stroke", strokeRows));
+    const capC = common((n) => n.getAttribute("stroke-linecap") || "butt");
+    const joinC = common((n) => n.getAttribute("stroke-linejoin") || "miter");
+    const miterC = common((n) => parseFloat(n.getAttribute("stroke-miterlimit")) || 4);
+    const dashC = common((n) => n.getAttribute("stroke-dasharray") || "");
+    const join = joinC.value || "miter";
+
+    const colourRow = this._paintRow("Colour", strokeNone ? null : strokeHex, strokeA, "Stroke",
+      (hex, a) => { this.applyStroke(hex || "none", hex ? curW() : 0); this.applyStrokeOpacity(a); }, "stroke", !!(strokeC.mixed || strokeAC.mixed));
+    const widthRow = numRow("Width", strokeW, 0, 0.5, (v) => { this.beginCoalesce(); this.applyStroke(curC(), v); }, (inp) => { this._strokeWidthInput = inp; }, () => this.commitCoalesce("Stroke width"), !!strokeWC.mixed);
+    const capRow = this._segRow("Cap", capC.mixed ? null : (capC.value || "butt"),
+      [["butt", CAP_GLYPH.butt], ["round", CAP_GLYPH.round], ["square", CAP_GLYPH.square]],
+      { butt: "Butt", round: "Round", square: "Projecting" },
+      (v) => { this.push("Stroke cap"); this.setStrokeAttr("stroke-linecap", v); });
+    const miterRow = this._numSliderRow("Miter", miterC.value == null ? 4 : miterC.value, 1, 20, 0.5,
+      (v) => { this.beginCoalesce(); this.setStrokeAttr("stroke-miterlimit", nfmt(v)); }, () => this.commitCoalesce("Miter limit"), !!miterC.mixed);
+    const setMiterEnabled = (on) => miterRow.classList.toggle("insp-disabled", !on || !hasStroke);
+    const joinRow = this._segRow("Join", joinC.mixed ? null : join,
+      [["miter", JOIN_GLYPH.miter], ["round", JOIN_GLYPH.round], ["bevel", JOIN_GLYPH.bevel]],
+      { miter: "Miter", round: "Round", bevel: "Bevel" },
+      (v) => { this.push("Stroke join"); this.setStrokeAttr("stroke-linejoin", v); setMiterEnabled(v === "miter"); });
+    const dashRow = this._dashRow("Dashes", dashC.value || "", curW(),
+      (arr, dotted) => { this.beginCoalesce(); this.setStrokeAttr("stroke-dasharray", arr); if (dotted) this.setStrokeAttr("stroke-linecap", "round"); },
+      () => this.commitCoalesce("Dashes"), !!dashC.mixed);
+
+    if (!hasStroke) [capRow, joinRow, miterRow, dashRow].forEach((r) => r.classList.add("insp-disabled"));
+    setMiterEnabled(join === "miter" && !joinC.mixed);
+    wrap.appendChild(inspGroup("Stroke", [colourRow, widthRow, capRow, joinRow, miterRow, dashRow]));
 
     // OPACITY — object opacity 0–100% as a slider.
-    const op = first.hasAttribute("opacity") ? parseFloat(first.getAttribute("opacity")) : 1;
+    const opC = common((n) => (n.hasAttribute("opacity") ? parseFloat(n.getAttribute("opacity")) : 1));
     wrap.appendChild(inspGroup("Opacity", [
-      this._sliderRow("Opacity", op, (v) => { this.beginCoalesce(); this.applyOpacity(v); }, () => this.commitCoalesce("Opacity")),
+      this._sliderRow("Opacity", opC.value == null ? 1 : opC.value, (v) => { this.beginCoalesce(); this.applyOpacity(v); }, () => this.commitCoalesce("Opacity"), !!opC.mixed),
     ]));
     return wrap;
   },
   // A colour row: a swatch button (None shows a hatched chip) that opens the
   // unified picker. `apply(hex|null, alpha)` is called live; history is coalesced.
-  _paintRow(label, hex, alpha, commitLabel, apply) {
+  _paintRow(label, hex, alpha, commitLabel, apply, duoWhich, mixed) {
     const btn = document.createElement("button");
-    btn.type = "button"; btn.className = "insp-swatch" + (hex == null ? " none" : "");
+    btn.type = "button"; btn.className = "insp-swatch" + (hex == null ? " none" : "") + (mixed ? " mixed" : "");
     if (hex != null) { btn.style.background = hex; btn.style.opacity = String(alpha == null ? 1 : alpha); }
-    btn.title = hex == null ? "None — click to set a colour" : hex;
+    btn.title = mixed ? "Mixed — click to set all selected" : (hex == null ? "None — click to set a colour" : hex);
     const paintBtn = (h, a) => {
       btn.classList.toggle("none", h == null);
       btn.style.background = h == null ? "" : h;
@@ -2230,6 +2450,9 @@ const editor = {
       btn.title = h == null ? "None — click to set a colour" : h;
     };
     btn.addEventListener("click", () => {
+      // Fill/stroke rows open the DUO picker (primary/secondary + X) when available,
+      // matching the toolstrip; artboard background etc. fall back to single-target.
+      if (duoWhich && this.pickPaint) { this.pickPaint(duoWhich); return; }
       if (!this.pickColor) return;
       this.beginCoalesce();
       this.pickColor({
@@ -2241,40 +2464,95 @@ const editor = {
     });
     return inspRow(label, btn);
   },
-  // A segmented control (cap / join). `glyphs` is [[value, glyph], …]; `titles` maps value→tooltip.
-  // Updates its own active button inline — the persistent context panel isn't rebuilt
-  // on every edit, so relying on _renderInspector here left the highlight stale ("dead").
+  // A segmented control (cap / join). `glyphs` is [[value, glyph], …]; `titles` maps
+  // value→tooltip. A glyph that starts with "<" is treated as inline SVG markup (so
+  // cap/join previews are unambiguous instead of look-alike Unicode boxes). Updates
+  // its own active button inline — the persistent context panel isn't rebuilt on every
+  // edit, so relying on _renderInspector here left the highlight stale ("dead").
   _segRow(label, value, glyphs, titles, onPick) {
     const seg = document.createElement("div"); seg.className = "insp-seg";
     const btns = [];
     for (const [val, glyph] of glyphs) {
       const b = document.createElement("button");
       b.type = "button"; b.className = "insp-seg-btn" + (val === value ? " active" : "");
-      b.textContent = glyph; b.title = (titles && titles[val]) || val;
+      if (typeof glyph === "string" && glyph.trim().startsWith("<")) b.innerHTML = glyph; else b.textContent = glyph;
+      b.title = (titles && titles[val]) || val;
       b.addEventListener("click", () => { onPick(val); btns.forEach((x) => x.classList.toggle("active", x === b)); });
       btns.push(b); seg.appendChild(b);
     }
     return inspRow(label, seg);
   },
-  // Dash editor: free-text dash-array (e.g. "6 4") plus quick presets.
-  _dashRow(label, value, onSet) {
-    const wrap = document.createElement("div"); wrap.className = "insp-dash";
-    const inp = document.createElement("input"); inp.type = "text"; inp.value = value; inp.placeholder = "solid";
-    inp.title = "dash gap … (px), blank = solid";
-    inp.addEventListener("change", () => onSet(inp.value));
-    const presets = document.createElement("div"); presets.className = "insp-dash-presets";
-    [["", "—"], ["4 3", "··"], ["8 4", "- -"], ["1 4", ":"]].forEach(([v, g]) => {
-      const b = document.createElement("button"); b.type = "button"; b.className = "insp-seg-btn"; b.textContent = g;
-      b.title = v || "solid"; b.addEventListener("click", () => { inp.value = v; onSet(v); }); presets.appendChild(b);
+  // Slider + live numeric echo for a bounded value (e.g. miter limit). onLive runs
+  // through coalesce while dragging; onCommit fires once on release.
+  _numSliderRow(label, value, min, max, step, onLive, onCommit, mixed) {
+    const wrap = document.createElement("div"); wrap.className = "insp-slider";
+    const range = document.createElement("input"); range.type = "range";
+    range.min = String(min); range.max = String(max); range.step = String(step); range.value = String(value);
+    const num = document.createElement("span"); num.className = "insp-slider-val" + (mixed ? " mixed" : ""); num.textContent = mixed ? "—" : String(value);
+    range.addEventListener("input", () => { num.textContent = range.value; onLive(parseFloat(range.value)); });
+    range.addEventListener("change", () => { if (onCommit) onCommit(); });
+    wrap.appendChild(range); wrap.appendChild(num);
+    return inspRow(label, wrap);
+  },
+  // Dash editor: Solid / Dashed / Dotted presets (inline-SVG previews) plus Dash and
+  // Gap length sliders that compose the stroke-dasharray live. Dotted forces dash→0
+  // and a round cap so it renders as round dots. `live(arr, dotted)` applies during a
+  // drag (coalesced); `commit()` flushes one history step on release.
+  _dashRow(label, value, strokeW, live, commit, mixed) {
+    let indet = !!mixed;   // multi-selection disagrees → show no active preset until one is picked
+    const w = Math.max(strokeW || 1, 0.5);
+    const parts = (value || "").trim().split(/[\s,]+/).map(parseFloat).filter((n) => !isNaN(n));
+    let mode = !parts.length ? "solid" : (parts[0] === 0 ? "dotted" : "dashed");
+    let dash = parts.length && parts[0] ? parts[0] : Math.round(w * 3);
+    let gap = parts.length > 1 ? parts[1] : Math.round(w * 2);
+    const max = Math.max(8, Math.round(w * 10));
+
+    const compose = () => {
+      if (mode === "solid") return "";
+      if (mode === "dotted") return `${nfmt(0)} ${nfmt(Math.max(gap, 1))}`;
+      return `${nfmt(Math.max(dash, 0.5))} ${nfmt(Math.max(gap, 0.5))}`;
+    };
+    const emit = (final) => { live(compose(), mode === "dotted"); if (final && commit) commit(); };
+
+    const wrap = document.createElement("div"); wrap.className = "insp-stroke-style";
+    const seg = document.createElement("div"); seg.className = "insp-seg";
+    const sliders = document.createElement("div"); sliders.className = "insp-dash-sliders";
+
+    const mkSlider = (lab, get, set) => {
+      const row = document.createElement("label"); row.className = "insp-dash-srow";
+      const span = document.createElement("span"); span.textContent = lab;
+      const r = document.createElement("input"); r.type = "range"; r.min = "0"; r.max = String(max); r.step = "1"; r.value = String(get());
+      r.addEventListener("input", () => { set(parseFloat(r.value)); emit(false); });
+      r.addEventListener("change", () => emit(true));
+      row.appendChild(span); row.appendChild(r); row._range = r;
+      return row;
+    };
+    const dashSlider = mkSlider("Dash", () => dash, (v) => { dash = v; });
+    const gapSlider = mkSlider("Gap", () => gap, (v) => { gap = v; });
+    sliders.appendChild(dashSlider); sliders.appendChild(gapSlider);
+
+    const syncUI = () => {
+      sliders.style.display = mode === "solid" ? "none" : "";
+      dashSlider.classList.toggle("insp-disabled", mode === "dotted");
+      dashSlider._range.disabled = mode === "dotted";
+      [...seg.children].forEach((b) => b.classList.toggle("active", !indet && b.dataset.mode === mode));
+    };
+    [["solid", "Solid"], ["dashed", "Dashed"], ["dotted", "Dotted"]].forEach(([m, t]) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "insp-seg-btn"; b.dataset.mode = m;
+      b.innerHTML = DASH_GLYPH[m]; b.title = t;
+      b.addEventListener("click", () => { mode = m; indet = false; syncUI(); emit(true); });
+      seg.appendChild(b);
     });
-    wrap.appendChild(inp); wrap.appendChild(presets);
+
+    wrap.appendChild(seg); wrap.appendChild(sliders);
+    syncUI();
     return inspRow(label, wrap);
   },
   // Opacity slider 0–100% with a live numeric echo.
-  _sliderRow(label, value, onLive, onCommit) {
+  _sliderRow(label, value, onLive, onCommit, mixed) {
     const wrap = document.createElement("div"); wrap.className = "insp-slider";
     const range = document.createElement("input"); range.type = "range"; range.min = "0"; range.max = "100"; range.value = String(Math.round(value * 100));
-    const num = document.createElement("span"); num.className = "insp-slider-val"; num.textContent = Math.round(value * 100) + "%";
+    const num = document.createElement("span"); num.className = "insp-slider-val" + (mixed ? " mixed" : ""); num.textContent = mixed ? "—" : Math.round(value * 100) + "%";
     range.addEventListener("input", () => { num.textContent = range.value + "%"; onLive(parseInt(range.value, 10) / 100); });
     range.addEventListener("change", () => { if (onCommit) onCommit(); });
     wrap.appendChild(range); wrap.appendChild(num);
@@ -2314,6 +2592,24 @@ const editor = {
 };
 
 // ---------- inspector control builders ----------
+// Inline-SVG previews for the cap / join / dash segmented controls. currentColor so
+// the active (inverted) button still reads. Far clearer than the old look-alike
+// Unicode glyphs (▭ ▢ ■ / ⌐ ◜ ◹) that rendered as near-identical tofu boxes.
+const CAP_GLYPH = {
+  butt: `<svg viewBox="0 0 24 16" width="24" height="13" aria-hidden="true"><line x1="8" y1="8" x2="16" y2="8" stroke="currentColor" stroke-width="8" stroke-linecap="butt"/></svg>`,
+  round: `<svg viewBox="0 0 24 16" width="24" height="13" aria-hidden="true"><line x1="8" y1="8" x2="16" y2="8" stroke="currentColor" stroke-width="8" stroke-linecap="round"/></svg>`,
+  square: `<svg viewBox="0 0 24 16" width="24" height="13" aria-hidden="true"><line x1="8" y1="8" x2="16" y2="8" stroke="currentColor" stroke-width="8" stroke-linecap="square"/></svg>`,
+};
+const JOIN_GLYPH = {
+  miter: `<svg viewBox="0 0 24 18" width="24" height="14" aria-hidden="true"><path d="M5 16 L12 5 L19 16" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="miter"/></svg>`,
+  round: `<svg viewBox="0 0 24 18" width="24" height="14" aria-hidden="true"><path d="M5 16 L12 5 L19 16" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/></svg>`,
+  bevel: `<svg viewBox="0 0 24 18" width="24" height="14" aria-hidden="true"><path d="M5 16 L12 5 L19 16" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="bevel"/></svg>`,
+};
+const DASH_GLYPH = {
+  solid: `<svg viewBox="0 0 36 12" width="34" height="11" aria-hidden="true"><line x1="3" y1="6" x2="33" y2="6" stroke="currentColor" stroke-width="2.5"/></svg>`,
+  dashed: `<svg viewBox="0 0 36 12" width="34" height="11" aria-hidden="true"><line x1="3" y1="6" x2="33" y2="6" stroke="currentColor" stroke-width="2.5" stroke-dasharray="6 4"/></svg>`,
+  dotted: `<svg viewBox="0 0 36 12" width="34" height="11" aria-hidden="true"><line x1="3" y1="6" x2="33" y2="6" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="0.1 6"/></svg>`,
+};
 function inspGroup(title, rows) {
   const g = document.createElement("div"); g.className = "insp-group";
   const t = document.createElement("div"); t.className = "insp-title"; t.textContent = title; g.appendChild(t);
@@ -2366,8 +2662,9 @@ function makeScrub(handle, inp, min, step, onLive, onCommit) {
     handle.addEventListener("pointerup", up);
   });
 }
-function numRow(label, value, min, step, onLive, capture, onCommit) {
-  const inp = document.createElement("input"); inp.type = "number"; inp.value = String(value);
+function numRow(label, value, min, step, onLive, capture, onCommit, mixed) {
+  const inp = document.createElement("input"); inp.type = "number";
+  if (mixed) { inp.value = ""; inp.placeholder = "Mixed"; } else inp.value = String(value);
   if (min != null) inp.min = String(min);
   inp.step = String(step);
   inp.addEventListener("input", () => { if (inp.value !== "") onLive(parseFloat(inp.value)); });

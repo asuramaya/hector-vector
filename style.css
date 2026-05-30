@@ -234,6 +234,10 @@ button:disabled {
    viewport BG button; help/collapse live in the ready bar. */
 .editor-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .doc-actions-left { justify-self: start; }
+/* document name, centred in the header (moved out of the stage so the canvas gets the
+   full height). flex:1 between the File icon and the view-swap → centred + truncates. */
+.doc-title { flex: 1 1 auto; min-width: 0; text-align: center; font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-sel { color: var(--accent); font-weight: 600; }
 .brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .brand-name { font-weight: 600; letter-spacing: 0.02em; }
 .brand-sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -243,14 +247,17 @@ button:disabled {
 .editor-grid {
   min-height: 0;
   display: grid;
-  /* toolstrip · stage · rightdock (inspector + layers) */
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 10px;
+  /* toolstrip · stage · actionbar · rightdock (history + layers) */
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  /* no gap between the toolstrip / stage / action bar: they butt together so their
+     borders form one continuous picture frame around the canvas. The dock is set
+     apart with its own margin (below). */
+  gap: 0;
 }
 /* Collapsing the dock must also drop its grid track, or the stage falls into the
-   dock's `auto` column and the canvas collapses. */
+   dock's `auto` column and the canvas collapses. The action bar stays. */
 .app.editor.rail-collapsed .rightdock { display: none; }
-.app.editor.rail-collapsed .editor-grid { grid-template-columns: auto minmax(0, 1fr); }
+.app.editor.rail-collapsed .editor-grid { grid-template-columns: auto minmax(0, 1fr) auto; }
 
 .toolstrip {
   border: 1px solid var(--line);
@@ -261,21 +268,36 @@ button:disabled {
   padding: 6px;
   flex: 0 0 auto;
 }
+/* THE shared button object — every toolbar (tools, arrange, actions, viewport)
+   inherits this one class so they all match. Primary tools opt into a larger box. */
 .tool-button {
   position: relative;
-  width: 34px; height: 34px;
+  width: 30px; height: 30px;
   border: 1px solid var(--line);
   background: var(--bg); color: var(--fg);
-  font-size: 16px; line-height: 1; cursor: pointer;
+  font-size: 14px; line-height: 1; cursor: pointer; white-space: nowrap;
   display: grid; place-items: center;
 }
 .tool-button.active { background: #000; color: #fff; }
+/* one consistent hover / disabled / toggle-on treatment for every bar */
+.tool-button:hover:not(:disabled):not(.active):not(.on) { background: var(--accent); color: #fff; border-color: var(--accent); }
+.tool-button:hover:not(:disabled)[data-key]::after { color: rgba(255, 255, 255, 0.8); }
+.tool-button:disabled { opacity: 0.3; cursor: default; }
+.tool-button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.tool-button.on[data-key]::after { color: rgba(255, 255, 255, 0.8); }
+/* right-side object action bar — mirrors the left toolstrip (clipboard / boolean /
+   transform actions for the selection). Buttons are the same square objects as the
+   tools, and as action buttons they get a hover + disabled state. */
+.actionbar {
+  border: 1px solid var(--line); background: var(--bg);
+  display: flex; flex-direction: column; gap: 6px; padding: 6px; flex: 0 0 auto;
+  justify-content: center;
+}
 /* V and A are the two primary tools; the creation tools below read as subcontrols */
-.tool-button.tool-primary { font-size: 17px; }
-.toolstrip .tool-button:not(.tool-primary) { width: 30px; height: 30px; font-size: 14px; }
+.tool-button.tool-primary { width: 34px; height: 34px; font-size: 17px; }
 /* shortcut badge: a tiny letter in the bottom-right corner (tool buttons,
    viewport controls, the fill/stroke swap — one consistent kind of object) */
-.tool-button[data-key]::after, .vp-btn[data-key]::after, .swatch-swap[data-key]::after,
+.tool-button[data-key]::after, .swatch-swap[data-key]::after,
 .icon-btn[data-key]::after, .view-btn[data-key]::after {
   content: attr(data-key);
   position: absolute; right: 1px; bottom: 0;
@@ -283,15 +305,7 @@ button:disabled {
   color: var(--muted); pointer-events: none; letter-spacing: 0;
 }
 .tool-button.active[data-key]::after { color: rgba(255, 255, 255, 0.75); }
-/* viewport controls — same bordered-box object as the tools, sized to their labels */
-.vp-btn {
-  position: relative; box-sizing: border-box; min-width: 34px; height: 30px;
-  padding: 0 9px 2px; border: 1px solid var(--line); background: var(--bg); color: var(--fg);
-  font: inherit; font-size: 13px; line-height: 1; cursor: pointer; display: grid; place-items: center;
-}
-.vp-btn:hover:not(:disabled) { background: var(--accent); color: #fff; border-color: var(--accent); }
-.vp-btn:hover:not(:disabled)[data-key]::after { color: rgba(255, 255, 255, 0.8); }
-.vp-btn:disabled { opacity: 0.35; cursor: default; }
+/* viewport controls now use the shared .tool-button object (see above) */
 .vp-sep { width: 1px; align-self: stretch; margin: 2px 3px; background: var(--line); }
 .swatch-swap[data-key]::after { right: -6px; bottom: -1px; }
 /* header icon box (File menu) — same bordered-box object, square */
@@ -301,6 +315,9 @@ button:disabled {
   font: inherit; font-size: 16px; line-height: 1; cursor: pointer; display: grid; place-items: center;
 }
 .icon-btn:hover, .menu.open .icon-btn { background: var(--accent); color: #fff; border-color: var(--accent); }
+/* text variant for header dropdown triggers (Layout ▾) */
+.icon-btn.hdr-text { width: auto; padding: 0 10px; font-size: 13px; }
+.icon-btn.hdr-text.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .menu.open .icon-btn[data-key]::after, .icon-btn:hover[data-key]::after { color: rgba(255, 255, 255, 0.8); }
 /* Ableton-style view swap: two icon boxes, the active view highlighted. Lifted
    above the modal (z 50) so you can swap back to Edit while Process is open. */
@@ -337,6 +354,7 @@ button:disabled {
   position: relative;
   border: 1px solid var(--line);
   background: var(--bg);
+  margin-left: 10px;   /* set apart from the picture-frame (which has no gaps) */
   width: 270px;
   min-height: 0;
   display: flex;
@@ -350,8 +368,25 @@ button:disabled {
 .menu-count { color: var(--muted); font-size: 11px; margin-left: 2px; }
 .rail-section { display: flex; flex-direction: column; min-height: 0; }
 
-.stage-wrap { min-height: 0; }
+.stage-wrap { min-height: 0; position: relative; }
 .stage-head { gap: 10px; }
+/* arrange/structure toolbar across the top of the canvas (reorder/group/cleanup …) */
+/* top arrange bar — the top run of the picture frame: same fill as the side bars,
+   bordered top (outer edge) and bottom (inner edge against the canvas). */
+.stage-toolbar { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap; padding: 5px 8px; background: var(--bg); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.tool-vsep { width: 1px; align-self: stretch; margin: 3px 4px; background: var(--line); }
+/* body holds the rulers overlay + the preview frame (so rulers don't cover the toolbar) */
+.stage-body { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* Illustrator-style measurement rulers (canvas-drawn, synced to zoom/pan) overlaid on
+   the top + left edges of the stage. pointer-events:none so the canvas stays clickable. */
+.rulers { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
+.rulers[hidden] { display: none; }
+.ruler { position: absolute; background: var(--bg); }
+/* explicit width/height: an absolutely-positioned <canvas> (replaced element) uses its
+   intrinsic size with left+right:auto, so it won't stretch — size it directly. */
+.ruler-h { top: 0; left: 18px; width: calc(100% - 18px); height: 18px; border-bottom: 1px solid var(--line); }
+.ruler-v { top: 18px; left: 0; width: 18px; height: calc(100% - 18px); border-right: 1px solid var(--line); }
+.ruler-corner { position: absolute; top: 0; left: 0; width: 18px; height: 18px; background: var(--bg); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); z-index: 1; }
 
 .inspector {
   background: var(--bg);
@@ -379,7 +414,7 @@ button:disabled {
 .inspector-body { min-height: 0; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 14px; }
 .insp-group { display: flex; flex-direction: column; gap: 6px; }
 .insp-title { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 4px; }
-.insp-row { display: grid; grid-template-columns: 70px 1fr; gap: 8px; align-items: center; }
+.insp-row { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; align-items: center; }
 .insp-row > span { font-size: 12px; color: var(--muted); }
 /* scrubbable number label — drag horizontally to change the value */
 .insp-row > span.scrub { cursor: ew-resize; user-select: none; -webkit-user-select: none; touch-action: none; }
@@ -399,17 +434,27 @@ button:disabled {
   background: #fff;
   background-image: linear-gradient(to top right, transparent 45%, #e0245e 46%, #e0245e 54%, transparent 55%);
 }
+/* multi-selection with differing values → indeterminate "Mixed" indicator */
+.insp-swatch.mixed { background-image: repeating-linear-gradient(45deg, rgba(127,127,127,0.55) 0 5px, rgba(127,127,127,0.15) 5px 10px); box-shadow: inset 0 0 0 1px #fff; }
+.insp-slider-val.mixed { font-style: italic; opacity: 0.7; }
 /* segmented control (cap / join / dash presets) */
-.insp-seg, .insp-dash-presets { display: flex; gap: 0; }
+.insp-seg { display: flex; gap: 0; }
 .insp-seg-btn {
   flex: 1 1 0; border: 1px solid var(--line); margin-left: -1px; background: var(--bg); color: var(--fg);
-  padding: 5px 0; font-size: 13px; line-height: 1; cursor: pointer; min-width: 0;
+  padding: 4px 0; font-size: 13px; line-height: 1; cursor: pointer; min-width: 0;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .insp-seg-btn:first-child { margin-left: 0; }
+.insp-seg-btn svg { display: block; pointer-events: none; }
 .insp-seg-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); position: relative; z-index: 1; }
-.insp-dash { display: flex; flex-direction: column; gap: 4px; }
-.insp-dash input { width: 100%; border: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 6px 8px; font: inherit; min-width: 0; }
-.insp-dash-presets .insp-seg-btn { font-size: 11px; }
+/* dash editor: presets row + dash/gap length sliders */
+.insp-stroke-style { display: flex; flex-direction: column; gap: 6px; }
+.insp-dash-sliders { display: flex; flex-direction: column; gap: 4px; }
+.insp-dash-srow { display: grid; grid-template-columns: 34px minmax(0, 1fr); align-items: center; gap: 6px; }
+.insp-dash-srow > span { font-size: 11px; color: var(--muted); }
+.insp-dash-srow input[type="range"] { width: 100%; min-width: 0; accent-color: var(--accent); }
+/* a control that doesn't apply yet (e.g. cap/join with no stroke, miter on a non-miter join) */
+.insp-row.insp-disabled, .insp-disabled { opacity: 0.4; pointer-events: none; }
 .insp-slider { display: flex; align-items: center; gap: 8px; }
 .insp-slider input[type="range"] { flex: 1 1 0; min-width: 0; accent-color: var(--accent); }
 .insp-slider-val { font-size: 12px; color: var(--muted); min-width: 34px; text-align: right; }
@@ -423,42 +468,52 @@ button:disabled {
   background: rgba(0, 0, 0, 0.35);
 }
 .cp-window {
-  width: 320px; max-width: calc(100vw - 24px); box-sizing: border-box;
+  width: 300px; max-width: calc(100vw - 24px); box-sizing: border-box;
   background: var(--bg); color: var(--fg); border: 1px solid var(--line);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35); padding: 12px; display: flex; flex-direction: column; gap: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35); padding: 10px; display: flex; flex-direction: column; gap: 7px;
   font-size: 12px; overflow: hidden;
 }
-.cp-head { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.cp-head { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
 .cp-body { display: flex; gap: 8px; min-width: 0; }
 /* field flexes to fill the row so field + hue + preview never overflow the window */
-.cp-field { position: relative; flex: 1 1 auto; width: auto; min-width: 0; height: 160px; cursor: crosshair; border: 1px solid var(--line); }
+.cp-field { position: relative; flex: 1 1 auto; width: auto; min-width: 0; height: 128px; cursor: crosshair; border: 1px solid var(--line); }
 .cp-field-sat { position: absolute; inset: 0; background: linear-gradient(to right, #fff, rgba(255,255,255,0)); }
 .cp-field-val { position: absolute; inset: 0; background: linear-gradient(to top, #000, rgba(0,0,0,0)); }
 .cp-field-thumb {
   position: absolute; width: 12px; height: 12px; border: 2px solid #fff; border-radius: 50%;
   transform: translate(-50%, -50%); box-shadow: 0 0 0 1px #000; pointer-events: none;
 }
-.cp-hue { position: relative; width: 16px; height: 160px; cursor: ns-resize; border: 1px solid var(--line); flex: 0 0 auto;
+.cp-hue { position: relative; width: 14px; height: 128px; cursor: ns-resize; border: 1px solid var(--line); flex: 0 0 auto;
   background: linear-gradient(to bottom, #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%); }
 .cp-hue-thumb { position: absolute; left: -2px; right: -2px; height: 4px; background: #fff; border: 1px solid #000; transform: translateY(-50%); pointer-events: none; }
-.cp-preview { flex: 0 0 40px; display: flex; flex-direction: column; border: 1px solid var(--line); }
-.cp-prev-new, .cp-prev-old { flex: 1 1 0; cursor: pointer; }
-.cp-prev-new { border-bottom: 1px solid var(--line); }
-.cp-alpha { position: relative; height: 16px; cursor: ew-resize; border: 1px solid var(--line); }
+/* side column: fill/stroke targets (duo) or a solo live preview (single) */
+.cp-side { flex: 0 0 44px; display: flex; flex-direction: column; gap: 5px; }
+.cp-side .cp-target { flex: 1 1 0; position: relative; padding: 0; border: 1px solid var(--line); cursor: default; }
+.cp-side.duo .cp-target { cursor: pointer; }
+.cp-side.duo .cp-target.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); z-index: 1; }
+.cp-target > .cp-target-lab {
+  position: absolute; top: 2px; left: 2px; font-size: 9px; line-height: 1; padding: 1px 3px;
+  background: rgba(255, 255, 255, 0.82); color: #000; pointer-events: none; letter-spacing: 0.02em;
+}
+.cp-alpha { position: relative; height: 13px; cursor: ew-resize; border: 1px solid var(--line); }
 .cp-alpha-track { position: absolute; inset: 0; }
 .cp-alpha-thumb { position: absolute; top: -2px; bottom: -2px; width: 4px; background: #fff; border: 1px solid #000; transform: translateX(-50%); pointer-events: none; }
-.cp-fields { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 8px; }
-.cp-inp { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); min-width: 0; cursor: ew-resize; user-select: none; -webkit-user-select: none; touch-action: none; }
-.cp-inp input { cursor: text; }
-.cp-hex { grid-column: span 4; }
-.cp-inp input { flex: 1 1 0; min-width: 0; border: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 4px 5px; font: inherit; }
-.cp-swatches { display: flex; gap: 4px; flex-wrap: wrap; }
-.cp-sw { width: 20px; height: 20px; padding: 0; border: 1px solid var(--line); cursor: pointer; }
+/* numeric fields: two tidy columns (RGB | HSB) with right-aligned values, hex + alpha
+   span the full width. Each row is a fixed label cell + input so everything lines up. */
+.cp-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 10px; }
+.cp-inp { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 5px; font-size: 11px; color: var(--muted); min-width: 0; cursor: ew-resize; user-select: none; -webkit-user-select: none; touch-action: none; }
+.cp-inp input { cursor: text; min-width: 0; border: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 3px 6px; font: inherit; text-align: right; }
+.cp-hex, .cp-alpha-num { grid-column: span 2; }
+.cp-hex input { text-align: left; letter-spacing: 0.06em; }
+.cp-swatches { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; }
+.cp-sw { width: 100%; aspect-ratio: 1 / 1; padding: 0; border: 1px solid var(--line); cursor: pointer; }
+.cp-sw-add { background: var(--bg); color: var(--muted); font-size: 14px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+.cp-sw-add:hover { color: var(--fg); border-color: var(--accent); }
+/* eyedropper sits in the swatch row as a clearly-bordered icon (first item) */
+.cp-eyedrop { background: var(--bg); color: var(--fg); display: inline-flex; align-items: center; justify-content: center; margin-right: 2px; }
+.cp-eyedrop:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
 .cp-actions { display: flex; align-items: center; gap: 6px; }
 .cp-spacer { flex: 1 1 auto; }
-.cp-window.cp-is-none .cp-prev-new {
-  background-image: linear-gradient(to top right, transparent 45%, #e0245e 46%, #e0245e 54%, transparent 55%) !important;
-}
 
 /* selection overlay — lives in the stage svg but is stripped from saved output */
 .hv-sel-box { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
@@ -471,7 +526,7 @@ button:disabled {
 .rail-section.layers { flex: 1 1 auto; min-height: 120px; }
 .rail-section.library { flex: 0 0 auto; }
 .rail-section.library .queue { max-height: 200px; }
-.layers-list { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.layers-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
 .layer-row {
   display: flex; align-items: center; gap: 6px;
   padding: 5px 8px; border-bottom: 1px solid var(--line);
@@ -480,8 +535,25 @@ button:disabled {
 .layer-row:hover { background: #f2f2f2; }
 .layer-row.active { background: #000; color: #fff; }
 .layer-row.dragging { opacity: 0.4; }
+/* drag-drop affordances: nest INTO a group (outline+tint), or a "magnet" line BETWEEN
+   rows for reorder (before/after). The crevice the pointer is in picks which. */
+.layer-row.drop-into { outline: 1px solid var(--accent); outline-offset: -1px; background: color-mix(in srgb, var(--accent) 14%, var(--bg)); }
+.layer-row.drop-into.active { background: color-mix(in srgb, var(--accent) 40%, #000); }
+.layer-row.drop-before { box-shadow: inset 0 2px 0 0 var(--accent); }
+.layer-row.drop-after { box-shadow: inset 0 -2px 0 0 var(--accent); }
+.layers-list.drop-root { box-shadow: inset 0 0 0 2px var(--accent); }
+/* group expand/collapse twisty (leaf rows render an invisible spacer to stay aligned) */
+.layer-twist {
+  flex: 0 0 12px; width: 12px; padding: 0; border: 0; background: none; color: var(--muted);
+  font-size: 9px; line-height: 1; cursor: pointer; text-align: center;
+}
+.layer-twist.leaf { visibility: hidden; cursor: default; }
+.layer-row.active .layer-twist { color: rgba(255, 255, 255, 0.85); }
+.layer-row.is-group { font-weight: 600; }
+.layer-swatch.group { background: none; border: 0; display: inline-grid; place-items: center; color: var(--muted); font-size: 12px; }
+.layer-row.active .layer-swatch.group { color: #fff; }
 /* Artboard pinned at the bottom of the stack, like a background layer. */
-.layer-row.artboard-row { border-top: 2px solid var(--line); border-bottom: none; color: var(--muted); font-style: italic; }
+.layer-row.artboard-row { border-bottom: none; color: var(--muted); font-style: italic; }
 .layer-row.artboard-row.active { color: #fff; }
 .layer-swatch {
   flex: 0 0 auto; width: 14px; height: 14px; border: 1px solid var(--line);
@@ -500,15 +572,29 @@ button:disabled {
 .layer-btn.on { font-weight: 700; }
 .layer-rename { flex: 1 1 auto; min-width: 0; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: inherit; padding: 2px 4px; }
 
-/* collapsible rail sections (accordion) */
-.section-head { cursor: pointer; user-select: none; gap: 8px; }
+/* collapsible rail sections (accordion): caret + label on the left, any header
+   buttons (History undo/redo) on the right. The layer arrange controls moved to the
+   top-of-canvas toolbar, so the headers have their labels back. */
+.section-head { cursor: pointer; user-select: none; gap: 6px; padding: 7px 8px; }
 .section-head .caret { flex: 0 0 auto; font-size: 10px; color: var(--muted); transition: transform 0.12s; }
+.section-head .sec-label { flex: 1 1 auto; font-size: 12px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* a small count badge next to the History / Layers titles (pushes any header buttons right) */
+.section-head .sec-label:has(+ .sec-count) { flex: 0 1 auto; }
+.section-head .sec-count { flex: 0 0 auto; margin: 0 auto 0 6px; color: var(--muted); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.section-head .sec-count:empty { display: none; }
+/* Artboard pinned to the bottom of the Layers panel (a chin that never scrolls away) */
+.layers-foot { flex: 0 0 auto; border-top: 1px solid var(--line); }
+.layers-foot:empty { display: none; }
+.rail-section.collapsed .layers-foot { display: none; }
 .rail-section.collapsed .section-head .caret { transform: rotate(-90deg); }
 .rail-section.collapsed .section-body { display: none; }
+/* collapsed → just the caret + label; the header action buttons (which can wrap to a
+   second row) would otherwise leave a tall block with no list under it */
+.rail-section.collapsed .panel-actions { display: none; }
 .rail-section.collapsed { flex: 0 0 auto; min-height: 0; }   /* must not reserve flex/min space */
 
 @media (max-width: 900px) {
-  .editor-grid { grid-template-columns: auto minmax(0, 1fr); }
+  .editor-grid { grid-template-columns: auto minmax(0, 1fr) auto; }
   .rightdock { display: none; }
 }
 
@@ -533,12 +619,20 @@ button:disabled {
   text-overflow: ellipsis;
 }
 
+/* rail-header action buttons (Layers reorder/group/cleanup/rename/delete, History
+   undo/redo) — the same square objects as the tools so the headers read consistently. */
+.panel-actions { gap: 4px; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
+
+/* bottom viewport bar — the bottom run of the picture frame: bordered top (inner
+   edge against the canvas) and bottom (outer edge), same fill as the side bars. */
 .panel-foot {
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 8px 12px;
+  background: var(--bg);
   border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
 }
 
@@ -609,6 +703,14 @@ button:disabled {
   overflow: visible;
   background: #ffffff;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.20), 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+/* artboard fill = none → show a checker so the sheet reads as transparent (the white
+   background otherwise made a transparent artboard look solid white). */
+.inline-svg.transparent-board {
+  background:
+    linear-gradient(45deg, #dadada 25%, transparent 25%), linear-gradient(-45deg, #dadada 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #dadada 75%), linear-gradient(-45deg, transparent 75%, #dadada 75%), #fff;
+  background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0;
 }
 
 /* Per-tool canvas cursors (set via .stage-wrap[data-tool]). */
@@ -716,10 +818,22 @@ button:disabled {
 .menu[data-menu="layers"] .menu-list { left: auto; right: 0; }
 /* right-click context menu reuses .menu-list styling but is viewport-positioned */
 .context-menu { position: fixed; top: auto; right: auto; z-index: 1000; max-height: 80vh; overflow-y: auto; }
-/* Redesigned object/canvas context panel: style editors + actions in one place */
-.context-panel { width: 240px; padding: 0; background: var(--bg); border: 1px solid var(--line); box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.12); display: flex; flex-direction: column; }
-.context-panel .ctx-head { font-size: 13px; font-weight: 600; padding: 8px 12px; border-bottom: 1px solid var(--line); }
-.context-panel .ctx-style { padding: 10px; display: flex; flex-direction: column; gap: 12px; }
+/* Object context panel = style editors (canvas panel adds an actions grid). overflow-x
+   hidden kills the stray horizontal scrollbar (overflow-y:auto otherwise computes
+   overflow-x:auto); min-width:0 lets the rows shrink to the panel width. */
+.context-panel { width: 248px; padding: 0; overflow-x: hidden; background: var(--bg); border: 1px solid var(--line); box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.12); display: flex; flex-direction: column; }
+.context-panel .ctx-head { font-size: 12px; font-weight: 600; letter-spacing: 0.02em; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.context-panel .ctx-style { padding: 12px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.context-panel .ctx-style > div { min-width: 0; }
+/* persistent floating Properties window: a draggable titlebar over a live body */
+.float-panel { position: fixed; z-index: 1000; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.28); }
+.float-panel[hidden] { display: none; }
+.fp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 6px 5px 12px; border-bottom: 1px solid var(--line); cursor: move; user-select: none; -webkit-user-select: none; touch-action: none; }
+.fp-title { font-size: 12px; font-weight: 600; letter-spacing: 0.02em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-close { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: 1px solid transparent; background: none; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; display: grid; place-items: center; }
+.fp-close:hover { color: #fff; background: var(--accent); border-color: var(--accent); }
+.fp-body { padding: 12px; display: flex; flex-direction: column; gap: 14px; min-width: 0; overflow-y: auto; max-height: calc(100vh - 130px); }
+.fp-body > div { min-width: 0; }
 .context-panel .ctx-actions { border-top: 1px solid var(--line); padding: 6px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
 .grid-item { aspect-ratio: 1 / 1; display: grid; place-items: center; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font-size: 15px; line-height: 1; cursor: pointer; padding: 0; }
 .grid-item:hover { background: #f2f2f2; }
@@ -749,6 +863,12 @@ button:disabled {
   text-align: center;
 }
 .menu-label { flex: 1 1 auto; }
+/* manageable menu row (Layout profiles): label + inline rename / delete buttons */
+.menu-row { padding: 2px 6px 2px 9px; gap: 2px; }
+.menu-row .menu-rowlabel { flex: 1 1 auto; min-width: 0; text-align: left; padding: 5px 3px 5px 20px; border: 1px solid transparent; background: var(--bg); color: var(--fg); font: inherit; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu-row .menu-rowlabel:hover { border-color: var(--line); }
+.menu-row .menu-rowbtn { flex: 0 0 auto; width: 24px; height: 26px; border: 1px solid transparent; background: var(--bg); color: var(--muted); font-size: 12px; cursor: pointer; }
+.menu-row .menu-rowbtn:hover { color: #fff; background: var(--accent); border-color: var(--accent); }
 .menu-sep {
   height: 1px;
   background: var(--line);
@@ -1285,6 +1405,20 @@ button:disabled {
   color: var(--muted); pointer-events: none;
 }
 .bar-btn:hover:not(:disabled)[data-key]::after { color: rgba(255, 255, 255, 0.8); }
+.bar-btn.bar-text { width: auto; padding: 0 10px; font-size: 12px; }
+.bar-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* ---- Customize-layout mode: drag toolbar tiles between the picture-frame bars ---- */
+.app.editor.customizing .toolstrip,
+.app.editor.customizing .stage-toolbar,
+.app.editor.customizing .actionbar,
+.app.editor.customizing .viewport-controls { outline: 1px dashed var(--accent); outline-offset: -1px; background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
+/* tiles become draggable handles; their normal click is suppressed while customizing */
+.app.editor.customizing .tool-button { cursor: grab; }
+.app.editor.customizing .tool-button:active { cursor: grabbing; }
+.app.editor.customizing .tool-button.dragging { opacity: 0.4; outline: 1px solid var(--accent); }
+/* disabled tiles stay draggable in customize mode (you're arranging, not using them) */
+.app.editor.customizing .tool-button:disabled { opacity: 1; cursor: grab; }
 
 @media (max-width: 700px) {
   .form-row {

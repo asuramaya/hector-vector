@@ -98,7 +98,12 @@ def pick_color(page, swatch_index, hexes=None, none=False):
 def set_opacity(page, frac):
     """Drive the object-opacity slider in the context panel (0..1)."""
     open_ctx_panel(page)
-    page.evaluate("""(f) => { const el = document.querySelector('.context-panel input[type=range]');
+    # The panel now has several range sliders (Miter, dash Dash/Gap, Opacity), so target
+    # the Opacity row by its label rather than the first range in the panel.
+    page.evaluate("""(f) => {
+        const row = [...document.querySelectorAll('.context-panel .insp-row')]
+            .find(r => r.querySelector('span') && r.querySelector('span').textContent === 'Opacity');
+        const el = row && row.querySelector('input[type=range]');
         if (!el) throw new Error('no opacity slider'); el.value = String(Math.round(f * 100));
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true })); }""", frac)
@@ -262,6 +267,58 @@ def main():
         check("colour picker session coalesces to ONE undo entry", page.evaluate("editor.history.length") == hf + 1,
               f"delta={page.evaluate('editor.history.length')-hf}")
 
+        # colour picker: eyedropper button + persistent swatch system (base palette,
+        # a "+" to save the current colour, click-to-apply, right-click to remove).
+        page.evaluate("() => localStorage.removeItem('hector-vector:swatches')")
+        open_ctx_panel(page)
+        page.evaluate("() => document.querySelectorAll('.context-panel .insp-swatch')[0].click()")
+        page.wait_for_function("!!document.querySelector('.cp-window')", timeout=4000)
+        picker = page.evaluate("""() => ({
+            eyedropper: !!document.querySelector('.cp-eyedrop'),
+            base: document.querySelectorAll('.cp-swatches .cp-sw:not(.cp-sw-add)').length,
+            add: !!document.querySelector('.cp-sw-add') })""")
+        check("picker exposes an eyedropper button", picker["eyedropper"])
+        check("picker shows a base swatch palette", picker["base"] >= 10, f"base={picker['base']}")
+        # set a distinctive colour, save it, and confirm it persists + adds a swatch
+        page.evaluate("""() => { const el = document.querySelector('.cp-hex input');
+            el.value = '123456'; el.dispatchEvent(new Event('input', { bubbles: true })); }""")
+        page.click(".cp-sw-add"); page.wait_for_timeout(40)
+        saved = page.evaluate("() => JSON.parse(localStorage.getItem('hector-vector:swatches') || '[]')")
+        check("saving a swatch persists it", saved and saved[0].lower() == "#123456", f"saved={saved}")
+        page.click(".cp-window .cp-ok"); page.wait_for_timeout(40)
+
+        # MAIN picker = a fill/stroke DUO: the toolstrip fill swatch opens it editing
+        # both; X toggles which target the field edits, Shift+X swaps; Cancel reverts.
+        orig = page.evaluate("""() => ({ fill: editor.nodeById('r1').getAttribute('fill'),
+            stroke: editor.nodeById('r1').getAttribute('stroke') })""")
+        page.click("#swatch-fill")
+        page.wait_for_selector(".cp-window", timeout=4000)
+        duo = page.evaluate("""() => ({
+            isDuo: !!document.querySelector('.cp-side.duo'),
+            targets: [...document.querySelectorAll('.cp-side .cp-target-lab')].map(t => t.textContent),
+            active: document.querySelector('.cp-target.active .cp-target-lab')?.textContent,
+            noNewCurrent: !document.querySelector('.cp-prev-new, .cp-prev-old') })""")
+        check("main picker is a fill/stroke duo (no new/current)",
+              duo["isDuo"] and duo["targets"] == ["Fill", "Stroke"] and duo["active"] == "Fill" and duo["noNewCurrent"], f"{duo}")
+        set_hex = lambda v: page.evaluate("""(v) => { const el = document.querySelector('.cp-hex input');
+            el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }""", v)
+        set_hex("abc123"); page.wait_for_timeout(30)
+        page.keyboard.press("x"); page.wait_for_timeout(30)   # → edit Stroke
+        active2 = page.evaluate("() => document.querySelector('.cp-target.active .cp-target-lab')?.textContent")
+        set_hex("def456"); page.wait_for_timeout(30)
+        mid = page.evaluate("""() => ({ fill: editor.nodeById('r1').getAttribute('fill'),
+            stroke: editor.nodeById('r1').getAttribute('stroke') })""")
+        check("X switches the field to the stroke target",
+              active2 == "Stroke" and mid["fill"] == "#abc123" and mid["stroke"] == "#def456", f"active={active2} {mid}")
+        page.keyboard.press("Shift+X"); page.wait_for_timeout(30)
+        swapped = page.evaluate("""() => ({ fill: editor.nodeById('r1').getAttribute('fill'),
+            stroke: editor.nodeById('r1').getAttribute('stroke') })""")
+        check("Shift+X swaps fill/stroke", swapped["fill"] == "#def456" and swapped["stroke"] == "#abc123", f"{swapped}")
+        page.click(".cp-window .cp-cancel"); page.wait_for_timeout(40)
+        reverted = page.evaluate("""() => ({ fill: editor.nodeById('r1').getAttribute('fill'),
+            stroke: editor.nodeById('r1').getAttribute('stroke') })""")
+        check("Cancel reverts both targets", reverted["fill"] == orig["fill"] and (reverted["stroke"] or None) == (orig["stroke"] or None), f"{reverted} vs {orig}")
+
         # inspector: stroke width (the v0 'stroke not applied' regression). Width is
         # the first number input in the object panel.
         set_inspector_input(page, "number", 0, "5", "change")
@@ -295,10 +352,20 @@ def main():
         w1 = page.evaluate("parseFloat(editor.nodeById('r1').getAttribute('stroke-width'))")
         check("drag-scrub label changes the value", w1 > w0, f"{w0} -> {w1}")
         open_ctx_panel(page)
-        page.evaluate("""() => { const el = document.querySelector('.context-panel .insp-dash input');
-            el.value = '6 4'; el.dispatchEvent(new Event('change', { bubbles: true })); }""")
+        # dash editor: pick the "Dashed" preset → composes a "dash gap" stroke-dasharray
+        page.evaluate("""() => { const b = [...document.querySelectorAll('.context-panel .insp-seg-btn')]
+            .find(x => x.dataset.mode === 'dashed'); b.click(); }""")
         page.wait_for_timeout(40)
-        check("stroke dashes apply", page.evaluate("editor.nodeById('r1').getAttribute('stroke-dasharray')") == "6 4")
+        da = page.evaluate("editor.nodeById('r1').getAttribute('stroke-dasharray')")
+        check("stroke dashes apply", bool(da) and len(da.split()) == 2, f"dasharray={da}")
+        # "Dotted" forces dash→0 and a round cap so it renders as round dots
+        page.evaluate("""() => { const b = [...document.querySelectorAll('.context-panel .insp-seg-btn')]
+            .find(x => x.dataset.mode === 'dotted'); b.click(); }""")
+        page.wait_for_timeout(40)
+        dot = page.evaluate("""() => ({ da: editor.nodeById('r1').getAttribute('stroke-dasharray'),
+            cap: editor.nodeById('r1').getAttribute('stroke-linecap') })""")
+        check("dotted preset → 0-length dashes + round cap", dot["da"].split()[0] == "0" and dot["cap"] == "round", f"{dot}")
+        page.evaluate("window.hideFloatPanel && window.hideFloatPanel()")   # the panel persists now — tuck it away so it doesn't cover later canvas clicks
 
         # D shortcut → default white fill / black stroke on the selection
         page.evaluate("() => { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); }")
@@ -439,7 +506,7 @@ def main():
                   && document.querySelectorAll('.tool-button.tool-primary').length === 2 """))
         # viewport controls are standardized badged buttons too
         check("viewport controls have shortcut badges",
-              page.evaluate("""() => { const v = [...document.querySelectorAll('.viewport-controls .vp-btn[data-key]')];
+              page.evaluate("""() => { const v = [...document.querySelectorAll('.viewport-controls .tool-button[data-key]')];
                   return v.length >= 5 && v.every(b => b.getAttribute('data-key')); }"""))
 
         # transform box is correct for a shape carrying a non-translate transform
@@ -455,11 +522,11 @@ def main():
             return Math.max(Math.abs(r.left-q.left), Math.abs(r.top-q.top), Math.abs(r.right-q.right), Math.abs(r.bottom-q.bottom)); }""")
         check("transform box aligns with a matrix-transformed shape", mbox is not None and mbox < 2, f"max offset={mbox}")
 
-        # Ctrl+R rotate mode: resize handles hidden, corner rotators shown
+        # rotate mode (enterTransform 'rotate'): resize handles hidden, corner rotators shown
         page.evaluate("() => editor.enterTransform('rotate')"); page.wait_for_timeout(60)
         rmode = page.evaluate("""() => ({ rot: document.querySelectorAll('.hv-xform-rot').length,
             resize: document.querySelectorAll('.hv-xform-handle').length }) """)
-        check("Ctrl+R rotate mode shows rotators, hides resize handles", rmode["rot"] == 4 and rmode["resize"] == 0, str(rmode))
+        check("rotate mode shows rotators, hides resize handles", rmode["rot"] == 4 and rmode["resize"] == 0, str(rmode))
         # rotation handles sit OUTSIDE the corners now — grab one directly and rotate
         rb = page.evaluate("""() => { const z = document.querySelector('.hv-xform-rot'); const bx = document.querySelector('.hv-xform-box').getBoundingClientRect();
             const r = z.getBoundingClientRect(); return { cx:(bx.left+bx.right)/2, cy:(bx.top+bx.bottom)/2, zx:r.left+r.width/2, zy:r.top+r.height/2 }; }""")
@@ -568,9 +635,77 @@ def main():
         page.click("#view-edit"); page.wait_for_timeout(120)
         active_edit = page.evaluate("document.querySelector('#view-edit').classList.contains('active') && !document.querySelector('#process-button').classList.contains('active') && document.querySelector('#modal-root').hidden")
         check("view-swap reflects + toggles the active view", active_proc and active_edit)
-        # undo/redo moved next to the viewport BG button
-        check("undo/redo sit in the viewport controls",
-              page.evaluate("!!document.querySelector('.viewport-controls #undo-button') && !!document.querySelector('.viewport-controls #redo-button')"))
+        # undo/redo moved into the History panel header (and out of the viewport controls)
+        check("undo/redo sit in the History header",
+              page.evaluate("""!!document.querySelector('.rail-section.history .panel-actions #undo-button')
+                && !!document.querySelector('.rail-section.history .panel-actions #redo-button')
+                && !document.querySelector('.viewport-controls #undo-button')"""))
+        # top arrange bar carries reorder + group/ungroup + rename/delete; cleanup/merge moved to the Layers header
+        check("top stage toolbar carries reorder / group / delete",
+              page.evaluate("""['layer-front','layer-forward','layer-backward','layer-back','layer-group','layer-ungroup','layer-rename','layer-delete']
+                .every(id => !!document.querySelector('.stage-toolbar #' + id))
+                && !document.querySelector('.stage-toolbar #layer-cleanup')
+                && ['layer-cleanup','layer-merge'].every(id => !!document.querySelector('.rail-section.layers .section-head #' + id))
+                && !document.querySelector('.rail-section.layers .menu')"""))
+        # object clipboard/boolean/transform actions live on the right-side action bar (delete/rename moved to Layers)
+        check("object action bar carries clipboard + transform",
+              page.evaluate("""['act-cut','act-copy','act-paste','act-duplicate','act-union','act-rotate-cw','act-flip-h','act-invert']
+                .every(id => !!document.querySelector('.actionbar #' + id))
+                && !document.querySelector('.actionbar #act-delete')"""))
+
+        # --- customizable picture-frame layout (Layout header dropdown; auto-save + profiles) ---
+        # all four bars share the one .tool-button object so they match
+        check("every frame bar uses the shared .tool-button class",
+              page.evaluate("""['.toolstrip','.stage-toolbar','.actionbar','.viewport-controls']
+                .every(s => document.querySelectorAll(s + ' .tool-button').length > 0)
+                && !document.querySelector('.vp-btn')"""))
+        # the Layout control is a header dropdown next to File (not footer buttons)
+        check("Layout is a header dropdown next to File",
+              page.evaluate("""!!document.querySelector('.doc-actions-left .menu[data-menu="layout"]')
+                && !document.querySelector('#layout-save') && !document.querySelector('#layout-edit')"""))
+        # customize mode (via the exposed controller) makes frame tiles draggable
+        page.evaluate("window.__layout.toggleEdit()")
+        check("customize mode makes frame tiles draggable",
+              page.evaluate("""!!document.querySelector('.app.editor.customizing')
+                && document.querySelector('.toolstrip .tool-button').draggable === true"""))
+        # move the Pen tile into the action bar; arrangement auto-saves
+        page.evaluate("() => { const pen = document.querySelector('.toolstrip [data-tool=pen]'); document.querySelector('.actionbar').appendChild(pen); window.__layout.save(); }")
+        check("moved tile auto-saves into the layout",
+              page.evaluate("""() => { const L = JSON.parse(localStorage.getItem('hector-vector:layout') || '{}');
+                return !!document.querySelector('.actionbar [data-tool=pen]')
+                  && L.actions.includes('tool:pen') && !L.tools.includes('tool:pen'); }"""))
+        # save it as a named profile, then reset to default
+        page.evaluate("window.__layout.saveProfile('Test'); window.__layout.reset()")
+        check("Reset restores the default layout and clears storage",
+              page.evaluate("""() => !!document.querySelector('.toolstrip [data-tool=pen]')
+                && !document.querySelector('.actionbar [data-tool=pen]')
+                && localStorage.getItem('hector-vector:layout') === null"""))
+        # the saved profile is listed and re-applies the arrangement
+        check("a saved profile re-applies the arrangement",
+              page.evaluate("""() => { if (!window.__layout.listProfiles().includes('Test')) return false;
+                window.__layout.applyProfile('Test');
+                return !!document.querySelector('.actionbar [data-tool=pen]'); }"""))
+        # profiles can be renamed and deleted (was: "clunky, cant delete or edit profiles")
+        check("a profile can be renamed",
+              page.evaluate("""() => { window.__layout.renameProfile('Test','Renamed');
+                const L = window.__layout.listProfiles(); return L.includes('Renamed') && !L.includes('Test'); }"""))
+        check("a profile can be deleted",
+              page.evaluate("""() => { window.__layout.deleteProfile('Renamed'); return !window.__layout.listProfiles().includes('Renamed'); }"""))
+        # the Layout dropdown renders each profile as a manageable row (rename ✎ / delete ✕)
+        check("Layout dropdown shows rename/delete on a profile row",
+              page.evaluate("""() => { window.__layout.saveProfile('Row');
+                document.querySelector('.menu[data-menu=layout] .menu-trigger').click();
+                const rows=[...document.querySelectorAll('.menu[data-menu=layout] .menu-row')];
+                const ok = rows.some(r => r.querySelector('.menu-rowlabel') && r.querySelectorAll('.menu-rowbtn').length===2);
+                document.body.click(); window.__layout.deleteProfile('Row'); return ok; }"""))
+        # clean up: reset to default, exit customize mode
+        page.evaluate("() => { window.__layout.reset(); if (window.__layout.isEditing()) window.__layout.toggleEdit(); }")
+        # Ctrl/Cmd+R toggles the rulers
+        rulers0 = page.evaluate("!!document.querySelector('#vp-rulers').classList.contains('on')")
+        page.keyboard.press("Control+r"); page.wait_for_timeout(60)
+        check("Ctrl+R toggles the rulers",
+              page.evaluate("!!document.querySelector('#vp-rulers').classList.contains('on')") != rulers0)
+        page.keyboard.press("Control+r"); page.wait_for_timeout(60)   # restore
         # rotate/flip moved into the right-click panel; toolstrip now has colour swatches
         check("colour swatches in the toolstrip", page.evaluate("!!document.querySelector('.toolstrip #swatch-fill') && !!document.querySelector('.toolstrip #swatch-stroke')"))
         check("no rotate/flip buttons in the toolstrip", page.evaluate("!document.querySelector('.toolstrip [data-xform]')"))
@@ -607,9 +742,10 @@ def main():
         # list is reverse DOM order: top row = frontmost (last artwork child)
         check("layers list reflects nodes (reverse order)", rows == ["r3", "r2", "r1"], f"rows={rows}")
 
-        # the Artboard row is pinned at the bottom and selects the canvas
-        check("artboard row pinned at bottom of layers", page.evaluate("document.querySelector('#layers-list .layer-row:last-child').classList.contains('artboard-row')") is True)
-        page.click("#layers-list .layer-row.artboard-row"); page.wait_for_timeout(50)
+        # the Artboard row is pinned to the bottom chin (#layers-foot, not the scrolling list) and selects the canvas
+        check("artboard row pinned to the layers chin",
+              page.evaluate("!!document.querySelector('#layers-foot .layer-row.artboard-row') && !document.querySelector('#layers-list .artboard-row')") is True)
+        page.click("#layers-foot .layer-row.artboard-row"); page.wait_for_timeout(50)
         check("clicking artboard row selects the artboard", page.evaluate("editor.artboardSelected === true && editor.selection.size === 0"))
 
         # click a layer row selects that node on the canvas
@@ -647,6 +783,59 @@ def main():
         check("ungroup restores top-level nodes", page.evaluate("editor._artworkNodes().length") == 3)
         page.keyboard.press("Control+z"); page.wait_for_timeout(40)
         check("ungroup is undoable", page.evaluate("editor._artworkNodes().length") == 2)
+
+        # ---- drag layers in/out of groups, selection normalization, header counts, mixed inspector ----
+        mount_ctl(page)
+        page.evaluate("editor.selection=new Set(['r1','r2']); editor.artboardSelected=false; editor.group();")
+        page.wait_for_timeout(40)
+        gid = page.evaluate("[...editor.selection][0]")
+        page.evaluate(f"editor.reorderTo('r3', '{gid}')"); page.wait_for_timeout(40)   # drop r3 onto the group row
+        check("dropping a layer on a group nests it inside",
+              page.evaluate(f"editor.nodeById('r3').parentNode === editor.nodeById('{gid}') && !editor._artworkNodes().some(n=>n.getAttribute('data-hv-id')==='r3')"))
+        page.evaluate("editor.reorderToRoot('r3')"); page.wait_for_timeout(40)         # drop r3 on the artboard chin
+        check("dropping on the artboard chin pulls a layer back to top level",
+              page.evaluate("editor.nodeById('r3').parentNode === editor.stage"))
+        check("a group + its own child normalizes to just the group (no double-move)",
+              page.evaluate(f"""() => {{ editor.selection = new Set(['{gid}','r1']);
+                const t = editor._topSelection(editor.selectedNodes());
+                return t.length===1 && t[0]===editor.nodeById('{gid}'); }}"""))
+        # group-in-group: grouping shapes that already live in a group nests a new <g> inside it
+        mount_ctl(page)
+        page.evaluate("editor.selection=new Set(['r1','r2','r3']); editor.group();"); page.wait_for_timeout(40)
+        outer = page.evaluate("[...editor.selection][0]")
+        page.evaluate("editor.selection=new Set(['r1','r2']); editor.group();"); page.wait_for_timeout(40)
+        check("can create a group inside a group",
+              page.evaluate(f"""() => {{ const inner=[...editor.selection][0]; const g=editor.nodeById(inner);
+                return g && g.tagName.toLowerCase()==='g' && g.parentNode===editor.nodeById('{outer}')
+                  && editor.nodeById('r1').parentNode===g; }}"""))
+        # multi-node drag moves the whole selection together, keeping z-order
+        mount_ctl(page)
+        page.evaluate("editor._reorderDrop(['r1','r2'],'r3','after')"); page.wait_for_timeout(40)
+        check("multi-node reorder moves the selection together (z-order kept)",
+              page.evaluate("JSON.stringify(editor._artworkNodes().map(n=>n.getAttribute('data-hv-id')))") == '["r3","r1","r2"]')
+        # position-aware drop: 'before' inserts ahead of the target
+        mount_ctl(page)
+        page.evaluate("editor._reorderDrop(['r3'],'r1','before')"); page.wait_for_timeout(40)
+        check("drop 'before' lands the layer ahead of the target",
+              page.evaluate("JSON.stringify(editor._artworkNodes().map(n=>n.getAttribute('data-hv-id')))") == '["r3","r1","r2"]')
+        # dragging to empty space / root pulls multiple layers out of a group
+        mount_ctl(page)
+        page.evaluate("editor.selection=new Set(['r1','r2']); editor.group(); editor._reorderManyToRoot(['r1','r2']);"); page.wait_for_timeout(40)
+        check("multi pull-to-root removes layers from their group",
+              page.evaluate("editor.nodeById('r1').parentNode===editor.stage && editor.nodeById('r2').parentNode===editor.stage"))
+        check("layers count badge shows the top-level count",
+              page.evaluate("document.querySelector('#layers-count').textContent === String(editor._artworkNodes().length)"))
+        check("history count badge is non-empty after edits",
+              page.evaluate("document.querySelector('#history-count').textContent !== ''"))
+        # mismatched multi-selection → indeterminate ("Mixed") fill swatch instead of just the first object's
+        page.evaluate("""() => { app.selectedOutput=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
+              + '<rect data-hv-id="mx1" x="10" y="10" width="40" height="40" fill="#ff0000"/>'
+              + '<rect data-hv-id="mx2" x="60" y="10" width="40" height="40" fill="#0000ff"/></svg>','mix.svg'); }""")
+        page.wait_for_timeout(60)
+        check("mismatched fills show a Mixed swatch",
+              page.evaluate("""() => { editor.selection=new Set(['mx1','mx2']); editor.artboardSelected=false;
+                return !!editor._objectPanel(editor.selectedNodes()).querySelector('.insp-swatch.mixed'); }"""))
 
         # ---- H. Polish pass: handle scaling, panel collapse, modal width, swatch, flatten ----
         # node handles stay a constant screen size under zoom
@@ -883,6 +1072,31 @@ def main():
         page.evaluate("editor.selection = new Set(['ra']); editor.booleanOp('union')"); page.wait_for_timeout(40)
         check("single selection: boolean is a no-op", n_nodes(page) == 2)
 
+        # Boolean works on a GROUPED selection (group counts its leaves, result lands in the group)
+        page.evaluate("""svg => { app.selectedOutput=null; app.manualOutputName=null; mountStageFromText(svg,'grpbool.svg'); }""",
+                      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect data-hv-id="ga" x="20" y="20" width="60" height="60" fill="#36c"/><rect data-hv-id="gb" x="50" y="50" width="60" height="60" fill="#36c"/></svg>')
+        page.wait_for_function("editor.stage && editor.nodeById('gb')", timeout=8000)
+        page.evaluate("editor.selection=new Set(['ga','gb']); editor.group();"); page.wait_for_timeout(40)
+        check("a grouped selection counts its fillable leaves",
+              page.evaluate("editor._fillableSelection().length === 2"))
+        page.evaluate("editor.booleanOp('union')"); page.wait_for_timeout(80)
+        check("union runs on a grouped selection and lands inside the group",
+              page.evaluate("""() => { const pid=[...editor.selection][0]; const p=editor.nodeById(pid);
+                return p && p.tagName.toLowerCase()==='path' && p.parentNode && p.parentNode.tagName.toLowerCase()==='g'; }"""))
+
+        # clicking a shape inside a group selects the WHOLE group (so dragging moves the group, not one child)
+        page.evaluate("""svg => { app.selectedOutput=null; app.manualOutputName=null; mountStageFromText(svg,'grpclick.svg'); }""",
+                      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect data-hv-id="ca" x="20" y="20" width="40" height="40" fill="#36c"/><rect data-hv-id="cb" x="70" y="20" width="40" height="40" fill="#c33"/></svg>')
+        page.wait_for_function("editor.stage && editor.nodeById('cb')", timeout=8000)
+        page.evaluate("editor.setTool('select'); editor.selection=new Set(['ca','cb']); editor.group();"); page.wait_for_timeout(40)
+        gid = page.evaluate("[...editor.selection][0]")
+        page.evaluate("""() => { editor.selection=new Set(); const c=editor.nodeById('ca'); const r=c.getBoundingClientRect();
+            c.dispatchEvent(new PointerEvent('pointerdown',{button:0,clientX:r.left+5,clientY:r.top+5,bubbles:true,cancelable:true}));
+            window.dispatchEvent(new PointerEvent('pointerup',{button:0,bubbles:true})); }""")
+        page.wait_for_timeout(40)
+        check("clicking a grouped shape selects the whole group",
+              page.evaluate(f"editor.selection.has('{gid}') && !editor.selection.has('ca')"))
+
         # invert-space overlap fix: overlap of two shapes must be a HOLE, not XOR-filled
         mount_bool(page)
         page.evaluate("editor.invertSpace()"); page.wait_for_timeout(150)
@@ -1000,24 +1214,107 @@ def main():
         page.evaluate("editor.selection=new Set(['r1']); editor.nudge(5,-3);")
         check("nudge moves the selection", "translate" in (page.evaluate("editor.nodeById('r1').getAttribute('transform')") or ""))
 
-        # right-click an object → contextual menu, and it selects the object
+        # right-click an object → summons the persistent floating Properties panel + selects it
         mount_ctl(page)
+        page.evaluate("window.hideFloatPanel && window.hideFloatPanel()")   # start closed so the right-click reaches the canvas
         r = node_rect(page, "r2")
         page.mouse.click(r["cx"], r["cy"], button="right"); page.wait_for_timeout(80)
-        ctx = page.evaluate("""() => { const m=document.querySelector('.context-panel'); return m
-            ? { n: m.querySelectorAll('.grid-item').length, labels: [...m.querySelectorAll('.grid-item')].map(b=>b.title), style: !!m.querySelector('.ctx-style input') } : null; }""")
-        check("object context panel opens with style + actions", ctx and ctx["n"] >= 8 and ctx["style"] and "Duplicate" in ctx["labels"] and "Flip Horizontal" in ctx["labels"], str(ctx and ctx["n"]))
+        ctx = page.evaluate("""() => { const m=document.querySelector('.float-panel:not([hidden])'); return m
+            ? { actions: m.querySelectorAll('.grid-item').length, style: !!m.querySelector('.fp-body input'),
+                hasStrokeSeg: !!m.querySelector('.insp-seg') } : null; }""")
+        # object right-click is now STYLE-ONLY (actions moved to the toolbars)
+        check("object context panel is style-only (no actions grid)", ctx and ctx["style"] and ctx["actions"] == 0, str(ctx))
         check("right-click selects the object", page.evaluate("editor.selection.has('r2')"))
+        # selecting an object enables the object action bar (cut) + layer reorder
+        check("action bar enables on selection",
+              page.evaluate("!document.querySelector('#act-cut').disabled && !document.querySelector('#layer-front').disabled"))
         page.keyboard.press("Escape"); page.wait_for_timeout(40)
         check("Escape closes the context menu", page.evaluate("!document.querySelector('.context-menu')"))
 
-        # right-click empty canvas → artboard panel
+        # ---- nested layers tree: group → indented children with ids; collapse hides them ----
+        mount_ctl(page)
+        page.evaluate("editor.selection=new Set(['r1','r2','r3']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector(); editor.group();")
+        page.wait_for_timeout(80)
+        tree = page.evaluate("""() => {
+            const rows=[...document.querySelectorAll('#layers-list .layer-row:not(.artboard-row)')];
+            const grp = rows.find(r=>r.classList.contains('is-group'));
+            const kids = rows.filter(r=>parseInt(r.style.paddingLeft||'0') > 6);
+            const childIds = grp ? [...editor.selectedNodes()[0].children].every(c=>c.hasAttribute('data-hv-id')) : false;
+            return { hasGroupRow: !!grp, indentedKids: kids.length, childIds }; }""")
+        check("group renders a tree with indented children", tree["hasGroupRow"] and tree["indentedKids"] == 3 and tree["childIds"], str(tree))
+        # collapse the group → children hidden
+        page.evaluate("() => document.querySelector('#layers-list .layer-row.is-group .layer-twist').click()")
+        page.wait_for_timeout(60)
+        check("collapsing a group hides its children",
+              page.evaluate("[...document.querySelectorAll('#layers-list .layer-row:not(.artboard-row)')].filter(r=>parseInt(r.style.paddingLeft||'0')>6).length") == 0)
+        # right-click a layer row opens the same object context panel + selects that node
+        page.evaluate("() => document.querySelector('#layers-list .layer-row.is-group .layer-twist').click()")  # expand
+        page.wait_for_timeout(60)
+        page.evaluate("""() => { const child=[...document.querySelectorAll('#layers-list .layer-row')].find(r=>parseInt(r.style.paddingLeft||'0')>6);
+            child.dispatchEvent(new MouseEvent('contextmenu',{clientX:300,clientY:200,bubbles:true,cancelable:true})); }""")
+        page.wait_for_timeout(80)
+        check("layer-row right-click opens the object panel + selects nested child",
+              page.evaluate("""!!document.querySelector('.float-panel:not([hidden])') && editor.selection.size===1
+                && [...editor.selection].every(id=>{const n=editor.nodeById(id); return n && n.parentNode.tagName.toLowerCase()==='g';})"""))
+        page.evaluate("window.hideFloatPanel && window.hideFloatPanel()"); page.wait_for_timeout(40)
+
+        # ---- node-edit focus: a selection limits visible anchors; nothing selected shows all ----
+        mount_ctl(page)
+        n_anch = lambda: page.evaluate("document.querySelectorAll('.hv-handles .hv-node-anchor, .hv-handles circle.hv-handle').length")
+        page.evaluate("editor.selection=new Set(); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector(); editor.setTool('node');")
+        page.wait_for_timeout(100); all_anchors = n_anch()
+        page.evaluate("editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector(); editor.setTool('node');")
+        page.wait_for_timeout(100); focus_anchors = n_anch()
+        check("node focus shows fewer anchors than the whole doc", all_anchors > 0 and 0 < focus_anchors < all_anchors, f"all={all_anchors} focus={focus_anchors}")
+        # node mode draws NO object bounding box (just anchors) — the line/select-box clutter fix
+        check("node mode hides the selection bbox", page.evaluate("editor._overlayEl().querySelectorAll('.hv-sel-box').length") == 0)
+        page.evaluate("editor.setTool('select'); editor.selection=new Set(); editor._renderSelection(); editor._renderInspector();")
+
+        # ---- group right-click registers its objects ("N objects") and recolours them all ----
+        mount_ctl(page)
+        page.evaluate("editor.selection=new Set(['r1','r2','r3']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector(); editor.group();")
+        page.wait_for_timeout(60)
+        leaves = page.evaluate("editor._effectiveLeaves().length")
+        check("group expands to its leaf objects", leaves == 3, f"leaves={leaves}")
+        # recolour the group → applies to every child leaf
+        page.evaluate("editor.applyFill('#abcdef');")
+        page.wait_for_timeout(40)
+        allred = page.evaluate("""() => { const g=editor.selectedNodes()[0];
+            return [...g.children].every(c => c.getAttribute('fill') === '#abcdef'); }""")
+        check("recolouring a group hits all its children", allred)
+
+        # right-click empty canvas → artboard panel is STYLE-ONLY now (size + background);
+        # its old actions are duplicated on the toolbars / moved to the bottom viewport bar.
+        page.evaluate("window.hideFloatPanel && window.hideFloatPanel()")
         ab = artboard_rect(page)
         page.mouse.click(ab["x"] + ab["w"] * 0.04, ab["y"] + ab["h"] * 0.94, button="right"); page.wait_for_timeout(80)
-        ctx2 = page.evaluate("""() => { const m=document.querySelector('.context-panel'); return m
-            ? [...m.querySelectorAll('.grid-item')].map(b=>b.title) : null; }""")
-        check("canvas context panel has Select All + Paste", ctx2 and "Select All" in ctx2 and "Paste" in ctx2, str(ctx2))
+        ctx2 = page.evaluate("""() => { const m=document.querySelector('.float-panel:not([hidden])'); return m
+            ? { actions: m.querySelectorAll('.grid-item').length, size: !!m.querySelector('.fp-body input') } : null; }""")
+        check("artboard context panel is style-only (no actions grid)", ctx2 and ctx2["size"] and ctx2["actions"] == 0, str(ctx2))
+        check("Smart-guides + Select-All moved to the viewport bar",
+              page.evaluate("!!document.querySelector('.viewport-controls #vp-guides') && !!document.querySelector('.viewport-controls #vp-selectall')"))
         page.keyboard.press("Escape")
+
+        # ---- transparent artboard shows a checker (not solid white) ----
+        page.evaluate("window.hideFloatPanel && window.hideFloatPanel()")
+        mount_ctl(page)
+        page.evaluate("editor.selectArtboard(); editor.applyArtboardBg('#ffffff');")
+        opaque = page.evaluate("editor.stage.classList.contains('transparent-board')")
+        page.evaluate("editor.applyArtboardBg(null);")
+        trans = page.evaluate("()=>({cls: editor.stage.classList.contains('transparent-board'), fill: editor.artboardEl().getAttribute('fill')})")
+        check("transparent artboard toggles the checker class", (not opaque) and trans["cls"] and trans["fill"] == "none", f"opaque_cls={opaque} {trans}")
+        # right-clicking the Artboard row in the layers panel opens the artboard panel
+        page.evaluate("window.hideFloatPanel && window.hideFloatPanel(); editor.selection=new Set(); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector();")
+        page.evaluate("""()=>{const r=document.querySelector('#layers-foot .layer-row.artboard-row');
+            r.dispatchEvent(new MouseEvent('contextmenu',{clientX:300,clientY:300,bubbles:true,cancelable:true}));}""")
+        page.wait_for_timeout(80)
+        check("artboard-row right-click selects artboard + opens its panel",
+              page.evaluate("""editor.artboardSelected && !!document.querySelector('.float-panel:not([hidden])')
+                && document.querySelector('.fp-title').textContent === 'Artboard'"""))
+        page.evaluate("window.hideFloatPanel && window.hideFloatPanel()")
+        # selected object name shows in the header indicator
+        mount_ctl(page); page.evaluate("editor.selection=new Set(['r1']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector();")
+        check("header shows the selected object name", "Rectangle" in page.evaluate("document.querySelector('#sel-label').textContent"))
 
         # ---- Process workspace: backends as first-class inline options ----
         page.evaluate("processSelectEl.value='pipeline';")

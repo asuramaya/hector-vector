@@ -128,10 +128,11 @@ const _anchorSkip = (el) => el.closest(".hv-handles") || el.closest(".hv-overlay
 // rigidly; setIn/setOut move one handle and optionally mirror the other (smooth).
 // Closed paths whose final segment returns to the start share that segment as
 // anchor-0's incoming handle (and the last anchor's outgoing handle).
-export function pathNodes(svg) {
+export function pathNodes(svg, accept) {
   const out = [];
   svg.querySelectorAll("path").forEach((el) => {
     if (_anchorSkip(el)) return;
+    if (accept && !accept(el)) return;   // focus mode: restrict to the in-scope paths
     const segs = parsePath(el.getAttribute("d") || "");
     el._hvSegs = segs;
     const commit = () => el.setAttribute("d", serializeSegs(el._hvSegs));
@@ -286,9 +287,9 @@ export function catmullRomAnchors(pts, closed) {
   return out;
 }
 
-export function collectAnchors(svg) {
+export function collectAnchors(svg, accept) {
   const out = [];
-  const skip = _anchorSkip;
+  const skip = (el) => _anchorSkip(el) || (accept && !accept(el));
   svg.querySelectorAll("rect").forEach((el) => {
     if (skip(el)) return;
     const get = () => ({ x: +el.getAttribute("x") || 0, y: +el.getAttribute("y") || 0, w: +el.getAttribute("width") || 0, h: +el.getAttribute("height") || 0 });
