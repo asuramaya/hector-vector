@@ -465,7 +465,7 @@ function bindRulerGuides(rulersEl) {
   rulersEl.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     showContextMenu(e.clientX, e.clientY, [
-      { label: editor.guidesLocked ? "Unlock guides" : "Lock guides", onClick: () => editor.toggleGuidesLock() },
+      { label: editor.guidesLocked ? "Unlock guides — add / edit" : "Lock guides (visible, can't move)", onClick: () => editor.toggleGuidesLock() },
       { label: `Clear guides (${editor.guides.length})`, disabled: !editor.guides.length, onClick: () => editor.clearGuides() },
     ]);
   });
@@ -1226,6 +1226,23 @@ function openColorPicker(opts) {
   $(".cp-cancel").addEventListener("click", cancel);
   if (opts.allowNone) $(".cp-none").addEventListener("click", () => { st.none = true; paint(); emit(); });
   back.addEventListener("pointerdown", (e) => { if (e.target === back) cancel(); });
+  // Movable, panel-style window: drag it by the header (the backdrop no longer dims, so
+  // the canvas stays visible while you pick).
+  {
+    const head = $(".cp-head"); if (head) {
+      head.style.cursor = "move"; head.style.touchAction = "none";
+      head.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        const r = win.getBoundingClientRect();
+        win.style.position = "fixed"; win.style.margin = "0"; win.style.left = r.left + "px"; win.style.top = r.top + "px";
+        const ox = e.clientX - r.left, oy = e.clientY - r.top;
+        try { head.setPointerCapture(e.pointerId); } catch {}
+        const mv = (ev) => { win.style.left = Math.max(2, Math.min(ev.clientX - ox, window.innerWidth - 60)) + "px"; win.style.top = Math.max(2, Math.min(ev.clientY - oy, window.innerHeight - 30)) + "px"; };
+        const up = () => { head.removeEventListener("pointermove", mv); head.removeEventListener("pointerup", up); };
+        head.addEventListener("pointermove", mv); head.addEventListener("pointerup", up);
+      });
+    }
+  }
   const onKey = (e) => {
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel(); }
     else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); ok(); }
@@ -1878,22 +1895,16 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
   const rulersBtn = document.querySelector("#vp-rulers");
   if (rulersBtn) {
     const rulersEl = document.querySelector("#rulers");
-    const syncRulers = () => { const on = !!prefs.rulers; if (rulersEl) rulersEl.hidden = !on; rulersBtn.classList.toggle("on", on); rulersBtn.setAttribute("aria-pressed", on ? "true" : "false"); if (on) drawRulers(); };
+    // Rulers + guide marks share ONE visibility (Ctrl+R / this button): on → both shown,
+    // off → both hidden. Editing guides is gated separately by the lock (default locked,
+    // so you can't accidentally drag them — unlock via the ruler right-click menu).
+    const syncRulers = () => { const on = !!prefs.rulers; if (rulersEl) rulersEl.hidden = !on; rulersBtn.classList.toggle("on", on); rulersBtn.setAttribute("aria-pressed", on ? "true" : "false"); editor.guidesHidden = !on; editor.renderGuides(); if (on) drawRulers(); };
     syncRulers();
     rulersBtn.addEventListener("click", () => { prefs.rulers = !prefs.rulers; persistPrefs(); syncRulers(); setStatus(`Rulers ${prefs.rulers ? "on" : "off"}.`, 1500); });
     bindRulerGuides(rulersEl);
   }
-  const railToggle = document.querySelector("#rail-toggle");
-  const RAIL_KEY = "hector-vector:rail-collapsed";
   const appEl = document.querySelector(".app.editor");
-  if (appEl && localStorage.getItem(RAIL_KEY) === "1") appEl.classList.add("rail-collapsed");
-  if (railToggle && appEl) {
-    railToggle.addEventListener("click", () => {
-      const c = appEl.classList.toggle("rail-collapsed");
-      try { localStorage.setItem(RAIL_KEY, c ? "1" : "0"); } catch {}
-      requestAnimationFrame(() => measureFit(viewports.output));
-    });
-  }
+  // (#rail-toggle now folds BOTH side docks — owned by the Dockable-panels module below.)
   // ---- Customizable picture-frame layout: drag toolbar tiles between bars; Default / Save / Reset ----
   {
     const LAYOUT_KEY = "hector-vector:layout";
@@ -2060,31 +2071,8 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       });
     }
   }
-  // Vertical resizer between the History and Layers dock sections.
-  {
-    const hist = document.querySelector(".rail-section.history");
-    const vhandle = document.querySelector("#dock-vresizer");
-    const HKEY = "hector-vector:hist-h";
-    const savedH = parseInt(localStorage.getItem(HKEY) || "", 10);
-    if (hist && savedH >= 60) hist.style.height = savedH + "px";
-    if (hist && vhandle) {
-      vhandle.addEventListener("pointerdown", (e) => {
-        e.preventDefault();
-        const startY = e.clientY;
-        const startH = hist.getBoundingClientRect().height;
-        const dockH = document.querySelector("#rightdock").getBoundingClientRect().height;
-        vhandle.setPointerCapture(e.pointerId);
-        const move = (ev) => { hist.style.height = Math.max(60, Math.min(dockH - 120, startH + (ev.clientY - startY))) + "px"; };
-        const up = () => {
-          vhandle.removeEventListener("pointermove", move);
-          vhandle.removeEventListener("pointerup", up);
-          try { localStorage.setItem(HKEY, String(Math.round(hist.getBoundingClientRect().height))); } catch {}
-        };
-        vhandle.addEventListener("pointermove", move);
-        vhandle.addEventListener("pointerup", up);
-      });
-    }
-  }
+  // (The History/Layers vertical resizer is gone — docked panels share the column
+  // height equally now that they're freely reorderable.)
   // Collapsible rail sections (Photopea/Illustrator-style accordion), persisted.
   document.querySelectorAll(".rail-section[data-section] .section-head").forEach((head) => {
     const section = head.closest(".rail-section");
@@ -2095,143 +2083,240 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       if (e.target.closest(".panel-actions") || head._docking || head.closest(".dock-window")) return;
       const c = section.classList.toggle("collapsed");
       try { localStorage.setItem(key, c ? "1" : "0"); } catch {}
+      if (window.__docks) window.__docks.relayout();   // recompute the dock's height split
     });
   });
 
-  // ---- Dockable panels: detach History / Layers to floating windows; dock left or right ----
+  // ---- Dockable panels: drag a panel's header to detach/float, drop on a dock to attach;
+  //      panels reorder within a dock; History/Layers/Properties are all the same object;
+  //      one toggle folds BOTH side docks; empty docks auto-close, fill auto-opens. ----
   {
-    const appEl = document.querySelector(".app.editor");
     const leftDock = document.querySelector("#leftdock");
     const rightDock = document.querySelector("#rightdock");
-    const vresizer = document.querySelector("#dock-vresizer");
-    const leftToggle = document.querySelector("#leftrail-toggle");
-    const DOCKS_KEY = "hector-vector:docks";
-    const ORDER = ["history", "layers"];   // home order within a dock column
-    const sectionEl = (name) => document.querySelector(`.rail-section[data-section="${name}"]`);
+    const grid = document.querySelector(".editor-grid");
+    const railToggle = document.querySelector("#rail-toggle");
+    const DOCKS_KEY = "hector-vector:docks", FOLD_KEY = "hector-vector:sides-folded";
+    const ORDER = ["history", "layers", "properties"];   // home identity order
     const dockElFor = (side) => (side === "left" ? leftDock : rightDock);
+    let folded = localStorage.getItem(FOLD_KEY) === "1";
+
+    // Properties is summoned (not in the HTML) — build its section once.
+    let propsSection = null;
+    function ensureProps() {
+      if (propsSection) return propsSection;
+      const s = document.createElement("div");
+      s.className = "rail-section properties context-panel"; s.dataset.section = "properties";
+      s.innerHTML = `<div class="panel-head section-head"><span class="caret">▾</span>`
+        + `<span class="sec-label fp-title">Properties</span><span class="sec-count"></span>`
+        + `<div class="panel-actions"><button type="button" class="tool-button fp-close props-close" title="Hide properties (Esc)">×</button></div></div>`
+        + `<div class="section-body fp-body"></div>`;
+      s.querySelector(".props-close").addEventListener("click", (e) => { e.stopPropagation(); closeProps(); });
+      bindHeaderDrag(s);
+      propsSection = s; return s;
+    }
+    const sectionEl = (name) => name === "properties" ? propsSection : document.querySelector(`.rail-section[data-section="${name}"]`);
+    const isFloat = (name) => { const s = sectionEl(name); return !!(s && s.closest(".dock-window")); };
+    const curLoc = (name) => { const s = sectionEl(name); if (!s || !s.parentElement) return null; if (s.closest(".dock-window")) return "float"; return s.parentElement === leftDock ? "left" : "right"; };
+
     let state = {};
-    for (const n of ORDER) state[n] = { loc: "right", lastSide: "right", rect: null };
+    ORDER.forEach((n, i) => state[n] = { loc: n === "properties" ? "float" : "right", order: i, rect: null, visible: false });
     try { const s = JSON.parse(localStorage.getItem(DOCKS_KEY) || "null"); if (s) for (const n of ORDER) if (s[n]) state[n] = { ...state[n], ...s[n] }; } catch {}
-    const persist = () => { try { localStorage.setItem(DOCKS_KEY, JSON.stringify(state)); } catch {} };
+    const persist = () => { try { localStorage.setItem(DOCKS_KEY, JSON.stringify(state)); localStorage.setItem(FOLD_KEY, folded ? "1" : "0"); } catch {} };
+    const propsVisible = () => state.properties.loc !== "float" || state.properties.visible;
 
-    // a small "dock back" control injected into a floating panel's header
-    function ensureRedock(name) {
-      const sec = sectionEl(name), actions = sec && sec.querySelector(".panel-actions");
-      if (!actions || actions.querySelector(".dock-redock")) return;
-      const b = document.createElement("button");
-      b.className = "tool-button dock-redock"; b.type = "button"; b.title = "Dock this panel back into a rail"; b.textContent = "⤓";
-      b.addEventListener("click", (e) => { e.stopPropagation(); setLoc(name, state[name].lastSide || "right"); });
-      actions.appendChild(b);
-    }
-    const removeRedock = (name) => { const sec = sectionEl(name), b = sec && sec.querySelector(".dock-redock"); if (b) b.remove(); };
-
-    function placeDock(name, side) {
-      const sec = sectionEl(name); if (!sec) return;
-      const win = sec.closest(".dock-window");
-      const dock = dockElFor(side);
-      // keep home order: insert before the first later-ordered section already in this dock
-      const after = ORDER.slice(ORDER.indexOf(name) + 1).map(sectionEl).find((s) => s && s.parentElement === dock);
-      dock.insertBefore(sec, after || null);
-      sec.style.height = ""; sec.classList.remove("collapsed-floating");
-      if (win) { if (win._ro) win._ro.disconnect(); win.remove(); }
-      removeRedock(name);
+    function renderProps() {
+      if (!propsSection || !propsSection.parentElement || !propsVisible()) return;
+      const title = propsSection.querySelector(".fp-title"), body = propsSection.querySelector(".fp-body");
+      if (!body) return; body.innerHTML = "";
+      if (!editor.stage) { title.textContent = "Properties"; body.innerHTML = `<div class="insp-empty">No canvas.</div>`; return; }
+      if (editor.artboardSelected) { title.textContent = "Artboard"; body.appendChild(editor._artboardPanel()); return; }
+      let nodes = editor._effectiveLeaves(); if (!nodes.length) nodes = editor.selectedNodes();
+      if (!nodes.length) { title.textContent = "Properties"; body.innerHTML = `<div class="insp-empty">Select an object, or right-click the canvas for the artboard.</div>`; return; }
+      title.textContent = nodes.length === 1 ? "Object" : `${nodes.length} objects`;
+      body.appendChild(editor._objectPanel(nodes));
     }
 
-    function makeFloat(name) {
-      const sec = sectionEl(name); if (!sec || sec.closest(".dock-window")) return;
-      const r = sec.getBoundingClientRect();
-      const w = Math.max(220, r.width || 260), h = Math.max(200, Math.min(r.height || 320, 440));
-      const fr = state[name].rect || { x: Math.max(8, Math.min(r.left || (window.innerWidth - w - 12), window.innerWidth - w - 8)), y: Math.max(64, r.top || 80), w, h };
-      const win = document.createElement("div");
-      win.className = "dock-window"; win.dataset.dockWindow = name;
-      win.style.left = fr.x + "px"; win.style.top = fr.y + "px"; win.style.width = fr.w + "px"; win.style.height = fr.h + "px";
-      document.body.appendChild(win);
-      win.appendChild(sec);
-      sec.classList.remove("collapsed");   // a floating window always shows its body
-      ensureRedock(name);
-      bindWindowDrag(win, name);
-      win._ro = new ResizeObserver(() => { const b = win.getBoundingClientRect(); state[name].rect = { x: b.left, y: b.top, w: b.width, h: b.height }; persist(); });
-      win._ro.observe(win);
+    function detachFromWindow(name) {
+      const s = sectionEl(name); if (!s) return;
+      const w = s.closest(".dock-window");
+      if (w) { if (w._ro) w._ro.disconnect(); s.remove(); w.remove(); }
+      else if (s.parentElement) s.remove();
+    }
+    function ensureFloatWin(name, atX, atY) {
+      const s = sectionEl(name) || (name === "properties" ? ensureProps() : null); if (!s) return null;
+      let w = s.closest(".dock-window"); if (w) return w;
+      const r = s.getBoundingClientRect(), prev = state[name].rect, detaching = atX != null;
+      // Keep the panel's current size when it's dragged out of a dock; otherwise reuse the
+      // last float size (or a sensible default).
+      const ww = (detaching && r.width > 40) ? r.width : (prev?.w || Math.max(220, r.width || 260));
+      const wh = (detaching && r.height > 40) ? r.height : (prev?.h || Math.max(200, r.height || 320));
+      const x = atX != null ? atX : (prev?.x ?? Math.max(8, Math.min((r.left || innerWidth - ww - 12), innerWidth - ww - 8)));
+      const y = atY != null ? atY : (prev?.y ?? Math.max(64, r.top || 80));
+      w = document.createElement("div");
+      w.className = "dock-window" + (name === "properties" ? " float-panel" : "");
+      w.dataset.dockWindow = name;
+      w.style.left = x + "px"; w.style.top = y + "px"; w.style.width = ww + "px"; w.style.height = wh + "px";
+      document.body.appendChild(w); w.appendChild(s);
+      s.classList.remove("collapsed");
+      w._ro = new ResizeObserver(() => { const b = w.getBoundingClientRect(); state[name].rect = { x: b.left, y: b.top, w: b.width, h: b.height }; persist(); });
+      w._ro.observe(w);
+      return w;
     }
 
-    // current DOM location of a panel: 'left' | 'right' | 'float'
-    const curLoc = (name) => { const sec = sectionEl(name); if (!sec) return null; if (sec.closest(".dock-window")) return "float"; return sec.parentElement === leftDock ? "left" : "right"; };
-
-    function apply() {
+    // Reconcile the DOM from `state` (placement + ordering + dock visibility + grid).
+    function reconcile() {
       for (const name of ORDER) {
-        const want = state[name].loc, have = curLoc(name);
-        if (want === have) continue;
-        if (want === "float") makeFloat(name);
-        else placeDock(name, want);
+        const st = state[name];
+        if (name === "properties" && st.loc === "float" && !st.visible) { detachFromWindow(name); continue; }
+        if (st.loc === "float") ensureFloatWin(name);
       }
-      // grid + chrome sync
-      appEl.classList.toggle("left-docked", !!leftDock.querySelector(".rail-section"));
-      rightDock.classList.toggle("dock-empty", !rightDock.querySelector(".rail-section"));   // collapse an empty right dock
-      const bothRight = curLoc("history") === "right" && curLoc("layers") === "right";
-      if (vresizer) vresizer.style.display = bothRight ? "" : "none";
-      if (leftToggle) leftToggle.hidden = !appEl.classList.contains("left-docked");
-      requestAnimationFrame(() => measureFit(viewports.output));
-    }
-    function setLoc(name, loc) {
-      state[name] = { ...state[name], loc, lastSide: loc === "float" ? state[name].lastSide : loc };
-      apply(); persist();
-    }
-
-    // ---- drag a floating window by its header; drop over a dock zone to re-dock ----
-    let dropEl = null;
-    const dropIndicator = () => { if (!dropEl) { dropEl = document.createElement("div"); dropEl.className = "dock-droplines hidden"; document.body.appendChild(dropEl); } return dropEl; };
-    const hideDrop = () => { if (dropEl) dropEl.classList.add("hidden"); };
-    const overDock = (x, y) => {
       for (const side of ["left", "right"]) {
-        const d = dockElFor(side); if (side === "right" && appEl.classList.contains("rail-collapsed")) continue;
-        const r = d.getBoundingClientRect();
-        // left dock may be 0-wide when empty → also accept the left/right screen margin
-        const hit = side === "left" ? (x < Math.max(r.right, 56)) : (x > Math.min(r.left, window.innerWidth - 56));
-        if (hit && y > r.top - 40) return side;
+        const dock = dockElFor(side);
+        const items = ORDER.filter((n) => state[n].loc === side && !isFloatWanted(n)).sort((a, b) => (state[a].order || 0) - (state[b].order || 0));
+        for (const n of items) { const s = sectionEl(n) || (n === "properties" ? ensureProps() : null); if (!s) continue; detachWinKeepSection(n); s.style.flex = ""; dock.appendChild(s); }
       }
-      return null;
-    };
-    function bindWindowDrag(win, name) {
-      const head = win.querySelector(".section-head"); if (!head) return;
-      head.addEventListener("pointerdown", (e) => {
-        if (e.target.closest(".panel-actions") || e.button !== 0) return;
-        e.preventDefault();
-        const r = win.getBoundingClientRect(), ox = e.clientX - r.left, oy = e.clientY - r.top;
-        let moved = false;
-        try { head.setPointerCapture(e.pointerId); } catch {}
-        const move = (ev) => {
-          if (!moved && Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) < 4) return;
-          moved = true; head._docking = true; win.classList.add("dragging");
-          win.style.left = Math.max(0, Math.min(ev.clientX - ox, window.innerWidth - 60)) + "px";
-          win.style.top = Math.max(0, Math.min(ev.clientY - oy, window.innerHeight - 30)) + "px";
-          const side = overDock(ev.clientX, ev.clientY);
-          if (side) { const d = dockElFor(side).getBoundingClientRect(); const ind = dropIndicator(); ind.classList.remove("hidden");
-            const w = d.width > 8 ? d.width : 270; const left = side === "left" ? 0 : window.innerWidth - w;
-            ind.style.left = left + "px"; ind.style.top = d.top + "px"; ind.style.width = w + "px"; ind.style.height = d.height + "px"; }
-          else hideDrop();
-        };
-        const up = (ev) => {
-          try { head.releasePointerCapture(e.pointerId); } catch {}
-          head.removeEventListener("pointermove", move); head.removeEventListener("pointerup", up);
-          win.classList.remove("dragging"); hideDrop();
-          if (moved) {
-            const side = overDock(ev.clientX, ev.clientY);
-            if (side) setLoc(name, side);
-            else { const b = win.getBoundingClientRect(); state[name].rect = { x: b.left, y: b.top, w: b.width, h: b.height }; persist(); }
-            setTimeout(() => { head._docking = false; }, 0);   // swallow the trailing click so it doesn't collapse
-          }
-        };
-        head.addEventListener("pointermove", move); head.addEventListener("pointerup", up);
+      syncChrome();
+    }
+    const isFloatWanted = (n) => state[n].loc === "float";
+    function detachWinKeepSection(name) { const s = sectionEl(name); const w = s && s.closest(".dock-window"); if (w) { if (w._ro) w._ro.disconnect(); w.remove(); document.body.appendChild(s); } }
+
+    // Resize between stacked docked panels: every section but the last in a dock gets an
+    // explicit height + a drag handle below it; the last fills the remainder.
+    function relayoutDock(side) {
+      const dock = dockElFor(side);
+      dock.querySelectorAll(".dock-vsep").forEach((s) => s.remove());
+      const secs = [...dock.querySelectorAll(":scope > .rail-section")];
+      secs.forEach((sec, i) => {
+        const name = sec.dataset.section, collapsed = sec.classList.contains("collapsed");
+        if (i < secs.length - 1 && !collapsed) {
+          sec.style.flex = "0 0 " + (state[name].h || Math.max(120, Math.round((dock.getBoundingClientRect().height || 600) / secs.length))) + "px";
+          const sep = document.createElement("div"); sep.className = "dock-vsep"; sep.title = "Drag to resize";
+          bindVSep(sep, sec, name); sec.after(sep);
+        } else { sec.style.flex = collapsed ? "0 0 auto" : "1 1 auto"; }
+      });
+    }
+    function bindVSep(sep, sec, name) {
+      sep.addEventListener("pointerdown", (e) => {
+        e.preventDefault(); sep.setPointerCapture(e.pointerId);
+        const startY = e.clientY, startH = sec.getBoundingClientRect().height;
+        const mv = (ev) => { const h = Math.max(80, startH + (ev.clientY - startY)); sec.style.flex = "0 0 " + h + "px"; state[name].h = h; };
+        const up = () => { sep.removeEventListener("pointermove", mv); sep.removeEventListener("pointerup", up); persist(); };
+        sep.addEventListener("pointermove", mv); sep.addEventListener("pointerup", up);
       });
     }
 
-    // detach buttons in the dock headers
-    document.querySelectorAll(".rail-section[data-section] .dock-detach").forEach((btn) => {
-      const name = btn.closest(".rail-section").dataset.section;
-      btn.addEventListener("click", (e) => { e.stopPropagation(); setLoc(name, "float"); });
-    });
-    // left-dock collapse toggle + resizer
-    if (leftToggle) leftToggle.addEventListener("click", () => { appEl.classList.toggle("left-collapsed"); requestAnimationFrame(() => measureFit(viewports.output)); });
+    function syncChrome() {
+      const leftHas = !!leftDock.querySelector(".rail-section"), rightHas = !!rightDock.querySelector(".rail-section");
+      const leftShown = leftHas && !folded, rightShown = rightHas && !folded;
+      leftDock.style.display = leftShown ? "flex" : "none";
+      rightDock.style.display = rightShown ? "flex" : "none";
+      const cols = [];
+      if (leftShown) cols.push("auto");
+      cols.push("auto", "minmax(0, 1fr)", "auto");
+      if (rightShown) cols.push("auto");
+      grid.style.gridTemplateColumns = cols.join(" ");
+      relayoutDock("left"); relayoutDock("right");
+      if (railToggle) { railToggle.classList.toggle("on", folded); railToggle.title = folded ? "Show side panels" : "Hide side panels"; }
+      requestAnimationFrame(() => measureFit(viewports.output));
+    }
+
+    function setLoc(name, loc, beforeName) {
+      if (loc === "float") { state[name].loc = "float"; if (name === "properties") state[name].visible = true; }
+      else {
+        // insert into `side`, ordered: before `beforeName` (or at the end)
+        const others = ORDER.filter((n) => n !== name && state[n].loc === loc).sort((a, b) => (state[a].order || 0) - (state[b].order || 0));
+        const idx = beforeName ? others.indexOf(beforeName) : others.length;
+        others.splice(idx < 0 ? others.length : idx, 0, name);
+        others.forEach((n, i) => state[n].order = i);
+        state[name].loc = loc; if (name === "properties") state[name].visible = true;
+      }
+      reconcile(); persist();
+    }
+
+    // ---- drop targeting + indicator ----
+    let dropEl = null;
+    const dropInd = () => { if (!dropEl) { dropEl = document.createElement("div"); dropEl.className = "dock-droplines hidden"; document.body.appendChild(dropEl); } return dropEl; };
+    const hideDrop = () => { if (dropEl) dropEl.classList.add("hidden"); };
+    function dropTarget(x, y) {
+      for (const side of ["left", "right"]) {
+        const dock = dockElFor(side), r = dock.getBoundingClientRect();
+        const shown = dock.style.display !== "none" && r.width > 4;
+        const inEdge = side === "left" ? x < Math.max(r.right, 64) : x > Math.min(shown ? r.left : innerWidth, innerWidth - 64);
+        if (!inEdge || y < 8 || y > innerHeight - 36) continue;
+        let before = null, beforeTop = null;
+        if (shown) for (const sec of dock.querySelectorAll(".rail-section")) {
+          const sr = sec.getBoundingClientRect();
+          if (y < sr.top + sr.height / 2) { before = sec.dataset.section; beforeTop = sr.top; break; }
+        }
+        return { side, before, rect: r, shown, beforeTop };
+      }
+      return null;
+    }
+    function showDrop(t) {
+      if (!t) { hideDrop(); return; }
+      const ind = dropInd(); ind.classList.remove("hidden");
+      const w = t.shown && t.rect.width > 8 ? t.rect.width : 270;
+      const left = t.side === "left" ? 0 : innerWidth - w;
+      if (t.beforeTop != null) { ind.style.left = left + "px"; ind.style.top = (t.beforeTop - 2) + "px"; ind.style.width = w + "px"; ind.style.height = "4px"; }
+      else { ind.style.left = left + "px"; ind.style.top = (t.shown ? t.rect.top : 56) + "px"; ind.style.width = w + "px"; ind.style.height = (t.shown ? t.rect.height : innerHeight - 120) + "px"; }
+    }
+
+    // ---- unified header drag: works whether the panel is docked or already floating ----
+    function bindHeaderDrag(section) {
+      const head = section.querySelector(".section-head"); if (!head || head._dragBound) return;
+      head._dragBound = true;
+      head.addEventListener("pointerdown", (e) => {
+        if (e.target.closest(".panel-actions") || e.button !== 0) return;
+        const name = section.dataset.section;
+        const sx = e.clientX, sy = e.clientY;
+        let moved = false, win = section.closest(".dock-window"), offX = 24, offY = 12;
+        if (win) { const r = win.getBoundingClientRect(); offX = sx - r.left; offY = sy - r.top; }
+        const onMove = (ev) => {
+          if (!moved) {
+            if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
+            moved = true; head._docking = true;
+            if (!win) { win = ensureFloatWin(name, ev.clientX - offX, ev.clientY - offY); state[name].loc = "float"; if (name === "properties") state[name].visible = true; syncChrome(); }
+            if (win) win.classList.add("dragging");
+          }
+          if (!win) return;
+          win.style.left = Math.max(0, Math.min(ev.clientX - offX, innerWidth - 60)) + "px";
+          win.style.top = Math.max(0, Math.min(ev.clientY - offY, innerHeight - 30)) + "px";
+          showDrop(dropTarget(ev.clientX, ev.clientY));
+        };
+        const onUp = (ev) => {
+          window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp);
+          hideDrop(); if (win) win.classList.remove("dragging");
+          if (moved) {
+            const t = dropTarget(ev.clientX, ev.clientY);
+            if (t) setLoc(name, t.side, t.before);
+            else { state[name].loc = "float"; if (win) { const b = win.getBoundingClientRect(); state[name].rect = { x: b.left, y: b.top, w: b.width, h: b.height }; } reconcile(); persist(); }
+            setTimeout(() => { head._docking = false; }, 0);
+          }
+        };
+        window.addEventListener("pointermove", onMove); window.addEventListener("pointerup", onUp);
+      });
+    }
+    document.querySelectorAll(".rail-section[data-section]").forEach(bindHeaderDrag);
+
+    // Properties summon / hide (the right-click panel, now a dockable object).
+    function summonProps(x, y) {
+      ensureProps();
+      if (state.properties.loc === "float") {
+        state.properties.visible = true;
+        if (!propsSection.closest(".dock-window")) ensureFloatWin("properties", (x != null ? x + 6 : null), (y != null ? y + 6 : null));
+        syncChrome();
+      }
+      renderProps();
+    }
+    function closeProps() {   // the × button: fully hide (undock if needed)
+      state.properties.visible = false; state.properties.loc = "float";
+      detachFromWindow("properties"); persist(); syncChrome();
+    }
+    function hideProps() { if (state.properties.loc === "float") closeProps(); }   // Esc: only dismiss a FLOATING Properties
+
+    // Fold BOTH side docks in/out with one control.
+    if (railToggle) railToggle.addEventListener("click", () => { folded = !folded; reconcile(); persist(); });
+    // Left dock width resizer (mirrors the right one).
     {
       const lh = document.querySelector("#leftdock-resizer");
       if (lh) lh.addEventListener("pointerdown", (e) => {
@@ -2244,10 +2329,13 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       });
     }
 
-    apply();   // restore docked/floating state at boot
+    reconcile();
     window.__docks = {
-      float: (n) => setLoc(n, "float"), dock: (n, side) => setLoc(n, side || "right"),
-      loc: curLoc, state: () => state,
+      float: (n) => setLoc(n, "float"), dock: (n, side, before) => setLoc(n, side || "right", before),
+      loc: curLoc, isFolded: () => folded, toggleFold: () => { folded = !folded; reconcile(); persist(); },
+      summonProps, hideProps, renderProps, propsVisible,
+      relayout: () => { relayoutDock("left"); relayoutDock("right"); },
+      state: () => state,
     };
   }
 
@@ -2308,7 +2396,7 @@ document.addEventListener("keydown", (e) => {
   if (mod && (e.key === "v" || e.key === "V")) { e.preventDefault(); editor.paste(); return; }
   if (mod && (e.key === "a" || e.key === "A")) { e.preventDefault(); editor.selectAll(); return; }
   if (mod && (e.key === "t" || e.key === "T")) { e.preventDefault(); editor.enterTransform("scale"); return; }   // Ctrl/Cmd+T — scale mode
-  if (mod && (e.key === "r" || e.key === "R")) { e.preventDefault(); const rb = document.querySelector("#vp-rulers"); if (rb) rb.click(); return; }  // Ctrl/Cmd+R — toggle rulers
+  if (mod && (e.key === "r" || e.key === "R")) { e.preventDefault(); const rb = document.querySelector("#vp-rulers"); if (rb) rb.click(); return; }  // Ctrl/Cmd+R — show/hide rulers + guide marks together
   if (mod) return;
   if (!modalRootEl.hidden) return;
   if (e.key.startsWith("Arrow")) {       // nudge selection (Shift = ×10)
@@ -2471,39 +2559,10 @@ function showContextMenu(x, y, items) {
 // that mirrors the selection (object style / artboard / empty). It PERSISTS — no
 // click-away dismiss — and re-renders on every selection change, so it doubles as a
 // floating Properties/Appearance palette. Summon with right-click; close with ×.
-let floatPanel = null, floatPos = null;
-const _clampX = (x, el) => Math.max(2, Math.min(x, window.innerWidth - el.offsetWidth - 4));
-const _clampY = (y, el) => Math.max(2, Math.min(y, window.innerHeight - el.offsetHeight - 4));
-function ensureFloatPanel() {
-  if (floatPanel) return floatPanel;
-  const p = document.createElement("div");
-  p.className = "context-panel float-panel"; p.hidden = true;
-  p.innerHTML = `<div class="fp-head"><span class="fp-title"></span><button type="button" class="fp-close" title="Close (Esc)" aria-label="Close">×</button></div><div class="fp-body"></div>`;
-  document.body.appendChild(p);
-  p.querySelector(".fp-close").addEventListener("click", () => hideFloatPanel());
-  const head = p.querySelector(".fp-head");
-  head.addEventListener("pointerdown", (e) => {           // drag by the titlebar
-    if (e.target.closest(".fp-close")) return;
-    e.preventDefault(); head.setPointerCapture(e.pointerId);
-    const r = p.getBoundingClientRect(), ox = e.clientX - r.left, oy = e.clientY - r.top;
-    const mv = (ev) => { floatPos = { x: _clampX(ev.clientX - ox, p), y: _clampY(ev.clientY - oy, p) }; p.style.left = floatPos.x + "px"; p.style.top = floatPos.y + "px"; };
-    const up = () => { head.removeEventListener("pointermove", mv); head.removeEventListener("pointerup", up); };
-    head.addEventListener("pointermove", mv); head.addEventListener("pointerup", up);
-  });
-  floatPanel = p; return p;
-}
-function renderFloatPanel() {
-  if (!floatPanel || floatPanel.hidden) return;
-  const title = floatPanel.querySelector(".fp-title");
-  const body = floatPanel.querySelector(".fp-body"); body.innerHTML = "";
-  if (!editor.stage) { title.textContent = "Properties"; body.innerHTML = `<div class="insp-empty">No canvas.</div>`; return; }
-  if (editor.artboardSelected) { title.textContent = "Artboard"; body.appendChild(editor._artboardPanel()); return; }
-  let nodes = editor._effectiveLeaves(); if (!nodes.length) nodes = editor.selectedNodes();
-  if (!nodes.length) { title.textContent = "Properties"; body.innerHTML = `<div class="insp-empty">Select an object, or right-click the canvas for the artboard.</div>`; return; }
-  title.textContent = nodes.length === 1 ? "Object" : `${nodes.length} objects`;
-  body.appendChild(editor._objectPanel(nodes));
-}
-function hideFloatPanel() { if (floatPanel) floatPanel.hidden = true; }
+// The Properties panel is now a fully dockable object owned by the Dockable-panels
+// module (window.__docks). These remain as the names the rest of the app calls.
+function renderFloatPanel() { if (window.__docks) window.__docks.renderProps(); }
+function hideFloatPanel() { if (window.__docks) window.__docks.hideProps(); }
 // Header middle indicator: append the current selection after the document name
 // ("untitled.svg · Path" / "· 3 objects" / "· Artboard").
 function updateSelLabel() {
@@ -2516,16 +2575,12 @@ function updateSelLabel() {
 }
 function showContextPanel(x, y, _kind) {
   hideContextMenu();
-  const p = ensureFloatPanel();
-  const firstShow = p.hidden;
-  p.hidden = false;
-  renderFloatPanel();
-  if (firstShow || !floatPos) floatPos = { x: _clampX((x || 0) + 4, p), y: _clampY((y || 0) + 4, p) };
-  p.style.left = floatPos.x + "px"; p.style.top = floatPos.y + "px";
+  if (window.__docks) window.__docks.summonProps(x, y);
 }
 function toggleFloatPanel() {
-  if (floatPanel && !floatPanel.hidden) hideFloatPanel();
-  else showContextPanel(window.innerWidth - 270, 96);
+  if (!window.__docks) return;
+  if (window.__docks.propsVisible()) window.__docks.hideProps();
+  else window.__docks.summonProps(window.innerWidth - 270, 96);
 }
 function pointMenuItems() {
   const n = editor._nodeSel.size;

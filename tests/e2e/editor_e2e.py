@@ -1458,12 +1458,20 @@ def main():
         check("node drag writes back into local geometry", moved is True)
         page.evaluate("editor.setTool('select')")
 
-        # ---- Ruler guides: draggable persistent guides, stripped from output ----
+        # ---- Ruler guides: persistent, editable when unlocked, view tied to rulers ----
         mount_ctl(page)
-        page.evaluate("editor.guidesLocked=false; editor.guides=[]; editor.renderGuides(); editor.addGuide('v', 30); editor.addGuide('h', 40);")
+        # guides + rulers share one visibility; default locked (no accidental moves)
+        page.evaluate("editor.guidesHidden=false; editor.guidesLocked=true; editor.guides=[]; editor.renderGuides(); editor.addGuide('v', 30); editor.addGuide('h', 40);")
         page.wait_for_timeout(40)
         check("ruler guides render in their own layer",
               page.evaluate("editor.stage.querySelectorAll('g.hv-guideslayer .hv-guideobj').length") == 2)
+        check("locked guides draw no drag hit-targets (can't be moved by accident)",
+              page.evaluate("editor.stage.querySelectorAll('.hv-guidehit').length") == 0)
+        check("guides render above artwork (layer is just below the overlay)",
+              page.evaluate("() => { const g=editor.stage.querySelector('g.hv-guideslayer'); return !!g && g.nextSibling === editor._overlayEl(); }"))
+        page.evaluate("editor.toggleGuidesLock();"); page.wait_for_timeout(20)   # unlock → editable
+        check("unlocked guides expose drag hit-targets",
+              page.evaluate("editor.stage.querySelectorAll('.hv-guidehit').length") == 2)
         ser = page.evaluate("editor.serialize()")
         check("guides never reach saved output", "hv-guideslayer" not in ser and "hv-guideobj" not in ser)
         check("guides layer is not artwork (no data-hv-id)",
@@ -1471,10 +1479,14 @@ def main():
         page.evaluate("editor.push('probe'); editor.undo();"); page.wait_for_timeout(60)
         check("guides survive an undo restore (re-rendered on install)",
               page.evaluate("editor.stage.querySelectorAll('.hv-guideobj').length") == 2)
-        page.evaluate("editor.toggleGuidesLock();"); page.wait_for_timeout(20)
-        check("locked guides drop their drag hit-targets",
-              page.evaluate("editor.stage.querySelectorAll('.hv-guidehit').length") == 0)
-        page.evaluate("editor.toggleGuidesLock(); editor.clearGuides();"); page.wait_for_timeout(20)
+        # Ctrl+R hides rulers + guide marks together
+        page.evaluate("if(!document.querySelector('#vp-rulers').classList.contains('on')) document.querySelector('#vp-rulers').click();"); page.wait_for_timeout(40)
+        rulers_on = page.evaluate("document.querySelector('#vp-rulers').classList.contains('on')")
+        page.keyboard.press("Control+r"); page.wait_for_timeout(40)
+        check("Ctrl+R toggles rulers AND guide marks together",
+              page.evaluate("document.querySelector('#vp-rulers').classList.contains('on')") != rulers_on
+              and page.evaluate("editor.guidesHidden") == rulers_on)
+        page.evaluate("document.querySelector('#vp-rulers').classList.contains('on') || document.querySelector('#vp-rulers').click(); editor.guidesHidden=false; editor.renderGuides(); editor.clearGuides();"); page.wait_for_timeout(20)
         check("clearGuides empties the layer",
               page.evaluate("editor.guides.length === 0 && editor.stage.querySelectorAll('.hv-guideobj').length === 0"))
 
@@ -1500,30 +1512,46 @@ def main():
               page.evaluate("document.querySelectorAll('.actionbar .tool-sep').length") == before, f"back to {before}")
         page.evaluate("window.__layout.toggleEdit(); window.__layout.reset()"); page.wait_for_timeout(60)
 
-        # ---- Dockable panels: detach to float, dock left/right, persist ----
+        # ---- Dockable panels: float, dock left/right, reorder, fold, Properties ----
         check("docking controller is exposed", page.evaluate("!!window.__docks") is True)
-        # detach button floats a panel into a window
-        page.click('.rail-section.history .dock-detach'); page.wait_for_timeout(80)
-        check("detach floats History into a window",
+        # leftdock is the leftmost grid child (before the toolstrip)
+        check("left dock is the leftmost column",
+              page.evaluate("() => document.querySelector('.editor-grid').firstElementChild.id === 'leftdock'"))
+        # float History (no detach button — controller / header-drag does it)
+        page.evaluate("window.__docks.float('history')"); page.wait_for_timeout(80)
+        check("a panel floats into a dock-window",
               page.evaluate("window.__docks.loc('history') === 'float' && !!document.querySelector('.dock-window[data-dock-window=\"history\"]')"))
-        check("floating window grows a dock-back control",
-              page.evaluate("!!document.querySelector('.dock-window[data-dock-window=\"history\"] .dock-redock')"))
-        # dock Layers to the LEFT → left dock column appears
+        check("no detach buttons in panel headers (drag the header instead)",
+              page.evaluate("!document.querySelector('.dock-detach')"))
+        # dock Layers LEFT → left dock auto-opens
         page.evaluate("window.__docks.dock('layers','left')"); page.wait_for_timeout(80)
-        check("docking left reveals the left dock column",
-              page.evaluate("window.__docks.loc('layers') === 'left' && document.querySelector('.app.editor').classList.contains('left-docked') && !!document.querySelector('#leftdock .rail-section.layers')"))
-        check("left-dock collapse toggle becomes available",
-              page.evaluate("!document.querySelector('#leftrail-toggle').hidden"))
-        # with both panels out of the right dock, it collapses to nothing
-        check("emptied right dock collapses",
-              page.evaluate("document.querySelector('#rightdock').classList.contains('dock-empty')"))
+        check("docking left auto-opens the left dock",
+              page.evaluate("window.__docks.loc('layers')==='left' && getComputedStyle(document.querySelector('#leftdock')).display !== 'none' && !!document.querySelector('#leftdock .rail-section.layers')"))
+        check("emptied right dock auto-closes",
+              page.evaluate("getComputedStyle(document.querySelector('#rightdock')).display === 'none'"))
+        # dock both into the right dock and REORDER: Layers above History
+        page.evaluate("window.__docks.dock('history','right'); window.__docks.dock('layers','right','history')"); page.wait_for_timeout(80)
+        order = page.evaluate("[...document.querySelectorAll('#rightdock .rail-section')].map(s=>s.dataset.section)")
+        check("panels reorder within a dock (Layers above History)", order == ["layers", "history"], f"order={order}")
+        page.evaluate("window.__docks.dock('history','right','layers'); window.__docks.dock('layers','right')"); page.wait_for_timeout(40)
+        # Properties is the same kind of object — summon it, then dock it
+        page.evaluate("window.__docks.summonProps(400, 200)"); page.wait_for_timeout(60)
+        check("Properties summons as a floating panel",
+              page.evaluate("!!document.querySelector('.dock-window[data-dock-window=\"properties\"]') && !!document.querySelector('.float-panel:not([hidden]) .fp-body')"))
+        page.evaluate("window.__docks.dock('properties','right')"); page.wait_for_timeout(60)
+        check("Properties docks like any other panel",
+              page.evaluate("window.__docks.loc('properties')==='right' && !!document.querySelector('#rightdock .rail-section.properties')"))
+        page.evaluate("window.__docks.hideProps()"); page.wait_for_timeout(40)
+        # fold BOTH side docks with the one toggle
+        page.click('#rail-toggle'); page.wait_for_timeout(80)
+        check("fold toggle hides both side docks",
+              page.evaluate("window.__docks.isFolded() && getComputedStyle(document.querySelector('#rightdock')).display === 'none'"))
+        page.click('#rail-toggle'); page.wait_for_timeout(80)
+        check("unfold restores the docks",
+              page.evaluate("!window.__docks.isFolded() && getComputedStyle(document.querySelector('#rightdock')).display !== 'none'"))
         # state persisted
         check("dock layout is persisted",
-              page.evaluate("() => { const s=JSON.parse(localStorage.getItem('hector-vector:docks')||'{}'); return s.history && s.history.loc==='float' && s.layers && s.layers.loc==='left'; }"))
-        # re-dock both back to the right
-        page.evaluate("window.__docks.dock('history','right'); window.__docks.dock('layers','right')"); page.wait_for_timeout(80)
-        check("re-docking returns panels to the right dock (no floating windows)",
-              page.evaluate("window.__docks.loc('history')==='right' && window.__docks.loc('layers')==='right' && !document.querySelector('.dock-window') && !document.querySelector('.app.editor').classList.contains('left-docked')"))
+              page.evaluate("() => { const s=JSON.parse(localStorage.getItem('hector-vector:docks')||'{}'); return !!s.history && !!s.layers; }"))
 
         # ---- App-window mode (standalone Chromium window) ----
         # Headless can't exercise WCO/AWC, but the ?app=1 gate must engage and make

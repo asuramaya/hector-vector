@@ -43,7 +43,8 @@ const editor = {
   _curv: null,          // in-progress curvature path: { node, pts:[{x,y,corner}], closed }
   smartGuides: true,    // snap moves to other objects' bounds + artboard, with guide lines
   guides: [],           // ruler guides: [{ axis:'v'|'h', pos }] in document coords
-  guidesLocked: false,  // when true, guides render but can't be dragged/deleted
+  guidesLocked: true,   // default locked: guides render but can't be dragged/deleted (no accidental moves); unlock to edit/add
+  guidesHidden: false,  // follows the rulers toggle (Ctrl+R) — rulers + guides hide/show together
   clipboard: [],        // in-app clipboard: serialized node markup
 
   get dirty() { return this.history.length > 0; },
@@ -798,6 +799,7 @@ const editor = {
   },
   _renderSelection() {
     const ov = this._overlayEl(); if (!ov) return;
+    this._raiseGuides();   // keep ruler guides above any newly-added artwork (still below the overlay)
     ov.innerHTML = ""; this._xform = null;
     // Node tool shows anchors, not the object's bounding box — drawing the select bbox
     // on top of the handles (esp. degenerate on a thin line) just clutters the edit.
@@ -1911,35 +1913,41 @@ const editor = {
     if (!g) {
       g = document.createElementNS(SVG_NS, "g");
       g.setAttribute("class", "hv-guideslayer");
-      this.stage.insertBefore(g, this._overlayEl() || null);   // below the overlay so handles draw on top
+      this.stage.insertBefore(g, this._overlayEl() || null);
     }
     return g;
   },
+  // Keep the guides layer the LAST child before the overlay, so guides draw above all
+  // artwork (newly-drawn shapes insert before the overlay too and would otherwise cover
+  // them) but below the selection handles. Cheap; called after renders.
+  _raiseGuides() {
+    const g = this.stage && this.stage.querySelector("g.hv-guideslayer");
+    const ov = this._overlayEl();
+    if (g && ov && g.nextSibling !== ov) this.stage.insertBefore(g, ov);
+  },
   _scaleK() { const m = this.stage && this.stage.getScreenCTM(); return m ? (Math.hypot(m.a, m.b) || 1) : 1; },
+  _applyGuideCoords(el, gd) {
+    const vb = this.stage.viewBox.baseVal, vert = gd.axis === "v";
+    el.setAttribute("x1", nfmt(vert ? gd.pos : vb.x)); el.setAttribute("y1", nfmt(vert ? vb.y : gd.pos));
+    el.setAttribute("x2", nfmt(vert ? gd.pos : vb.x + vb.width)); el.setAttribute("y2", nfmt(vert ? vb.y + vb.height : gd.pos));
+  },
   renderGuides() {
     const layer = this._guidesLayer(); if (!layer) return;
     layer.innerHTML = "";
-    const vb = this.stage.viewBox.baseVal;
+    this._raiseGuides();
+    if (this.guidesHidden) return;   // Ctrl+R view toggle
     for (const gd of this.guides) {
-      const vert = gd.axis === "v";
-      const x1 = vert ? gd.pos : vb.x, x2 = vert ? gd.pos : vb.x + vb.width;
-      const y1 = vert ? vb.y : gd.pos, y2 = vert ? vb.y + vb.height : gd.pos;
-      const mk = (cls) => {
-        const ln = document.createElementNS(SVG_NS, "line");
-        ln.setAttribute("class", cls);
-        ln.setAttribute("x1", nfmt(x1)); ln.setAttribute("y1", nfmt(y1)); ln.setAttribute("x2", nfmt(x2)); ln.setAttribute("y2", nfmt(y2));
-        layer.appendChild(ln); return ln;
-      };
-      mk("hv-guideobj");   // visible 1px non-scaling line (see CSS)
-      if (!this.guidesLocked) this._bindGuideDrag(mk("hv-guidehit"), gd);   // wide transparent hit target
+      const mk = (cls) => { const ln = document.createElementNS(SVG_NS, "line"); ln.setAttribute("class", cls); this._applyGuideCoords(ln, gd); layer.appendChild(ln); return ln; };
+      const vis = mk("hv-guideobj");   // visible 1px non-scaling line (see CSS)
+      if (!this.guidesLocked) this._bindGuideDrag(mk("hv-guidehit"), vis, gd);   // wide transparent hit target
     }
   },
   addGuide(axis, pos) { this.guides.push({ axis, pos }); this._persistGuides(); this.renderGuides(); },
   removeGuide(gd) { const i = this.guides.indexOf(gd); if (i >= 0) { this.guides.splice(i, 1); this._persistGuides(); this.renderGuides(); } },
   clearGuides() { this.guides = []; this._persistGuides(); this.renderGuides(); setStatus("Guides cleared.", 1500); },
-  toggleGuidesLock() { this.guidesLocked = !this.guidesLocked; this._persistGuides(); this.renderGuides(); setStatus(`Guides ${this.guidesLocked ? "locked" : "unlocked"}.`, 1500); return this.guidesLocked; },
+  toggleGuidesLock() { this.guidesLocked = !this.guidesLocked; this._persistGuides(); this.renderGuides(); setStatus(this.guidesLocked ? "Guides locked (visible, can't move)." : "Guides unlocked — drag to edit / add.", 2000); return this.guidesLocked; },
   _persistGuides() { try { localStorage.setItem("hector-vector:guides", JSON.stringify({ guides: this.guides, locked: this.guidesLocked })); } catch {} },
-  loadGuides() { try { const s = JSON.parse(localStorage.getItem("hector-vector:guides") || "null"); if (s && Array.isArray(s.guides)) { this.guides = s.guides; this.guidesLocked = !!s.locked; } } catch {} },
+  loadGuides() { try { const s = JSON.parse(localStorage.getItem("hector-vector:guides") || "null"); if (s && Array.isArray(s.guides)) { this.guides = s.guides; this.guidesLocked = s.locked !== false; } } catch {} },
   // Snap a guide coord to artboard / object edges + centres (unless Shift overrides).
   _snapGuide(axis, v, shift) {
     if (shift || !this.smartGuides || !this.stage) return v;
@@ -1949,11 +1957,13 @@ const editor = {
     for (const c of arr) { const d = Math.abs(c - v); if (d < bd) { bd = d; best = c; } }
     return best;
   },
-  _bindGuideDrag(hl, gd) {
+  // Drag an existing guide. Updates the line coords IN PLACE (never re-renders the layer
+  // mid-drag — that would destroy the pointer-captured element and strand the drag).
+  _bindGuideDrag(hl, vis, gd) {
     hl.style.cursor = gd.axis === "v" ? "ew-resize" : "ns-resize";
     hl.addEventListener("dblclick", (e) => { e.stopPropagation(); this.removeGuide(gd); });
     hl.addEventListener("pointerdown", (e) => {
-      if (this.guidesLocked) return;
+      if (this.guidesLocked || e.button !== 0) return;
       e.stopPropagation(); e.preventDefault();
       try { hl.setPointerCapture(e.pointerId); } catch {}
       this._handleDragging = true;
@@ -1962,7 +1972,7 @@ const editor = {
         const m = this.stage.getScreenCTM(); if (!m) return;
         const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
         gd.pos = this._snapGuide(gd.axis, vert ? p.x : p.y, ev.shiftKey);
-        this.renderGuides();
+        this._applyGuideCoords(vis, gd); this._applyGuideCoords(hl, gd);   // in place, keeps the capture alive
       };
       const up = (ev) => {
         try { hl.releasePointerCapture(e.pointerId); } catch {}

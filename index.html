@@ -33,6 +33,11 @@
       </header>
 
       <section class="editor-grid">
+        <!-- Left dock: leftmost column, empty until a panel is docked here (drag a panel's
+             header over it). Hidden from the grid when empty. -->
+        <aside class="leftdock" id="leftdock" aria-label="Left dock">
+          <div class="dock-resizer dock-resizer-l" id="leftdock-resizer" title="Drag to resize"></div>
+        </aside>
         <nav class="toolstrip" role="toolbar" aria-label="Tools">
           <button class="tool-button tool-primary active" data-tool="select" data-key="V" type="button" title="Select / Move (V) — drag empty space to marquee (Alt = lasso) · Ctrl+T scale · Ctrl+R rotate">▣</button>
           <button class="tool-button tool-primary" data-tool="node" data-key="A" type="button" title="Edit points (A) — anchors &amp; handles">✥</button>
@@ -43,12 +48,6 @@
           <button class="tool-button" data-tool="ellipse" data-key="E" type="button" title="Ellipse (E)">◯</button>
           <button class="tool-button" data-tool="line" data-key="L" type="button" title="Line (L)">╱</button>
         </nav>
-
-        <!-- Left dock: empty until a panel is docked here (drag a floating window over it,
-             or use a panel's dock control). Hidden via the grid when empty. -->
-        <aside class="leftdock" id="leftdock" aria-label="Left dock">
-          <div class="dock-resizer dock-resizer-l" id="leftdock-resizer" title="Drag to resize"></div>
-        </aside>
 
         <article class="stage-wrap preview-panel" data-tool="select">
           <!-- arrange/structure controls for the selection, across the top of the canvas -->
@@ -122,7 +121,6 @@
               <div class="panel-actions">
                 <button id="undo-button" class="tool-button" type="button" title="Undo (Ctrl/Cmd+Z)" disabled>↶</button>
                 <button id="redo-button" class="tool-button" type="button" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>↷</button>
-                <button class="tool-button dock-detach" type="button" title="Detach / float this panel">⤢</button>
               </div>
             </div>
             <div id="history-list" class="history-list section-body"></div>
@@ -134,7 +132,6 @@
               <div class="panel-actions">
                 <button id="layer-cleanup" class="tool-button" type="button" title="Clean up ghost layers" disabled>⊘</button>
                 <button id="layer-merge" class="tool-button" type="button" title="Merge same-colour layers" disabled>⧉</button>
-                <button class="tool-button dock-detach" type="button" title="Detach / float this panel">⤢</button>
               </div>
             </div>
             <div id="layers-list" class="layers-list section-body"></div>
@@ -184,8 +181,7 @@
         </div>
         <div class="status-tools" role="toolbar" aria-label="View">
           <button id="shortcut-button" class="bar-btn" type="button" title="Keyboard shortcuts (?)">?</button>
-          <button id="leftrail-toggle" class="bar-btn" type="button" title="Collapse the left dock" hidden>⊠</button>
-          <button id="rail-toggle" class="bar-btn" type="button" title="Collapse the right dock">⊟</button>
+          <button id="rail-toggle" class="bar-btn" type="button" title="Hide side panels">◫</button>
         </div>
       </footer>
     </main>
