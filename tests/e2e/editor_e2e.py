@@ -298,7 +298,32 @@ def main():
             el.value = '123456'; el.dispatchEvent(new Event('input', { bubbles: true })); }""")
         page.click(".cp-sw-add"); page.wait_for_timeout(40)
         saved = page.evaluate("() => JSON.parse(localStorage.getItem('hector-vector:swatches') || '[]')")
-        check("saving a swatch persists it", saved and saved[0].lower() == "#123456", f"saved={saved}")
+        first_hex = (saved[0].get("c") if (saved and isinstance(saved[0], dict)) else (saved[0] if saved else None))
+        check("saving a swatch persists it", bool(saved) and first_hex.lower() == "#123456", f"saved={saved}")
+        page.evaluate("window.__docks.close('color')"); page.wait_for_timeout(40)
+
+        # ---- Colour panel: RGB/HSL/HSB model tabs + recent-colours strip ----
+        page.evaluate("() => { localStorage.removeItem('hector-vector:swatches-recent'); localStorage.removeItem('hector-vector:cp-model'); }")
+        page.click("#swatch-fill"); page.wait_for_function("!!document.querySelector('.cp-window')", timeout=4000)
+        check("colour panel has RGB/HSL/HSB model tabs",
+              page.evaluate("[...document.querySelectorAll('.cp-tab')].map(t=>t.dataset.m)") == ["rgb", "hsl", "hsb"])
+        page.evaluate("""() => { const el=document.querySelector('.cp-hex input'); el.value='ff0000'; el.dispatchEvent(new Event('input',{bubbles:true})); }""")
+        page.click(".cp-tab[data-m=hsl]"); page.wait_for_timeout(40)
+        hsl = page.evaluate("""() => ({ h:+document.querySelector('.cp-triple input[data-k=h]').value,
+            s:+document.querySelector('.cp-triple input[data-k=s]').value,
+            l:+document.querySelector('.cp-triple input[data-k=l]').value })""")
+        check("HSL tab reads correct H/S/L for red", hsl == {"h": 0, "s": 100, "l": 50}, str(hsl))
+        page.evaluate("""() => { const el=document.querySelector('.cp-triple input[data-k=l]'); el.value='25'; el.dispatchEvent(new Event('input',{bubbles:true})); }""")
+        page.wait_for_timeout(40)
+        check("editing an HSL field applies", page.evaluate("document.querySelector('.cp-hex input').value.toLowerCase()") == "800000")
+        page.click(".cp-tab[data-m=hsb]"); page.wait_for_timeout(40)
+        check("HSB tab exposes H/S/B", page.evaluate("!!document.querySelector('.cp-triple input[data-k=v]')"))
+        check("the chosen colour model persists", page.evaluate("localStorage.getItem('hector-vector:cp-model')") == "hsb")
+        page.evaluate("""() => { const el=document.querySelector('.cp-hex input'); el.value='3366cc'; el.dispatchEvent(new Event('input',{bubbles:true})); }""")
+        page.wait_for_timeout(820)   # past the recents debounce
+        rec = page.evaluate("() => JSON.parse(localStorage.getItem('hector-vector:swatches-recent')||'[]')")
+        check("recent colours are tracked", any(c.lower() == "#3366cc" for c in rec), str(rec))
+        check("recent strip is shown", page.evaluate("() => { const r=document.querySelector('.cp-recent'); return !!r && !r.hidden; }"))
         page.evaluate("window.__docks.close('color')"); page.wait_for_timeout(40)
 
         # MAIN colour = a fill/stroke DUO, summoned by the toolstrip fill swatch; X toggles

@@ -1003,8 +1003,13 @@ document.addEventListener("keydown", (event) => {
 const CP_BASE_SWATCHES = ["#000000", "#ffffff", "#808080", "#e23b3b", "#f6a623", "#f8e71c", "#38b24a", "#2f7fe0", "#7d4fd0", "#e0529c"];
 const CP_PIPETTE_SVG = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M10.5 1.8a1.7 1.7 0 0 1 2.4 2.4l-1.2 1.2 1 1-1.1 1.1-1-1-5 5L3 13l-1.8.6.6-1.8.5-1.6 5-5-1-1L7.4 4.2l1 1 1.1-1.1z" fill="currentColor"/></svg>`;
 const CP_SWATCH_KEY = "hector-vector:swatches";
-function loadSwatches() { try { const a = JSON.parse(localStorage.getItem(CP_SWATCH_KEY)); return Array.isArray(a) ? a.filter((c) => typeof c === "string") : []; } catch (_) { return []; } }
+const CP_RECENT_KEY = "hector-vector:swatches-recent";
+// Saved swatches can carry a name now; legacy entries are plain hex strings, so
+// loadSwatches normalises both to { c, name? }. saveSwatches keeps the raw array.
+function loadSwatches() { try { const a = JSON.parse(localStorage.getItem(CP_SWATCH_KEY)); return Array.isArray(a) ? a.map((x) => (typeof x === "string" ? { c: x } : x)).filter((x) => x && typeof x.c === "string") : []; } catch (_) { return []; } }
 function saveSwatches(arr) { try { localStorage.setItem(CP_SWATCH_KEY, JSON.stringify(arr.slice(0, 24))); } catch (_) {} }
+function loadRecent() { try { const a = JSON.parse(localStorage.getItem(CP_RECENT_KEY)); return Array.isArray(a) ? a.filter((c) => typeof c === "string") : []; } catch (_) { return []; } }
+function pushRecent(hex) { try { const u = loadRecent().filter((x) => x.toLowerCase() !== hex.toLowerCase()); u.unshift(hex); localStorage.setItem(CP_RECENT_KEY, JSON.stringify(u.slice(0, 12))); } catch (_) {} }
 let _activeColorPicker = null;
 function openColorPicker(opts) {
   if (_activeColorPicker) _activeColorPicker.cancel();
@@ -1039,16 +1044,19 @@ function openColorPicker(opts) {
       <div class="cp-side"></div>
     </div>
     <div class="cp-alpha"><div class="cp-alpha-track"></div><div class="cp-alpha-thumb"></div></div>
-    <div class="cp-fields">
-      <label class="cp-inp cp-hex">#<input data-k="hex" maxlength="7" /></label>
-      <label class="cp-inp">R<input data-k="r" type="number" min="0" max="255" /></label>
-      <label class="cp-inp">H<input data-k="h" type="number" min="0" max="360" /></label>
-      <label class="cp-inp">G<input data-k="g" type="number" min="0" max="255" /></label>
-      <label class="cp-inp">S<input data-k="s" type="number" min="0" max="100" /></label>
-      <label class="cp-inp">B<input data-k="b" type="number" min="0" max="255" /></label>
-      <label class="cp-inp">Bv<input data-k="v" type="number" min="0" max="100" /></label>
-      <label class="cp-inp cp-alpha-num">A<input data-k="a" type="number" min="0" max="100" /></label>
+    <div class="cp-models">
+      <div class="cp-tabs" role="tablist">
+        <button type="button" class="cp-tab" data-m="rgb">RGB</button>
+        <button type="button" class="cp-tab" data-m="hsl">HSL</button>
+        <button type="button" class="cp-tab" data-m="hsb">HSB</button>
+      </div>
+      <div class="cp-fields">
+        <label class="cp-inp cp-hex">#<input data-k="hex" maxlength="7" /></label>
+        <div class="cp-triple"></div>
+        <label class="cp-inp cp-alpha-num">A<input data-k="a" type="number" min="0" max="100" /></label>
+      </div>
     </div>
+    <div class="cp-recent" hidden><span class="cp-strip-lab">Recent</span><div class="cp-recent-row"></div></div>
     <div class="cp-swatches"></div>
     <div class="cp-actions">
       ${opts.allowNone ? `<button type="button" class="ghost-button cp-none">None</button>` : ""}
@@ -1066,14 +1074,66 @@ function openColorPicker(opts) {
   const hue = $(".cp-hue"), hueThumb = $(".cp-hue-thumb");
   const alphaEl = $(".cp-alpha"), alphaTrack = $(".cp-alpha-track"), alphaThumb = $(".cp-alpha-thumb");
   const side = $(".cp-side");
-  const inputs = {}; win.querySelectorAll(".cp-fields input").forEach((i) => (inputs[i.dataset.k] = i));
-
   const curHex = () => { const c = hv.hsvToRgb(st.h, st.s, st.v); return hv.rgbToHex(c.r, c.g, c.b); };
   const stHexOf = (t) => { const c = hv.hsvToRgb(t.h, t.s, t.v); return hv.rgbToHex(c.r, c.g, c.b); };
   const checker = "repeating-conic-gradient(#bbb 0% 25%, #fff 0% 50%) 50% / 12px 12px";
 
+  // Colour-model tabs (RGB / HSL / HSB): the hex + alpha fields are persistent; the
+  // middle triple is rebuilt per model. The working colour stays in HSV, so each model
+  // just reads/writes that. The active model is remembered across pickers.
+  const CP_MODEL_KEY = "hector-vector:cp-model";
+  const MODELS = {
+    rgb: { fields: [["r", "R", 255], ["g", "G", 255], ["b", "B", 255]],
+      read: () => { const c = hv.hsvToRgb(st.h, st.s, st.v); return { r: Math.round(c.r), g: Math.round(c.g), b: Math.round(c.b) }; },
+      write: (v) => Object.assign(st, hv.rgbToHsv(v.r, v.g, v.b)) },
+    hsl: { fields: [["h", "H", 360], ["s", "S", 100], ["l", "L", 100]],
+      read: () => { const c = hv.hsvToRgb(st.h, st.s, st.v), x = hv.rgbToHsl(c.r, c.g, c.b); return { h: Math.round(x.h), s: Math.round(x.s), l: Math.round(x.l) }; },
+      write: (v) => { const c = hv.hslToRgb(v.h, v.s, v.l); Object.assign(st, hv.rgbToHsv(c.r, c.g, c.b)); } },
+    hsb: { fields: [["h", "H", 360], ["s", "S", 100], ["v", "B", 100]],
+      read: () => ({ h: Math.round(st.h), s: Math.round(st.s), v: Math.round(st.v) }),
+      write: (v) => { st.h = v.h; st.s = v.s; st.v = v.v; } },
+  };
+  let model = "rgb"; try { const m = localStorage.getItem(CP_MODEL_KEY); if (m && MODELS[m]) model = m; } catch {}
+  const hexInput = $('.cp-fields input[data-k="hex"]'), aInput = $('.cp-fields input[data-k="a"]');
+  const tripleBox = $(".cp-triple");
+  let triple = {};   // current model's data-k → input element
+  // Drag the field's letter label to scrub its value (an "invisible slider"); click the
+  // input itself to type. Hex is never scrubbed.
+  function bindScrubLabel(lab, input) {
+    if (!lab || !input || input.dataset.k === "hex") return;
+    lab.addEventListener("pointerdown", (e) => {
+      if (e.target === input || e.button !== 0) return;
+      e.preventDefault(); lab.setPointerCapture(e.pointerId);
+      const sx = e.clientX, start = parseFloat(input.value) || 0; let moved = false;
+      const mv = (ev) => { const dx = ev.clientX - sx; if (!moved && Math.abs(dx) < 3) return; moved = true;
+        input.value = String(start + Math.round(dx / 4)); input.dispatchEvent(new Event("input", { bubbles: true })); };
+      const up = () => { lab.removeEventListener("pointermove", mv); lab.removeEventListener("pointerup", up); };
+      lab.addEventListener("pointermove", mv); lab.addEventListener("pointerup", up);
+    });
+  }
+  function onTriple() {
+    const m = MODELS[model], v = {};
+    for (const [k, , max] of m.fields) v[k] = Math.max(0, Math.min(max, parseFloat(triple[k].value) || 0));
+    m.write(v); changed();
+  }
+  function buildTriple() {
+    tripleBox.innerHTML = ""; triple = {};
+    for (const [k, lab, max] of MODELS[model].fields) {
+      const l = document.createElement("label"); l.className = "cp-inp";
+      const inp = document.createElement("input"); inp.type = "number"; inp.min = "0"; inp.max = String(max); inp.dataset.k = k;
+      l.append(document.createTextNode(lab), inp); tripleBox.appendChild(l); triple[k] = inp;
+      inp.addEventListener("input", onTriple); bindScrubLabel(l, inp);
+    }
+    win.querySelectorAll(".cp-tab").forEach((t) => t.classList.toggle("active", t.dataset.m === model));
+  }
+  function paintFields() {
+    hexInput.value = curHex().slice(1);
+    aInput.value = Math.round(st.a * 100);
+    const vals = MODELS[model].read();
+    for (const [k] of MODELS[model].fields) if (triple[k]) triple[k].value = vals[k];
+  }
   function paint() {
-    const hex = curHex(); const rgb = hv.hexToRgb(hex);
+    const hex = curHex();
     const hueHex = (() => { const c = hv.hsvToRgb(st.h, 100, 100); return hv.rgbToHex(c.r, c.g, c.b); })();
     fieldSat.parentElement.style.background = hueHex;
     fieldThumb.style.left = st.s + "%"; fieldThumb.style.top = (100 - st.v) + "%";
@@ -1081,9 +1141,7 @@ function openColorPicker(opts) {
     hueThumb.style.top = (st.h / 360 * 100) + "%";
     alphaTrack.style.background = `linear-gradient(to right, transparent, ${hex}), ${checker}`;
     alphaThumb.style.left = (st.a * 100) + "%";
-    inputs.hex.value = hex.slice(1); inputs.r.value = rgb.r; inputs.g.value = rgb.g; inputs.b.value = rgb.b;
-    inputs.h.value = Math.round(st.h); inputs.s.value = Math.round(st.s); inputs.v.value = Math.round(st.v);
-    inputs.a.value = Math.round(st.a * 100);
+    paintFields();
     win.classList.toggle("cp-is-none", st.none);
   }
   // --- fill/stroke side (duo) or a solo live preview (single) ---
@@ -1125,6 +1183,7 @@ function openColorPicker(opts) {
     if (duo) { targets[active] = { a: st.a, none: st.none, h: st.h, s: st.s, v: st.v }; duo.apply(active, hex, st.a); }
     else if (opts.onChange) opts.onChange(hex, st.a);
     paintSide();
+    if (typeof recordRecent === "function") recordRecent();   // settle the colour into recents (debounced)
   }
   function changed() { st.none = false; paint(); emit(); }
   // Switch which target the field edits — pure focus change, no colour applied (so it
@@ -1161,36 +1220,32 @@ function openColorPicker(opts) {
   bindDrag(hue, (x, y, w, h) => { st.h = clamp01(y / h) * 360; changed(); });
   bindDrag(alphaEl, (x, y, w) => { st.a = clamp01(x / w); paint(); emit(); });
 
-  // --- numeric / hex inputs ---
+  // --- hex + alpha inputs, model tabs (the per-model triple is wired in buildTriple) ---
   const setFromRgb = (r, g, b) => { Object.assign(st, hv.rgbToHsv(r, g, b)); };
-  inputs.hex.addEventListener("input", () => { const rgb = hv.hexToRgb(inputs.hex.value); if (rgb) { setFromRgb(rgb.r, rgb.g, rgb.b); changed(); } });
-  ["r", "g", "b"].forEach((k) => inputs[k].addEventListener("input", () => {
-    const r = +inputs.r.value || 0, g = +inputs.g.value || 0, b = +inputs.b.value || 0; setFromRgb(r, g, b); changed();
+  hexInput.addEventListener("input", () => { const rgb = hv.hexToRgb(hexInput.value); if (rgb) { setFromRgb(rgb.r, rgb.g, rgb.b); changed(); } });
+  aInput.addEventListener("input", () => { st.a = clamp01((+aInput.value || 0) / 100); paint(); emit(); });
+  bindScrubLabel(aInput.closest(".cp-inp"), aInput);
+  win.querySelectorAll(".cp-tab").forEach((t) => t.addEventListener("click", () => {
+    model = t.dataset.m; try { localStorage.setItem(CP_MODEL_KEY, model); } catch {}
+    buildTriple(); paintFields();
   }));
-  inputs.h.addEventListener("input", () => { st.h = Math.max(0, Math.min(360, +inputs.h.value || 0)); changed(); });
-  inputs.s.addEventListener("input", () => { st.s = Math.max(0, Math.min(100, +inputs.s.value || 0)); changed(); });
-  inputs.v.addEventListener("input", () => { st.v = Math.max(0, Math.min(100, +inputs.v.value || 0)); changed(); });
-  inputs.a.addEventListener("input", () => { st.a = clamp01((+inputs.a.value || 0) / 100); paint(); emit(); });
-
-  // --- scrubbable numeric labels (drag the R/G/B/H/S/Bv/A% chips) ---
-  win.querySelectorAll(".cp-inp").forEach((lab) => {
-    const input = lab.querySelector("input"); if (!input || input.dataset.k === "hex") return;
-    lab.addEventListener("pointerdown", (e) => {
-      if (e.target === input || e.button !== 0) return;   // click the field to type; drag the label to scrub
-      e.preventDefault(); lab.setPointerCapture(e.pointerId);
-      const sx = e.clientX, start = parseFloat(input.value) || 0; let moved = false;
-      const mv = (ev) => { const dx = ev.clientX - sx; if (!moved && Math.abs(dx) < 3) return; moved = true;
-        input.value = String(start + Math.round(dx / 4)); input.dispatchEvent(new Event("input", { bubbles: true })); };
-      const up = () => { lab.removeEventListener("pointermove", mv); lab.removeEventListener("pointerup", up); };
-      lab.addEventListener("pointermove", mv); lab.addEventListener("pointerup", up);
-    });
-  });
+  buildTriple();
 
   // --- eyedropper + swatches row. Eyedropper (native EyeDropper API) is the first,
   // clearly-bordered item so it's unmistakable; it samples the screen into the active
   // target. Then the fixed base palette + a persistent user palette (localStorage):
   // click applies, "+" saves the current colour, right-click removes a saved one.
   const sw = $(".cp-swatches");
+  const recentWrap = $(".cp-recent"), recentRow = $(".cp-recent-row");
+  const applyHex = (c) => { const rgb = hv.hexToRgb(c); if (rgb) { setFromRgb(rgb.r, rgb.g, rgb.b); changed(); } };
+  const mkSw = (c, name) => { const b = document.createElement("button"); b.type = "button"; b.className = "cp-sw"; b.style.background = c; b.title = name ? `${name} (${c})` : c; b.addEventListener("click", () => applyHex(c)); return b; };
+  // Recently-used colours (auto-tracked, separate from the saved palette).
+  function renderRecent() {
+    const rec = loadRecent(); recentWrap.hidden = rec.length === 0; recentRow.innerHTML = "";
+    rec.forEach((c) => recentRow.appendChild(mkSw(c)));
+  }
+  // Eyedropper + base palette + saved (nameable) swatches. Right-click a saved swatch
+  // for Rename / Remove; "+" saves the current colour.
   const renderSwatches = () => {
     sw.innerHTML = "";
     if (window.EyeDropper) {
@@ -1203,19 +1258,26 @@ function openColorPicker(opts) {
       });
       sw.appendChild(eye);
     }
-    const mk = (c, removable) => {
-      const b = document.createElement("button"); b.type = "button"; b.className = "cp-sw"; b.style.background = c; b.title = removable ? `${c} — right-click to remove` : c;
-      b.addEventListener("click", () => { const rgb = hv.hexToRgb(c); if (rgb) { setFromRgb(rgb.r, rgb.g, rgb.b); changed(); } });
-      if (removable) b.addEventListener("contextmenu", (e) => { e.preventDefault(); saveSwatches(loadSwatches().filter((x) => x !== c)); renderSwatches(); });
+    CP_BASE_SWATCHES.forEach((c) => sw.appendChild(mkSw(c)));
+    loadSwatches().forEach((it) => {
+      const b = mkSw(it.c, it.name);
+      b.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        showContextMenu(e.clientX, e.clientY, [
+          { label: "Rename…", onClick: () => { const n = window.prompt("Swatch name:", it.name || ""); if (n == null) return; const arr = loadSwatches(); const m = arr.find((x) => x.c === it.c); if (m) { m.name = n.trim() || undefined; saveSwatches(arr); renderSwatches(); } } },
+          { label: "Remove", onClick: () => { saveSwatches(loadSwatches().filter((x) => x.c !== it.c)); renderSwatches(); } },
+        ]);
+      });
       sw.appendChild(b);
-    };
-    CP_BASE_SWATCHES.forEach((c) => mk(c, false));
-    loadSwatches().forEach((c) => mk(c, true));
+    });
     const add = document.createElement("button"); add.type = "button"; add.className = "cp-sw cp-sw-add"; add.textContent = "+"; add.title = "Save current colour";
-    add.addEventListener("click", () => { const hex = curHex(); const u = loadSwatches().filter((x) => x.toLowerCase() !== hex.toLowerCase()); u.unshift(hex); saveSwatches(u); renderSwatches(); });
+    add.addEventListener("click", () => { const hex = curHex(); const u = loadSwatches().filter((x) => x.c.toLowerCase() !== hex.toLowerCase()); u.unshift({ c: hex }); saveSwatches(u); renderSwatches(); });
     sw.appendChild(add);
   };
-  renderSwatches();
+  renderSwatches(); renderRecent();
+  // Record a settled colour into recents (debounced so live dragging doesn't spam it).
+  let recentT = null;
+  const recordRecent = () => { clearTimeout(recentT); recentT = setTimeout(() => { if (!st.none) { pushRecent(curHex()); renderRecent(); } }, 700); };
 
   // --- actions ---
   const close = () => { if (host) { win.remove(); } else { back.remove(); _activeColorPicker = null; } document.removeEventListener("keydown", onKey, true); };
