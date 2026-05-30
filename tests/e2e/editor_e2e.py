@@ -81,12 +81,10 @@ def set_inspector_input(page, kind, index, value, event):
         }""", {"kind": kind, "index": index, "value": value, "event": event})
 
 def pick_color(page, swatch_index, hexes=None, none=False):
-    """Open the Properties panel, click the index-th colour swatch to summon the live
-    Colour panel, fire each hex (live-applied), optionally None; the edits coalesce into
-    one undo on a short debounce, so wait for that before returning. Then close Colour."""
-    open_ctx_panel(page)
-    page.evaluate("""(i) => { const s = document.querySelectorAll('.context-panel .insp-swatch')[i];
-        if (!s) throw new Error('no swatch #' + i); s.click(); }""", swatch_index)
+    """Summon the live Colour panel via the toolstrip fill/stroke swatch (0=fill, 1=stroke),
+    fire each hex (live-applied to the selection), optionally None; edits coalesce into one
+    undo on a short debounce, so wait for that. Then close the Colour panel."""
+    page.click("#swatch-fill" if swatch_index == 0 else "#swatch-stroke")
     page.wait_for_function("!!document.querySelector('.cp-window')", timeout=4000)
     for h in (hexes or []):
         page.evaluate("""(v) => { const el = document.querySelector('.cp-hex input');
@@ -271,10 +269,9 @@ def main():
 
         # Colour panel: eyedropper + persistent swatch system (base palette, "+" to save
         # the current colour, click-to-apply, right-click to remove). It's a dockable panel
-        # now (the object swatch summons it), not a modal — no OK/Cancel.
+        # now (the toolstrip swatch summons it), not a modal — no OK/Cancel.
         page.evaluate("() => localStorage.removeItem('hector-vector:swatches')")
-        open_ctx_panel(page)
-        page.evaluate("() => document.querySelectorAll('.context-panel .insp-swatch')[0].click()")
+        page.click("#swatch-fill")
         page.wait_for_function("!!document.querySelector('.cp-window')", timeout=4000)
         picker = page.evaluate("""() => ({
             eyedropper: !!document.querySelector('.cp-eyedrop'),
@@ -826,15 +823,18 @@ def main():
               page.evaluate("document.querySelector('#layers-count').textContent === String(editor._artworkNodes().length)"))
         check("history count badge is non-empty after edits",
               page.evaluate("document.querySelector('#history-count').textContent !== ''"))
-        # mismatched multi-selection → indeterminate ("Mixed") fill swatch instead of just the first object's
+        # mismatched multi-selection → indeterminate ("Mixed") state in the object panel
+        # (colour moved to the Colour panel; the remaining style — e.g. stroke width — still
+        # shows Mixed instead of silently showing just the first object's value)
         page.evaluate("""() => { app.selectedOutput=null;
             mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
-              + '<rect data-hv-id="mx1" x="10" y="10" width="40" height="40" fill="#ff0000"/>'
-              + '<rect data-hv-id="mx2" x="60" y="10" width="40" height="40" fill="#0000ff"/></svg>','mix.svg'); }""")
+              + '<rect data-hv-id="mx1" x="10" y="10" width="40" height="40" fill="#ff0000" stroke="#000" stroke-width="2"/>'
+              + '<rect data-hv-id="mx2" x="60" y="10" width="40" height="40" fill="#0000ff" stroke="#000" stroke-width="8"/></svg>','mix.svg'); }""")
         page.wait_for_timeout(60)
-        check("mismatched fills show a Mixed swatch",
+        check("mismatched stroke widths show a Mixed state",
               page.evaluate("""() => { editor.selection=new Set(['mx1','mx2']); editor.artboardSelected=false;
-                return !!editor._objectPanel(editor.selectedNodes()).querySelector('.insp-swatch.mixed'); }"""))
+                const inp = editor._objectPanel(editor.selectedNodes()).querySelector('input[type=number]');
+                return !!inp && (inp.placeholder.toLowerCase()==='mixed' || inp.value===''); }"""))
 
         # ---- H. Polish pass: handle scaling, panel collapse, modal width, swatch, flatten ----
         # node handles stay a constant screen size under zoom

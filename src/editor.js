@@ -2468,27 +2468,15 @@ const editor = {
     const common = (read) => { let v, set = false; for (const n of reads) { const c = read(n); if (!set) { v = c; set = true; } else if (c !== v) return { mixed: true, value: read(first) }; } return { value: v }; };
     const wrap = document.createElement("div");
 
-    // FILL — swatch opens the unified colour picker (colour + alpha + None).
-    const fillC = common((n) => n.getAttribute("fill"));
-    const fillAC = common((n) => (n.hasAttribute("fill-opacity") ? parseFloat(n.getAttribute("fill-opacity")) : 1));
-    const fillVal = fillC.value;
-    const fillNone = fillVal === "none";
-    const fillHex = toHexColor(fillVal) || "#000000";
-    const fillA = fillAC.value == null ? 1 : fillAC.value;
-    wrap.appendChild(inspGroup("Fill", [
-      this._paintRow("Colour", fillNone ? null : fillHex, fillA, "Fill",
-        (hex, a) => { this.applyFill(hex); this.applyFillOpacity(a); }, "fill", !!(fillC.mixed || fillAC.mixed)),
-    ]));
+    // Fill / stroke COLOUR live in the persistent Colour panel now (summoned from the
+    // toolstrip swatches), so the object panel only carries the non-colour style below.
 
-    // STROKE — colour/alpha, weight, cap, join, miter limit, dashes. Cap/join/miter/
-    // dash are meaningless without a stroke, so they're disabled until one exists.
+    // STROKE — weight, cap, join, miter limit, dashes. Cap/join/miter/dash are
+    // meaningless without a stroke, so they're disabled until one exists.
     const strokeC = common((n) => n.getAttribute("stroke"));
-    const strokeAC = common((n) => (n.hasAttribute("stroke-opacity") ? parseFloat(n.getAttribute("stroke-opacity")) : 1));
     const strokeWC = common((n) => parseFloat(n.getAttribute("stroke-width")) || 0);
     const strokeVal = strokeC.value;
-    const strokeNone = !strokeVal || strokeVal === "none";
     const strokeHex = toHexColor(strokeVal) || "#000000";
-    const strokeA = strokeAC.value == null ? 1 : strokeAC.value;
     const strokeW = strokeWC.value || 0;
     const hasStroke = reads.some((n) => { const s = n.getAttribute("stroke"); return s && s !== "none" && (parseFloat(n.getAttribute("stroke-width")) || 0) > 0; });
     this._strokeWidthInput = null;
@@ -2500,8 +2488,6 @@ const editor = {
     const dashC = common((n) => n.getAttribute("stroke-dasharray") || "");
     const join = joinC.value || "miter";
 
-    const colourRow = this._paintRow("Colour", strokeNone ? null : strokeHex, strokeA, "Stroke",
-      (hex, a) => { this.applyStroke(hex || "none", hex ? curW() : 0); this.applyStrokeOpacity(a); }, "stroke", !!(strokeC.mixed || strokeAC.mixed));
     const widthRow = numRow("Width", strokeW, 0, 0.5, (v) => { this.beginCoalesce(); this.applyStroke(curC(), v); }, (inp) => { this._strokeWidthInput = inp; }, () => this.commitCoalesce("Stroke width"), !!strokeWC.mixed);
     const capRow = this._segRow("Cap", capC.mixed ? null : (capC.value || "butt"),
       [["butt", CAP_GLYPH.butt], ["round", CAP_GLYPH.round], ["square", CAP_GLYPH.square]],
@@ -2520,7 +2506,7 @@ const editor = {
 
     if (!hasStroke) [capRow, joinRow, miterRow, dashRow].forEach((r) => r.classList.add("insp-disabled"));
     setMiterEnabled(join === "miter" && !joinC.mixed);
-    wrap.appendChild(inspGroup("Stroke", [colourRow, widthRow, capRow, joinRow, miterRow, dashRow]));
+    wrap.appendChild(inspGroup("Stroke", [widthRow, capRow, joinRow, miterRow, dashRow]));
 
     // OPACITY — object opacity 0–100% as a slider.
     const opC = common((n) => (n.hasAttribute("opacity") ? parseFloat(n.getAttribute("opacity")) : 1));
@@ -2543,8 +2529,9 @@ const editor = {
       btn.title = h == null ? "None — click to set a colour" : h;
     };
     btn.addEventListener("click", () => {
-      // Fill/stroke rows open the DUO picker (primary/secondary + X) when available,
-      // matching the toolstrip; artboard background etc. fall back to single-target.
+      // The artboard background + fill/stroke all route to the persistent Colour panel
+      // (it edits the artboard bg when the artboard is selected, the duo otherwise).
+      if (duoWhich === "bg") { if (this._summonColor) this._summonColor(); return; }
       if (duoWhich && this.pickPaint) { this.pickPaint(duoWhich); return; }
       if (!this.pickColor) return;
       this.beginCoalesce();
@@ -2664,7 +2651,7 @@ const editor = {
       numRow("Height", Math.round(vb.height), 1, 1, liveSize, (i) => { hInp = i; }, () => this.commitCoalesce("Resize artboard")),
     ]));
     wrap.appendChild(inspGroup("Background", [
-      this._paintRow("Colour", bgNone ? null : bgHex, 1, "Background", (hex) => this.applyArtboardBg(hex)),
+      this._paintRow("Colour", bgNone ? null : bgHex, 1, "Background", (hex) => this.applyArtboardBg(hex), "bg"),
     ]));
     return wrap;
   },

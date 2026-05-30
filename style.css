@@ -408,7 +408,9 @@ button:disabled {
 .dock-window .fp-body, .leftdock .properties .fp-body, .rightdock .properties .fp-body { max-height: none; flex: 1 1 auto; }
 /* Drop indicator shown over a dock zone while dragging a window onto it. */
 .dock-droplines { position: fixed; z-index: 1100; pointer-events: none;
-  border: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  border: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 2px; }
+/* insertion line between / below panels (vs. the full-zone box for an empty dock) */
+.dock-droplines.line { border: 0; background: var(--accent); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6); }
 .dock-droplines.hidden { display: none; }
 /* the side-panel fold toggle reads as "active" when panels are hidden */
 .bar-btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
@@ -632,6 +634,22 @@ button:disabled {
 .rail-section.collapsed .layers-foot { display: none; }
 .rail-section.collapsed .section-head .caret { transform: rotate(-90deg); }
 .rail-section.collapsed .section-body { display: none; }
+/* Dock-aware header: the caret sits on the OUTER (screen) edge and, when collapsed,
+   points toward the canvas; the label hugs the INNER edge. Mirrored per dock side. */
+.leftdock .section-head, .rightdock .section-head { justify-content: flex-start; }
+/* RIGHT dock → label/count left, actions + caret pushed to the right edge, caret last. */
+.rightdock .section-head .sec-label { order: 1; }
+.rightdock .section-head .sec-count { order: 2; margin: 0; }
+.rightdock .section-head .panel-actions { order: 3; margin-left: auto; }
+.rightdock .section-head .caret { order: 4; margin-left: 6px; }
+.rightdock .rail-section.collapsed .section-head .caret { transform: rotate(90deg); }   /* ◄ points inward */
+/* LEFT dock → caret on the left edge, label grows + right-aligns so its text hugs the
+   inner edge, count trailing it. */
+.leftdock .section-head .caret { order: 1; }
+.leftdock .section-head .panel-actions { order: 2; }
+.leftdock .section-head .sec-label { order: 3; flex: 1 1 auto; text-align: right; }
+.leftdock .section-head .sec-count { order: 4; margin: 0 0 0 4px; }
+.leftdock .rail-section.collapsed .section-head .caret { transform: rotate(-90deg); }   /* ► points inward */
 /* collapsed → just the caret + label; the header action buttons (which can wrap to a
    second row) would otherwise leave a tall block with no list under it */
 .rail-section.collapsed .panel-actions { display: none; }

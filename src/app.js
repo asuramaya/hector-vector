@@ -1246,7 +1246,9 @@ function openColorPicker(opts) {
     }
   }
   const onKey = (e) => {
-    if (host) return;   // panel mode: the toolstrip X/Shift+X handler drives the editor
+    // Panel mode: only claim X/Shift+X (duo target toggle/swap) — even when a field is
+    // focused — and let everything else through (no Esc/Enter commit in a panel).
+    if (host) { if (duo && (e.key === "x" || e.key === "X")) { e.preventDefault(); e.stopPropagation(); if (e.shiftKey) swapTargets(); else switchTo(active === "fill" ? "stroke" : "fill"); } return; }
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel(); }
     else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); ok(); }
     // X toggles fill/stroke, Shift+X swaps — intercepted even while a field is focused
@@ -1781,8 +1783,15 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
   const colApply = (w, hex, a) => { if (!coalescing) { editor.beginCoalesce(); coalescing = true; } applyPaint(w, hex, a); active = w; refreshSwatches(); scheduleColorCommit(); };
   // Build the live editor into a host element (the Colour panel body). Reused on each
   // selection change (the docks module gates rebuilds to actual selection-set changes).
+  const colApplyBg = (hex) => { if (!coalescing) { editor.beginCoalesce(); coalescing = true; } editor.applyArtboardBg(hex); scheduleColorCommit(); };
   editor._renderColorPanel = (hostEl) => {
     if (colorCtl) { colorCtl.destroy(); colorCtl = null; }
+    if (editor.artboardSelected) {     // the Colour panel edits the artboard background (solo)
+      const ab = editor.artboardEl();
+      colorCtl = openColorPicker({ title: "Background", allowNone: true, host: hostEl,
+        color: ab ? ab.getAttribute("fill") : null, alpha: 1, onChange: (hex) => colApplyBg(hex) });
+      return;
+    }
     colorCtl = openColorPicker({
       title: "Colour", allowNone: true, host: hostEl,
       duo: {
@@ -1793,6 +1802,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       },
     });
   };
+  editor._summonColor = () => { if (window.__docks) window.__docks.showColor(); };
   const pickFor = (which) => { active = which; refreshSwatches(); if (window.__docks) window.__docks.showColor(which); };
   const doSwap = () => {
     const f = cur("fill"), s = cur("stroke");
@@ -2271,12 +2281,11 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
         const shown = dock.style.display !== "none" && r.width > 4;
         const inEdge = side === "left" ? x < Math.max(r.right, 64) : x > Math.min(shown ? r.left : innerWidth, innerWidth - 64);
         if (!inEdge || y < 8 || y > innerHeight - 36) continue;
-        let before = null, beforeTop = null;
-        if (shown) for (const sec of dock.querySelectorAll(".rail-section")) {
-          const sr = sec.getBoundingClientRect();
-          if (y < sr.top + sr.height / 2) { before = sec.dataset.section; beforeTop = sr.top; break; }
-        }
-        return { side, before, rect: r, shown, beforeTop };
+        const secs = shown ? [...dock.querySelectorAll(":scope > .rail-section")] : [];
+        let before = null, lineY = null;
+        for (const sec of secs) { const sr = sec.getBoundingClientRect(); if (y < sr.top + sr.height / 2) { before = sec.dataset.section; lineY = sr.top; break; } }
+        if (before == null && secs.length) lineY = secs[secs.length - 1].getBoundingClientRect().bottom;   // append → line at the bottom edge
+        return { side, before, rect: r, shown, lineY, empty: secs.length === 0 };
       }
       return null;
     }
@@ -2285,8 +2294,11 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       const ind = dropInd(); ind.classList.remove("hidden");
       const w = t.shown && t.rect.width > 8 ? t.rect.width : 270;
       const left = t.side === "left" ? 0 : innerWidth - w;
-      if (t.beforeTop != null) { ind.style.left = left + "px"; ind.style.top = (t.beforeTop - 2) + "px"; ind.style.width = w + "px"; ind.style.height = "4px"; }
-      else { ind.style.left = left + "px"; ind.style.top = (t.shown ? t.rect.top : 56) + "px"; ind.style.width = w + "px"; ind.style.height = (t.shown ? t.rect.height : innerHeight - 120) + "px"; }
+      if (t.lineY != null) {   // insertion line between / below existing panels
+        ind.classList.add("line"); ind.style.left = left + "px"; ind.style.top = (t.lineY - 2) + "px"; ind.style.width = w + "px"; ind.style.height = "4px";
+      } else {                 // empty (or hidden) dock → outline the whole drop zone
+        ind.classList.remove("line"); ind.style.left = left + "px"; ind.style.top = (t.shown ? t.rect.top : 56) + "px"; ind.style.width = w + "px"; ind.style.height = (t.shown ? t.rect.height : innerHeight - 120) + "px";
+      }
     }
 
     // ---- unified header drag: works whether the panel is docked or already floating ----
