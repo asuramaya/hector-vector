@@ -2583,31 +2583,28 @@ const editor = {
       const sizeRow = numPairRow(
         ["W", r2(bb.x1 - bb.x0), 0, 1, (v) => { this.beginCoalesce(); this.setSelectionSize(v, null, false); }, null, () => { this.commitCoalesce("Resize"); this._renderInspector(); }],
         ["H", r2(bb.y1 - bb.y0), 0, 1, (v) => { this.beginCoalesce(); this.setSelectionSize(null, v, false); }, null, () => { this.commitCoalesce("Resize"); this._renderInspector(); }]);
-      // Rotation scrubs live too. Incremental deltas would drift the bbox centre as the
-      // shape turns, so the centre is captured once at scrub start and every step rotates
-      // about that fixed point. Paired with Corner radius to even out the row.
+      // Rotation scrubs live too — labelled "R" for congruence with X/Y/W/H. Incremental
+      // deltas would drift the bbox centre as the shape turns, so the centre is captured
+      // once at scrub start and every step rotates about that fixed point.
       const ang = this.selectionAngle();
       const baseAng = ang == null ? 0 : r2(ang);
       let lastAng = baseAng, rotCentre = null;
-      const rotField = ["Rotate", baseAng, null, 1,
+      const rotField = ["R", baseAng, null, 1,
         (v) => { if (isNaN(v)) return; if (!rotCentre) { const c = this.selectionBBox(); rotCentre = { cx: (c.x0 + c.x1) / 2, cy: (c.y0 + c.y1) / 2 }; }
           this.beginCoalesce(); this.rotateSelectionBy(v - lastAng, rotCentre); lastAng = v; },
         null, () => { this.commitCoalesce("Rotate"); rotCentre = null; this._renderInspector(); }, ang == null];
-      // Corner radius — active for rects, otherwise a disabled placeholder that keeps the
-      // Rotate row balanced (Figma-style: the field is always present, greyed when N/A).
-      const hasRect = tags.has("rect");
-      const rxC = hasRect ? common((n) => n.tagName.toLowerCase() === "rect" ? (parseFloat(n.getAttribute("rx")) || 0) : 0) : { value: 0 };
-      const cornerField = ["Corner", hasRect ? (rxC.value || 0) : 0, 0, 1,
-        (v) => { this.beginCoalesce(); this.setRectRadius(v); }, null,
-        () => this.commitCoalesce("Corner radius"), hasRect && !!rxC.mixed, !hasRect];
-      wrap.appendChild(inspGroup("Transform", [posRow, sizeRow, numPairRow(rotField, cornerField)]));
+      wrap.appendChild(inspGroup("Transform", [posRow, sizeRow, numHalfRow(rotField)]));
     }
     // (Align → the panel's bottom chin via _alignBar(); Flip + z-order Arrange were removed
-    //  — both are global on the action bar. Corner radius moved up into the Transform
-    //  row beside Rotate.)
+    //  — both are global on the action bar.)
 
-    // ---- SHAPE (contextual) — fill-rule for paths/polygons (Corner lives in Transform). ----
+    // ---- SHAPE (contextual) — corner radius (C) for rects, fill-rule for paths. Rows
+    //  appear only when they apply (no greyed placeholders), to save vertical space. ----
     const shapeRows = [];
+    if (tags.has("rect")) {
+      const rxC = common((n) => n.tagName.toLowerCase() === "rect" ? (parseFloat(n.getAttribute("rx")) || 0) : 0);
+      shapeRows.push(numRow("C", rxC.value || 0, 0, 1, (v) => { this.beginCoalesce(); this.setRectRadius(v); }, null, () => this.commitCoalesce("Corner radius"), !!rxC.mixed));
+    }
     if (tags.has("path") || tags.has("polygon")) {
       const frC = common((n) => n.getAttribute("fill-rule") || "nonzero");
       shapeRows.push(this._segRow("Fill rule", frC.mixed ? null : frC.value,
@@ -2616,8 +2613,9 @@ const editor = {
     }
     if (shapeRows.length) wrap.appendChild(inspGroup("Shape", shapeRows));
 
-    // STROKE — weight, cap, join, miter limit, dashes. Cap/join/miter/dash are
-    // meaningless without a stroke, so they're disabled until one exists.
+    // STROKE — weight, cap, join, miter limit, dashes. Cap/join/dash are meaningless
+    // without a stroke and miter only applies to a miter join, so those rows APPEAR/
+    // DISAPPEAR with context (rather than greying out) to save vertical space.
     const strokeC = common((n) => n.getAttribute("stroke"));
     const strokeWC = common((n) => parseFloat(n.getAttribute("stroke-width")) || 0);
     const strokeVal = strokeC.value;
@@ -2633,25 +2631,28 @@ const editor = {
     const dashC = common((n) => n.getAttribute("stroke-dasharray") || "");
     const join = joinC.value || "miter";
 
-    const widthRow = numRow("Width", strokeW, 0, 0.5, (v) => { this.beginCoalesce(); this.applyStroke(curC(), v); }, (inp) => { this._strokeWidthInput = inp; }, () => this.commitCoalesce("Stroke width"), !!strokeWC.mixed);
-    const capRow = this._segRow("Cap", capC.mixed ? null : (capC.value || "butt"),
-      [["butt", CAP_GLYPH.butt], ["round", CAP_GLYPH.round], ["square", CAP_GLYPH.square]],
-      { butt: "Butt", round: "Round", square: "Projecting" },
-      (v) => { this.push("Stroke cap"); this.setStrokeAttr("stroke-linecap", v); });
-    const miterRow = this._numSliderRow("Miter", miterC.value == null ? 4 : miterC.value, 1, 20, 0.5,
-      (v) => { this.beginCoalesce(); this.setStrokeAttr("stroke-miterlimit", nfmt(v)); }, () => this.commitCoalesce("Miter limit"), !!miterC.mixed);
-    const setMiterEnabled = (on) => miterRow.classList.toggle("insp-disabled", !on || !hasStroke);
-    const joinRow = this._segRow("Join", joinC.mixed ? null : join,
-      [["miter", JOIN_GLYPH.miter], ["round", JOIN_GLYPH.round], ["bevel", JOIN_GLYPH.bevel]],
-      { miter: "Miter", round: "Round", bevel: "Bevel" },
-      (v) => { this.push("Stroke join"); this.setStrokeAttr("stroke-linejoin", v); setMiterEnabled(v === "miter"); });
-    const dashRow = this._dashRow("Dashes", dashC.value || "", curW(),
-      (arr, dotted) => { this.beginCoalesce(); this.setStrokeAttr("stroke-dasharray", arr); if (dotted) this.setStrokeAttr("stroke-linecap", "round"); },
-      () => this.commitCoalesce("Dashes"), !!dashC.mixed);
-
-    if (!hasStroke) [capRow, joinRow, miterRow, dashRow].forEach((r) => r.classList.add("insp-disabled"));
-    setMiterEnabled(join === "miter" && !joinC.mixed);
-    wrap.appendChild(inspGroup("Stroke", [widthRow, capRow, joinRow, miterRow, dashRow]));
+    // Width commits re-render so adding/removing a stroke reveals/hides the rows below.
+    const widthRow = numRow("Width", strokeW, 0, 0.5, (v) => { this.beginCoalesce(); this.applyStroke(curC(), v); }, (inp) => { this._strokeWidthInput = inp; }, () => { this.commitCoalesce("Stroke width"); this._renderInspector(); }, !!strokeWC.mixed);
+    const strokeRows = [widthRow];
+    if (hasStroke) {
+      strokeRows.push(this._segRow("Cap", capC.mixed ? null : (capC.value || "butt"),
+        [["butt", CAP_GLYPH.butt], ["round", CAP_GLYPH.round], ["square", CAP_GLYPH.square]],
+        { butt: "Butt", round: "Round", square: "Projecting" },
+        (v) => { this.push("Stroke cap"); this.setStrokeAttr("stroke-linecap", v); }));
+      // Changing the join re-renders so the Miter row appears only for a miter join.
+      strokeRows.push(this._segRow("Join", joinC.mixed ? null : join,
+        [["miter", JOIN_GLYPH.miter], ["round", JOIN_GLYPH.round], ["bevel", JOIN_GLYPH.bevel]],
+        { miter: "Miter", round: "Round", bevel: "Bevel" },
+        (v) => { this.push("Stroke join"); this.setStrokeAttr("stroke-linejoin", v); this._renderInspector(); }));
+      if (join === "miter" && !joinC.mixed) {
+        strokeRows.push(this._numSliderRow("Miter", miterC.value == null ? 4 : miterC.value, 1, 20, 0.5,
+          (v) => { this.beginCoalesce(); this.setStrokeAttr("stroke-miterlimit", nfmt(v)); }, () => this.commitCoalesce("Miter limit"), !!miterC.mixed));
+      }
+      strokeRows.push(this._dashRow("Dashes", dashC.value || "", curW(),
+        (arr, dotted) => { this.beginCoalesce(); this.setStrokeAttr("stroke-dasharray", arr); if (dotted) this.setStrokeAttr("stroke-linecap", "round"); },
+        () => this.commitCoalesce("Dashes"), !!dashC.mixed));
+    }
+    wrap.appendChild(inspGroup("Stroke", strokeRows));
 
     // APPEARANCE — blend mode + object opacity.
     const opC = common((n) => (n.hasAttribute("opacity") ? parseFloat(n.getAttribute("opacity")) : 1));
@@ -2974,12 +2975,21 @@ function numField(label, value, min, step, onLive, capture, onCommit, mixed, dis
   field.appendChild(s); field.appendChild(inp);
   return { field, inp };
 }
-// Two number fields on one row (X|Y, W|H, Rotate|Corner) — reclaims the dead horizontal
-// space a single short value left as whitespace. Each arg is a numField argument list.
+// Two number fields on one row (X|Y, W|H) — reclaims the dead horizontal space a single
+// short value left as whitespace. Each arg is a numField argument list.
 function numPairRow(a, b) {
   const row = document.createElement("div"); row.className = "insp-row insp-pair";
   row.appendChild(numField(...a).field);
   row.appendChild(numField(...b).field);
+  return row;
+}
+// A lone compact field in the left half of a pair row (right half empty) — for single
+// congruent fields like R (rotate) and C (corner) so their input lines up under X / W
+// instead of stretching full-width. `spec` is a numField argument list.
+function numHalfRow(spec) {
+  const row = document.createElement("div"); row.className = "insp-row insp-pair";
+  row.appendChild(numField(...spec).field);
+  row.appendChild(document.createElement("div"));
   return row;
 }
 function numRow(label, value, min, step, onLive, capture, onCommit, mixed) {

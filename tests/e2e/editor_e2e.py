@@ -374,6 +374,17 @@ def main():
         check("stroke cap via segmented control", page.evaluate("editor.nodeById('r1').getAttribute('stroke-linecap')") == "round")
         # the segmented control updates its OWN active highlight (the 'unresponsive panel' fix)
         check("segmented control reflects the active option", seg_active == "Round", f"active={seg_active}")
+        # Miter row is contextual — present for a miter join, gone for round/bevel (it
+        # appears/disappears rather than greying out). A new stroke seeds a round join, so
+        # set miter first, then clicking the Join seg to round must re-render it away.
+        has_miter = lambda: page.evaluate("""() => [...document.querySelectorAll('.context-panel .insp-row > span, .context-panel .insp-field > span')].some(s=>s.textContent==='Miter')""")
+        page.evaluate("editor.setStrokeAttr('stroke-linejoin','miter'); editor._renderInspector();"); page.wait_for_timeout(50)
+        check("Miter row present for a miter join", has_miter())
+        page.evaluate("""() => { const join=[...document.querySelectorAll('.context-panel .insp-seg')]
+            .find(s=>[...s.querySelectorAll('.insp-seg-btn')].some(b=>b.title==='Bevel'));
+            const round=[...join.querySelectorAll('.insp-seg-btn')].find(b=>b.title==='Round'); round.click(); }""")
+        page.wait_for_timeout(60)
+        check("Miter row hidden for a non-miter join (seg re-render)", not has_miter())
         # drag-to-scrub: dragging the Width label changes stroke-width (invisible slider)
         open_ctx_panel(page)
         lbl = page.evaluate("""() => { const sp = [...document.querySelectorAll('.context-panel .insp-row > span')]
@@ -941,34 +952,42 @@ def main():
         # align-to-artboard lives in the panel's pinned bottom chin now (6 buttons)
         check("align-to-artboard buttons sit in the bottom chin",
               page.evaluate("document.querySelectorAll('.context-panel .insp-foot .insp-alignbar .insp-iconbtn').length") == 6)
-        # X/Y, W/H and Rotate/Corner are each paired two-up on one row (.insp-pair) — short
-        # numeric fields no longer waste half the panel width, and Rotate is no longer a
-        # lone full-width row (it's evened out by Corner). No "Lock W:H" row / magnet.
-        check("X/Y, W/H, Rotate/Corner are paired two-up (insp-pair rows)",
+        # X/Y and W/H pair two-up; Rotate is a lone compact "R" half-row (Corner moved to
+        # Shape). Single-letter labels for congruence with X/Y/W/H. No Lock W:H / magnet.
+        check("X/Y, W/H paired and Rotate is a compact R half-row",
               page.evaluate("""() => {
-                const fieldLabel = f => f.querySelector('span') && f.querySelector('span').textContent;
+                const fl = f => f.querySelector('span') && f.querySelector('span').textContent;
                 const pairs = [...document.querySelectorAll('.context-panel .insp-row.insp-pair')]
-                  .map(r => [...r.querySelectorAll('.insp-field')].map(fieldLabel).join(''));
-                const fields = ['X','Y','W','H','Rotate','Corner'].every(l =>
-                  [...document.querySelectorAll('.context-panel .insp-field')].some(f => fieldLabel(f) === l));
+                  .map(r => [...r.querySelectorAll('.insp-field')].map(fl).join(''));
+                const has = l => [...document.querySelectorAll('.context-panel .insp-field')].some(f => fl(f) === l);
                 const noLock = ![...document.querySelectorAll('.context-panel .insp-row > span, .context-panel .insp-field > span')]
                   .some(s => s.textContent === 'Lock W:H');
                 const noMagnet = !document.querySelector('.context-panel .insp-link');
-                return fields && pairs.includes('XY') && pairs.includes('WH')
-                  && pairs.includes('RotateCorner') && noLock && noMagnet; }"""))
-        # Corner is enabled for a rect (t1) — live-editable radius.
-        check("Corner field is enabled for a rect selection",
+                return ['X','Y','W','H','R'].every(has) && pairs.includes('XY')
+                  && pairs.includes('WH') && pairs.includes('R') && noLock && noMagnet; }"""))
+        # Corner (C) is contextual — it lives in the Shape section (a full Width-style row)
+        # and appears for a rect.
+        check("Corner (C) appears in Shape for a rect",
               page.evaluate("""() => {
-                const fieldLabel = f => f.querySelector('span') && f.querySelector('span').textContent;
-                const f = [...document.querySelectorAll('.context-panel .insp-field')].find(f => fieldLabel(f) === 'Corner');
-                return !!f && !f.classList.contains('is-disabled') && !f.querySelector('input').disabled; }"""))
+                const shape = [...document.querySelectorAll('.context-panel .insp-group')]
+                  .find(g => { const t = g.querySelector('.insp-title'); return t && t.textContent === 'Shape'; });
+                return !!shape && [...shape.querySelectorAll('.insp-row > span')].some(s => s.textContent === 'C'); }"""))
         # Native number spinners are suppressed (scrub label replaces them).
         check("number inputs drop the native spinner",
               page.evaluate("""() => { const i = document.querySelector('.context-panel .insp-field input[type=number]');
                 return i && ['textfield','none'].includes(getComputedStyle(i).appearance || getComputedStyle(i).webkitAppearance); }"""))
-        # Rotate is a scrub-numeric like X/Y/W/H (a number input in a Transform row), not a button bar
-        check("Rotate is a numeric field in Transform",
-              page.evaluate("""() => { const r=[...document.querySelectorAll('.context-panel .insp-field')].find(r=>r.querySelector('span')&&r.querySelector('span').textContent==='Rotate'); return !!r && !!r.querySelector('input[type=number]'); }"""))
+        # Strokeless selection: Stroke section shows ONLY Width — Cap/Join/Dashes appear
+        # with context, they aren't greyed placeholders.
+        check("strokeless selection shows only Width in Stroke",
+              page.evaluate("""() => {
+                const st = [...document.querySelectorAll('.context-panel .insp-group')]
+                  .find(g => { const t = g.querySelector('.insp-title'); return t && t.textContent === 'Stroke'; });
+                if (!st) return false;
+                const labels = [...st.querySelectorAll('.insp-row > span, .insp-field > span')].map(s => s.textContent);
+                return labels.includes('Width') && !labels.includes('Cap') && !labels.includes('Join') && !labels.includes('Dashes'); }"""))
+        # Rotate is a scrub-numeric like X/Y/W/H (label "R"), not a button bar
+        check("Rotate (R) is a numeric field in Transform",
+              page.evaluate("""() => { const r=[...document.querySelectorAll('.context-panel .insp-field')].find(r=>r.querySelector('span')&&r.querySelector('span').textContent==='R'); return !!r && !!r.querySelector('input[type=number]'); }"""))
         page.evaluate("editor.setSelectionPos(0,0)")
         bb = page.evaluate("() => { const b = editor.selectionBBox(); return [Math.round(b.x0), Math.round(b.y0)]; }")
         check("Transform X/Y moves the selection to the origin", bb == [0, 0], str(bb))
@@ -998,7 +1017,7 @@ def main():
         w_live = page.evaluate("() => Math.round(editor.selectionBBox().x1 - editor.selectionBBox().x0)")
         page.mouse.up(); page.wait_for_timeout(40)
         check("W scrubs the width live (before release)", w_live > w_before, f"{w_before} -> {w_live}")
-        rxy = field_label_xy("Rotate")
+        rxy = field_label_xy("R")
         page.mouse.move(rxy["x"], rxy["y"]); page.mouse.down()
         page.mouse.move(rxy["x"] + 40, rxy["y"], steps=8)
         rot_live = page.evaluate("() => { const c=editor.nodeById('t1').transform.baseVal.consolidate(); return c?Math.abs(c.matrix.b)>0.02:false; }")
@@ -1008,12 +1027,10 @@ def main():
         page.wait_for_timeout(30)
         check("Shape section exposes Fill rule for a path",
               page.evaluate("""[...document.querySelectorAll('.context-panel .insp-row > span')].some(s=>s.textContent==='Fill rule')"""))
-        # Corner is disabled (greyed, present) for a non-rect so the Rotate row stays even.
-        check("Corner field is disabled for a non-rect selection",
-              page.evaluate("""() => {
-                const fieldLabel = f => f.querySelector('span') && f.querySelector('span').textContent;
-                const f = [...document.querySelectorAll('.context-panel .insp-field')].find(f => fieldLabel(f) === 'Corner');
-                return !!f && f.classList.contains('is-disabled') && f.querySelector('input').disabled; }"""))
+        # Corner (C) is contextual — ABSENT entirely for a non-rect (not greyed out).
+        check("Corner is absent for a non-rect (contextual, not greyed)",
+              page.evaluate("""() => ![...document.querySelectorAll('.context-panel .insp-row > span, .context-panel .insp-field > span')]
+                .some(s => s.textContent === 'C')"""))
         page.evaluate("editor.setAttrAll('fill-rule','evenodd')")
         check("fill-rule applies to the path", page.evaluate("editor.nodeById('t2').getAttribute('fill-rule')") == "evenodd")
 
