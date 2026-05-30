@@ -76,6 +76,26 @@ export function starD(cx, cy, rx, ry, points, inset, rot, corner) {
 
 const onEll = (cx, cy, rx, ry, deg) => { const a = deg * Math.PI / 180; return { x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) }; };
 
+// Cubic-bézier approximation of an elliptical arc from a0..a1 (degrees), split into
+// <=90° pieces (kappa = 4/3·tan(Δ/4)). Emits " C … C …" (no leading M). Ellipses are
+// built from these so their NODES are smooth bézier anchors with in/out handles —
+// identical to pen points, and fully node-editable (vs opaque SVG `A` arc endpoints).
+function arcBezier(cx, cy, rx, ry, a0, a1) {
+  const s = a0 * Math.PI / 180, e = a1 * Math.PI / 180, sweep = e - s;
+  const n = Math.max(1, Math.ceil(Math.abs(sweep) / (Math.PI / 2) - 1e-9));
+  const step = sweep / n;
+  let out = "";
+  for (let i = 0; i < n; i++) {
+    const t0 = s + i * step, t1 = t0 + step, k = (4 / 3) * Math.tan((t1 - t0) / 4);
+    const p0x = cx + rx * Math.cos(t0), p0y = cy + ry * Math.sin(t0);
+    const p3x = cx + rx * Math.cos(t1), p3y = cy + ry * Math.sin(t1);
+    const c1x = p0x - k * rx * Math.sin(t0), c1y = p0y + k * ry * Math.cos(t0);
+    const c2x = p3x + k * rx * Math.sin(t1), c2y = p3y - k * ry * Math.cos(t1);
+    out += ` C${f(c1x, c1y)} ${f(c2x, c2y)} ${f(p3x, p3y)}`;
+  }
+  return out;
+}
+
 // full ellipse / pie / arc / ring. start..end in degrees (0 = +x, clockwise with y-down);
 // a zero span means a full ellipse. inner (0..1) carves a concentric hole / annulus.
 export function ellipseD(cx, cy, rx, ry, start, end, inner) {
@@ -83,20 +103,19 @@ export function ellipseD(cx, cy, rx, ry, start, end, inner) {
   const span = ((((end || 0) - (start || 0)) % 360) + 360) % 360;
   const full = span < 0.001;
   if (full) {
-    const outer = `M${f(cx - rx, cy)} A${nfmt(rx)} ${nfmt(ry)} 0 1 1 ${f(cx + rx, cy)} A${nfmt(rx)} ${nfmt(ry)} 0 1 1 ${f(cx - rx, cy)} Z`;
+    // start at the top (-90°) so the four anchors land at top / right / bottom / left
+    const top = onEll(cx, cy, rx, ry, -90);
+    const outer = `M${f(top.x, top.y)}${arcBezier(cx, cy, rx, ry, -90, 270)} Z`;
     if (!ir) return outer;
-    const ax = rx * ir, ay = ry * ir;   // inner drawn reversed (sweep 0) so nonzero winding cuts a hole
-    return outer + ` M${f(cx - ax, cy)} A${nfmt(ax)} ${nfmt(ay)} 0 1 0 ${f(cx + ax, cy)} A${nfmt(ax)} ${nfmt(ay)} 0 1 0 ${f(cx - ax, cy)} Z`;
+    const ax = rx * ir, ay = ry * ir, itop = onEll(cx, cy, ax, ay, -90);   // inner reversed → hole
+    return outer + ` M${f(itop.x, itop.y)}${arcBezier(cx, cy, ax, ay, 270, -90)} Z`;
   }
-  const large = span > 180 ? 1 : 0;
-  const oS = onEll(cx, cy, rx, ry, start), oE = onEll(cx, cy, rx, ry, end);
+  const oS = onEll(cx, cy, rx, ry, start);
   if (!ir) {   // pie wedge from the centre
-    return `M${f(cx, cy)} L${f(oS.x, oS.y)} A${nfmt(rx)} ${nfmt(ry)} 0 ${large} 1 ${f(oE.x, oE.y)} Z`;
+    return `M${f(cx, cy)} L${f(oS.x, oS.y)}${arcBezier(cx, cy, rx, ry, start, end)} Z`;
   }
-  const ax = rx * ir, ay = ry * ir;     // annular sector
-  const iS = onEll(cx, cy, ax, ay, start), iE = onEll(cx, cy, ax, ay, end);
-  return `M${f(iS.x, iS.y)} L${f(oS.x, oS.y)} A${nfmt(rx)} ${nfmt(ry)} 0 ${large} 1 ${f(oE.x, oE.y)}` +
-    ` L${f(iE.x, iE.y)} A${nfmt(ax)} ${nfmt(ay)} 0 ${large} 0 ${f(iS.x, iS.y)} Z`;
+  const ax = rx * ir, ay = ry * ir, iE = onEll(cx, cy, ax, ay, end);   // annular sector
+  return `M${f(oS.x, oS.y)}${arcBezier(cx, cy, rx, ry, start, end)} L${f(iE.x, iE.y)}${arcBezier(cx, cy, ax, ay, end, start)} Z`;
 }
 
 // ---- data model ----------------------------------------------------------------

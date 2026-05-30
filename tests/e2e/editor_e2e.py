@@ -1179,6 +1179,19 @@ def main():
         page.evaluate(f"editor.selection=new Set(['{eid}']); editor.setShapeParam('end', 90, 'ellipse'); editor._renderSelection();"); page.wait_for_timeout(30)
         check("ellipse arc carves a pie wedge", page.evaluate(f"/^M[\\d.\\s-]+L/.test(editor.nodeById('{eid}').getAttribute('d'))"),
               page.evaluate(f"editor.nodeById('{eid}').getAttribute('d')")[:30])
+        # circle points are pen-like: a full ellipse is 4 cubic-bezier anchors (top/right/
+        # bottom/left) WITH direction handles, not opaque SVG arc endpoints.
+        mount_ctl(page)
+        draw_shape(page, "ellipse", 0.25, 0.25, 0.75, 0.75)
+        cid = page.evaluate("[...editor.selection][0]")
+        check("circle is cubic beziers (4 C segments), no SVG arcs",
+              page.evaluate(f"(editor.nodeById('{cid}').getAttribute('d').match(/C/g)||[]).length") == 4
+              and "A" not in page.evaluate(f"editor.nodeById('{cid}').getAttribute('d')"))
+        page.evaluate(f"editor.selection=new Set(['{cid}']); editor.setTool('node');"); page.wait_for_timeout(80)
+        check("circle shows 4 node anchors WITH bezier direction handles (pen-like)",
+              page.evaluate("document.querySelectorAll('.hv-node-anchor').length") == 4
+              and page.evaluate("document.querySelectorAll('.hv-node-handle').length") > 0)
+        page.evaluate("editor.setTool('select')")
         # FULL POINT CONTROL on shapes: a live polygon exposes one node anchor per vertex
         # in the node tool, and dragging one both moves the geometry and frees it from its
         # params (no "Expand" step needed).
