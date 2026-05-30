@@ -2091,11 +2091,165 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     const key = "hv-sec-" + section.dataset.section;
     if (localStorage.getItem(key) === "1") section.classList.add("collapsed");
     head.addEventListener("click", (e) => {
-      if (e.target.closest(".panel-actions")) return;   // kebab/menu clicks don't collapse
+      // action clicks, a just-finished drag, or a floating window's titlebar don't collapse
+      if (e.target.closest(".panel-actions") || head._docking || head.closest(".dock-window")) return;
       const c = section.classList.toggle("collapsed");
       try { localStorage.setItem(key, c ? "1" : "0"); } catch {}
     });
   });
+
+  // ---- Dockable panels: detach History / Layers to floating windows; dock left or right ----
+  {
+    const appEl = document.querySelector(".app.editor");
+    const leftDock = document.querySelector("#leftdock");
+    const rightDock = document.querySelector("#rightdock");
+    const vresizer = document.querySelector("#dock-vresizer");
+    const leftToggle = document.querySelector("#leftrail-toggle");
+    const DOCKS_KEY = "hector-vector:docks";
+    const ORDER = ["history", "layers"];   // home order within a dock column
+    const sectionEl = (name) => document.querySelector(`.rail-section[data-section="${name}"]`);
+    const dockElFor = (side) => (side === "left" ? leftDock : rightDock);
+    let state = {};
+    for (const n of ORDER) state[n] = { loc: "right", lastSide: "right", rect: null };
+    try { const s = JSON.parse(localStorage.getItem(DOCKS_KEY) || "null"); if (s) for (const n of ORDER) if (s[n]) state[n] = { ...state[n], ...s[n] }; } catch {}
+    const persist = () => { try { localStorage.setItem(DOCKS_KEY, JSON.stringify(state)); } catch {} };
+
+    // a small "dock back" control injected into a floating panel's header
+    function ensureRedock(name) {
+      const sec = sectionEl(name), actions = sec && sec.querySelector(".panel-actions");
+      if (!actions || actions.querySelector(".dock-redock")) return;
+      const b = document.createElement("button");
+      b.className = "tool-button dock-redock"; b.type = "button"; b.title = "Dock this panel back into a rail"; b.textContent = "⤓";
+      b.addEventListener("click", (e) => { e.stopPropagation(); setLoc(name, state[name].lastSide || "right"); });
+      actions.appendChild(b);
+    }
+    const removeRedock = (name) => { const sec = sectionEl(name), b = sec && sec.querySelector(".dock-redock"); if (b) b.remove(); };
+
+    function placeDock(name, side) {
+      const sec = sectionEl(name); if (!sec) return;
+      const win = sec.closest(".dock-window");
+      const dock = dockElFor(side);
+      // keep home order: insert before the first later-ordered section already in this dock
+      const after = ORDER.slice(ORDER.indexOf(name) + 1).map(sectionEl).find((s) => s && s.parentElement === dock);
+      dock.insertBefore(sec, after || null);
+      sec.style.height = ""; sec.classList.remove("collapsed-floating");
+      if (win) { if (win._ro) win._ro.disconnect(); win.remove(); }
+      removeRedock(name);
+    }
+
+    function makeFloat(name) {
+      const sec = sectionEl(name); if (!sec || sec.closest(".dock-window")) return;
+      const r = sec.getBoundingClientRect();
+      const w = Math.max(220, r.width || 260), h = Math.max(200, Math.min(r.height || 320, 440));
+      const fr = state[name].rect || { x: Math.max(8, Math.min(r.left || (window.innerWidth - w - 12), window.innerWidth - w - 8)), y: Math.max(64, r.top || 80), w, h };
+      const win = document.createElement("div");
+      win.className = "dock-window"; win.dataset.dockWindow = name;
+      win.style.left = fr.x + "px"; win.style.top = fr.y + "px"; win.style.width = fr.w + "px"; win.style.height = fr.h + "px";
+      document.body.appendChild(win);
+      win.appendChild(sec);
+      sec.classList.remove("collapsed");   // a floating window always shows its body
+      ensureRedock(name);
+      bindWindowDrag(win, name);
+      win._ro = new ResizeObserver(() => { const b = win.getBoundingClientRect(); state[name].rect = { x: b.left, y: b.top, w: b.width, h: b.height }; persist(); });
+      win._ro.observe(win);
+    }
+
+    // current DOM location of a panel: 'left' | 'right' | 'float'
+    const curLoc = (name) => { const sec = sectionEl(name); if (!sec) return null; if (sec.closest(".dock-window")) return "float"; return sec.parentElement === leftDock ? "left" : "right"; };
+
+    function apply() {
+      for (const name of ORDER) {
+        const want = state[name].loc, have = curLoc(name);
+        if (want === have) continue;
+        if (want === "float") makeFloat(name);
+        else placeDock(name, want);
+      }
+      // grid + chrome sync
+      appEl.classList.toggle("left-docked", !!leftDock.querySelector(".rail-section"));
+      rightDock.classList.toggle("dock-empty", !rightDock.querySelector(".rail-section"));   // collapse an empty right dock
+      const bothRight = curLoc("history") === "right" && curLoc("layers") === "right";
+      if (vresizer) vresizer.style.display = bothRight ? "" : "none";
+      if (leftToggle) leftToggle.hidden = !appEl.classList.contains("left-docked");
+      requestAnimationFrame(() => measureFit(viewports.output));
+    }
+    function setLoc(name, loc) {
+      state[name] = { ...state[name], loc, lastSide: loc === "float" ? state[name].lastSide : loc };
+      apply(); persist();
+    }
+
+    // ---- drag a floating window by its header; drop over a dock zone to re-dock ----
+    let dropEl = null;
+    const dropIndicator = () => { if (!dropEl) { dropEl = document.createElement("div"); dropEl.className = "dock-droplines hidden"; document.body.appendChild(dropEl); } return dropEl; };
+    const hideDrop = () => { if (dropEl) dropEl.classList.add("hidden"); };
+    const overDock = (x, y) => {
+      for (const side of ["left", "right"]) {
+        const d = dockElFor(side); if (side === "right" && appEl.classList.contains("rail-collapsed")) continue;
+        const r = d.getBoundingClientRect();
+        // left dock may be 0-wide when empty → also accept the left/right screen margin
+        const hit = side === "left" ? (x < Math.max(r.right, 56)) : (x > Math.min(r.left, window.innerWidth - 56));
+        if (hit && y > r.top - 40) return side;
+      }
+      return null;
+    };
+    function bindWindowDrag(win, name) {
+      const head = win.querySelector(".section-head"); if (!head) return;
+      head.addEventListener("pointerdown", (e) => {
+        if (e.target.closest(".panel-actions") || e.button !== 0) return;
+        e.preventDefault();
+        const r = win.getBoundingClientRect(), ox = e.clientX - r.left, oy = e.clientY - r.top;
+        let moved = false;
+        try { head.setPointerCapture(e.pointerId); } catch {}
+        const move = (ev) => {
+          if (!moved && Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) < 4) return;
+          moved = true; head._docking = true; win.classList.add("dragging");
+          win.style.left = Math.max(0, Math.min(ev.clientX - ox, window.innerWidth - 60)) + "px";
+          win.style.top = Math.max(0, Math.min(ev.clientY - oy, window.innerHeight - 30)) + "px";
+          const side = overDock(ev.clientX, ev.clientY);
+          if (side) { const d = dockElFor(side).getBoundingClientRect(); const ind = dropIndicator(); ind.classList.remove("hidden");
+            const w = d.width > 8 ? d.width : 270; const left = side === "left" ? 0 : window.innerWidth - w;
+            ind.style.left = left + "px"; ind.style.top = d.top + "px"; ind.style.width = w + "px"; ind.style.height = d.height + "px"; }
+          else hideDrop();
+        };
+        const up = (ev) => {
+          try { head.releasePointerCapture(e.pointerId); } catch {}
+          head.removeEventListener("pointermove", move); head.removeEventListener("pointerup", up);
+          win.classList.remove("dragging"); hideDrop();
+          if (moved) {
+            const side = overDock(ev.clientX, ev.clientY);
+            if (side) setLoc(name, side);
+            else { const b = win.getBoundingClientRect(); state[name].rect = { x: b.left, y: b.top, w: b.width, h: b.height }; persist(); }
+            setTimeout(() => { head._docking = false; }, 0);   // swallow the trailing click so it doesn't collapse
+          }
+        };
+        head.addEventListener("pointermove", move); head.addEventListener("pointerup", up);
+      });
+    }
+
+    // detach buttons in the dock headers
+    document.querySelectorAll(".rail-section[data-section] .dock-detach").forEach((btn) => {
+      const name = btn.closest(".rail-section").dataset.section;
+      btn.addEventListener("click", (e) => { e.stopPropagation(); setLoc(name, "float"); });
+    });
+    // left-dock collapse toggle + resizer
+    if (leftToggle) leftToggle.addEventListener("click", () => { appEl.classList.toggle("left-collapsed"); requestAnimationFrame(() => measureFit(viewports.output)); });
+    {
+      const lh = document.querySelector("#leftdock-resizer");
+      if (lh) lh.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        const startX = e.clientX, startW = leftDock.getBoundingClientRect().width;
+        lh.setPointerCapture(e.pointerId);
+        const mv = (ev) => { leftDock.style.width = Math.max(200, Math.min(560, startW + (ev.clientX - startX))) + "px"; };
+        const up = () => { lh.removeEventListener("pointermove", mv); lh.removeEventListener("pointerup", up); requestAnimationFrame(() => measureFit(viewports.output)); };
+        lh.addEventListener("pointermove", mv); lh.addEventListener("pointerup", up);
+      });
+    }
+
+    apply();   // restore docked/floating state at boot
+    window.__docks = {
+      float: (n) => setLoc(n, "float"), dock: (n, side) => setLoc(n, side || "right"),
+      loc: curLoc, state: () => state,
+    };
+  }
 
   // ---- PWA install (surfaced as a File-menu item; one-click path to WCO) ----
   if ("serviceWorker" in navigator) {

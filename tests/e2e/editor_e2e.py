@@ -1500,6 +1500,31 @@ def main():
               page.evaluate("document.querySelectorAll('.actionbar .tool-sep').length") == before, f"back to {before}")
         page.evaluate("window.__layout.toggleEdit(); window.__layout.reset()"); page.wait_for_timeout(60)
 
+        # ---- Dockable panels: detach to float, dock left/right, persist ----
+        check("docking controller is exposed", page.evaluate("!!window.__docks") is True)
+        # detach button floats a panel into a window
+        page.click('.rail-section.history .dock-detach'); page.wait_for_timeout(80)
+        check("detach floats History into a window",
+              page.evaluate("window.__docks.loc('history') === 'float' && !!document.querySelector('.dock-window[data-dock-window=\"history\"]')"))
+        check("floating window grows a dock-back control",
+              page.evaluate("!!document.querySelector('.dock-window[data-dock-window=\"history\"] .dock-redock')"))
+        # dock Layers to the LEFT → left dock column appears
+        page.evaluate("window.__docks.dock('layers','left')"); page.wait_for_timeout(80)
+        check("docking left reveals the left dock column",
+              page.evaluate("window.__docks.loc('layers') === 'left' && document.querySelector('.app.editor').classList.contains('left-docked') && !!document.querySelector('#leftdock .rail-section.layers')"))
+        check("left-dock collapse toggle becomes available",
+              page.evaluate("!document.querySelector('#leftrail-toggle').hidden"))
+        # with both panels out of the right dock, it collapses to nothing
+        check("emptied right dock collapses",
+              page.evaluate("document.querySelector('#rightdock').classList.contains('dock-empty')"))
+        # state persisted
+        check("dock layout is persisted",
+              page.evaluate("() => { const s=JSON.parse(localStorage.getItem('hector-vector:docks')||'{}'); return s.history && s.history.loc==='float' && s.layers && s.layers.loc==='left'; }"))
+        # re-dock both back to the right
+        page.evaluate("window.__docks.dock('history','right'); window.__docks.dock('layers','right')"); page.wait_for_timeout(80)
+        check("re-docking returns panels to the right dock (no floating windows)",
+              page.evaluate("window.__docks.loc('history')==='right' && window.__docks.loc('layers')==='right' && !document.querySelector('.dock-window') && !document.querySelector('.app.editor').classList.contains('left-docked')"))
+
         # ---- App-window mode (standalone Chromium window) ----
         # Headless can't exercise WCO/AWC, but the ?app=1 gate must engage and make
         # the header a draggable titlebar without disturbing normal layout. Window

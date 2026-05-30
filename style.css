@@ -258,6 +258,16 @@ button:disabled {
    dock's `auto` column and the canvas collapses. The action bar stays. */
 .app.editor.rail-collapsed .rightdock { display: none; }
 .app.editor.rail-collapsed .editor-grid { grid-template-columns: auto minmax(0, 1fr) auto; }
+/* Left dock: hidden (no grid track) until a panel is docked there. DOM order is
+   toolstrip · leftdock · stage · actionbar · rightdock, so `display:none` on an empty
+   left dock collapses it cleanly and the remaining four items fill the 4-col template. */
+.leftdock { display: none; }
+.app.editor.left-docked .leftdock { display: flex; }
+.app.editor.left-docked .editor-grid { grid-template-columns: auto auto minmax(0, 1fr) auto auto; }
+.app.editor.left-docked.rail-collapsed .editor-grid { grid-template-columns: auto auto minmax(0, 1fr) auto; }
+.app.editor.left-collapsed .leftdock { display: none; }
+.app.editor.left-docked.left-collapsed .editor-grid { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+.app.editor.left-docked.left-collapsed.rail-collapsed .editor-grid { grid-template-columns: auto minmax(0, 1fr) auto; }
 
 .toolstrip {
   border: 1px solid var(--line);
@@ -373,6 +383,34 @@ button:disabled {
 .dock-resizer:hover { background: var(--accent); opacity: 0.3; }
 .menu-count { color: var(--muted); font-size: 11px; margin-left: 2px; }
 .rail-section { display: flex; flex-direction: column; min-height: 0; }
+
+/* Left dock — mirror of the right dock (margin + resizer on the opposite edge). */
+.leftdock {
+  position: relative; border: 1px solid var(--line); background: var(--bg);
+  margin-right: 10px; width: 270px; min-height: 0; flex-direction: column;
+}
+.dock-resizer-l { left: auto; right: -5px; }
+/* an emptied dock (all its panels floated / moved away) collapses out of the grid */
+.rightdock.dock-empty { width: 0; margin: 0; border: 0; overflow: hidden; }
+.leftdock .rail-section.layers, .leftdock .rail-section.history { flex: 1 1 auto; min-height: 90px; height: auto; }
+/* Detach control: only meaningful on docked panels; hidden when a panel floats. */
+.dock-window .dock-detach { display: none; }
+/* A floating, draggable panel window (History / Layers / Properties popped out). */
+.dock-window {
+  position: fixed; z-index: 80; min-width: 190px; min-height: 120px;
+  display: flex; flex-direction: column; background: var(--bg);
+  border: 1px solid var(--line); box-shadow: 0 8px 30px rgba(0, 0, 0, 0.22);
+  resize: both; overflow: hidden;
+}
+.dock-window > .rail-section { flex: 1 1 auto; min-height: 0; }
+.dock-window > .rail-section > .section-body,
+.dock-window > .rail-section .layers-list { flex: 1 1 auto; }
+.dock-window .section-head { cursor: grab; }
+.dock-window.dragging { opacity: 0.92; cursor: grabbing; }
+/* Drop indicator shown over a dock zone while dragging a window onto it. */
+.dock-droplines { position: fixed; z-index: 90; pointer-events: none;
+  border: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.dock-droplines.hidden { display: none; }
 
 .stage-wrap { min-height: 0; position: relative; }
 .stage-head { gap: 10px; }
