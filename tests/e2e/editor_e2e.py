@@ -1137,15 +1137,16 @@ def main():
         mount_ctl(page)
         draw_shape(page, "rect", 0.2, 0.2, 0.7, 0.6)
         sid = page.evaluate("[...editor.selection][0]")
-        # the Shape panel offers a Type switch + Expand-to-path for a live shape
+        # the Shape panel offers a Type switch + corner fields for a live shape
         shape_titles = page.evaluate("""() => { const g=[...document.querySelectorAll('.context-panel .insp-group')]
             .find(g=>{const t=g.querySelector('.insp-title');return t&&t.textContent==='Shape';});
             return g ? [...g.querySelectorAll('.insp-row > span, .insp-field > span')].map(s=>s.textContent) : []; }""")
         check("live-shape Shape panel shows Type + corner fields",
               page.evaluate("""!!document.querySelector('.context-panel .insp-seg')""") and ("C" in shape_titles)
               and ("TL" in shape_titles) and ("TR" in shape_titles), str(shape_titles))
-        check("live-shape Shape panel offers Expand to path",
-              page.evaluate("""[...document.querySelectorAll('.context-panel .ghost-button')].some(b=>/Expand/.test(b.textContent))"""))
+        # NO redundant "Expand to path" button — it's already a path; point control is the node tool
+        check("no redundant Expand-to-path button",
+              not page.evaluate("""[...document.querySelectorAll('.context-panel .ghost-button')].some(b=>/Expand/.test(b.textContent))"""))
         # corner radius regenerates the path d with arcs (rounded), keeping it a live rect
         d_sharp = page.evaluate(f"editor.nodeById('{sid}').getAttribute('d')")
         page.evaluate("editor.setRectRadius(8)"); page.wait_for_timeout(30)
@@ -1168,11 +1169,8 @@ def main():
         check("polygon -> star exposes points + inset",
               page.evaluate(f"editor.nodeById('{sid}').getAttribute('data-hv-shape')") == "star"
               and page.evaluate(f"!!editor.nodeById('{sid}').getAttribute('data-hv-points')"))
-        # Expand to path: drop the parametric metadata -> a plain freeform path
-        page.evaluate("editor.expandShapes()"); page.wait_for_timeout(30)
-        check("Expand to path drops the parametric metadata",
-              page.evaluate(f"!editor.nodeById('{sid}').hasAttribute('data-hv-shape')")
-              and page.evaluate(f"editor.nodeById('{sid}').tagName.toLowerCase()") == "path")
+        # (no Expand button / API — node-editing is the way a shape becomes freeform; that
+        #  transition is covered by "node-editing a live shape freezes it" below.)
 
         # ellipse arc: a span turns the full ellipse into a centre-anchored pie wedge
         mount_ctl(page)
@@ -1181,16 +1179,23 @@ def main():
         page.evaluate(f"editor.selection=new Set(['{eid}']); editor.setShapeParam('end', 90, 'ellipse'); editor._renderSelection();"); page.wait_for_timeout(30)
         check("ellipse arc carves a pie wedge", page.evaluate(f"/^M[\\d.\\s-]+L/.test(editor.nodeById('{eid}').getAttribute('d'))"),
               page.evaluate(f"editor.nodeById('{eid}').getAttribute('d')")[:30])
-        # node-editing a live shape freezes it to a freeform path
+        # FULL POINT CONTROL on shapes: a live polygon exposes one node anchor per vertex
+        # in the node tool, and dragging one both moves the geometry and frees it from its
+        # params (no "Expand" step needed).
         mount_ctl(page)
         draw_shape(page, "rect", 0.2, 0.2, 0.6, 0.6)
         nid = page.evaluate("[...editor.selection][0]")
-        page.evaluate("editor.setTool('node')"); page.wait_for_timeout(60)
-        # drag the first anchor a touch
+        page.evaluate(f"editor.selection=new Set(['{nid}']); editor.setShapeKind('poly'); editor.setShapeParam('sides',5,'poly'); editor.setShapeParam('corner',0,'poly'); editor._renderSelection();")
+        page.evaluate("editor.setTool('node')"); page.wait_for_timeout(80)
+        check("node tool shows one anchor per polygon vertex (full point control)",
+              page.evaluate("document.querySelectorAll('.hv-node-anchor').length") == 5,
+              str(page.evaluate("document.querySelectorAll('.hv-node-anchor').length")))
+        d_before = page.evaluate(f"editor.nodeById('{nid}').getAttribute('d')")
         h = page.evaluate("() => { const c = editor._overlayEl().querySelector('.hv-handle'); const r=c.getBoundingClientRect(); return {x:r.x+r.width/2, y:r.y+r.height/2}; }")
-        page.mouse.move(h["x"], h["y"]); page.mouse.down(); page.mouse.move(h["x"]+12, h["y"]+8, steps=4); page.mouse.up(); page.wait_for_timeout(40)
-        check("node-editing a live shape freezes it to a freeform path",
-              page.evaluate(f"!editor.nodeById('{nid}').hasAttribute('data-hv-shape')"))
+        page.mouse.move(h["x"], h["y"]); page.mouse.down(); page.mouse.move(h["x"]+14, h["y"]+10, steps=4); page.mouse.up(); page.wait_for_timeout(40)
+        check("dragging a vertex edits the geometry and frees it from params",
+              page.evaluate(f"!editor.nodeById('{nid}').hasAttribute('data-hv-shape')")
+              and page.evaluate(f"editor.nodeById('{nid}').getAttribute('d')") != d_before)
         page.evaluate("editor.setTool('select')")
 
         # Keyboard shortcuts switch tools

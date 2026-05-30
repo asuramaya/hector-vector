@@ -1910,14 +1910,6 @@ const editor = {
     });
     this._renderSelection(); this._renderInspector(); this._renderLayers();
   },
-  // Expand a live shape into a plain freeform path (drop its parametric metadata).
-  expandShapes() {
-    const live = this.selectedNodes().filter(isLiveShape); if (!live.length) return;
-    this.push("Expand shape");
-    live.forEach((n) => freezeShape(n));
-    this._renderSelection(); this._renderInspector(); this._renderLayers();
-    setStatus(live.length === 1 ? "Expanded to path." : `Expanded ${live.length} shapes.`, 1500);
-  },
   invertSpace() {
     const sel = this._fillableSelection();
     const nodes = sel.length ? sel : this._artworkNodes().filter((n) => shapeToAbsPath(n));
@@ -2644,8 +2636,8 @@ const editor = {
     //  — both are global on the action bar.)
 
     // ---- SHAPE (contextual). A single parametric "live shape" gets the full editor
-    //  (type, corners/sides/arc, Expand to path). Otherwise: corner radius for rects and
-    //  fill-rule for freeform paths. Rows appear only when they apply. ----
+    //  (type, corners/sides/arc). Otherwise: corner radius for rects and fill-rule for
+    //  freeform paths. Rows appear only when they apply. (Point control = the node tool.) ----
     const shapeRows = [];
     if (nodes.length === 1 && isLiveShape(nodes[0])) {
       shapeRows.push(...this._shapePanel(nodes[0]));
@@ -2756,7 +2748,8 @@ const editor = {
       rows.push(this._numSliderRow("Ring", p("inner", 0), 0, 0.95, 0.05,
         (v) => { this.beginCoalesce(); this.setShapeParam("inner", v, "ellipse"); }, () => { this.commitCoalesce("Ring"); this._renderInspector(); }));
     }
-    rows.push(inspRow("", ghostBtn("Expand to path", () => this.expandShapes())));
+    // No "Expand to path" button — it's already a path. Full point control is the node
+    // tool (A): grabbing an anchor frees the shape from its params (see pathNodes commit).
     return rows;
   },
   // Set one corner radius (index 0..3 = TL,TR,BR,BL) of a live rect — no push (coalesced).
