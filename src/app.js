@@ -17,7 +17,6 @@ const modeSelectEl = document.querySelector("#mode-select");
 const outputPreviewEl = document.querySelector("#output-preview");
 const statusTextEl = document.querySelector("#status-text");
 const forceInputEl = document.querySelector("#force-input");
-const runButtonEl = document.querySelector("#run-button");
 const libraryHeaderEl = document.querySelector("#process-count");
 const sourcePathEl = document.querySelector("#source-path");
 const sourceEditEl = document.querySelector("#source-edit");
@@ -3091,11 +3090,11 @@ if (forceInputEl) {
   });
 }
 
-async function runProcess() {
-  if (runButtonEl.disabled) return;
-  runButtonEl.disabled = true;
-  const originalLabel = runButtonEl.textContent;
-  runButtonEl.textContent = "Starting…";
+async function runProcess(btn) {
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  const originalLabel = btn.textContent;
+  btn.textContent = "Starting…";
   try {
     if (!anyStageEnabled()) {
       setStatus("Enable at least one pipeline stage to run.", 3000);
@@ -3123,11 +3122,10 @@ async function runProcess() {
   } catch (error) {
     setStatus(error.message, 3000);
   } finally {
-    runButtonEl.disabled = false;
-    runButtonEl.textContent = originalLabel;
+    btn.disabled = false;
+    btn.textContent = originalLabel;
   }
 }
-runButtonEl.addEventListener("click", runProcess);
 
 function jobLastLine(job) {
   const lines = job.log_lines || [];
@@ -3673,7 +3671,7 @@ function renderProcessWorkspace() {
   const runBtn = document.createElement("button"); runBtn.type = "button"; runBtn.className = "primary-button"; runBtn.textContent = "Run → canvas";
   runBtn.disabled = !anyStageEnabled();
   if (runBtn.disabled) runBtn.title = "Enable at least one pipeline stage";
-  runBtn.addEventListener("click", () => runProcess());
+  runBtn.addEventListener("click", () => runProcess(runBtn));
   bar.appendChild(modeSel);
   bar.appendChild(force);
   bar.appendChild(ghostBtn("Add images", () => fileInputEl.click()));
