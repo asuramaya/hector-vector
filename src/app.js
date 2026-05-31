@@ -13,9 +13,7 @@ const dropzoneEl = document.querySelector("#dropzone");
 const queueEl = document.querySelector("#queue");
 const workspaceTitleEl = document.querySelector("#workspace-title");
 const workspacePathEl = document.querySelector("#workspace-path");
-const processSelectEl = document.querySelector("#process-select");
 const modeSelectEl = document.querySelector("#mode-select");
-const settingsButtonEl = document.querySelector("#settings-button");
 const outputPreviewEl = document.querySelector("#output-preview");
 const statusTextEl = document.querySelector("#status-text");
 const forceInputEl = document.querySelector("#force-input");
@@ -352,7 +350,7 @@ function preferredOutput(name) {
       || matches.find((x) => x.name === targetName);
     if (hit) return hit;
   }
-  const process = processSelectEl.value;
+  const process = effectiveProcessKind();
   if (process === "cutout") return matches.find((x) => x.name.includes(".cutout.")) || matches[0];
   if (process === "chromakey") return matches.find((x) => x.name.includes(".chromakey.")) || matches[0];
   if (process === "upscale") return matches.find((x) => x.kind === "png" && !x.name.includes(".cutout.") && !x.name.includes(".chromakey.") && !x.name.includes(".preview.")) || matches[0];
@@ -733,7 +731,6 @@ const knownJobStates = new Map();
 const TERMINAL_STATES = new Set(["done", "failed", "cancelled"]);
 let jobsCache = [];
 let processModalOpen = false;
-let settingsFormRerender = null;   // where buildSettingsForm re-renders to (Settings modal vs Process workspace)
 
 function stem_(n) { return n.replace(/\.[^.]+$/, ""); }
 
@@ -3069,32 +3066,12 @@ fileInputEl.addEventListener("change", async () => {
   }
 });
 
-processSelectEl.addEventListener("change", () => {
-  renderPreviews().catch((error) => setStatus(error.message, 2500));
-});
-
 const FORCE_KEY = "hector-vector:force";
 if (forceInputEl) {
   forceInputEl.checked = localStorage.getItem(FORCE_KEY) === "1";
   forceInputEl.addEventListener("change", () => {
     try { localStorage.setItem(FORCE_KEY, forceInputEl.checked ? "1" : "0"); } catch {}
   });
-}
-
-// True when the selected source already has an output for the chosen process.
-// Single-mode runs send an explicit input, which the server processes
-// unconditionally — so without this guard, re-running a done image silently
-// redoes the whole pipeline (incl. the expensive upscale) into a fresh folder.
-function alreadyProcessed(name, process) {
-  const matches = latestOutputsFor(name);
-  if (!matches.length) return false;
-  if (process === "cutout") return matches.some((x) => x.name.includes(".cutout."));
-  if (process === "chromakey") return matches.some((x) => x.name.includes(".chromakey."));
-  if (process === "upscale") {
-    return matches.some((x) => x.kind === "png"
-      && !/\.(cutout|chromakey|preview|mask)\./.test(x.name));
-  }
-  return matches.some((x) => x.kind === "svg" && !x.name.includes(".edited."));   // vectorize / pixelvec / pipeline
 }
 
 async function runProcess() {
@@ -3108,14 +3085,14 @@ async function runProcess() {
       return;
     }
     // The stage strip always drives the generalized pipeline route; the enabled
-    // stage flags travel in the payload (via {...settings}). The legacy kind is
-    // only used for "already processed" skip-detection on the output it produces.
+    // stage flags travel in the payload (via {...settings}). Single-mode runs send
+    // an explicit input, which the server processes unconditionally — so this guard
+    // (matching the server's stage-aware batch skip) stops a needless re-run.
     const payload = { ...settings };
-    const kind = effectiveProcessKind();
     const force = !!(forceInputEl && forceInputEl.checked);
     if (modeSelectEl.value === "single" && selectedName) {
       payload.inputs = [selectedName];
-      if (!force && alreadyProcessed(selectedName, kind)) {
+      if (!force && pipelineProcessed(selectedName)) {
         setStatus(`“${selectedName}” is already processed — turn on Force to re-run.`, 4000);
         return;   // finally{} restores the button; no wasteful re-run
       }
@@ -3150,6 +3127,14 @@ function jobActions(job) {
   }
   if ((job.outputs || []).length && job.source_name) {
     actions.push({ label: "View", kind: "view" });
+  }
+  // "Place" adds the finished vector to the current canvas as a layer (vs View,
+  // which replaces it). Only when there's a canvas to place into and an SVG to place.
+  if (editor.stage && TERMINAL_STATES.has(job.status)) {
+    const rel = chooseFinalOutput(job);
+    if (rel && jobOutputName(rel).toLowerCase().endsWith(".svg")) {
+      actions.push({ label: "Place", kind: "place" });
+    }
   }
   return actions;
 }
@@ -3253,6 +3238,14 @@ function buildJobsPanel() {
           viewJobOutput(job);
           return;
         }
+        if (action.kind === "place") {
+          const rel = chooseFinalOutput(job);
+          if (rel) {
+            closeModal();
+            await placeFromUrl(jobOutputUrl(job, rel), jobOutputName(rel));
+          }
+          return;
+        }
         btn.disabled = true;
         try {
           if (action.kind === "cancel") {
@@ -3327,13 +3320,34 @@ function outputChipInfo() {
   return { kind: "PNG", label: "PNG" };
 }
 
+// The terminal file the current stage-set emits for `sourceStem` — Vectorize wins
+// (SVG), else Remove-BG's cutout PNG, else the Upscale PNG. Mirrors the server's
+// pipeline_expected_output(); null when nothing is enabled.
+function pipelineExpectedOutput(sourceStem) {
+  if (stageOn("vectorize")) return `${sourceStem}.svg`;
+  if (stageOn("removebg")) return `${sourceStem}.cutout.png`;
+  if (stageOn("upscale")) return `${sourceStem}.png`;
+  return null;
+}
+
+// True when the current stage-set's terminal output already exists in a pipeline-*
+// folder for this source. The client mirror of the server's is_pipeline_processed,
+// so the single-mode guard and the server's batch skip agree on "already done" —
+// no more false "already processed" when the stage-set has changed since last run.
+function pipelineProcessed(name) {
+  const want = pipelineExpectedOutput(stem(name));
+  if (!want) return false;
+  return latestOutputsFor(name).some(
+    (x) => x.name === want && /^pipeline-/.test(x.folder || ""),
+  );
+}
+
 // The expandable settings for one stage. Reuses the shared form helpers
 // (fieldRow/makeSelect/makeRange/makeNumber) so it matches the Settings modal.
 function stageBody(id) {
   const body = document.createElement("div");
   body.className = "pipeline-detail-body form";
   const rerender = () => renderProcessWorkspace();
-  settingsFormRerender = renderProcessWorkspace;
 
   if (id === "upscale") {
     body.appendChild(fieldRow("Model", makeSelect("model", [
@@ -3638,11 +3652,6 @@ function renderProcessWorkspace() {
   const root = document.createElement("div");
   root.className = "process-workspace";
 
-  // Keep the hidden #process-select in sync with the stage set so previews,
-  // skip-detection and the Settings-modal label keep working unchanged.
-  const effKind = effectiveProcessKind();
-  if (effKind && processSelectEl.value !== effKind) processSelectEl.value = effKind;
-
   // --- the pipeline stage strip (replaces the old process dropdown) ---
   root.appendChild(renderPipelineStrip());
 
@@ -3665,7 +3674,6 @@ function renderProcessWorkspace() {
   bar.appendChild(runBtn);
   root.appendChild(bar);
 
-  settingsFormRerender = renderProcessWorkspace;   // keep stage edits inside the workspace
 
   // --- gallery (left) + jobs (right) ---
   const panes = document.createElement("div");
@@ -3870,197 +3878,6 @@ function sectionTitle(text) {
   h.className = "form-section";
   h.textContent = text;
   return h;
-}
-
-function buildSettingsForm(process) {
-  const root = document.createElement("div");
-  root.className = "form";
-  const rerender = () => (settingsFormRerender || openSettingsModal)();   // host-aware re-render
-  if (process === "upscale" || process === "pipeline") {
-    root.appendChild(sectionTitle("Upscale model"));
-    root.appendChild(fieldRow("Model", makeSelect("model", [
-      ["realesrgan-x4plus", "ESRGAN x4+ (photo)"],
-      ["realesrnet-x4plus", "ESRNet x4+ (cleaner)"],
-      ["realesr-animevideov3", "Anime / line-art"],
-    ])));
-    root.appendChild(fieldRow("Scale", makeSelect("scale", [["2","2x"],["3","3x"],["4","4x"]])));
-  }
-  if (process === "vectorize" || process === "pipeline") {
-    root.appendChild(sectionTitle("Output"));
-    const colorSel = makeSelect("trace_colormode", [
-      ["bw", "Black & white — silhouette mask"],
-      ["color", "Color — full palette"],
-    ]);
-    colorSel.addEventListener("change", () => rerender());
-    root.appendChild(fieldRow("Trace", colorSel, "B&W traces a 1-color silhouette; Color traces the image's real colors."));
-    const isColor = settings.trace_colormode === "color";
-    if (isColor) {
-      root.appendChild(fieldRow("Style", makeSelect("trace_color_style", [
-        ["poster", "Poster — flat, limited palette"],
-        ["photo", "Photo — smooth gradients"],
-      ]), "Poster suits logos/illustration; Photo follows gradients (bigger SVG)."));
-      root.appendChild(fieldRow("Colors", makeRange("color_precision", 1, 8, 1), "Higher = more colours. Poster uses this as the palette size (lower = cleaner, flatter shapes); Photo as gradient precision."));
-      root.appendChild(fieldRow("Layers", makeSelect("trace_hierarchical", [
-        ["stacked", "Stacked — layered fills"],
-        ["cutout", "Cutout — non-overlapping shapes"],
-      ]), "Stacked paints back-to-front; Cutout makes each color its own shape."));
-    }
-    root.appendChild(sectionTitle(isColor ? "Image" : "Mask"));
-    root.appendChild(fieldRow("Target max dim", makeNumber("target_max_dim", { min: 0, max: 16384, step: 64, placeholder: "auto (no resize)" }), "Resize the longest side before tracing. Smaller = simpler SVG."));
-    if (!isColor) root.appendChild(fieldRow("Black threshold", makeNumber("mask_threshold", { min: 16, max: 240, step: 1, placeholder: "auto (otsu)" }), "0–255 gray cutoff. Higher = more pixels treated as foreground."));
-    root.appendChild(sectionTitle("Trace (VTracer)"));
-    const presetSel = makeSelect("trace_preset", [
-      ["draft", "Draft — fewest points, fastest"],
-      ["balanced", "Balanced — default"],
-      ["smooth", "Smooth — curvier, fewer corners"],
-      ["sharp", "Sharp — preserve detail/corners"],
-      ["custom", "Custom — use sliders below"],
-    ]);
-    presetSel.addEventListener("change", () => {
-      const pre = TRACE_PRESETS[presetSel.value];
-      if (pre) {
-        Object.assign(settings, pre);
-        persistSettings();
-      }
-      rerender();
-    });
-    root.appendChild(fieldRow("Preset", presetSel, "Tunes the sliders below as a group."));
-    root.appendChild(fieldRow("Mode", makeSelect("trace_mode", [["spline","Spline (curves)"],["polygon","Polygon"],["pixel","Pixel (no smoothing)"]])));
-    root.appendChild(fieldRow("Simplify", makeSelect("trace_simplify", [
-      ["off", "Off — raw vtracer output"],
-      ["light", "Light — keep fine detail"],
-      ["medium", "Medium — recommended"],
-      ["strong", "Strong — fewest nodes"],
-    ]), "Refits the trace to the fewest curves that reproduce it. Resolution-independent — node count tracks shape, not pixels."));
-    const advToggle = document.createElement("input");
-    advToggle.type = "checkbox";
-    advToggle.checked = !!settings.trace_advanced;
-    advToggle.addEventListener("change", () => { settings.trace_advanced = advToggle.checked; persistSettings(); rerender(); });
-    root.appendChild(fieldRow("Show advanced", advToggle, "Show individual VTracer sliders."));
-    if (settings.trace_advanced) {
-      const onSliderChange = () => { settings.trace_preset = "custom"; persistSettings(); };
-      const wrapWithCustomFlag = (row) => {
-        row.querySelectorAll("input").forEach((el) => el.addEventListener("input", onSliderChange));
-        return row;
-      };
-      root.appendChild(wrapWithCustomFlag(fieldRow("Smooth (segment_length)", makeRange("segment_length", 3.5, 10, 0.5), "Higher = smoother curves, fewer points.")));
-      root.appendChild(wrapWithCustomFlag(fieldRow("Filter speckle", makeRange("filter_speckle", 0, 16, 1), "Drop blobs smaller than this many pixels.")));
-      root.appendChild(wrapWithCustomFlag(fieldRow("Corner threshold", makeRange("corner_threshold", 30, 180, 5), "Higher = fewer sharp corners.")));
-      root.appendChild(wrapWithCustomFlag(fieldRow("Splice threshold", makeRange("splice_threshold", 0, 180, 5))));
-      root.appendChild(wrapWithCustomFlag(fieldRow("Path precision", makeRange("path_precision", 0, 10, 1))));
-    }
-  }
-  if (process === "cutout" || process === "pipeline") {
-    root.appendChild(sectionTitle(process === "pipeline" ? "Cutout (within pipeline)" : "Cutout"));
-    const backendSel = makeSelect("cutout_backend", [
-      ["classical", "Classical (numpy auto-bg, fast)"],
-      ["ai", "AI (rembg / BiRefNet)"],
-    ]);
-    backendSel.addEventListener("change", () => rerender());
-    root.appendChild(fieldRow("Backend", backendSel, "AI quality is far higher on complex backgrounds. Requires one-time ~500MB install."));
-    if (settings.cutout_backend === "ai") {
-      root.appendChild(fieldRow("Model", makeSelect("cutout_model", [
-        ["u2net", "u2net — default, general (175MB)"],
-        ["u2netp", "u2netp — fast/light (5MB)"],
-        ["u2net_human_seg", "u2net_human_seg — humans"],
-        ["isnet-general-use", "ISNet — sharper general (~170MB)"],
-        ["isnet-anime", "ISNet anime"],
-        ["birefnet-general", "BiRefNet general — OSS SOTA (~440MB)"],
-        ["birefnet-general-lite", "BiRefNet lite"],
-        ["birefnet-portrait", "BiRefNet portrait"],
-        ["silueta", "silueta — quantized U²-Net (~40MB)"],
-      ]), "First run of each model downloads weights to ~/.u2net/"));
-      const am = document.createElement("input");
-      am.type = "checkbox";
-      am.checked = !!settings.alpha_matting;
-      am.addEventListener("change", () => { settings.alpha_matting = am.checked; persistSettings(); });
-      root.appendChild(fieldRow("Alpha matting", am, "Refines edges (hair). Slower."));
-      if (workspace && !workspace.rembg_installed) {
-        const cta = document.createElement("button");
-        cta.type = "button";
-        cta.className = "ghost-button";
-        cta.textContent = "Install rembg (one-time, ~500MB)";
-        cta.addEventListener("click", async () => {
-          cta.disabled = true;
-          cta.textContent = "Installing rembg…";
-          try {
-            const data = await api("/api/install/rembg", "POST", {});
-            setStatus(data.message || "Install started.", 3000);
-            await loadJobs();
-          } catch (e) {
-            setStatus(e.message, 3000);
-            cta.disabled = false;
-            cta.textContent = "Install rembg (one-time, ~500MB)";
-          }
-        });
-        const wrap = document.createElement("div");
-        wrap.className = "form-actions";
-        wrap.appendChild(cta);
-        root.appendChild(wrap);
-        const hint = document.createElement("div");
-        hint.className = "form-hint";
-        hint.textContent = "Runs in background. Watch progress under Jobs.";
-        root.appendChild(hint);
-      }
-    }
-  }
-  if (process === "pixelvec") {
-    root.appendChild(sectionTitle("Pixel grid"));
-    const gridInput = makeNumber("pv_grid", { min: 0, max: 4096, step: 1, placeholder: "auto-detect" });
-    root.appendChild(fieldRow("Native size (cells)", gridInput, "Blank = auto-detect the original pixel grid. Set a number (e.g. 16) to force it — best for heavily resampled / blurry art the detector can't lock onto."));
-    root.appendChild(fieldRow("Cell color", makeSelect("pv_sample", [
-      ["mode", "Mode — most common (best for clean art)"],
-      ["median", "Median — robust to noise/AA"],
-      ["center", "Center pixel — fastest"],
-    ]), "How each native cell's single color is chosen."));
-    root.appendChild(sectionTitle("Palette"));
-    root.appendChild(fieldRow("Quantize colors", makeNumber("pv_quantize", { min: 0, max: 256, step: 1, placeholder: "keep all" }), "Snap to an N-color palette (e.g. 16). Blank/0 keeps every color."));
-    const keyCb = document.createElement("input");
-    keyCb.type = "checkbox";
-    keyCb.checked = !!settings.pv_key_corner;
-    keyCb.addEventListener("change", () => { settings.pv_key_corner = keyCb.checked; persistSettings(); });
-    root.appendChild(fieldRow("Key out corner", keyCb, "Make the dominant corner color transparent (drop a flat background)."));
-    root.appendChild(sectionTitle("Output"));
-    root.appendChild(fieldRow("Shape mode", makeSelect("pv_mode", [
-      ["merged", "Merged rects — compact, default"],
-      ["path", "Per-color paths — fewest nodes"],
-      ["pixels", "One rect per pixel — exact, largest"],
-    ]), "All modes are pixel-exact; they differ only in SVG size. Coordinates are native pixel units (crispEdges), so output scales perfectly."));
-    const note = document.createElement("div");
-    note.className = "form-hint";
-    note.textContent = "Unlike SVG Trace, this never smooths — it recovers the pixel grid and emits squares. No upscale/cutout stages run.";
-    root.appendChild(note);
-  }
-  if (process === "chromakey") {
-    const note = document.createElement("div");
-    note.className = "form-section";
-    note.textContent = "Greenscreen uses a fixed green-dominance threshold.";
-    root.appendChild(note);
-  }
-  const actions = document.createElement("div");
-  actions.className = "form-actions";
-  const reset = document.createElement("button");
-  reset.type = "button";
-  reset.className = "ghost-button";
-  reset.textContent = "Reset to defaults";
-  reset.addEventListener("click", () => {
-    settings = { ...SETTINGS_DEFAULTS };
-    persistSettings();
-    rerender();
-  });
-  actions.appendChild(reset);
-  root.appendChild(actions);
-  return root;
-}
-
-function openSettingsModal() {
-  const proc = processSelectEl.value;
-  const label = processSelectEl.options[processSelectEl.selectedIndex]?.text || proc;
-  openModal(`Settings — ${label}`, true);
-  modalSearchEl.hidden = true;
-  modalBodyEl.innerHTML = "";
-  settingsFormRerender = openSettingsModal;   // standalone Settings modal re-renders itself
-  modalBodyEl.appendChild(buildSettingsForm(proc));
 }
 
 function fmtBytes(n) {
@@ -4275,7 +4092,6 @@ function openShortcutsModal() {
   modalBodyEl.appendChild(root);
 }
 
-settingsButtonEl.addEventListener("click", openSettingsModal);
 shortcutButtonEl.addEventListener("click", openShortcutsModal);
 
 function zoomVp(vp, factor) {
@@ -4415,7 +4231,6 @@ window.openOpenModal = openOpenModal;
 window.renderProcessWorkspace = renderProcessWorkspace;
 window.zoomVp = zoomVp;
 window.fitVp = fitVp;
-window.processSelectEl = processSelectEl;
 window.settings = settings;
 window.hideFloatPanel = hideFloatPanel;
 window.toggleFloatPanel = toggleFloatPanel;

@@ -136,6 +136,41 @@ def check_pipeline_stages() -> None:
     print("ok: pipeline stage flags resolve (explicit, legacy all-three, method fallbacks)")
 
 
+def check_pipeline_skip() -> None:
+    """Stage-aware skip-detection: the terminal output a stage-set emits (SVG /
+    cutout PNG / upscale PNG) and 'already processed' track the ACTUAL stages, not
+    a fixed 'pipeline -> .svg' — so an upscale-only run is skipped on its PNG and a
+    vectorize run isn't falsely skipped by a leftover upscale PNG. Pure logic + a
+    throwaway pipeline-* folder."""
+    sys.path.insert(0, str(ROOT))
+    import server
+
+    on = {"upscale": True, "removebg": True, "vectorize": True}
+    assert server.pipeline_expected_output(on, "img") == "img.svg"
+    assert server.pipeline_expected_output({"upscale": True, "removebg": True, "vectorize": False}, "img") == "img.cutout.png"
+    assert server.pipeline_expected_output({"upscale": True, "removebg": False, "vectorize": False}, "img") == "img.png"
+    assert server.pipeline_expected_output({"upscale": False, "removebg": False, "vectorize": False}, "img") is None
+
+    folder = server.OUTPUTS_DIR / "pipeline-_skiptest"
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        # only the upscale PNG exists on disk
+        (folder / "_skipstem.png").write_text("")
+        up_only = {"upscale": True, "removebg": False, "vectorize": False}
+        vec = {"upscale": True, "removebg": True, "vectorize": True}
+        assert server.is_pipeline_processed(up_only, "_skipstem"), "upscale-only must skip on its PNG"
+        assert not server.is_pipeline_processed(vec, "_skipstem"), "a vectorize run must NOT skip on a leftover upscale PNG"
+        # now the SVG exists too -> the vectorize run is genuinely done
+        (folder / "_skipstem.svg").write_text("<svg/>")
+        assert server.is_pipeline_processed(vec, "_skipstem"), "vectorize must skip once its SVG exists"
+        assert not server.is_pipeline_processed(vec, "_other"), "unrelated stem must not skip"
+    finally:
+        for child in folder.glob("*"):
+            child.unlink()
+        folder.rmdir()
+    print("ok: stage-aware skip — expected output + is_pipeline_processed track the live stage-set")
+
+
 def main() -> int:
     check_parses()
     svg = check_pixelvec()
@@ -143,6 +178,7 @@ def main() -> int:
     check_color_simplify()
     check_path_simplify()
     check_pipeline_stages()
+    check_pipeline_skip()
     for tmp in ["_out.svg", "_out.png"]:
         (ROOT / "tests" / tmp).unlink(missing_ok=True)
     print("\nALL SMOKE TESTS PASSED")

@@ -149,20 +149,11 @@
           <button id="source-edit" type="button">Change</button>
           <button id="source-reset" type="button" hidden>Default</button>
         </div>
-        <select id="process-select">
-          <option value="upscale">Upscale PNG</option>
-          <option value="cutout">Cutout PNG</option>
-          <option value="chromakey">Greenscreen Cutout</option>
-          <option value="vectorize">SVG Trace</option>
-          <option value="pixelvec">Pixel Art → SVG</option>
-          <option value="pipeline" selected>Production SVG</option>
-        </select>
         <select id="mode-select">
           <option value="batch">Batch</option>
           <option value="single" selected>Single</option>
         </select>
         <label><input id="force-input" type="checkbox" /> Force</label>
-        <button id="settings-button" type="button">Settings</button>
         <button id="run-button" type="button">Run</button>
         <div id="queue"></div>
         <button id="dropzone" type="button">Add Images<input id="file-input" type="file" accept="image/*" multiple hidden /></button>

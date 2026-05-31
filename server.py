@@ -337,14 +337,6 @@ def output_dir(label: str) -> Path:
     return out
 
 
-def build_trace_mask(input_path: Path, output_path: Path) -> None:
-    build_monochrome_assets(input_path, mask_output=output_path)
-
-
-def build_cutout(input_path: Path, output_path: Path) -> None:
-    build_alpha_cutout(input_path, output_path)
-
-
 def build_chromakey_cutout(input_path: Path, output_path: Path) -> None:
     rgba = Image.open(input_path).convert("RGBA")
     pixels = rgba.load()
@@ -636,37 +628,38 @@ def invalidate_outputs_cache() -> None:
         _outputs_cache["sig"] = None
 
 
-def expected_outputs_for(kind: str, stem: str) -> list[str]:
-    if kind == "upscale":
-        return [f"{stem}.png"]
-    if kind == "cutout":
-        return [f"{stem}.cutout.png"]
-    if kind == "chromakey":
-        return [f"{stem}.chromakey.png"]
-    if kind == "vectorize":
-        return [f"{stem}.svg"]
-    if kind == "pipeline":
-        return [f"{stem}.svg"]
-    if kind == "pixelvec":
-        return [f"{stem}.svg"]
-    return []
+def pipeline_expected_output(st: dict, stem: str) -> str | None:
+    """The terminal file a stage-set emits: SVG if Vectorize is on, else the
+    cutout PNG if Remove-BG is on, else the Upscale PNG. Mirrors the client's
+    pipelineExpectedOutput() so single- and batch-mode skip-detection agree on
+    what 'already processed' means for the actual stages that will run."""
+    if st.get("vectorize"):
+        return f"{stem}.svg"
+    if st.get("removebg"):
+        return f"{stem}.cutout.png"
+    if st.get("upscale"):
+        return f"{stem}.png"
+    return None
 
 
-def is_processed_for(kind: str, stem: str) -> bool:
-    expected = expected_outputs_for(kind, stem)
-    if not expected:
+def is_pipeline_processed(st: dict, stem: str) -> bool:
+    """True when this stage-set's terminal output already exists in a pipeline-*
+    folder. Stage-aware: an upscale-only run is skipped on its PNG, a vectorize run
+    on its SVG — never falsely re-run (or falsely skipped) by a fixed expectation."""
+    want = pipeline_expected_output(st, stem)
+    if not want:
         return False
-    for folder in OUTPUTS_DIR.glob(f"{kind}-*"):
-        if not folder.is_dir():
-            continue
-        for name in expected:
-            if (folder / name).exists():
-                return True
+    for folder in OUTPUTS_DIR.glob("pipeline-*"):
+        if folder.is_dir() and (folder / want).exists():
+            return True
     return False
 
 
-def select_inputs(payload: dict, kind: str | None = None) -> tuple[list[Path], list[str]]:
-    """Returns (input_paths, skipped_names). Explicit selections and explicit input_path bypass skip-detection."""
+def select_inputs(payload: dict) -> tuple[list[Path], list[str]]:
+    """Resolve the input set: explicit `inputs`, then `input_path`, else discover
+    the workspace. Skip-detection now lives in the caller (run_pipeline is
+    stage-aware), so the second tuple element (skipped names) is always empty —
+    it's kept only so existing `targets, _ = select_inputs(...)` sites don't change."""
     selected = payload.get("inputs") or []
     if selected:
         files = []
@@ -682,20 +675,11 @@ def select_inputs(payload: dict, kind: str | None = None) -> tuple[list[Path], l
     files = discover_work_items()
     if not files:
         raise ValueError(f"No supported image files found in {APP_DIR}")
-    if kind and not payload.get("force"):
-        kept: list[Path] = []
-        skipped: list[str] = []
-        for f in files:
-            if is_processed_for(kind, f.stem):
-                skipped.append(f.name)
-            else:
-                kept.append(f)
-        return kept, skipped
     return files, []
 
 
-def resolve_inputs(payload: dict, kind: str | None = None) -> list[Path]:
-    return select_inputs(payload, kind)[0]
+def resolve_inputs(payload: dict) -> list[Path]:
+    return select_inputs(payload)[0]
 
 
 def clean_log_line(line: str) -> str | None:
@@ -1277,45 +1261,6 @@ def _skip_message(kind: str, skipped: list[str]) -> str:
     )
 
 
-def run_upscale(payload: dict) -> dict:
-    ensure_tools_ready("realesrgan")
-    model = payload.get("model", "realesrgan-x4plus")
-    scale = str(payload.get("scale", "4"))
-    targets, skipped = select_inputs(payload, "upscale")
-    if not targets:
-        return {"message": _skip_message("upscale", skipped), "started": 0, "skipped": skipped}
-    out_dir = output_dir("upscale")
-    jobs_started = []
-    for src in targets:
-        dest = out_dir / f"{src.stem}.png"
-        cmd = [
-            str(REALESRGAN_BIN),
-            "-i",
-            str(src),
-            "-o",
-            str(dest),
-            "-n",
-            model,
-            "-s",
-            scale,
-        ]
-        jobs_started.append(
-            launch_job(
-                "upscale",
-                cmd,
-                cwd=REALESRGAN_DIR,
-                summary=f"Upscale {src.name}",
-                source_name=src.name,
-                output_dir=str(out_dir),
-                expected_outputs=[dest],
-            )
-        )
-    msg = f"Started {len(jobs_started)} upscale job(s)."
-    if skipped:
-        msg += f" Skipped {len(skipped)} already processed."
-    return {"message": msg, "output_dir": str(out_dir), "started": len(jobs_started), "skipped": skipped}
-
-
 AI_CUTOUT_MODELS = {
     "u2net", "u2netp", "u2net_human_seg",
     "isnet-general-use", "isnet-anime",
@@ -1334,121 +1279,6 @@ def build_ai_cutout(src: Path, dest: Path, model: str, alpha_matting: bool, log)
     if alpha_matting:
         cmd.append("--alpha-matting")
     log_subprocess_lines(log, run_subprocess(cmd))
-
-
-def run_cutout(payload: dict) -> dict:
-    backend = (payload.get("backend") or "classical").strip()
-    targets, skipped = select_inputs(payload, "cutout")
-    if not targets:
-        return {"message": _skip_message("cutout", skipped), "started": 0, "skipped": skipped}
-    out_dir = output_dir("cutout")
-
-    if backend == "ai":
-        if not rembg_installed():
-            raise ValueError("rembg is not installed. Click 'Install rembg' in Settings (one-time, ~500MB).")
-        model = (payload.get("cutout_model") or "u2net").strip()
-        alpha_matting = bool(payload.get("alpha_matting"))
-        jobs_started = []
-        total = len(targets)
-        for i, src in enumerate(targets, 1):
-            dest = out_dir / f"{src.stem}.cutout.png"
-            def worker(log, src=src, dest=dest, i=i) -> None:
-                _report_progress(i, total, f"cutout {src.name}")
-                build_ai_cutout(src, dest, model, alpha_matting, log)
-                validate_cutout_png(dest)
-                _register_output(dest)
-            jobs_started.append(
-                launch_internal_job(
-                    "cutout", f"AI cutout ({model}) {src.name}", worker,
-                    source_name=src.name, output_dir=str(out_dir),
-                )
-            )
-        msg = f"Queued {len(jobs_started)} AI cutout job(s) using {model}."
-        if skipped:
-            msg += f" Skipped {len(skipped)} already processed."
-        return {"message": msg, "output_dir": str(out_dir), "started": len(jobs_started), "skipped": skipped}
-
-    # classical (synchronous, fast)
-    results = []
-    for src in targets:
-        dest = out_dir / f"{src.stem}.cutout.png"
-        build_cutout(src, dest)
-        validate_cutout_png(dest)
-        results.append(dest)
-    msg = f"Created {len(results)} cutout PNG(s)."
-    if skipped:
-        msg += f" Skipped {len(skipped)} already processed."
-    return {"message": msg, "output_dir": str(out_dir), "started": len(results), "skipped": skipped}
-
-
-def run_chromakey(payload: dict) -> dict:
-    targets, skipped = select_inputs(payload, "chromakey")
-    if not targets:
-        return {"message": _skip_message("chromakey", skipped), "started": 0, "skipped": skipped}
-    out_dir = output_dir("chromakey")
-    results = []
-    for src in targets:
-        dest = out_dir / f"{src.stem}.chromakey.png"
-        build_chromakey_cutout(src, dest)
-        results.append(dest)
-    msg = f"Created {len(results)} color-key PNG(s)."
-    if skipped:
-        msg += f" Skipped {len(skipped)} already processed."
-    return {"message": msg, "output_dir": str(out_dir), "started": len(results), "skipped": skipped}
-
-
-def run_vectorize(payload: dict) -> dict:
-    ensure_tools_ready("vtracer")
-    targets, skipped = select_inputs(payload, "vectorize")
-    if not targets:
-        return {"message": _skip_message("vectorize", skipped), "started": 0, "skipped": skipped}
-    out_dir = output_dir("vectorize")
-    jobs_started = []
-    trace = trace_config(payload)
-    mask_cfg = mask_config(payload)
-    for src in targets:
-        mask_path = out_dir / f"{src.stem}.mask.png"
-        dest = out_dir / f"{src.stem}.svg"
-        def worker(log, src=src, mask_path=mask_path, dest=dest) -> None:
-            _report_progress(1, 3, "Preprocess")
-            staged = src
-            if mask_cfg["target_max_dim"] is not None:
-                staged_preview = out_dir / f"{src.stem}.preview.png"
-                staged = apply_preprocess(src, staged_preview, target_max_dim=mask_cfg["target_max_dim"])
-                if staged is not src:
-                    log(f"Resized to max dim {mask_cfg['target_max_dim']}.")
-                    _register_output(staged_preview)
-            if trace["colormode"] == "color":
-                # Color trace works straight off the image — no monochrome mask step.
-                _report_progress(2, 3, "Flatten")
-                if image_is_near_binary(staged):
-                    log("Note: source is near-grayscale/2-tone — a B&W trace yields far fewer nodes than Color here.")
-                flat = out_dir / f"{src.stem}.flat.png"
-                prepare_color_input(staged, flat, trace)
-                _register_output(flat)
-                _report_progress(3, 3, f"Trace SVG ({trace['color_style']})")
-                trace_color_to_svg(flat, dest, trace, log)
-            else:
-                _report_progress(2, 3, "Build mask")
-                build_mask_with_overrides(staged, mask_path, None, mask_cfg)
-                validate_mask_png(mask_path)
-                _register_output(mask_path)
-                _report_progress(3, 3, "Trace SVG")
-                trace_mask_to_svg(mask_path, dest, trace, log)
-            simplify_trace_file(dest, trace["simplify"], log)
-            validate_svg_file(dest)
-            _register_output(dest)
-
-        jobs_started.append(
-            launch_internal_job(
-                "vectorize", f"Vectorize {src.name}", worker,
-                source_name=src.name, output_dir=str(out_dir),
-            )
-        )
-    msg = f"Started {len(jobs_started)} vector job(s)."
-    if skipped:
-        msg += f" Skipped {len(skipped)} already processed."
-    return {"message": msg, "output_dir": str(out_dir), "started": len(jobs_started), "skipped": skipped}
 
 
 def pixelvec_config(payload: dict) -> dict:
@@ -1491,33 +1321,6 @@ def validate_pixelvec_svg(path: Path) -> None:
         raise ValueError(f"Pixel SVG missing shapes: {path.name}")
     if len(text) < 80:
         raise ValueError(f"Pixel SVG too small: {path.name}")
-
-
-def run_pixelvec(payload: dict) -> dict:
-    targets, skipped = select_inputs(payload, "pixelvec")
-    if not targets:
-        return {"message": _skip_message("pixel-trace", skipped), "started": 0, "skipped": skipped}
-    out_dir = output_dir("pixelvec")
-    cfg = pixelvec_config(payload)
-    results = []
-    grids = []
-    for src in targets:
-        dest = out_dir / f"{src.stem}.svg"
-        info = pixelvec.vectorize_pixel_art(
-            src, dest,
-            mode=cfg["mode"], sample=cfg["sample"],
-            gridx=cfg["gridx"], gridy=cfg["gridy"],
-            quantize=cfg["quantize"], key_corner=cfg["key_corner"],
-        )
-        validate_pixelvec_svg(dest)
-        _register_output(dest)
-        results.append(dest)
-        grids.append(f"{info['grid'][0]}×{info['grid'][1]}")
-    sample_grid = grids[0] if len(set(grids)) == 1 else "varied"
-    msg = f"Traced {len(results)} pixel SVG(s) at {sample_grid} native grid ({cfg['mode']})."
-    if skipped:
-        msg += f" Skipped {len(skipped)} already processed."
-    return {"message": msg, "output_dir": str(out_dir), "started": len(results), "skipped": skipped}
 
 
 def _resolve_output_svg(payload: dict) -> Path:
@@ -1761,7 +1564,21 @@ def run_pipeline(payload: dict) -> dict:
     if rb and rb_method == "ai" and not rembg_installed():
         raise ValueError("AI cutout requested but rembg is not installed. Install it from Settings, or use the classical method.")
 
-    targets, skipped = select_inputs(payload, "pipeline")
+    # Skip-detection is stage-aware: skip a discovered image only when THIS
+    # stage-set's terminal output already exists (see is_pipeline_processed).
+    # Explicit selections (single mode) and input_path bypass skip by contract —
+    # the client guards those — so we only filter the discover branch here.
+    targets, _ = select_inputs(payload)
+    skipped: list[str] = []
+    explicit = bool(payload.get("inputs")) or bool(payload.get("input_path", "").strip())
+    if not explicit and not payload.get("force"):
+        kept: list[Path] = []
+        for f in targets:
+            if is_pipeline_processed(st, f.stem):
+                skipped.append(f.name)
+            else:
+                kept.append(f)
+        targets = kept
     if not targets:
         return {"message": _skip_message("run pipeline on", skipped), "started": 0, "skipped": skipped}
     out_dir = output_dir("pipeline")
@@ -2438,16 +2255,6 @@ class Handler(SimpleHTTPRequestHandler):
                 result = cancel_job(payload)
             elif parsed.path == "/api/jobs/retry":
                 result = retry_job(payload)
-            elif parsed.path == "/api/run/upscale":
-                result = run_upscale(payload)
-            elif parsed.path == "/api/run/cutout":
-                result = run_cutout(payload)
-            elif parsed.path == "/api/run/chromakey":
-                result = run_chromakey(payload)
-            elif parsed.path == "/api/run/vectorize":
-                result = run_vectorize(payload)
-            elif parsed.path == "/api/run/pixelvec":
-                result = run_pixelvec(payload)
             elif parsed.path == "/api/run/pipeline":
                 result = run_pipeline(payload)
             elif parsed.path == "/api/run/selftest":
