@@ -166,6 +166,17 @@ For commercial self-hosting **do not ship**: BRIA RMBG-1.4/2.0 (CC BY-NC), CodeF
 
 ---
 
+## Editor ↔ pipeline boundary (deliberate)
+
+The processing pipeline (this document's subject) and the vector editor are kept in **separate domains on purpose**:
+
+- The **pipeline is raster** — upscale and remove-bg are raster→raster; only vectorize crosses to SVG. Its home is the batch/gallery workspace ("Q", the `Process` view): many PNGs in, vectors/PNGs out. One generalized `run_pipeline` route honours the enabled stages.
+- The **editor is vector-pure** — its canvas is a live SVG document. PNGs are *imports* (pipeline inputs), never canvas citizens. The pipeline's output crosses into the editor as a **vector**, either replacing the document (open) or added as a layer (place → `editor.placeSvgMarkup`).
+
+So "combining" is always vector-on-vector (layers / groups / booleans) — an image is composited only *after* it has been vectorized. This keeps the editor's document model clean and is why there is no pipeline panel *inside* the editor.
+
+**Deferred future track — raster as a first-class canvas object.** Placing a raster on the canvas, processing/tracing it in place, and mixed raster+vector documents are explicitly **not** built. That capability is the only thing that would justify bringing the raster pipeline *inside* the editor; until then the boundary above holds. Most of the categories above (inpainting/cleanup, SR, denoise, face restore) only become in-editor operations once a raster can live on the canvas — until then they belong to the batch workspace.
+
 ## Key references
 
 BiRefNet — github.com/ZhengPeng7/BiRefNet · BEN2 — github.com/PramaLLC/BEN2 · BRIA RMBG-2.0 — huggingface.co/briaai/RMBG-2.0 · rembg — github.com/danielgatis/rembg · InSPyReNet — github.com/plemeri/InSPyReNet · Real-ESRGAN — github.com/xinntao/Real-ESRGAN · DAT — github.com/zhengchen1999/DAT · HAT — github.com/XPixelGroup/HAT · SwinIR — github.com/JingyunLiang/SwinIR · SPAN — github.com/hongyuanyu/SPAN · Real-CUGAN — github.com/bilibili/ailab · AuraSR — github.com/fal-ai/aura-sr · DiffBIR — github.com/XPixelGroup/DiffBIR · SUPIR — github.com/Fanghua-Yu/SUPIR · StableSR — github.com/IceClear/StableSR · Phhofm models — github.com/Phhofm/models · Upscayl — github.com/upscayl/upscayl · spandrel — github.com/chaiNNer-org/spandrel · OpenModelDB — openmodeldb.info · vtracer — github.com/visioncortex/vtracer · potrace — potrace.sourceforge.net · DeepSVG — github.com/alexandre01/deepsvg · GFPGAN — github.com/TencentARC/GFPGAN · CodeFormer — github.com/sczhou/CodeFormer · IOPaint — github.com/Sanster/IOPaint · LaMa — github.com/advimman/lama · MI-GAN — github.com/Picsart-AI-Research/MI-GAN · FBCNN — github.com/jiaxi-jiang/FBCNN · SCUNet — github.com/cszn/SCUNet · NAFNet — github.com/megvii-research/NAFNet · Restormer — github.com/swz30/Restormer · Deep_White_Balance — github.com/mahmoudnafifi/Deep_White_Balance · kmeans-colors — github.com/okaneco/kmeans-colors · img.ly background-removal-js — github.com/imgly/background-removal-js
