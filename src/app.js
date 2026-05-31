@@ -28,6 +28,10 @@ const modalRootEl = document.querySelector("#modal-root");
 const modalTitleEl = document.querySelector("#modal-title");
 const modalBodyEl = document.querySelector("#modal-body");
 const modalSearchEl = document.querySelector("#modal-search");
+const appShellEl = document.querySelector(".app.editor");
+const processViewEl = document.querySelector("#process-view");
+const processViewBodyEl = document.querySelector("#process-view-body");
+const processViewTitleEl = document.querySelector("#process-view-title");
 const shortcutButtonEl = document.querySelector("#shortcut-button");
 
 const SETTINGS_DEFAULTS = {
@@ -730,7 +734,7 @@ let activityState = "idle"; // "idle" | "busy"
 const knownJobStates = new Map();
 const TERMINAL_STATES = new Set(["done", "failed", "cancelled"]);
 let jobsCache = [];
-let processModalOpen = false;
+let processViewActive = false;
 
 function stem_(n) { return n.replace(/\.[^.]+$/, ""); }
 
@@ -783,7 +787,7 @@ function applyJobsData(jobs) {
     if (!seen.has(id)) knownJobStates.delete(id);
   }
 
-  if (processModalOpen) renderProcessJobs();
+  if (processViewActive) renderProcessJobs();
 
   const running = jobs.find((job) => job.status === "running");
   updateFooterProgress(running, jobs.filter((j) => j.status === "queued").length);
@@ -825,7 +829,7 @@ function applyJobsData(jobs) {
     setStatus(
       `Failed${stage}: ${short || `${failedCount} job(s) failed${note}.`} — click for Jobs.`,
       8000,
-      { error: true, onClick: () => openProcessModal(true), title: tail }
+      { error: true, onClick: () => showProcessView(true), title: tail }
     );
   } else if (failedCount === 0 && cancelledCount === 0) {
     setStatus(`Done. ${latest.summary}`);
@@ -973,25 +977,37 @@ function openModal(title, narrow = false) {
 function closeModal() {
   modalRootEl.hidden = true;
   modalBodyEl.innerHTML = "";
-  processModalOpen = false;
   appSettingsOpen = false;
-  updateViewSwap();
 }
 
-// Reflect the active "view" on the Edit/Process swap (Ableton-style): Process is
-// active only while its workspace is open; otherwise Edit (the canvas) is active.
+// Reflect the active view on the Edit/Process swap (Ableton-style): Process is
+// active while its view is showing; otherwise Edit (the canvas) is active.
 function updateViewSwap() {
   const edit = document.querySelector("#view-edit");
   const proc = document.querySelector("#process-button");
-  if (edit) edit.classList.toggle("active", !processModalOpen);
-  if (proc) proc.classList.toggle("active", !!processModalOpen);
+  if (edit) edit.classList.toggle("active", !processViewActive);
+  if (proc) proc.classList.toggle("active", !!processViewActive);
 }
 
-// Toggle between the two views. Process opens its workspace; Edit closes whatever
-// modal is up and returns to the canvas.
-function showProcessView() { if (!processModalOpen) openProcessModal(); }
-function showEditView() { if (!modalRootEl.hidden) closeModal(); }
-function toggleProcessView() { if (processModalOpen) showEditView(); else if (modalRootEl.hidden) showProcessView(); }
+// The two top-level views. Process is a first-class view (not a modal): toggling
+// `.process-active` on the shell hides `.editor-grid` and shows `#process-view`
+// in the same grid row. Switching views never touches modal-root, so File/Browse/
+// Info modals open over whichever view is up.
+function showProcessView(focusJobs = false) {
+  if (modalRootEl && !modalRootEl.hidden) closeModal();   // don't leave a canvas modal hanging over Process
+  processViewActive = true;
+  appShellEl.classList.add("process-active");
+  updateViewSwap();
+  renderProcessWorkspace();
+  if (focusJobs) { const j = document.querySelector("#process-jobs"); if (j) j.scrollIntoView({ block: "nearest" }); }
+  loadJobs().catch(() => {});
+}
+function showEditView() {
+  processViewActive = false;
+  appShellEl.classList.remove("process-active");
+  updateViewSwap();
+}
+function toggleProcessView() { if (processViewActive) showEditView(); else showProcessView(); }
 
 modalRootEl.addEventListener("click", (event) => {
   if (event.target.matches("[data-modal-close]") || event.target.closest("[data-modal-close]")) {
@@ -2014,6 +2030,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
 {
   const procBtn = document.querySelector("#process-button"); if (procBtn) procBtn.addEventListener("click", () => showProcessView());
   const editBtn = document.querySelector("#view-edit"); if (editBtn) editBtn.addEventListener("click", () => showEditView());
+  const procClose = document.querySelector("#process-close"); if (procClose) procClose.addEventListener("click", () => showEditView());
   const undoBtn = document.querySelector("#undo-button"); if (undoBtn) undoBtn.addEventListener("click", () => editor.undo());
   const redoBtn = document.querySelector("#redo-button"); if (redoBtn) redoBtn.addEventListener("click", () => editor.redoAction());
   // Canvas-level controls in the bottom viewport bar (moved off the artboard right-click).
@@ -3143,7 +3160,7 @@ function viewJobOutput(job) {
   const rel = chooseFinalOutput(job);
   if (job.source_name) selectedName = job.source_name;
   manualOutputName = rel ? jobOutputName(rel) : null;
-  closeModal();
+  showEditView();   // Process is a view now — switch to the canvas so the output is visible
   renderQueue();
   renderPreviews().catch((e) => setStatus(e.message, 2500));
 }
@@ -3241,7 +3258,7 @@ function buildJobsPanel() {
         if (action.kind === "place") {
           const rel = chooseFinalOutput(job);
           if (rel) {
-            closeModal();
+            showEditView();   // reveal the canvas so the placed layer is visible
             await placeFromUrl(jobOutputUrl(job, rel), jobOutputName(rel));
           }
           return;
@@ -3635,20 +3652,10 @@ function renderPipelineStrip() {
   return wrap;
 }
 
-function openProcessModal(focusJobs = false) {
-  processModalOpen = true;
-  openModal("Process — batch images to vectors");
-  modalSearchEl.hidden = true;
-  updateViewSwap();
-  renderProcessWorkspace();
-  if (focusJobs) { const j = document.querySelector("#process-jobs"); if (j) j.scrollIntoView({ block: "nearest" }); }
-  loadJobs().catch(() => {});
-}
-
 function renderProcessWorkspace() {
-  if (!processModalOpen) return;
-  modalTitleEl.textContent = `Process — ${workItems.length} image(s)`;
-  modalBodyEl.innerHTML = "";
+  if (!processViewActive) return;
+  processViewTitleEl.textContent = `Process — ${workItems.length} image(s)`;
+  processViewBodyEl.innerHTML = "";
   const root = document.createElement("div");
   root.className = "process-workspace";
 
@@ -3684,13 +3691,13 @@ function renderProcessWorkspace() {
   panes.appendChild(jobs);
   root.appendChild(panes);
 
-  modalBodyEl.appendChild(root);
+  processViewBodyEl.appendChild(root);
   // The gallery builds a thumbnail cell (image + action buttons + listeners) for
-  // every library image — O(n) synchronous DOM that stalls the modal's first paint
+  // every library image — O(n) synchronous DOM that stalls the view's first paint
   // on big libraries. Defer it one frame so the chrome shows instantly, then fill in.
   gallery.innerHTML = '<div class="gallery-empty">Loading library…</div>';
   requestAnimationFrame(() => {
-    if (!processModalOpen) return;
+    if (!processViewActive) return;
     renderProcessGallery();
     renderProcessJobs();
   });
@@ -3771,7 +3778,7 @@ api("/api/bootstrap", "POST")
     // the Process workspace open.
     if (prefs.startup === "resume" && (await resumeLastDoc())) return;
     mountBlankCanvas();
-    openProcessModal();
+    showProcessView();
   })
   .catch((error) => setStatus(error.message, 3000));
 
@@ -4175,7 +4182,7 @@ function schedulePoll() {
       const { completionsHappened, completedNow } = await loadJobs();
       if (wasBusy || activityState === "busy" || completionsHappened) {
         await loadOutputs();
-        if (processModalOpen) renderProcessGallery();   // refresh processed badges
+        if (processViewActive) renderProcessGallery();   // refresh processed badges
       }
       if (completionsHappened) {
         const stem = selectedName ? stem_(selectedName) : null;
@@ -4229,6 +4236,9 @@ window.closeModal = closeModal;
 window.newBlankDoc = newBlankDoc;
 window.openOpenModal = openOpenModal;
 window.renderProcessWorkspace = renderProcessWorkspace;
+window.showProcessView = showProcessView;
+window.showEditView = showEditView;
+window.effectiveProcessKind = effectiveProcessKind;
 window.zoomVp = zoomVp;
 window.fitVp = fitVp;
 window.settings = settings;

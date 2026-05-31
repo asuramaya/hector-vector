@@ -1321,8 +1321,17 @@ button:disabled {
   grid-template-rows: auto 1fr;
 }
 .modal-window.modal-narrow { width: min(460px, 92vw); }
-/* The Process workspace wants room for gallery + jobs side by side. */
-.modal-window:has(.process-workspace) { width: min(1200px, 95vw); height: 88vh; }
+
+/* ---- Process: first-class view (peer to the Edit canvas) ----
+   Toggled by `.process-active` on `.app`; shares the middle 1fr grid row with
+   `.editor-grid`, and exactly one of them is ever displayed. */
+.process-view { display: none; min-height: 0; flex-direction: column; gap: 10px; }
+.app.editor.process-active .editor-grid { display: none; }
+.app.editor.process-active .process-view { display: flex; }
+.process-view-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--line); background: var(--bg); padding: 6px 10px; }
+.process-view-title { font-size: 13px; color: var(--muted); }
+.process-view-body { flex: 1 1 auto; min-height: 0; display: flex; }
+.process-view-body .process-workspace { flex: 1 1 auto; }
 
 /* ---- Process workspace ---- */
 .process-workspace { display: flex; flex-direction: column; gap: 10px; min-height: 0; height: 100%; }
@@ -1469,13 +1478,16 @@ button:disabled {
   outline-offset: -2px;
 }
 
-/* compact icon actions — five fit a narrow cell without clipping */
+/* compact icon actions — five fit a narrow cell without clipping. min-width:0 lets
+   this grid item shrink to the (auto-fill floor) track so the flex:1 icons share it
+   instead of overflowing the cell when the gallery is wide (many narrow columns). */
 .gallery-actions {
   display: flex;
   gap: 2px;
   padding: 4px;
   border-top: 1px solid var(--line);
   background: var(--bg);
+  min-width: 0;
 }
 
 .gallery-act {

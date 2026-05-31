@@ -201,17 +201,17 @@ def main():
         # so the suite doesn't depend on what's in the outputs dir.
         page.wait_for_timeout(500)
         # Default startup (prefs.startup === "blank"): a fresh canvas mounts and the
-        # Process workspace opens over it.
+        # Process view opens — a first-class view (not a modal): it hides the edit grid.
         boot = page.evaluate("""() => ({
             stage: !!editor.stage,
-            modal: !document.querySelector('#modal-root').hidden,
-            title: document.querySelector('#modal-title').textContent,
+            processView: document.querySelector('.app.editor').classList.contains('process-active'),
+            title: document.querySelector('#process-view-title').textContent,
         })""")
         check("startup mounts a blank canvas + opens Process",
-              boot["stage"] and boot["modal"] and "Process" in boot["title"], str(boot))
-        # dismiss the modal so it doesn't intercept the suite's clicks.
-        if page.evaluate("!document.querySelector('#modal-root').hidden"):
-            page.keyboard.press("Escape"); page.wait_for_timeout(150)
+              boot["stage"] and boot["processView"] and "Process" in boot["title"], str(boot))
+        # switch to the Edit view so the stage is visible and the suite's clicks land.
+        if page.evaluate("document.querySelector('.app.editor').classList.contains('process-active')"):
+            page.click("#process-close"); page.wait_for_timeout(150)
         if not page.evaluate("!!editor.stage"):
             mount_ctl(page)
 
@@ -640,7 +640,7 @@ def main():
         # ---- F. Process workspace + rail collapse doesn't break the stage ----
         page.click("#process-button"); page.wait_for_timeout(150)
         ws = page.evaluate("""() => ({
-            open: !document.querySelector('#modal-root').hidden,
+            open: document.querySelector('.app.editor').classList.contains('process-active'),
             gallery: !!document.querySelector('#process-gallery'),
             jobs: !!document.querySelector('#process-jobs'),
             run: [...document.querySelectorAll('.process-controls .primary-button')].some(b => /Run/.test(b.textContent)),
@@ -652,13 +652,13 @@ def main():
         # processing defaults to Single
         mode_default = page.evaluate("document.querySelector('#mode-select').value")
         check("processing defaults to Single", mode_default == "single", mode_default)
-        page.evaluate("closeModal()")
+        page.evaluate("showEditView()")
         # footer Jobs button removed (redundant with header Process…)
         check("footer Jobs button removed", page.evaluate("!document.querySelector('#jobs-button')"))
         # 'q' opens the workspace instead
         page.keyboard.press("q"); page.wait_for_timeout(120)
         check("q opens the workspace", page.evaluate("!!document.querySelector('#process-jobs')"))
-        page.evaluate("closeModal()")
+        page.evaluate("showEditView()")
         # brand removed → header is action-only
         check("brand removed from header", page.evaluate("!document.querySelector('.brand')"))
         # header: File ▾ menu (left), Process centered, no loose New/Open/Save/Export buttons
@@ -702,7 +702,7 @@ def main():
         page.click("#process-button"); page.wait_for_timeout(120)
         active_proc = page.evaluate("document.querySelector('#process-button').classList.contains('active') && !document.querySelector('#view-edit').classList.contains('active')")
         page.click("#view-edit"); page.wait_for_timeout(120)
-        active_edit = page.evaluate("document.querySelector('#view-edit').classList.contains('active') && !document.querySelector('#process-button').classList.contains('active') && document.querySelector('#modal-root').hidden")
+        active_edit = page.evaluate("document.querySelector('#view-edit').classList.contains('active') && !document.querySelector('#process-button').classList.contains('active') && !document.querySelector('.app.editor').classList.contains('process-active')")
         check("view-swap reflects + toggles the active view", active_proc and active_edit)
         # undo/redo moved into the History panel header (and out of the viewport controls)
         check("undo/redo sit in the History header",
@@ -1724,12 +1724,12 @@ def main():
         })""")
         check("stage strip shows Upscale → Remove BG → Vectorize in order, output SVG, draggable",
               strip["stages"] == ["upscale", "removebg", "vectorize"] and strip["out"] == "SVG" and strip["draggable"], str(strip))
-        # the hidden #process-select tracks the stage set (all three on == pipeline) so previews/skip still work
-        check("all-three stage set maps to the pipeline kind", page.evaluate("processSelectEl.value") == "pipeline")
+        # the stage set maps to an effective kind (all three on == pipeline) so previews/skip still work
+        check("all-three stage set maps to the pipeline kind", page.evaluate("effectiveProcessKind()") == "pipeline")
         # toggling Vectorize off flips the output chip to PNG and remaps the effective kind to cutout
         page.evaluate("""() => { const t=document.querySelector('.pipeline-stage[data-stage=vectorize] .stage-toggle');
             t.checked=false; t.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
-        png_state = page.evaluate("() => ({chip:(document.querySelector('.pipeline-out')||{}).textContent, kind:processSelectEl.value})")
+        png_state = page.evaluate("() => ({chip:(document.querySelector('.pipeline-out')||{}).textContent, kind:effectiveProcessKind()})")
         check("disabling Vectorize → PNG output + cutout kind", png_state["chip"] == "PNG" and png_state["kind"] == "cutout", str(png_state))
         page.evaluate("""() => { const t=document.querySelector('.pipeline-stage[data-stage=vectorize] .stage-toggle');
             t.checked=true; t.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
@@ -1762,7 +1762,7 @@ def main():
         page.evaluate("""() => { Object.assign(settings,{trace_simplify:'medium',trace_colormode:'bw'}); renderProcessWorkspace(); }"""); page.wait_for_timeout(40)
         # Vectorize Pixel method folds in Pixel-Art → SVG (maps to the pixelvec kind, swaps the body)
         page.evaluate("""() => { const p=document.querySelector('.pipeline-stage[data-stage=vectorize] .stage-method'); p.value='pixel'; p.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
-        pix = page.evaluate("""() => ({ method: settings.vectorize_method, kind: processSelectEl.value,
+        pix = page.evaluate("""() => ({ method: settings.vectorize_method, kind: effectiveProcessKind(),
             body: [...document.querySelectorAll('.pipeline-detail[data-stage=vectorize] .form-label')].map(s=>s.textContent) })""")
         check("Vectorize Pixel method maps to pixelvec + shows pixel controls",
               pix["method"] == "pixel" and pix["kind"] == "pixelvec" and "Cell color" in pix["body"] and "Shape mode" in pix["body"], str(pix))
@@ -1786,7 +1786,7 @@ def main():
         # gallery polish: no horizontal overflow, square thumbs, compact icon actions that fit the cell
         page.evaluate("renderProcessWorkspace();"); page.wait_for_timeout(80)
         poly = page.evaluate("""() => {
-          const body=document.querySelector('.modal-body');
+          const body=document.querySelector('#process-view-body');
           const cell=document.querySelector('.gallery-cell');
           if(!cell) return {skip:true};
           const t=document.querySelector('.gallery-thumb').getBoundingClientRect();
@@ -1811,7 +1811,7 @@ def main():
         page.wait_for_timeout(90)
         filled = page.evaluate("() => !!document.querySelector('#process-gallery .gallery-grid') || !!document.querySelector('#process-gallery .gallery-empty')")
         check("deferred gallery fills in after a frame", filled)
-        page.evaluate("() => { Object.assign(settings,{trace_simplify:'medium',trace_colormode:'bw'}); closeModal(); }")
+        page.evaluate("() => { Object.assign(settings,{trace_simplify:'medium',trace_colormode:'bw'}); showEditView(); }")
 
         # ---- Settings: centralized AI models & tools panel (status + install) ----
         file_menu_click(page, "Settings"); page.wait_for_timeout(100)

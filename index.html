@@ -138,6 +138,17 @@
         </aside>
       </section>
 
+      <!-- Process: a first-class view (peer to the Edit canvas), not a modal. The
+           view-swap in the header toggles `.process-active` on `.app`, which shows
+           this and hides `.editor-grid` (so exactly one occupies the middle row). -->
+      <section id="process-view" class="process-view" aria-label="Process workspace">
+        <header class="process-view-bar">
+          <span id="process-view-title" class="process-view-title">Process</span>
+          <button id="process-close" class="ghost-button" type="button" title="Back to the canvas (Q)">Close</button>
+        </header>
+        <div id="process-view-body" class="process-view-body"></div>
+      </section>
+
       <!-- Import/library plumbing — kept in the DOM (hidden) so the job-queue and
            library code keeps its element bindings; the UI now lives in header menus
            (Import ▾ / Library ▾) and on-demand modals. -->
