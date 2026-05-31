@@ -9,19 +9,9 @@ import { shapeToAbsPath } from "./hv/index.js";
 import { editor, ghostBtn } from "./editor.js";
 
 const fileInputEl = document.querySelector("#file-input");
-const dropzoneEl = document.querySelector("#dropzone");
-const queueEl = document.querySelector("#queue");
-const workspaceTitleEl = document.querySelector("#workspace-title");
-const workspacePathEl = document.querySelector("#workspace-path");
-const modeSelectEl = document.querySelector("#mode-select");
 const outputPreviewEl = document.querySelector("#output-preview");
 const statusTextEl = document.querySelector("#status-text");
-const forceInputEl = document.querySelector("#force-input");
 const libraryHeaderEl = document.querySelector("#process-count");
-const sourcePathEl = document.querySelector("#source-path");
-const sourceEditEl = document.querySelector("#source-edit");
-const sourceResetEl = document.querySelector("#source-reset");
-const sourceRowEl = document.querySelector(".source-row");
 const outputLabelEl = document.querySelector("#output-label");
 const modalRootEl = document.querySelector("#modal-root");
 const modalTitleEl = document.querySelector("#modal-title");
@@ -140,7 +130,7 @@ async function resumeLastDoc() {
   try {
     if (d.sel && workItems.some((w) => w.name === d.sel)) {       // a library work item
       editor.pinned = false; selectedName = d.sel; manualOutputName = d.manual || null;
-      renderQueue(); await renderPreviews(); return true;
+      refreshLibrary(); await renderPreviews(); return true;
     }
     if (d.url) {                                                   // a saved canvas / standalone vector on disk
       const out = d.canvas ? { name: d.name, folder: d.folder, url: d.url, kind: "svg", path: null } : null;
@@ -559,86 +549,19 @@ function updateLibraryHeader() {
   libraryHeaderEl.textContent = workItems.length ? String(workItems.length) : "";   // corner badge on the Process icon
 }
 
-const LIBRARY_GROUPS_KEY = "hector-vector:library-groups";
-let libraryGroupCollapsed = loadLibraryGroups();
-
-function loadLibraryGroups() {
-  try {
-    const raw = localStorage.getItem(LIBRARY_GROUPS_KEY);
-    if (!raw) return { unprocessed: false, processed: true };
-    return { unprocessed: false, processed: true, ...JSON.parse(raw) };
-  } catch {
-    return { unprocessed: false, processed: true };
-  }
-}
-
-function persistLibraryGroups() {
-  try {
-    localStorage.setItem(LIBRARY_GROUPS_KEY, JSON.stringify(libraryGroupCollapsed));
-  } catch {}
-}
-
 function itemIsProcessed(name) {
   return latestOutputsFor(name).length > 0;
 }
 
-function renderQueue() {
-  queueEl.innerHTML = "";
+// Reconcile library state after work-items change: keep the corner-badge count
+// current and ensure selectedName still points at a real item (default to the
+// first). The library list IS the Process gallery now — repaint it when it's the
+// active view. (There's no separate hidden queue to render anymore.)
+function refreshLibrary() {
   updateLibraryHeader();
-  if (!workItems.length) {
-    queueEl.innerHTML = `<div class="queue-empty">Drop images here.</div>`;
-    selectedName = null;
-    return;
-  }
-  if (!workItems.some((item) => item.name === selectedName)) selectedName = workItems[0].name;
-
-  const unprocessed = workItems.filter((it) => !itemIsProcessed(it.name));
-  const processed = workItems.filter((it) => itemIsProcessed(it.name));
-
-  renderQueueGroup("Unprocessed", unprocessed, "unprocessed");
-  renderQueueGroup("Processed", processed, "processed");
-}
-
-function renderQueueGroup(label, items, groupKey) {
-  if (!items.length) return;
-  const collapsed = !!libraryGroupCollapsed[groupKey];
-  const header = document.createElement("button");
-  header.type = "button";
-  header.className = "queue-group-header";
-  header.innerHTML = `<span class="group-caret">${collapsed ? "▸" : "▾"}</span> ${label} <span class="group-count">(${items.length})</span>`;
-  header.addEventListener("click", () => {
-    libraryGroupCollapsed[groupKey] = !collapsed;
-    persistLibraryGroups();
-    renderQueue();
-  });
-  queueEl.appendChild(header);
-  if (collapsed) return;
-
-  for (const item of items) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `queue-item ${groupKey} ${item.name === selectedName ? "active" : ""}`;
-    if (groupKey === "processed") {
-      const dot = document.createElement("span");
-      dot.className = "queue-dot";
-      dot.textContent = "•";
-      button.appendChild(dot);
-    }
-    const text = document.createElement("span");
-    text.className = "queue-text";
-    text.textContent = item.name;
-    button.appendChild(text);
-    button.title = item.name;
-    button.addEventListener("click", () => {
-      if (selectedName !== item.name) manualOutputName = null;
-      selectedName = item.name;
-      editor.pinned = false;
-      selectedOutput = preferredOutput(selectedName);
-      renderQueue();
-      renderPreviews();
-    });
-    queueEl.appendChild(button);
-  }
+  if (!workItems.length) selectedName = null;
+  else if (!workItems.some((item) => item.name === selectedName)) selectedName = workItems[0].name;
+  if (processViewActive) renderProcessGallery();
 }
 
 async function renderPreviews() {
@@ -688,7 +611,7 @@ function applyQueueData(items, preferredSelection = null) {
   if (preferredSelection && workItems.some((item) => item.name === preferredSelection)) {
     selectedName = preferredSelection;
   }
-  renderQueue();
+  refreshLibrary();
 }
 
 async function fetchStatus() {
@@ -697,21 +620,12 @@ async function fetchStatus() {
 
 function applyStatusData(data) {
   workspace = data;
-  workspaceTitleEl.textContent = workspace.workspace_name || "Workspace";
-  workspacePathEl.textContent = workspace.workspace_dir || "";
   outputsDir = workspace.outputs_dir || "";
   sourceInfo = {
     source_dir: workspace.source_dir || "",
     default_dir: workspace.default_source_dir || "",
     is_default: workspace.source_dir === workspace.default_source_dir,
   };
-  renderSourceRow();
-}
-
-function renderSourceRow() {
-  sourcePathEl.textContent = sourceInfo.source_dir || "(unset)";
-  sourcePathEl.title = sourceInfo.source_dir;
-  sourceResetEl.hidden = !!sourceInfo.is_default;
 }
 
 async function fetchOutputs() {
@@ -724,7 +638,7 @@ function applyOutputsData(data) {
 
 async function loadOutputs() {
   applyOutputsData(await fetchOutputs());
-  renderQueue();
+  refreshLibrary();
   await renderPreviews();
 }
 
@@ -850,7 +764,7 @@ async function refreshAll(preferredSelection = null) {
   applyQueueData(queueData, preferredSelection);
   applyOutputsData(outputsData);
   applyJobsData(jobsData);
-  renderQueue();
+  refreshLibrary();
   await renderPreviews();
 }
 
@@ -896,45 +810,6 @@ document.querySelectorAll("[data-vp]").forEach((button) => {
     if (vp === viewports.output) editor.onViewportChanged();
   });
 });
-
-function beginSourceEdit() {
-  if (sourceRowEl.querySelector(".source-edit-input")) return;
-  const input = document.createElement("input");
-  input.type = "text";
-  input.className = "source-edit-input";
-  input.value = sourceInfo.source_dir || "";
-  input.placeholder = "/absolute/path/to/folder";
-  const submit = async () => {
-    const next = input.value.trim();
-    if (next === (sourceInfo.source_dir || "")) {
-      cleanup();
-      return;
-    }
-    try {
-      const data = await api("/api/source", "POST", { path: next });
-      setStatus(data.message || "Source updated.", 2500);
-      sourceInfo = data;
-      await refreshAll();
-    } catch (error) {
-      setStatus(error.message, 4000);
-    } finally {
-      cleanup();
-    }
-  };
-  const cleanup = () => {
-    input.replaceWith(sourcePathEl);
-    sourceEditEl.hidden = false;
-  };
-  input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") submit();
-    if (event.key === "Escape") cleanup();
-  });
-  input.addEventListener("blur", cleanup);
-  sourcePathEl.replaceWith(input);
-  sourceEditEl.hidden = true;
-  input.focus();
-  input.select();
-}
 
 async function setSourceDir(next) {
   next = (next || "").trim();
@@ -1412,19 +1287,6 @@ function renderGalleryGrid(items, onPick) {
   modalBodyEl.appendChild(grid);
 }
 
-sourceEditEl.addEventListener("click", beginSourceEdit);
-sourcePathEl.addEventListener("click", beginSourceEdit);
-sourceResetEl.addEventListener("click", async () => {
-  try {
-    const data = await api("/api/source", "POST", { path: "" });
-    setStatus(data.message || "Source reset.", 2000);
-    sourceInfo = data;
-    await refreshAll();
-  } catch (error) {
-    setStatus(error.message, 3000);
-  }
-});
-
 // --- File/locate actions (used by the gallery cell actions) ---
 
 async function revealInFileManager(absPath) {
@@ -1567,7 +1429,7 @@ function openOpenModal() {
     renderGalleryGrid(vis, (picked) => {
       closeModal();
       const wi = workItems.find((w) => stem(w.name) === stem(picked.name));
-      if (wi) { editor.pinned = false; selectedName = wi.name; manualOutputName = picked.name; renderQueue(); refreshAll(); }
+      if (wi) { editor.pinned = false; selectedName = wi.name; manualOutputName = picked.name; refreshLibrary(); refreshAll(); }
       else {
         const out = picked.folder === "canvas"
           ? { name: picked.name, folder: picked.folder, url: picked.url, kind: "svg", path: picked.path }
@@ -3031,18 +2893,14 @@ function showExportResult(data) {
   modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
 }
 
-dropzoneEl.addEventListener("click", () => fileInputEl.click());
-
 let dragDepth = 0;
 function clearDragState() {
   dragDepth = 0;
-  dropzoneEl.classList.remove("drag");
 }
 window.addEventListener("dragenter", (event) => {
   if (!event.dataTransfer?.types?.includes("Files")) return;
   event.preventDefault();
   dragDepth += 1;
-  dropzoneEl.classList.add("drag");
 });
 window.addEventListener("dragover", (event) => {
   if (!event.dataTransfer?.types?.includes("Files")) return;
@@ -3082,13 +2940,12 @@ fileInputEl.addEventListener("change", async () => {
   }
 });
 
+// Process run scope + force are owned by the Process view's own controls (module
+// state, not hidden DOM). Force persists; mode defaults to single each session.
 const FORCE_KEY = "hector-vector:force";
-if (forceInputEl) {
-  forceInputEl.checked = localStorage.getItem(FORCE_KEY) === "1";
-  forceInputEl.addEventListener("change", () => {
-    try { localStorage.setItem(FORCE_KEY, forceInputEl.checked ? "1" : "0"); } catch {}
-  });
-}
+let processMode = "single";   // "single" (selected image) | "batch" (whole library)
+let processForce = false;
+try { processForce = localStorage.getItem(FORCE_KEY) === "1"; } catch {}
 
 async function runProcess(btn) {
   if (!btn || btn.disabled) return;
@@ -3105,8 +2962,8 @@ async function runProcess(btn) {
     // an explicit input, which the server processes unconditionally — so this guard
     // (matching the server's stage-aware batch skip) stops a needless re-run.
     const payload = { ...settings };
-    const force = !!(forceInputEl && forceInputEl.checked);
-    if (modeSelectEl.value === "single" && selectedName) {
+    const force = processForce;
+    if (processMode === "single" && selectedName) {
       payload.inputs = [selectedName];
       if (!force && pipelineProcessed(selectedName)) {
         setStatus(`“${selectedName}” is already processed — turn on Force to re-run.`, 4000);
@@ -3159,7 +3016,7 @@ function viewJobOutput(job) {
   if (job.source_name) selectedName = job.source_name;
   manualOutputName = rel ? jobOutputName(rel) : null;
   showEditView();   // Process is a view now — switch to the canvas so the output is visible
-  renderQueue();
+  refreshLibrary();
   renderPreviews().catch((e) => setStatus(e.message, 2500));
 }
 
@@ -3362,7 +3219,7 @@ function pipelineProcessed(name) {
 function stageBody(id) {
   const body = document.createElement("div");
   body.className = "pipeline-detail-body form";
-  const rerender = () => renderProcessWorkspace();
+  const rerender = () => refreshProcessHead();
 
   if (id === "upscale") {
     body.appendChild(fieldRow("Model", makeSelect("model", [
@@ -3485,7 +3342,7 @@ const loadUserPresets = () => { try { return JSON.parse(localStorage.getItem(PIP
 const saveUserPresets = (p) => { try { localStorage.setItem(PIPELINE_PRESETS_KEY, JSON.stringify(p)); } catch {} };
 const capturePreset = () => Object.fromEntries(PRESET_KEYS.map((k) => [k, settings[k]]));
 const presetMatches = (p) => Object.keys(p).every((k) => String(settings[k]) === String(p[k]));
-function applyPreset(p) { Object.assign(settings, p); persistSettings(); renderProcessWorkspace(); }
+function applyPreset(p) { Object.assign(settings, p); persistSettings(); refreshProcessHead(); }
 
 function renderPresetBar() {
   const bar = document.createElement("div");
@@ -3511,7 +3368,7 @@ function renderPresetBar() {
     c.title = "Click to apply · right-click to delete";
     c.addEventListener("contextmenu", (e) => {
       e.preventDefault();
-      if (window.confirm(`Delete preset "${name}"?`)) { const u = loadUserPresets(); delete u[name]; saveUserPresets(u); renderProcessWorkspace(); }
+      if (window.confirm(`Delete preset "${name}"?`)) { const u = loadUserPresets(); delete u[name]; saveUserPresets(u); refreshProcessHead(); }
     });
     bar.appendChild(c);
   }
@@ -3523,7 +3380,7 @@ function renderPresetBar() {
     if (n == null) return; const nm = n.trim(); if (!nm) return;
     const u = loadUserPresets();
     if ((nm in u) && !window.confirm(`A preset named "${nm}" exists. Overwrite it?`)) return;
-    u[nm] = capturePreset(); saveUserPresets(u); setStatus(`Saved preset "${nm}".`, 1800); renderProcessWorkspace();
+    u[nm] = capturePreset(); saveUserPresets(u); setStatus(`Saved preset "${nm}".`, 1800); refreshProcessHead();
   });
   bar.appendChild(save);
   return bar;
@@ -3558,24 +3415,24 @@ function renderStage(id) {
   const toggle = document.createElement("input");
   toggle.type = "checkbox"; toggle.className = "stage-toggle"; toggle.checked = on;
   toggle.title = on ? `${def.label} on` : `${def.label} off`;
-  toggle.addEventListener("change", () => { settings[def.key] = toggle.checked; persistSettings(); renderProcessWorkspace(); });
+  toggle.addEventListener("change", () => { settings[def.key] = toggle.checked; persistSettings(); refreshProcessHead(); });
   const title = document.createElement("button");
   title.type = "button"; title.className = "pipeline-stage-title";
   title.innerHTML = `<span class="stage-name">${def.label}</span><span class="stage-note">${def.note}</span>`;
   title.title = open ? "Hide settings" : "Show settings";
-  title.addEventListener("click", () => { stageExpanded[id] = !stageExpanded[id]; renderProcessWorkspace(); });
+  title.addEventListener("click", () => { stageExpanded[id] = !stageExpanded[id]; refreshProcessHead(); });
   head.appendChild(toggle);
   head.appendChild(title);
 
   // method pill (Remove BG / Vectorize have alternative engines)
   if (id === "removebg") {
     const pill = makeSelectRaw(settings.removebg_method, [["classical", "Classical"], ["ai", "AI"], ["green", "Greenscreen"]], (v) => {
-      settings.removebg_method = v; settings.cutout_backend = v === "ai" ? "ai" : "classical"; persistSettings(); renderProcessWorkspace();
+      settings.removebg_method = v; settings.cutout_backend = v === "ai" ? "ai" : "classical"; persistSettings(); refreshProcessHead();
     });
     pill.className = "stage-method"; pill.title = "Background-removal engine"; head.appendChild(pill);
   } else if (id === "vectorize") {
     const pill = makeSelectRaw(settings.vectorize_method, [["trace", "Trace"], ["pixel", "Pixel"]], (v) => {
-      settings.vectorize_method = v; persistSettings(); renderProcessWorkspace();
+      settings.vectorize_method = v; persistSettings(); refreshProcessHead();
     });
     pill.className = "stage-method"; pill.title = "Vectorize engine"; head.appendChild(pill);
   }
@@ -3598,7 +3455,7 @@ function renderStageDetail(id) {
   const h = document.createElement("span"); h.textContent = `${def.label} settings`; head.appendChild(h);
   const x = document.createElement("button");
   x.type = "button"; x.className = "pipeline-detail-close"; x.textContent = "×"; x.title = "Hide settings";
-  x.addEventListener("click", () => { stageExpanded[id] = false; renderProcessWorkspace(); });
+  x.addEventListener("click", () => { stageExpanded[id] = false; refreshProcessHead(); });
   head.appendChild(x);
   panel.appendChild(head);
   panel.appendChild(stageBody(id));
@@ -3624,7 +3481,7 @@ function renderPipelineStrip() {
     e.preventDefault();
     const order = [...strip.querySelectorAll(".pipeline-stage")].map((c) => c.dataset.stage);
     if (order.length === CANON_ORDER.length) { settings.pipeline_order = order.join(","); persistSettings(); }
-    renderProcessWorkspace();
+    refreshProcessHead();
   });
 
   const order = stageOrder();
@@ -3650,23 +3507,14 @@ function renderPipelineStrip() {
   return wrap;
 }
 
-function renderProcessWorkspace() {
-  if (!processViewActive) return;
-  processViewTitleEl.textContent = `Process — ${workItems.length} image(s)`;
-  processViewBodyEl.innerHTML = "";
-  const root = document.createElement("div");
-  root.className = "process-workspace";
-
-  // --- the pipeline stage strip (replaces the old process dropdown) ---
-  root.appendChild(renderPipelineStrip());
-
-  // --- controls bar ---
+// The controls bar (run scope / force / add / source / run). Cheap to rebuild.
+function buildProcessControls() {
   const bar = document.createElement("div");
   bar.className = "process-controls";
-  const modeSel = makeSelectRaw(modeSelectEl.value, [["batch", "Batch — whole library"], ["single", "Single — selected image"]], (v) => { modeSelectEl.value = v; modeSelectEl.dispatchEvent(new Event("change")); });
+  const modeSel = makeSelectRaw(processMode, [["batch", "Batch — whole library"], ["single", "Single — selected image"]], (v) => { processMode = v; });
   const force = document.createElement("label"); force.className = "process-force";
-  const forceBox = document.createElement("input"); forceBox.type = "checkbox"; forceBox.checked = forceInputEl.checked;
-  forceBox.addEventListener("change", () => { forceInputEl.checked = forceBox.checked; });
+  const forceBox = document.createElement("input"); forceBox.type = "checkbox"; forceBox.checked = processForce;
+  forceBox.addEventListener("change", () => { processForce = forceBox.checked; try { localStorage.setItem(FORCE_KEY, processForce ? "1" : "0"); } catch {} });
   force.appendChild(forceBox); force.appendChild(document.createTextNode(" Force re-run"));
   const runBtn = document.createElement("button"); runBtn.type = "button"; runBtn.className = "primary-button"; runBtn.textContent = "Run → canvas";
   runBtn.disabled = !anyStageEnabled();
@@ -3677,8 +3525,34 @@ function renderProcessWorkspace() {
   bar.appendChild(ghostBtn("Add images", () => fileInputEl.click()));
   bar.appendChild(ghostBtn("Source…", openSourceModal));
   bar.appendChild(runBtn);
-  root.appendChild(bar);
+  return bar;
+}
 
+// Re-render ONLY the header (stage strip + controls) in place. Stage toggles /
+// preset changes use this so the O(n) gallery + jobs panes keep their DOM, scroll
+// position and focus instead of being torn down and rebuilt on every click.
+function refreshProcessHead() {
+  if (!processViewActive) return;
+  const head = document.querySelector("#process-head");
+  if (!head) { renderProcessWorkspace(); return; }
+  head.innerHTML = "";
+  head.appendChild(renderPipelineStrip());
+  head.appendChild(buildProcessControls());
+}
+
+function renderProcessWorkspace() {
+  if (!processViewActive) return;
+  processViewTitleEl.textContent = `Process — ${workItems.length} image(s)`;
+  processViewBodyEl.innerHTML = "";
+  const root = document.createElement("div");
+  root.className = "process-workspace";
+
+  // --- header: stage strip + controls bar (re-rendered together by refreshProcessHead) ---
+  const head = document.createElement("div");
+  head.id = "process-head";
+  head.appendChild(renderPipelineStrip());
+  head.appendChild(buildProcessControls());
+  root.appendChild(head);
 
   // --- gallery (left) + jobs (right) ---
   const panes = document.createElement("div");
@@ -3742,7 +3616,7 @@ function renderProcessGallery() {
     thumb.innerHTML = `<div class="gallery-thumb"><img src="${item.url}" alt="${item.name}" loading="lazy" /></div>`;
     thumb.addEventListener("click", () => {
       selectedName = item.name; manualOutputName = null; editor.pinned = false;
-      renderQueue(); renderProcessGallery();
+      refreshLibrary();
       renderPreviews().catch((e) => setStatus(e.message, 2500));
     });
     thumb.addEventListener("contextmenu", (e) => { e.preventDefault(); openInfoModal(item.name); });   // rescued Info panel
@@ -4187,7 +4061,7 @@ function schedulePoll() {
         const touchesSelection = stem && completedNow.some(
           (j) => j.source_name && stem_(j.source_name) === stem
         );
-        renderQueue();
+        refreshLibrary();
         if (touchesSelection) {
           // Force fresh mount so the new artifact lands on the canvas automatically.
           manualOutputName = null;

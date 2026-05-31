@@ -650,7 +650,7 @@ def main():
         check("Process gallery has a filter box (rescued Browse)",
               page.evaluate("!!document.querySelector('#process-gallery .process-filter')"))
         # processing defaults to Single
-        mode_default = page.evaluate("document.querySelector('#mode-select').value")
+        mode_default = page.evaluate("document.querySelector('.process-controls select').value")
         check("processing defaults to Single", mode_default == "single", mode_default)
         page.evaluate("showEditView()")
         # footer Jobs button removed (redundant with header Process…)

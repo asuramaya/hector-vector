@@ -107,90 +107,6 @@ button:disabled {
   grid-template-rows: auto 1fr;
 }
 
-.queue {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.queue-item, .queue-empty {
-  border: 1px solid var(--line);
-  background: var(--bg);
-  color: var(--fg);
-  padding: 8px 10px;
-  text-align: left;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  overflow: hidden;
-  font: inherit;
-  flex: 0 0 auto;
-}
-
-.queue-empty {
-  color: var(--muted);
-}
-
-.queue-item.active {
-  background: #000;
-  color: #fff;
-}
-
-.queue-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.queue-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.queue-dot {
-  flex: 0 0 auto;
-  line-height: 1;
-}
-
-.queue-item.processed .queue-text {
-  color: var(--muted);
-}
-
-.queue-item.processed.active .queue-text {
-  color: #fff;
-}
-
-.queue-group-header {
-  border: 1px dashed var(--line);
-  background: var(--bg);
-  color: var(--fg);
-  padding: 6px 8px;
-  text-align: left;
-  font: inherit;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-}
-
-.queue-group-header .group-caret {
-  width: 10px;
-  display: inline-block;
-}
-
-.queue-group-header .group-count {
-  margin-left: auto;
-  color: var(--muted);
-  letter-spacing: 0;
-}
-
 .control-bar {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -689,7 +605,6 @@ button:disabled {
 /* layers panel */
 .rail-section.layers { flex: 1 1 auto; min-height: 120px; }
 .rail-section.library { flex: 0 0 auto; }
-.rail-section.library .queue { max-height: 200px; }
 .layers-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
 .layer-row {
   display: flex; align-items: center; gap: 6px;
@@ -1235,37 +1150,6 @@ button:disabled {
   gap: 4px;
 }
 
-.source-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.source-label {
-  letter-spacing: 0.12em;
-}
-
-.source-row .ghost-button {
-  padding: 4px 8px;
-}
-
-.source-row #source-path {
-  min-width: 0;
-  flex: 1 1 auto;
-  cursor: pointer;
-}
-
-.source-edit-input {
-  border: 1px solid var(--line);
-  background: var(--bg);
-  color: var(--fg);
-  padding: 4px 8px;
-  flex: 1 1 240px;
-  min-width: 0;
-  font: inherit;
-}
-
 .output-panel {
   grid-template-rows: auto auto 1fr;
 }
@@ -1335,6 +1219,9 @@ button:disabled {
 
 /* ---- Process workspace ---- */
 .process-workspace { display: flex; flex-direction: column; gap: 10px; min-height: 0; height: 100%; }
+/* header = stage strip + controls; refreshProcessHead re-renders it in place so the
+   gallery/jobs panes below keep their scroll + focus on stage toggles. */
+#process-head { display: flex; flex-direction: column; gap: 10px; flex: 0 0 auto; }
 .process-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .process-controls select { padding: 6px 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: inherit; }
 .process-force { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--muted); }
@@ -1705,16 +1592,6 @@ button:disabled {
     grid-column: 1 / -1;
   }
 
-  .queue {
-    flex-direction: row;
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-
-  .queue-item, .queue-empty {
-    flex: 0 0 auto;
-    min-width: 160px;
-  }
 }
 
 @media (max-width: 700px) {

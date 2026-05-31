@@ -149,27 +149,8 @@
         <div id="process-view-body" class="process-view-body"></div>
       </section>
 
-      <!-- Import/library plumbing — kept in the DOM (hidden) so the job-queue and
-           library code keeps its element bindings; the UI now lives in header menus
-           (Import ▾ / Library ▾) and on-demand modals. -->
-      <div id="workspace-plumbing" hidden>
-        <span id="workspace-title"></span>
-        <span id="workspace-path"></span>
-        <div class="source-row">
-          <span id="source-path"></span>
-          <button id="source-edit" type="button">Change</button>
-          <button id="source-reset" type="button" hidden>Default</button>
-        </div>
-        <select id="mode-select">
-          <option value="batch">Batch</option>
-          <option value="single" selected>Single</option>
-        </select>
-        <label><input id="force-input" type="checkbox" /> Force</label>
-        <div id="queue"></div>
-        <button id="dropzone" type="button">Add Images<input id="file-input" type="file" accept="image/*" multiple hidden /></button>
-      </div>
-
-      <!-- Open an .svg straight from disk (File ▸ Open from file…). -->
+      <!-- Hidden file inputs: Add images (raster import) + File ▸ Open from file (svg). -->
+      <input id="file-input" type="file" accept="image/*" multiple hidden />
       <input id="open-file-input" type="file" accept=".svg,image/svg+xml" hidden />
 
       <footer class="status-bar">
