@@ -281,6 +281,43 @@ def check_validation_guards() -> None:
     print("ok: validation guards accept simple outputs, reject only empty/blank (#38)")
 
 
+def check_trace_downscale() -> None:
+    """The trace ceiling actually downscales: an image above the cap is resized to it (longest
+    side), one at/under it is passed through untouched (#42 / TRACE_MAX_DIM behaviour)."""
+    sys.path.insert(0, str(ROOT))
+    import server, tempfile
+    from PIL import Image
+
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        big = d / "big.png"; Image.new("RGB", (2400, 1200), (200, 30, 30)).save(big)
+        out = server.apply_preprocess(big, d / "big.small.png", target_max_dim=1600)
+        w, h = Image.open(out).size
+        assert max(w, h) == 1600 and (w, h) == (1600, 800), f"expected 1600x800, got {w}x{h}"
+        # at/under the cap → untouched (returns the source unchanged)
+        small = d / "small.png"; Image.new("RGB", (800, 400), (30, 30, 200)).save(small)
+        same = server.apply_preprocess(small, d / "small.small.png", target_max_dim=1600)
+        assert Image.open(same).size == (800, 400), "image under the cap must pass through"
+    print("ok: trace ceiling downscales above the cap, passes through at/under it (#42)")
+
+
+def check_dense_subpath_bounded() -> None:
+    """A pathologically dense subpath (the upscaled-raster / huge-path case) is decimated to a
+    bound before the O(n^2) refit, so simplify stays fast and reduces node count (#42 / #2)."""
+    sys.path.insert(0, str(ROOT))
+    import simplify_svg as S, math, time
+
+    # one closed subpath with ~9000 points around a SMOOTH circle (far over the max_pts cap):
+    # a smooth feature must collapse to a handful of cubics, fast, despite the dense input.
+    n = 9000
+    pts = [(400 + 180 * math.cos(2 * math.pi * i / n), 400 + 180 * math.sin(2 * math.pi * i / n)) for i in range(n)]
+    d = "M %.2f %.2f " % pts[0] + "".join("L %.2f %.2f " % p for p in pts[1:]) + "Z"
+    t = time.time(); out, segs = S.simplify_d(d, frac=0.02); dt = time.time() - t
+    assert segs and segs < 200, f"dense smooth subpath must collapse to few segments, got {segs}"
+    assert dt < 5.0, f"dense subpath refit should be fast (bounded), took {dt:.2f}s"
+    print(f"ok: dense {n}-pt smooth subpath bounded → {segs} segments in {dt:.2f}s (#42)")
+
+
 def main() -> int:
     check_parses()
     svg = check_pixelvec()
@@ -292,6 +329,8 @@ def main() -> int:
     check_pipeline_skip()
     check_trace_ceiling()
     check_validation_guards()
+    check_trace_downscale()
+    check_dense_subpath_bounded()
     for tmp in ["_out.svg", "_out.png"]:
         (ROOT / "tests" / tmp).unlink(missing_ok=True)
     print("\nALL SMOKE TESTS PASSED")

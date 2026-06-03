@@ -2319,6 +2319,35 @@ def main():
         page.evaluate("() => { app.selectedName=null; delete settings.stage_vectorize; delete settings.engine; renderProcessorPanel(); }")
         check("library-selected raster auto-loads onto the canvas on Run, then vectorises in place (#34)",
               al["before"]["imgs"] == 0 and al["before"]["label"] == "Run → canvas" and al["vgroup"] and al["imgs"] == 0, str(al))
+
+        # (d) #42: a MULTI-STAGE focused run (upscale + vectorize chained) goes through the job
+        #     path (not the vectorize-only fast path), traces the upscaled intermediate at the
+        #     focused resolution, and returns the terminal SVG onto the raster in place. Uses an
+        #     RGBA source so upscale takes the deterministic path (no Real-ESRGAN binary).
+        page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">'
+              + '<rect class="hv-artboard" x="0" y="0" width="120" height="120" fill="#fff"/></svg>','multistage.svg'); }""")
+        page.wait_for_function("editor && editor.stage", timeout=4000)
+        page.wait_for_function("""() => { if (!editor || !editor.stage) return false;
+            if (editor.stage.querySelector('image[data-hv-id]')) return true;
+            const c=document.createElement('canvas'); c.width=c.height=72; const x=c.getContext('2d');
+            x.fillStyle='#cc2222'; x.fillRect(10,10,30,30);                       // shapes on a TRANSPARENT bg → RGBA
+            x.fillStyle='#2266cc'; x.beginPath(); x.arc(48,48,16,0,7); x.fill();
+            editor.placeImage(c.toDataURL('image/png'),'multi',72,72); return false; }""", timeout=6000)
+        page.evaluate("""() => {
+            const im=editor.stage.querySelector('image[data-hv-id]');
+            editor.selection=new Set([im.getAttribute('data-hv-id')]); editor.artboardSelected=false; editor.onInspect();
+            settings.stage_upscale=true; settings.scale='2'; settings.stage_removebg=false;
+            settings.stage_vectorize=true; settings.engine='clean';
+            renderProcessorPanel();
+            window.__msFetch = window.fetch; window.__msPipeline = 0;
+            window.fetch = (u, ...r) => { if (String(u).includes('/api/run/pipeline')) window.__msPipeline++; return window.__msFetch(u, ...r); };
+            document.querySelector('#processor-chin .proc-run').click(); }""")
+        page.wait_for_function("() => !editor.stage.querySelector('image[data-hv-id]') && !!editor.stage.querySelector('g[data-hv-id] path')", timeout=60000)
+        ms = page.evaluate("() => { window.fetch = window.__msFetch || window.fetch; return { imgs: editor.stage.querySelectorAll('image[data-hv-id]').length, vgroup: !!editor.stage.querySelector('g[data-hv-id] path'), viaJob: window.__msPipeline }; }")
+        page.evaluate("() => { delete settings.stage_upscale; delete settings.scale; delete settings.stage_vectorize; delete settings.engine; }")
+        check("multi-stage focused run (upscale+vectorize) goes via a job and returns the vector in place (#42)",
+              ms["imgs"] == 0 and ms["vgroup"] and ms["viaJob"] >= 1, str(ms))
         # Clean up after the real jobs: clear the queue (so the background job-poller doesn't
         # keep re-rendering panels and destabilising later clicks) and reset the stage flags.
         page.evaluate("""async () => {
