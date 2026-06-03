@@ -2024,6 +2024,181 @@ def main():
         check("SVG export inlines same-origin <image> hrefs to data URIs (portable off-machine)",
               inl["hasData"] and inl["droppedUrl"], str(inl))
 
+        # ---- self-contained PERSISTED save: Save-As bakes a server-href raster into the
+        #      saved .svg, while the LIVE editor keeps its server href (re-processable). Uses a
+        #      small same-origin asset so the baked file stays under the server's save cap. ----
+        IMG_HREF = "/assets/hv_logo.svg"
+        page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
+              + '<rect class="hv-artboard" x="0" y="0" width="200" height="200" fill="#fff"/></svg>','bake-probe.svg'); }""")
+        page.wait_for_function("editor && editor.stage", timeout=4000)
+        page.wait_for_function("""(url) => { if (!editor || !editor.stage) return false;
+            if (editor.stage.querySelector('image[data-hv-id]')) return true;
+            editor.placeImage(url,'bake',120,120); return false; }""", arg=IMG_HREF, timeout=6000)
+        file_menu_click(page, "Save as")
+        page.wait_for_function("!document.querySelector('#modal-root').hidden && !!document.querySelector('#modal-body .form input')", timeout=4000)
+        page.fill('#modal-body .form input', 'e2e-bake-probe')
+        page.click('#modal-body .ghost-button:has-text("Save")')
+        # Wait on the concrete save target (not the shared status text, which can carry a
+        # stale "Saved" from an earlier test and match before this async save completes).
+        page.wait_for_function("() => window.app.selectedOutput && /e2e-bake-probe/.test(window.app.selectedOutput.name)", timeout=8000)
+        baked = page.evaluate("""async () => {
+            const o = app.selectedOutput;
+            const liveHref = editor.stage.querySelector('image').getAttribute('href') || '';
+            const url = '/outputs/' + encodeURIComponent(o.folder) + '/' + encodeURIComponent(o.name);
+            const text = await (await fetch(url)).text();
+            const m = text.match(/<image[^>]*\\shref="([^"]*)"/i);
+            return { savedData: !!(m && m[1].startsWith('data:')), liveNotBaked: !liveHref.startsWith('data:') && liveHref.length > 0 }; }""")
+        check("persisted .svg bakes the raster href → data URI; live editor keeps its server href",
+              baked["savedData"] and baked["liveNotBaked"], str(baked))
+
+        # ---- raster is a first-class object: fill/stroke no-op on <image> (clean DOM), and
+        #      its layers row shows a live thumbnail instead of a colour chip ----
+        page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+              + '<rect class="hv-artboard" x="0" y="0" width="100" height="100" fill="#fff"/></svg>','raster-fc.svg'); }""")
+        page.wait_for_function("editor && editor.stage", timeout=4000)
+        page.wait_for_function("""() => { if (!editor || !editor.stage) return false;
+            if (editor.stage.querySelector('image[data-hv-id]')) return true;
+            const px='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+            editor.placeImage(px,'fc.png',60,60); return false; }""", timeout=6000)
+        rfc = page.evaluate("""() => {
+            const id=[...editor.selection][0]; const img=editor.nodeById(id);
+            editor.applyFill('#ff0000'); editor.applyStroke('#00ff00', 4);   // must NO-OP on a raster
+            editor._renderLayers();
+            const sw=document.querySelector(`#layers-list .layer-row[data-id="${id}"] .layer-swatch`);
+            return { isRaster: editor.isRaster(img), noFill: !img.hasAttribute('fill'), noStroke: !img.hasAttribute('stroke'),
+                     swatchRaster: !!(sw && sw.classList.contains('raster')),
+                     swatchThumb: !!(sw && /url\\(/.test(sw.style.backgroundImage)) }; }""")
+        check("raster first-class: fill/stroke no-op + layers row shows a thumbnail (not a colour chip)",
+              rfc["isRaster"] and rfc["noFill"] and rfc["noStroke"] and rfc["swatchRaster"] and rfc["swatchThumb"], str(rfc))
+
+        # ---- pipeline dissolves into the editor: an on-canvas raster is runnable in place
+        #      (no library name needed) and the Run label is honest about where it lands ----
+        runl = page.evaluate("""() => {
+            const id=[...editor.selection][0];
+            settings.stage_vectorize=true; app.selectedName=null;
+            editor.selection=new Set([id]); editor.artboardSelected=false; renderProcessorPanel();
+            const onCanvas=document.querySelector('#processor-chin .proc-run');
+            const r={ canvasLabel:onCanvas.textContent, canvasEnabled:!onCanvas.disabled };
+            // library-only target (nothing on canvas selected, a library name set) → background job
+            app.selectedName='nonexistent-probe.png'; editor.selection=new Set(); editor.artboardSelected=false; renderProcessorPanel();
+            r.libLabel=document.querySelector('#processor-chin .proc-run').textContent;
+            // whole-library batch via the explicit swap toggle
+            document.querySelector('#processor-body .proc-target-swap').click();
+            r.batchLabel=document.querySelector('#processor-chin .proc-run').textContent;
+            document.querySelector('#processor-body .proc-target-swap').click();
+            app.selectedName=null; delete settings.stage_vectorize; renderProcessorPanel();
+            return r; }""")
+        check("Run is honest + on-canvas raster runs in place: canvas→'Run → canvas' (enabled, no lib name), library→'Run → library', batch→'Run library'",
+              runl["canvasLabel"]=="Run → canvas" and runl["canvasEnabled"]
+              and runl["libLabel"]=="Run → library" and runl["batchLabel"]=="Run library", str(runl))
+
+        # ---- res-swing regression: a float shoved off-screen (e.g. a 4K layout opened on a
+        #      1080p screen) re-clamps fully into the viewport instead of stranding unreachable ----
+        clamp = page.evaluate("""() => {
+            const was = window.__docks.loc('history');   // restore EXACTLY afterwards
+            window.__docks.float('history');
+            const w = document.querySelector('.dock-window[data-dock-window="history"]');
+            if (!w) return { nofloat: true };
+            w.style.left = (innerWidth + 400) + 'px'; w.style.top = (innerHeight + 400) + 'px';
+            const b = w.getBoundingClientRect();
+            const before = b.left >= innerWidth || b.top >= innerHeight;
+            window.__docks.clampFloats();
+            const a = w.getBoundingClientRect();
+            const after = a.left >= 0 && a.top >= 0 && a.right <= innerWidth + 1 && a.bottom <= innerHeight + 1;
+            if (was === 'left' || was === 'right') window.__docks.dock('history', was); else window.__docks.shelve('history');
+            const st = window.__docks.state(); if (st.history) delete st.history.rect;   // drop the off-screen test rect
+            return { before, after }; }""")
+        check("floating panel re-clamps into the viewport on resize/shrink (no off-screen stranding)",
+              clamp.get("before") and clamp.get("after"), str(clamp))
+
+        # ---- res-swing regression: a locking-bezel GROUP container also re-clamps ----
+        gclamp = page.evaluate("""() => {
+            const wasH = window.__docks.loc('history'), wasL = window.__docks.loc('library');
+            window.__docks.float('history'); window.__docks.float('library');
+            if (!window.__docks.joinGroup) { window.__docks.shelve('history'); window.__docks.shelve('library'); return { nogroup: true }; }
+            window.__docks.joinGroup('history','library','bottom');
+            const g = document.querySelector('.dock-group');
+            if (!g) return { nogroup: true };
+            g.style.left = (innerWidth + 500) + 'px'; g.style.top = '8px';
+            const before = g.getBoundingClientRect().left >= innerWidth;
+            window.__docks.clampFloats();
+            const r = g.getBoundingClientRect();
+            const after = r.left >= 0 && r.right <= innerWidth + 1;
+            // Restore EXACTLY (don't leave persisted float rects — a stranded Library float
+            // would otherwise re-open over the rail toggle after the suite's ?app=1 reload).
+            const restore = (n, was) => { if (was === 'left' || was === 'right') window.__docks.dock(n, was); else window.__docks.shelve(n); };
+            restore('history', wasH); restore('library', wasL);
+            // Drop the off-screen test rect so a LATER test that re-floats these panels
+            // doesn't reopen them at the clamped right-edge position (over the rail toggle).
+            const st = window.__docks.state(); if (st.history) delete st.history.rect; if (st.library) delete st.library.rect;
+            return { before, after }; }""")
+        check("floating GROUP container re-clamps into the viewport on resize/shrink",
+              gclamp.get("nogroup") or (gclamp.get("before") and gclamp.get("after")), str(gclamp))
+
+        # ---- Task 3 end-to-end (real job): a FOCUSED on-canvas run returns the result IN PLACE.
+        #      (a) vectorize → the raster becomes an editable vector group; the resolution
+        #      ceiling + tiny-image seeding fix keep this fast and crash-free. ----
+        page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">'
+              + '<rect class="hv-artboard" x="0" y="0" width="120" height="120" fill="#fff"/></svg>','focusrun.svg'); }""")
+        page.wait_for_function("editor && editor.stage", timeout=4000)
+        page.wait_for_function("""() => { if (!editor || !editor.stage) return false;
+            if (editor.stage.querySelector('image[data-hv-id]')) return true;
+            // a multi-colour raster → several traced paths (a trivial 1-shape image traces
+            // below the server's 'SVG too small' guard, which is meant to catch empty traces).
+            const c=document.createElement('canvas'); c.width=c.height=96; const x=c.getContext('2d');
+            x.fillStyle='#fff'; x.fillRect(0,0,96,96);
+            x.fillStyle='#cc2222'; x.fillRect(10,10,40,40);
+            x.fillStyle='#2266cc'; x.beginPath(); x.arc(64,64,24,0,7); x.fill();
+            x.fillStyle='#22aa55'; x.fillRect(52,8,32,22);
+            x.fillStyle='#222222'; x.fillRect(8,60,30,28);
+            editor.placeImage(c.toDataURL('image/png'),'focus',96,96); return false; }""", timeout=6000)
+        page.evaluate("""() => {
+            const im=editor.stage.querySelector('image[data-hv-id]');
+            editor.selection=new Set([im.getAttribute('data-hv-id')]); editor.artboardSelected=false; editor.onInspect();
+            settings.stage_vectorize=true; settings.stage_upscale=false; settings.stage_removebg=false; settings.engine='clean';
+            renderProcessorPanel();
+            document.querySelector('#processor-chin .proc-run').click(); }""")
+        page.wait_for_function("() => !editor.stage.querySelector('image[data-hv-id]') && !!editor.stage.querySelector('g[data-hv-id] path')", timeout=60000)
+        vrun = page.evaluate("() => ({ imgs: editor.stage.querySelectorAll('image[data-hv-id]').length, vgroup: !!editor.stage.querySelector('g[data-hv-id] path') })")
+        check("focused vectorize run returns an editable vector onto the canvas IN PLACE (Task 3, real job)",
+              vrun["imgs"] == 0 and vrun["vgroup"], str(vrun))
+
+        # (b) a raster-producing stage (upscale) → the PNG result is swapped onto the SAME
+        #     node: it stays an <image>, but its href moves from the data: source to an
+        #     /outputs/ file. Uses a TRANSPARENT (RGBA) source so upscale takes the
+        #     deterministic path (pure PIL — no Real-ESRGAN binary needed in CI).
+        page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">'
+              + '<rect class="hv-artboard" x="0" y="0" width="120" height="120" fill="#fff"/></svg>','focusrun2.svg'); }""")
+        page.wait_for_function("editor && editor.stage", timeout=4000)
+        page.wait_for_function("""() => { if (!editor || !editor.stage) return false;
+            if (editor.stage.querySelector('image[data-hv-id]')) return true;
+            const c=document.createElement('canvas'); c.width=c.height=64; const x=c.getContext('2d');
+            x.fillStyle='#cc2222'; x.beginPath(); x.arc(32,32,20,0,7); x.fill();   // transparent outside → RGBA
+            editor.placeImage(c.toDataURL('image/png'),'focusup',64,64); return false; }""", timeout=6000)
+        page.evaluate("""() => {
+            const im=editor.stage.querySelector('image[data-hv-id]');
+            editor.selection=new Set([im.getAttribute('data-hv-id')]); editor.artboardSelected=false; editor.onInspect();
+            settings.stage_vectorize=false; settings.stage_removebg=false; settings.stage_upscale=true; settings.scale='2';
+            renderProcessorPanel();
+            document.querySelector('#processor-chin .proc-run').click(); }""")
+        page.wait_for_function("""() => { const im=editor.stage.querySelector('image[data-hv-id]');
+            return !!im && (im.getAttribute('href')||'').startsWith('/outputs/'); }""", timeout=60000)
+        brun = page.evaluate("""() => { const im=editor.stage.querySelector('image[data-hv-id]');
+            return { stillImage: !!im, href: (im && (im.getAttribute('href')||'')).slice(0,9) }; }""")
+        check("focused upscale run swaps the PNG result onto the same raster IN PLACE (Task 3, raster branch)",
+              brun["stillImage"] and brun["href"] == "/outputs/", str(brun))
+        # Clean up after the real jobs: clear the queue (so the background job-poller doesn't
+        # keep re-rendering panels and destabilising later clicks) and reset the stage flags.
+        page.evaluate("""async () => {
+            delete settings.stage_upscale; delete settings.scale; delete settings.stage_vectorize; delete settings.engine;
+            try { await fetch('/api/jobs/clear', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}); } catch {}
+            if (typeof loadJobs === 'function') { try { await loadJobs(); } catch {} } }""")
+        page.wait_for_timeout(200)
+
         # ---- regression fix: stroke-align clip is re-anchored on clone (was sharing the source's clip id) ----
         SA_DOC = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">'
                   '<rect class="hv-artboard" x="0" y="0" width="200" height="200" fill="#fff"/>'
