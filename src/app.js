@@ -4141,36 +4141,36 @@ async function runProcess(btn) {
     const payload = { ...settings };
     const force = processForce;
     const t = processTarget();
-    // FOCUSED + ON-CANVAS: process EXACTLY the selected canvas raster (its href, full
-    // resolution) and return the result to it in place — the batch pipeline dissolves
-    // into the editor (input is the canvas image, output replaces it). `input_url` is
-    // the highest-priority target in the server's select_inputs.
-    const returnNode = (!t.batch && t.node && editor.isRaster(t.node)) ? t.node : null;
-    // WYSIWYG fast path: a focused, vectorize-ONLY on-canvas run commits exactly the
-    // live-preview trace (same engine + resolution) in place — identical to "Keep vector"
-    // — instead of kicking a second job that would re-trace at the batch ceiling. This
-    // collapses the two commit paths into one. Multi-stage / raster-op focused runs (which
-    // can't be previewed as a single SVG) still take the job path below.
+    // Resolve the FOCUSED target node — the raster whose result lands on the canvas in
+    // place. The pipeline dissolves into the editor for BOTH cases:
+    //   • on-canvas raster  → process its href directly
+    //   • library raster     → auto-load it onto the canvas first, then process it
+    // so a single-raster run is always symmetric (input is the canvas image, output
+    // replaces it). Only batch ("Whole library") stays a headless library job.
+    let returnNode = (!t.batch && t.node && editor.isRaster(t.node)) ? t.node : null;
+    if (!t.batch && !returnNode && t.name) {
+      const wi = workItems.find((i) => i.name === t.name);
+      if (!wi) { setStatus(`Couldn't find “${t.name}” in the library.`, 3500); return; }
+      await loadRasterToCanvas({ name: wi.name, url: wi.url });   // places + selects the <image>
+      returnNode = currentRasterTarget();
+      if (!returnNode) { setStatus("Couldn't load the raster onto the canvas.", 3500); return; }
+    }
+    // WYSIWYG fast path: a focused, vectorize-ONLY run commits exactly the live-preview
+    // trace (same engine + resolution) in place — identical to "Keep vector" — instead of
+    // kicking a second job that would re-trace at the batch ceiling. This collapses the two
+    // commit paths into one. Multi-stage / raster-op runs (which can't be previewed as a
+    // single SVG) still take the job path below.
     if (returnNode && stageOn("vectorize") && !stageOn("upscale") && !stageOn("removebg")) {
       await commitFocusedVectorize(returnNode);
       return;   // finally{} restores the button
     }
-    if (!t.batch) {
-      if (returnNode) {
-        payload.input_url = rasterHref(returnNode);
-        payload.input_name = rasterName(returnNode);   // friendly output stem; the result lands on the canvas (hidden dir)
-      } else {
-        // Library-only target (raster not on the canvas): a background job into the library.
-        if (!t.name) {
-          setStatus("Select a raster to process, or switch to Whole library (batch).", 3500);
-          return;
-        }
-        payload.inputs = [t.name];
-        if (!force && pipelineProcessed(t.name)) {
-          setStatus(`“${t.name}” is already processed — turn on Force to re-run.`, 4000);
-          return;   // finally{} restores the button; no wasteful re-run
-        }
-      }
+    if (returnNode) {
+      payload.input_url = rasterHref(returnNode);
+      payload.input_name = rasterName(returnNode);   // friendly output stem; the result lands on the canvas (hidden dir)
+    } else if (!t.batch) {
+      // No raster resolved (canRun guards the button, so this is a safety net).
+      setStatus("Select a raster to process, or switch to Whole library (batch).", 3500);
+      return;
     }
     if (force) payload.force = true;
     const data = await api("/api/run/pipeline", "POST", payload);
@@ -4779,7 +4779,7 @@ function buildProcessorChin(t) {
   if (!t.batch && !t.live && t.name) {
     const wi = workItems.find((i) => i.name === t.name);
     const load = document.createElement("button"); load.type = "button"; load.className = "proc-foot-load";
-    load.textContent = "↓ Load to preview"; load.title = `Load “${t.name}” into the canvas for live preview`;
+    load.textContent = "↓ Load to preview"; load.title = `Load “${t.name}” onto the canvas to tune a live preview first (Run loads it automatically)`;
     load.addEventListener("click", () => { if (wi) loadRasterToCanvas({ name: wi.name, url: wi.url }); });
     chin.appendChild(load);
   } else if (!t.batch && !t.name) {
@@ -4788,10 +4788,11 @@ function buildProcessorChin(t) {
     chin.appendChild(hint);
   }
   const run = document.createElement("button"); run.type = "button"; run.className = "primary-button proc-run";
-  // Honest label: on-canvas focused run edits the canvas in place; a library-only target
-  // runs a background job into the library (bring it on-canvas via "Load to preview" first
-  // to get the in-place result).
-  run.textContent = t.batch ? "Run library" : (t.live ? "Run → canvas" : "Run → library");
+  // A single-raster run always lands on the canvas — an on-canvas raster is processed in
+  // place; a library raster is auto-loaded onto the canvas first. Only batch runs the
+  // whole library headlessly. ("Load to preview" above is now just an optional pre-load
+  // for live tuning before running.)
+  run.textContent = t.batch ? "Run library" : "Run → canvas";
   run.disabled = !anyStageEnabled() || (!t.batch && !t.canRun);
   if (!anyStageEnabled()) run.title = "Enable at least one stage";
   else if (!t.batch && !t.canRun) run.title = "Select a raster to run";
@@ -5524,6 +5525,7 @@ window.app = {
   inlineSvgImages,   // exposed for the E2E: bake <image> hrefs → data URIs (self-contained export)
   serializeForSave,  // self-contained save serializer (bake, or linked with explicit consent) — for the E2E
   setSaveByteCap(n) { _saveByteCap = n; },   // test seam: force/clear the save cap without a giant raster
+  get workItems() { return workItems; },     // exposed for the E2E (library auto-load-on-run test)
   get engineSchemas() { return engineSchemas; },
   get rasterOpSchemas() { return rasterOpSchemas; },
   get rasterLiveKicks() { return rasterLiveKicks; },

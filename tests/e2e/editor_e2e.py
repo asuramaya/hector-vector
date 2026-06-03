@@ -2112,7 +2112,9 @@ def main():
             editor.selection=new Set([id]); editor.artboardSelected=false; renderProcessorPanel();
             const onCanvas=document.querySelector('#processor-chin .proc-run');
             const r={ canvasLabel:onCanvas.textContent, canvasEnabled:!onCanvas.disabled };
-            // library-only target (nothing on canvas selected, a library name set) → background job
+            // library-only target (nothing on canvas selected, a library name set) → still
+            // "Run → canvas": Run auto-loads the library raster onto the canvas (#34), so a
+            // single-raster run is symmetric whether or not it's already placed.
             app.selectedName='nonexistent-probe.png'; editor.selection=new Set(); editor.artboardSelected=false; renderProcessorPanel();
             r.libLabel=document.querySelector('#processor-chin .proc-run').textContent;
             // whole-library batch via the explicit swap toggle
@@ -2121,9 +2123,9 @@ def main():
             document.querySelector('#processor-body .proc-target-swap').click();
             app.selectedName=null; delete settings.stage_vectorize; renderProcessorPanel();
             return r; }""")
-        check("Run is honest + on-canvas raster runs in place: canvas→'Run → canvas' (enabled, no lib name), library→'Run → library', batch→'Run library'",
+        check("Run is honest + single-raster runs land on the canvas: canvas & library→'Run → canvas', batch→'Run library' (#34)",
               runl["canvasLabel"]=="Run → canvas" and runl["canvasEnabled"]
-              and runl["libLabel"]=="Run → library" and runl["batchLabel"]=="Run library", str(runl))
+              and runl["libLabel"]=="Run → canvas" and runl["batchLabel"]=="Run library", str(runl))
 
         # ---- res-swing regression: a float shoved off-screen (e.g. a 4K layout opened on a
         #      1080p screen) re-clamps fully into the viewport instead of stranding unreachable ----
@@ -2243,6 +2245,36 @@ def main():
                      notInLibrary: !(outs||[]).some(o => o.name === file) }; }""")
         check("focused run output is hidden from the library + friendly-named (#33)",
               lit["hiddenDir"] and lit["friendly"] and lit["noInlineHash"] and lit["notInLibrary"], str(lit))
+
+        # (c) #34: a LIBRARY-selected raster (nothing on the canvas) is auto-loaded onto the
+        #     canvas on Run, then processed in place — symmetric with an on-canvas raster, no
+        #     "Load to preview" two-step. Inject a synthetic library item backed by a data URL
+        #     (resolve_source_url materialises it), select it by name (empty canvas selection),
+        #     run vectorize-only → the raster lands on the canvas and becomes a vector group.
+        page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">'
+              + '<rect class="hv-artboard" x="0" y="0" width="120" height="120" fill="#fff"/></svg>','autoload.svg'); }""")
+        page.wait_for_function("editor && editor.stage", timeout=4000)
+        page.evaluate("""() => {
+            const c=document.createElement('canvas'); c.width=c.height=96; const x=c.getContext('2d');
+            x.fillStyle='#fff'; x.fillRect(0,0,96,96);
+            x.fillStyle='#cc2222'; x.fillRect(10,10,40,40);
+            x.fillStyle='#2266cc'; x.beginPath(); x.arc(64,64,24,0,7); x.fill();
+            x.fillStyle='#22aa55'; x.fillRect(52,8,32,22);
+            window.app.workItems.push({ name:'autoload-probe.png', url:c.toDataURL('image/png') });
+            editor.selection=new Set(); editor.artboardSelected=false;   // NOTHING on canvas selected
+            app.selectedName='autoload-probe.png';                       // selected only in the library
+            settings.stage_vectorize=true; settings.stage_upscale=false; settings.stage_removebg=false; settings.engine='clean';
+            renderProcessorPanel();
+            // sanity: with no canvas raster, the run is still 'Run → canvas' (auto-load)
+            window.__autoBefore = { imgs: editor.stage.querySelectorAll('image[data-hv-id]').length,
+                                    label: document.querySelector('#processor-chin .proc-run').textContent };
+            document.querySelector('#processor-chin .proc-run').click(); }""")
+        page.wait_for_function("() => !!editor.stage.querySelector('g[data-hv-id] path') && !editor.stage.querySelector('image[data-hv-id]')", timeout=60000)
+        al = page.evaluate("() => ({ before: window.__autoBefore, vgroup: !!editor.stage.querySelector('g[data-hv-id] path'), imgs: editor.stage.querySelectorAll('image[data-hv-id]').length })")
+        page.evaluate("() => { app.selectedName=null; delete settings.stage_vectorize; delete settings.engine; renderProcessorPanel(); }")
+        check("library-selected raster auto-loads onto the canvas on Run, then vectorises in place (#34)",
+              al["before"]["imgs"] == 0 and al["before"]["label"] == "Run → canvas" and al["vgroup"] and al["imgs"] == 0, str(al))
         # Clean up after the real jobs: clear the queue (so the background job-poller doesn't
         # keep re-rendering panels and destabilising later clicks) and reset the stage flags.
         page.evaluate("""async () => {
