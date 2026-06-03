@@ -2155,16 +2155,25 @@ def main():
             x.fillStyle='#22aa55'; x.fillRect(52,8,32,22);
             x.fillStyle='#222222'; x.fillRect(8,60,30,28);
             editor.placeImage(c.toDataURL('image/png'),'focus',96,96); return false; }""", timeout=6000)
+        # A vectorize-ONLY focused run is WYSIWYG (#31): it commits exactly the live-preview
+        # trace via /api/trace-preview, NOT a divergent /api/run/pipeline job at the batch
+        # ceiling — so previewing and committing can never disagree. Spy on fetch to prove
+        # the path collapsed (trace-preview hit, pipeline NOT hit).
         page.evaluate("""() => {
+            window.__hits = { preview: 0, pipeline: 0 }; window.__origFetch = window.fetch;
+            window.fetch = (u, ...rest) => { const s = String(u);
+              if (s.includes('/api/trace-preview')) window.__hits.preview++;
+              if (s.includes('/api/run/pipeline')) window.__hits.pipeline++;
+              return window.__origFetch(u, ...rest); };
             const im=editor.stage.querySelector('image[data-hv-id]');
             editor.selection=new Set([im.getAttribute('data-hv-id')]); editor.artboardSelected=false; editor.onInspect();
             settings.stage_vectorize=true; settings.stage_upscale=false; settings.stage_removebg=false; settings.engine='clean';
             renderProcessorPanel();
             document.querySelector('#processor-chin .proc-run').click(); }""")
         page.wait_for_function("() => !editor.stage.querySelector('image[data-hv-id]') && !!editor.stage.querySelector('g[data-hv-id] path')", timeout=60000)
-        vrun = page.evaluate("() => ({ imgs: editor.stage.querySelectorAll('image[data-hv-id]').length, vgroup: !!editor.stage.querySelector('g[data-hv-id] path') })")
-        check("focused vectorize run returns an editable vector onto the canvas IN PLACE (Task 3, real job)",
-              vrun["imgs"] == 0 and vrun["vgroup"], str(vrun))
+        vrun = page.evaluate("() => { window.fetch = window.__origFetch || window.fetch; return { imgs: editor.stage.querySelectorAll('image[data-hv-id]').length, vgroup: !!editor.stage.querySelector('g[data-hv-id] path'), hits: window.__hits }; }")
+        check("focused vectorize-only run commits the preview trace IN PLACE via trace-preview, not a job (Task 3 + #31 WYSIWYG)",
+              vrun["imgs"] == 0 and vrun["vgroup"] and vrun["hits"]["preview"] >= 1 and vrun["hits"]["pipeline"] == 0, str(vrun))
 
         # (b) a raster-producing stage (upscale) → the PNG result is swapped onto the SAME
         #     node: it stays an <image>, but its href moves from the data: source to an

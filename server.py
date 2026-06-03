@@ -47,9 +47,16 @@ INPUTS_DIR = APP_DIR / "inputs"
 # fed straight into Vectorize — overproduces a giant SVG (one connected region's boundary
 # becomes tens of thousands of nodes) and can wedge the simplify refit for minutes. Vectors
 # gain no perceptible fidelity past this, so normalise the trace resolution. The live
-# preview already caps tighter (1000); this keeps the committed/job trace in the same league
-# instead of exploding to full res. Images at/under this are passed through untouched.
+# preview + focused runs cap tighter still (TRACE_PREVIEW_DIM, below); this is the BATCH
+# ceiling, keeping a headless library trace in the same league instead of exploding to full
+# res. Images at/under this are passed through untouched.
 TRACE_MAX_DIM = 1600
+# The WYSIWYG resolution: both the live preview and a FOCUSED on-canvas run trace at this,
+# so what you preview is what you commit. Tighter than the batch ceiling above on purpose —
+# the focused/interactive path favours a clean, fast, preview-identical result. Batch/library
+# runs (no preview to match) still trace up to TRACE_MAX_DIM. Mirrors the client's
+# TRACE_PREVIEW_DIM; the preview route clamps any requested value to 64..2048.
+TRACE_PREVIEW_DIM = 1000
 ASSETS_DIR = APP_DIR / "assets"
 SRC_DIR = APP_DIR / "src"          # ES-module tree: hv/ library + editor + app shell
 WORKSPACE_DIR = APP_DIR
@@ -2163,7 +2170,7 @@ def trace_preview(payload: dict) -> dict:
     src = resolve_source_url(payload.get("input_url", ""))
     if src is None:
         raise ValueError("Could not resolve the source image for preview.")
-    cap = max(64, min(2048, int(payload.get("preview_max_dim") or 1000)))
+    cap = max(64, min(2048, int(payload.get("preview_max_dim") or TRACE_PREVIEW_DIM)))
     svg_text = vectorize_svg(src, payload, max_dim=cap)
     return {"svg": svg_text, "nodes": len(re.findall(r"[MLCZ]", svg_text)), "capped": cap}
 
@@ -2213,6 +2220,12 @@ def run_pipeline(payload: dict) -> dict:
         return {"message": _skip_message("run pipeline on", skipped), "started": 0, "skipped": skipped}
     out_dir = output_dir("pipeline")
     total = sum((up, rb, vec)) + 1   # +1 for the closing "Done" tick
+    # A focused on-canvas run (input_url) is the interactive path — trace it at the same
+    # resolution the live preview uses, so a focused vectorize matches what a preview would
+    # show (WYSIWYG). A user-set target_max_dim already downscaled the intermediate above,
+    # so don't second-guess it; and batch/library runs (no input_url) keep the full ceiling.
+    focused = bool(payload.get("input_url", "").strip())
+    vec_dim = TRACE_PREVIEW_DIM if (focused and mask_cfg["target_max_dim"] is None) else None
     jobs_started = []
     for src in targets:
         upscale_dest = out_dir / f"{src.stem}.png"
@@ -2279,7 +2292,7 @@ def run_pipeline(payload: dict) -> dict:
             # resolves from the payload (clean / vtracer-colour / vtracer-bw / pixel).
             if vec:
                 tick("Pixel trace" if vec_method == "pixel" else "Trace SVG")
-                vector_dest.write_text(vectorize_svg(current, payload, log=log), encoding="utf-8")
+                vector_dest.write_text(vectorize_svg(current, payload, max_dim=vec_dim, log=log), encoding="utf-8")
                 if vec_method == "pixel":
                     validate_pixelvec_svg(vector_dest)
                 else:

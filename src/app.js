@@ -2080,6 +2080,13 @@ function commitRasterOpLive() {
   setStatus("Applied on canvas (not saved to library).", 3000);
 }
 
+// The resolution at which BOTH the live preview and a focused on-canvas vectorize trace.
+// It's the WYSIWYG number: what you preview is what you commit, so they must match. It is
+// deliberately tighter than the server's batch overproduction ceiling (TRACE_MAX_DIM) —
+// the focused/interactive path favours a clean, fast, preview-identical result. Mirrors
+// the server's TRACE_PREVIEW_DIM (the server clamps the request to 64..2048 regardless).
+const TRACE_PREVIEW_DIM = 1000;
+
 // ---- live vectorize: debounced trace → swap the canvas to the vector ----
 function startRasterLive(node) {
   if (!rasterSourceUsable(node)) return;
@@ -2107,7 +2114,7 @@ async function doRasterLiveTrace() {
   const node = rasterLiveNode, seq = ++rasterLiveSeq;
   setStatus("Tracing preview…", 0);
   try {
-    const res = await api("/api/trace-preview", "POST", stagePayload(node, { preview_max_dim: 1000 }));
+    const res = await api("/api/trace-preview", "POST", stagePayload(node, { preview_max_dim: TRACE_PREVIEW_DIM }));
     if (seq !== rasterLiveSeq || !rasterLive) return;   // superseded or cancelled mid-flight
     if (res.svg) { rasterLiveSvg = res.svg; editor.showRasterPreview(node, res.svg); setStatus(`Preview — ${res.nodes} nodes`, 1800); }
   } catch (e) {
@@ -2128,6 +2135,31 @@ function commitRasterLive() {
   rasterLive = false; rasterLiveNode = null; rasterLiveSvg = null; rasterLiveSeq++;
   if (rasterLiveTimer) { clearTimeout(rasterLiveTimer); rasterLiveTimer = null; }
   editor.commitRasterToVector(node, svg, name);
+}
+
+// Single source of truth for a focused vectorize: trace ONCE at the live-preview
+// resolution and commit that exact SVG in place. If a live preview is already showing for
+// this node, reuse its SVG (instant, and byte-identical to "Keep vector"); otherwise do a
+// single synchronous /api/trace-preview at the same resolution. This is what the chin
+// "Run → canvas" calls for a vectorize-only run, so previewing and committing can never
+// disagree and no second job re-traces at the batch ceiling.
+async function commitFocusedVectorize(node) {
+  let svg = (rasterLive && rasterLiveNode === node && rasterLiveSvg) ? rasterLiveSvg : null;
+  if (!svg) {
+    setStatus("Tracing…", 0);
+    const res = await api("/api/trace-preview", "POST", stagePayload(node, { preview_max_dim: TRACE_PREVIEW_DIM }));
+    if (!res.svg) throw new Error(res.message || res.error || "No vector produced.");
+    svg = res.svg;
+  }
+  // Tear down any live-preview state for this node first, so its seq-guard / debounce
+  // timer / Revert can't fire against the node we're about to replace.
+  if (rasterLive && rasterLiveNode === node) {
+    rasterLive = false; rasterLiveNode = null; rasterLiveSvg = null; rasterLiveSeq++;
+    if (rasterLiveTimer) { clearTimeout(rasterLiveTimer); rasterLiveTimer = null; }
+  }
+  const ok = editor.commitRasterToVector(node, svg, rasterName(node));
+  if (!ok) setStatus("Couldn't place the traced vector.", 3500);
+  return ok;
 }
 
 // T1 "Auto": ask the server to recommend vectorize settings from image stats,
@@ -4062,6 +4094,15 @@ async function runProcess(btn) {
     // into the editor (input is the canvas image, output replaces it). `input_url` is
     // the highest-priority target in the server's select_inputs.
     const returnNode = (!t.batch && t.node && editor.isRaster(t.node)) ? t.node : null;
+    // WYSIWYG fast path: a focused, vectorize-ONLY on-canvas run commits exactly the
+    // live-preview trace (same engine + resolution) in place — identical to "Keep vector"
+    // — instead of kicking a second job that would re-trace at the batch ceiling. This
+    // collapses the two commit paths into one. Multi-stage / raster-op focused runs (which
+    // can't be previewed as a single SVG) still take the job path below.
+    if (returnNode && stageOn("vectorize") && !stageOn("upscale") && !stageOn("removebg")) {
+      await commitFocusedVectorize(returnNode);
+      return;   // finally{} restores the button
+    }
     if (!t.batch) {
       if (returnNode) {
         payload.input_url = rasterHref(returnNode);
