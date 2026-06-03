@@ -133,7 +133,7 @@ const editor = {
     for (const child of Array.from(svg.children)) {
       const tag = child.tagName.toLowerCase();
       if (SKIP_TAGS.has(tag)) continue;
-      if (child.classList.contains("hv-artboard") || child.classList.contains("hv-overlay") || child.classList.contains("hv-guideslayer")) continue;
+      if (child.classList.contains("hv-artboard") || child.classList.contains("hv-overlay") || child.classList.contains("hv-guideslayer") || child.classList.contains("hv-preview")) continue;
       if (!child.hasAttribute("data-hv-id")) child.setAttribute("data-hv-id", "n" + (++this.idSeq));
     }
     let ov = svg.querySelector("g.hv-overlay");
@@ -165,14 +165,16 @@ const editor = {
   // ---------- serialization ----------
   _historyMarkup() {
     const c = this.stage.cloneNode(true);
-    c.querySelectorAll("g.hv-overlay, g.hv-guideslayer").forEach((g) => g.remove());
+    c.querySelectorAll("g.hv-overlay, g.hv-guideslayer, g.hv-preview").forEach((g) => g.remove());
+    c.querySelectorAll(".hv-raster-hidden").forEach((n) => { n.classList.remove("hv-raster-hidden"); if (!n.getAttribute("class")) n.removeAttribute("class"); });
     c.classList.remove("hv-pickable");
     return c.outerHTML;
   },
   serialize() {
     if (!this.stage) return "";
     const c = this.stage.cloneNode(true);
-    c.querySelectorAll("g.hv-overlay, g.hv-guideslayer").forEach((g) => g.remove());
+    c.querySelectorAll("g.hv-overlay, g.hv-guideslayer, g.hv-preview").forEach((g) => g.remove());
+    c.querySelectorAll(".hv-raster-hidden").forEach((n) => { n.classList.remove("hv-raster-hidden"); if (!n.getAttribute("class")) n.removeAttribute("class"); });
     c.classList.remove("hv-pickable");
     // Strip ALL editor metadata, including parametric live-shape params (data-hv-shape,
     // data-hv-bx, …): the `d` is the rendering truth, so exported SVG stays standard.
@@ -992,6 +994,28 @@ const editor = {
     const sel = this.selectedNodes();
     return (el) => sel.some((s) => s === el || (s.contains && s.contains(el)));
   },
+  // The user-space rectangle currently visible on screen — the clip ancestor's screen
+  // box mapped back through the stage CTM (so it tracks zoom + pan). Used to cull node
+  // handles to what's actually in view. A ~15% margin keeps just-offscreen anchors
+  // grabbable. Returns null if it can't be computed (→ caller falls back to all anchors).
+  _visibleUserRect() {
+    const ctm = this.stage && this.stage.getScreenCTM(); if (!ctm) return null;
+    let inv; try { inv = ctm.inverse(); } catch { return null; }
+    let host = this.stage.parentElement, clip = null;
+    while (host && host !== document.body) {
+      const ov = getComputedStyle(host).overflow;
+      if (ov && ov !== "visible") { clip = host; break; }
+      host = host.parentElement;
+    }
+    const box = (clip || this.stage.parentElement || this.stage).getBoundingClientRect();
+    if (!box.width || !box.height) return null;
+    const corners = [[box.left, box.top], [box.right, box.top], [box.right, box.bottom], [box.left, box.bottom]]
+      .map(([x, y]) => new DOMPoint(x, y).matrixTransform(inv));
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of corners) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+    const mx = (x1 - x0) * 0.15, my = (y1 - y0) * 0.15;
+    return { x0: x0 - mx, y0: y0 - my, x1: x1 + mx, y1: y1 + my };
+  },
   mountNodeHandles() {
     this.unmountNodeHandles();
     const ov = this._overlayEl(); if (!ov || !this.stage) return;
@@ -1004,7 +1028,23 @@ const editor = {
     const anchors = collectAnchors(this.stage, accept);   // rect/ellipse/line/polygon corner points
     const total = pnodes.length + anchors.length;
     if (!total) return;
-    if (total > MAX_HANDLES) { setStatus(`Too many anchors (${total}) to edit. Works best on traced paths.`, 4000); return; }
+    // Level-of-detail + viewport culling so a huge traced path (10k+ anchors) is
+    // EDITABLE instead of refused: only anchors currently in view are candidates,
+    // and when that's still more than the render budget we draw every Nth (stride).
+    // Zoom in → fewer anchors in view → stride falls to 1 → every anchor is grabbable
+    // in that region. Selected in-view anchors always render so the selection stays
+    // live. This bounds the handle count to ~MAX_HANDLES per mount → the DOM (and the
+    // browser) never blow up, however dense the path. Pan/zoom re-mounts (onViewportChanged).
+    const view = this._visibleUserRect();
+    const inView = view ? (p) => p.x >= view.x0 && p.x <= view.x1 && p.y >= view.y0 && p.y <= view.y1 : null;
+    const visP = inView ? pnodes.filter(inView) : pnodes;
+    const visA = inView ? anchors.filter(inView) : anchors;
+    const stride = Math.max(1, Math.ceil((visP.length + visA.length) / MAX_HANDLES));
+    const keepP = stride === 1 ? visP : visP.filter((nd, i) => i % stride === 0 || this._nodeSel.has(this._nodeKey(nd)));
+    const keepA = stride === 1 ? visA : visA.filter((_a, i) => i % stride === 0);
+    const shown = keepP.length + keepA.length;
+    this._nodeLOD = shown < total;   // flag: a decimated/partial set of handles is mounted (LOD active)
+    if (this._nodeLOD) setStatus(`Editing ${shown} of ${total} anchors — zoom in to reach the rest.`, 3500);
     // prune stale selection keys (anchors that no longer exist after an edit)
     if (this._nodeSel.size) {
       const live = new Set(pnodes.map((nd) => this._nodeKey(nd)));
@@ -1020,8 +1060,8 @@ const editor = {
     const handleLayer = document.createElementNS(SVG_NS, "g");
     const anchorLayer = document.createElementNS(SVG_NS, "g");
     this._nodeEls = new Map();      // key → { nd, rect, refs, r } for group move + highlight
-    for (const nd of pnodes) this._renderPathNode(handleLayer, anchorLayer, nd, r, hr);
-    for (const a of anchors) {
+    for (const nd of keepP) this._renderPathNode(handleLayer, anchorLayer, nd, r, hr);
+    for (const a of keepA) {
       const c = document.createElementNS(SVG_NS, "circle");
       c.setAttribute("class", "hv-handle");
       c.setAttribute("cx", a.x); c.setAttribute("cy", a.y); c.setAttribute("r", r);
@@ -1672,9 +1712,12 @@ const editor = {
         // seed cap/join defaults only if the object doesn't already carry a choice
         if (!n.hasAttribute("stroke-linejoin")) n.setAttribute("stroke-linejoin", "round");
         if (!n.hasAttribute("stroke-linecap")) n.setAttribute("stroke-linecap", "round");
+        this._syncStrokeAlign(n);   // keep an inside/outside alignment correct at the new width
       } else {
+        n.removeAttribute("data-hv-stroke-align");
         ["stroke", "stroke-width", "vector-effect", "stroke-linejoin", "stroke-linecap",
          "stroke-opacity", "stroke-miterlimit", "stroke-dasharray"].forEach((x) => n.removeAttribute(x));
+        this._syncStrokeAlign(n);   // clear the alignment clip/paint-order/inline width
       }
     });
   },
@@ -1684,6 +1727,73 @@ const editor = {
   // Generic stroke-style setter (cap / join / miterlimit / dasharray); empty value clears.
   setStrokeAttr(attr, value) {
     this._eachSel((n) => { if (value === "" || value == null) n.removeAttribute(attr); else n.setAttribute(attr, String(value)); });
+  },
+  // ---- stroke alignment (SVG has no native stroke-alignment) ----
+  // The `stroke-width` ATTRIBUTE stays the user's nominal width (the Width control is
+  // untouched). Alignment layers on top: inside = clip the stroke to the shape + render
+  // at 2× (inner half = nominal, sits inside the edge); outside = render at 2× with the
+  // fill painted OVER the stroke (paint-order) so only the outer half shows. The 2× is an
+  // inline `style` so it overrides the attribute without disturbing it. The inside clip
+  // uses a live <use> reference, so geometry edits track automatically.
+  _defs() {
+    let d = this.stage.querySelector("defs.hv-defs");
+    if (!d) { d = document.createElementNS(SVG_NS, "defs"); d.setAttribute("class", "hv-defs"); this.stage.insertBefore(d, this.stage.firstChild); }
+    return d;
+  },
+  _ensureStrokeClip(n) {
+    const id = n.getAttribute("data-hv-id"); if (!id) return;
+    if (n.getAttribute("id") !== id) n.setAttribute("id", id);   // <use> needs a real id
+    const cid = "hvsa-" + id;
+    if (!this.stage.querySelector("#" + CSS.escape(cid))) {
+      const cp = document.createElementNS(SVG_NS, "clipPath");
+      cp.setAttribute("id", cid); cp.setAttribute("clipPathUnits", "userSpaceOnUse");
+      const use = document.createElementNS(SVG_NS, "use"); use.setAttribute("href", "#" + id);
+      cp.appendChild(use); this._defs().appendChild(cp);
+    }
+    n.setAttribute("clip-path", "url(#" + cid + ")");
+  },
+  _removeStrokeClip(n) {
+    const id = n.getAttribute("data-hv-id"); if (!id) return;
+    const cp = this.stage.querySelector("#" + CSS.escape("hvsa-" + id)); if (cp) cp.remove();
+  },
+  // After a clone/paste, a node that carried inside/outside stroke alignment still points
+  // at the SOURCE's clip (a shared `id` + clip-path="url(#hvsa-<sourceId>)") — so it clipped
+  // against the original's geometry and duplicated an id. Re-anchor: give aligned nodes a
+  // fresh id, drop the stale id/clip/inline style, and rebuild the visual against the new id.
+  _reanchorStrokeAlign(root) {
+    if (!root || !root.getAttribute) return;
+    const fix = (n, reassign) => {
+      if (!n.getAttribute("data-hv-stroke-align")) return;
+      if (reassign) n.setAttribute("data-hv-id", "n" + (++this.idSeq));   // descendants kept the source id
+      n.removeAttribute("id"); n.removeAttribute("clip-path");
+      n.style.removeProperty("stroke-width"); n.style.removeProperty("paint-order");
+      this._syncStrokeAlign(n);   // rebuild clip/paint-order against the (now-fresh) data-hv-id
+    };
+    fix(root, false);   // root's data-hv-id was already freshly assigned by the caller
+    if (root.querySelectorAll) root.querySelectorAll("[data-hv-stroke-align]").forEach((n) => fix(n, true));
+  },
+  // Re-apply the visual for a node's current alignment + nominal width (call after any
+  // width/align change). Clears everything for center / no-stroke.
+  _syncStrokeAlign(n) {
+    const mode = n.getAttribute("data-hv-stroke-align");
+    const nominal = parseFloat(n.getAttribute("stroke-width")) || 0;
+    if (!mode || mode === "center" || nominal <= 0) {
+      n.style.removeProperty("stroke-width"); n.style.removeProperty("paint-order");
+      n.removeAttribute("clip-path"); this._removeStrokeClip(n);
+      return;
+    }
+    n.style.strokeWidth = nfmt(nominal * 2);
+    if (mode === "inside") { n.style.removeProperty("paint-order"); this._ensureStrokeClip(n); }
+    else { n.style.paintOrder = "stroke"; n.removeAttribute("clip-path"); this._removeStrokeClip(n); }
+  },
+  setStrokeAlign(mode) {
+    this.push("Stroke align");
+    this._eachSel((n) => {
+      if (mode === "center") n.removeAttribute("data-hv-stroke-align");
+      else n.setAttribute("data-hv-stroke-align", mode);
+      this._syncStrokeAlign(n);
+    });
+    this._renderInspector();
   },
   applyArtboardBg(color) { const ab = this.artboardEl(); if (ab) ab.setAttribute("fill", color || "none"); this._syncBoardBg(); },
   // The stage <svg> carries a white CSS background so the sheet reads on the checker
@@ -1714,6 +1824,7 @@ const editor = {
       const id = "n" + (++this.idSeq); c.setAttribute("data-hv-id", id);
       if (offsetX || offsetY) { const t = currentTranslate(c); setTranslate(c, t.x + offsetX, t.y + offsetY); }
       this.stage.insertBefore(c, ov);
+      this._reanchorStrokeAlign(c);   // rebuild any stroke-align clip against the clone's new id
       ids.push(id);
     }
     return ids;
@@ -1748,7 +1859,9 @@ const editor = {
     for (const el of els) {
       const id = "n" + (++this.idSeq); el.setAttribute("data-hv-id", id);
       const t = currentTranslate(el); setTranslate(el, t.x + 12, t.y + 12);
-      this.stage.insertBefore(el, ov); ids.push(id);
+      this.stage.insertBefore(el, ov);
+      this._reanchorStrokeAlign(el);   // rebuild any stroke-align clip against the paste's new id
+      ids.push(id);
     }
     this.selection = new Set(ids); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector(); this._renderLayers();
@@ -1802,6 +1915,127 @@ const editor = {
     setStatus(`Placed ${label || "vector"} — ${src.length} object${src.length > 1 ? "s" : ""} (grouped).`, 2800);
     return src.length;
   },
+  // Load a raster into the canvas as an <image> node so it coexists with vectors
+  // (move/scale/z-order like any object — the scale is baked into width/height so
+  // the node stays translate-only, matching placed vectors). Fits + centres on the
+  // artboard. `w`/`h` are the image's natural pixel dimensions.
+  placeImage(href, label, w, h) {
+    if (!this.stage) { setStatus("Open or create a canvas first, then load into it.", 3500); return false; }
+    const vbA = this.stage.viewBox.baseVal;
+    const sw = w > 0 ? w : ((vbA && vbA.width) || 512);
+    const sh = h > 0 ? h : ((vbA && vbA.height) || 512);
+    let s = 1, ex = 0, ey = 0;
+    if (vbA && vbA.width) {
+      s = Math.min(1, 0.95 * Math.min(vbA.width / sw, vbA.height / sh));
+      ex = vbA.x + (vbA.width - sw * s) / 2;
+      ey = vbA.y + (vbA.height - sh * s) / 2;
+    }
+    this.beginCoalesce();
+    const ov = this._overlayEl();
+    const img = document.createElementNS(SVG_NS, "image");
+    const id = "n" + (++this.idSeq);
+    img.setAttribute("data-hv-id", id);
+    if (label) img.setAttribute("data-hv-name", "Image: " + String(label).replace(/\.[^.]+$/, ""));
+    img.setAttribute("x", "0"); img.setAttribute("y", "0");
+    img.setAttribute("width", String(sw * s)); img.setAttribute("height", String(sh * s));
+    img.setAttribute("preserveAspectRatio", "none");
+    img.setAttribute("transform", `translate(${ex}, ${ey})`);
+    // Plain SVG2 `href` only — emitting `xlink:href` without declaring the xlink
+    // namespace on the stage <svg> makes the serialized markup fail to parse
+    // ("Namespace prefix xlink for href on image is not defined").
+    img.setAttribute("href", href);
+    this.stage.insertBefore(img, ov);
+    this.commitCoalesce("Load image");
+    this.selection = new Set([id]); this.artboardSelected = false;
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+    setStatus(`Loaded ${label || "image"} into the canvas.`, 2600);
+    return true;
+  },
+
+  // ---------- raster → vector (the raster panel's live vectorize) ----------
+  // User-space box a placed <image> occupies: x/y + its translate, width × height.
+  // (Rotation/skew aren't accounted for — placed/moved rasters are translate-only,
+  //  the common case; a rotated raster previews in its axis-aligned box.)
+  _rasterBox(node) {
+    const x = parseFloat(node.getAttribute("x")) || 0;
+    const y = parseFloat(node.getAttribute("y")) || 0;
+    const w = parseFloat(node.getAttribute("width")) || 0;
+    const h = parseFloat(node.getAttribute("height")) || 0;
+    const t = currentTranslate(node);
+    return { x: x + t.x, y: y + t.y, w, h };
+  },
+  // Parse a trace SVG and build a <g> whose contents are mapped into `box`. Shared
+  // by the live preview (transient, class hv-preview, no id) and the commit (real
+  // artwork node). Returns the <g> or null.
+  _svgGroupInBox(text, box, label, { preview } = {}) {
+    let root;
+    try { root = new DOMParser().parseFromString(text, "image/svg+xml").documentElement; } catch { root = null; }
+    if (!root || root.tagName.toLowerCase() !== "svg") return null;
+    const SKIP = new Set(["defs", "metadata", "style", "title", "desc", "symbol"]);
+    const src = [...root.children].filter((c) => {
+      const t = c.tagName.toLowerCase();
+      return !SKIP.has(t) && !c.classList.contains("hv-artboard") && !c.classList.contains("hv-overlay");
+    });
+    if (!src.length) return null;
+    const p = (root.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+    let sx = 0, sy = 0, sw = 0, sh = 0;
+    if (p.length === 4 && p[2] > 0) { [sx, sy, sw, sh] = p; }
+    else { sw = parseFloat(root.getAttribute("width")) || 0; sh = parseFloat(root.getAttribute("height")) || 0; }
+    if (!(sw > 0 && sh > 0 && box.w > 0 && box.h > 0)) return null;
+    const a = box.w / sw, d = box.h / sh;             // map trace viewBox → the raster's box
+    const m = { a, b: 0, c: 0, d, e: box.x - sx * a, f: box.y - sy * d };
+    const g = document.createElementNS(SVG_NS, "g");
+    if (preview) g.setAttribute("class", "hv-preview");
+    else {
+      g.setAttribute("data-hv-id", "n" + (++this.idSeq));
+      if (label) g.setAttribute("data-hv-name", "Vector: " + String(label).replace(/\.[^.]+$/, ""));
+    }
+    for (const child of src) {
+      const node = document.importNode(child, true);
+      node.querySelectorAll?.("[data-hv-id]").forEach((n) => n.removeAttribute("data-hv-id"));
+      if (preview) node.querySelectorAll?.("[id]").forEach((n) => n.removeAttribute("id"));
+      else { node.setAttribute("data-hv-id", "n" + (++this.idSeq)); }
+      bakeMatrixInto(node, m, 0, 0);
+      g.appendChild(node);
+    }
+    return g;
+  },
+  // Show a transient vector preview over `node`, hiding the raster underneath so the
+  // canvas reads as the traced result. Replaces any prior preview. Not in history.
+  showRasterPreview(node, svgText) {
+    if (!this.stage || !node) return false;
+    this.clearRasterPreview(false);
+    const g = this._svgGroupInBox(svgText, this._rasterBox(node), null, { preview: true });
+    if (!g) { this.clearRasterPreview(true); return false; }
+    node.classList.add("hv-raster-hidden");
+    this.stage.insertBefore(g, this._overlayEl());
+    this._rasterPreviewEl = g; this._rasterPreviewFor = node;
+    return true;
+  },
+  // Drop the preview. restoreRaster=true un-hides the raster (revert); false leaves
+  // it hidden (the caller is about to remove it on commit).
+  clearRasterPreview(restoreRaster = true) {
+    if (this._rasterPreviewEl) { this._rasterPreviewEl.remove(); this._rasterPreviewEl = null; }
+    if (restoreRaster && this._rasterPreviewFor) this._rasterPreviewFor.classList.remove("hv-raster-hidden");
+    if (restoreRaster) this._rasterPreviewFor = null;
+  },
+  // Commit: replace the raster with a real vector layer fit to its box, push history.
+  commitRasterToVector(node, svgText, label) {
+    if (!this.stage || !node) return false;
+    const g = this._svgGroupInBox(svgText, this._rasterBox(node), label, { preview: false });
+    this.clearRasterPreview(false);
+    if (!g) { node.classList.remove("hv-raster-hidden"); return false; }
+    const ov = this._overlayEl();
+    this.stage.insertBefore(g, ov);
+    node.remove();
+    const gid = g.getAttribute("data-hv-id");
+    this.selection = new Set([gid]); this.artboardSelected = false;
+    this.push("Vectorize raster");
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+    setStatus("Vectorized — the raster is now an editable vector layer.", 2800);
+    return true;
+  },
+
   selectAll() {
     if (!this.stage) return;
     const ids = this._artworkNodes().filter((n) => n.getAttribute("data-hv-locked") !== "1").map((n) => n.getAttribute("data-hv-id"));
@@ -2389,7 +2623,7 @@ const editor = {
     const scrub = (parent) => {
       for (const child of [...parent.children]) {
         const tag = child.tagName.toLowerCase();
-        if (SKIP_TAGS.has(tag) || child.classList.contains("hv-artboard") || child.classList.contains("hv-overlay") || child.classList.contains("hv-guideslayer")) continue;
+        if (SKIP_TAGS.has(tag) || child.classList.contains("hv-artboard") || child.classList.contains("hv-overlay") || child.classList.contains("hv-guideslayer") || child.classList.contains("hv-preview")) continue;
         if (tag === "g") {
           scrub(child);
           const kids = [...child.children].filter((k) => !SKIP_TAGS.has(k.tagName.toLowerCase()));
@@ -2466,7 +2700,7 @@ const editor = {
     const GRAPHIC = new Set(["path", "rect", "circle", "ellipse", "line", "polygon", "polyline", "image", "text", "g"]);
     const walk = (parent) => {
       for (const c of parent.children) {
-        if (c === ov || (c.classList && (c.classList.contains("hv-artboard") || c.classList.contains("hv-guideslayer")))) continue;
+        if (c === ov || (c.classList && (c.classList.contains("hv-artboard") || c.classList.contains("hv-guideslayer") || c.classList.contains("hv-preview")))) continue;
         const tag = c.tagName.toLowerCase();
         if (!GRAPHIC.has(tag)) continue;
         if (!c.hasAttribute("data-hv-id")) c.setAttribute("data-hv-id", "n" + (++this.idSeq));
@@ -2634,14 +2868,34 @@ const editor = {
     input.addEventListener("blur", () => done(true));
     span.replaceWith(input); input.focus(); input.select();
   },
-  // Rename from elsewhere (context menu): reuse the layers-panel inline editor when
-  // that row is on screen, otherwise fall back to a prompt so it always works.
+  // Rename from elsewhere (context menu / button): reuse the layers-panel inline editor
+  // when that row is on screen, otherwise a floating tag-style editor over the object —
+  // never the browser's window.prompt.
   beginRename(id) {
     const n = this.nodeById(id); if (!n) return;
     const span = document.querySelector(`#layers-list .layer-row[data-id="${CSS.escape(id)}"] .layer-name`);
     if (span) { this._renameInline(n, span); return; }
-    const name = window.prompt("Rename object", this.nodeName(n));
-    if (name != null) this.rename(id, name.trim());
+    this._renameFloating(n);
+  },
+  // A small floating "tag" input anchored over the object's on-screen box. Commits on
+  // Enter/blur, cancels on Escape; key events are trapped so editor shortcuts (Delete,
+  // tool keys) don't fire while typing.
+  _renameFloating(node) {
+    const id = node.getAttribute("data-hv-id");
+    document.querySelectorAll(".hv-rename-pop").forEach((e) => e.remove());
+    let r; try { r = node.getBoundingClientRect(); } catch { r = null; }
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.className = "hv-rename-pop"; inp.value = this.nodeName(node);
+    inp.style.position = "fixed";
+    const left = r && r.width ? r.left : (window.innerWidth / 2 - 110);
+    const top = r && r.height ? r.top - 6 : (window.innerHeight / 2 - 16);
+    inp.style.left = Math.max(8, Math.min(left, window.innerWidth - 228)) + "px";
+    inp.style.top = Math.max(8, top) + "px";
+    document.body.appendChild(inp); inp.focus(); inp.select();
+    let done = false;
+    const finish = (commit) => { if (done) return; done = true; if (commit) this.rename(id, inp.value.trim()); inp.remove(); };
+    inp.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") finish(true); else if (e.key === "Escape") finish(false); });
+    inp.addEventListener("blur", () => finish(true));
   },
 
   // ---------- inspector ----------
@@ -2654,13 +2908,25 @@ const editor = {
     const body = document.querySelector("#inspector-body");
     const title = document.querySelector("#inspector-title");
     if (!body) return;
+    // Preserve scroll across the rebuild: clicking a button inside the panel
+    // (live-preview toggle, stage settings) re-renders the whole inspector, and an
+    // innerHTML reset would otherwise snap scrollTop to 0 — the content jumps out
+    // from under the cursor. Restoring keeps the pressed control in place.
+    const keepScroll = body.scrollTop;
     body.innerHTML = "";
     if (!this.stage) { if (title) title.textContent = "No canvas"; body.innerHTML = `<div class="insp-empty">Import or open a vector.</div>`; return; }
-    if (this.artboardSelected) { if (title) title.textContent = "Artboard"; body.appendChild(this._artboardPanel()); return; }
+    if (this.artboardSelected) { if (title) title.textContent = "Artboard"; body.appendChild(this._artboardPanel()); body.scrollTop = keepScroll; return; }
     const nodes = this.selectedNodes();
     if (!nodes.length) { if (title) title.textContent = "Nothing selected"; body.innerHTML = `<div class="insp-empty">Click a shape to select it, or click empty canvas for the artboard.</div>`; return; }
     if (title) title.textContent = nodes.length === 1 ? "Object" : `${nodes.length} objects`;
     body.appendChild(this._objectPanel(nodes));
+    body.scrollTop = keepScroll;
+  },
+  // True when the selection is one-or-more raster <image> nodes (and nothing else).
+  // Rasters have no fill/stroke/shape, so the inspector + colour panel adapt.
+  _selectionIsRaster() {
+    const ns = this.selectedNodes();
+    return ns.length > 0 && ns.every((n) => n.tagName.toLowerCase() === "image");
   },
   _objectPanel(nodes) {
     // Read style from the leaf shapes (a selected group carries none of its own), and
@@ -2672,6 +2938,7 @@ const editor = {
     const common = (read) => { let v, set = false; for (const n of reads) { const c = read(n); if (!set) { v = c; set = true; } else if (c !== v) return { mixed: true, value: read(first) }; } return { value: v }; };
     const wrap = document.createElement("div");
     const tags = new Set(reads.map((n) => n.tagName.toLowerCase()));
+    const isRaster = reads.every((n) => n.tagName.toLowerCase() === "image");   // no fill/stroke/shape
     const r2 = (v) => Math.round(v * 100) / 100;
 
     // Fill / stroke COLOUR live in the persistent Colour panel now (summoned from the
@@ -2730,7 +2997,8 @@ const editor = {
     // STROKE — weight, cap, join, miter limit, dashes. The sub-rows APPEAR/DISAPPEAR with
     // context (no greying): Cap only where the stroke has visible ENDS (open paths or a
     // dash/dotted pattern), Join only where the shape has a POINTY corner (an all-curves
-    // shape like a circle has none), Miter only for a miter join.
+    // shape like a circle has none), Miter only for a miter join. Rasters skip it entirely.
+    if (!isRaster) {
     const strokeGeom = (n) => {
       const tag = n.tagName.toLowerCase();
       if (tag === "path") { const d = n.getAttribute("d") || ""; return { open: pathOpenEnds(d), corner: pathHasCorner(d) }; }
@@ -2760,6 +3028,13 @@ const editor = {
     const widthRow = numRow("Width", strokeW, 0, 0.5, (v) => { this.beginCoalesce(); this.applyStroke(curC(), v); }, (inp) => { this._strokeWidthInput = inp; }, () => { this.commitCoalesce("Stroke width"); this._renderInspector(); }, !!strokeWC.mixed);
     const strokeRows = [widthRow];
     if (hasStroke) {
+      // Alignment — SVG has no stroke-alignment, so In = clip to the shape, Out = fill
+      // painted over the stroke; Center is the native default.
+      const alignC = common((n) => n.getAttribute("data-hv-stroke-align") || "center");
+      strokeRows.push(this._segRow("Align", alignC.mixed ? null : (alignC.value || "center"),
+        [["inside", "In"], ["center", "Ctr"], ["outside", "Out"]],
+        { inside: "Inside the edge", center: "Centred on the edge", outside: "Outside the edge" },
+        (v) => this.setStrokeAlign(v)));
       const dashed = !!(dashC.value && dashC.value !== "none" && /[1-9]/.test(dashC.value));
       // Join: only where the shape has a pointy corner. Changing it re-renders so the
       // Miter row appears only for a miter join.
@@ -2786,6 +3061,7 @@ const editor = {
       }
     }
     wrap.appendChild(inspGroup("Stroke", strokeRows));
+    }   // end !isRaster
 
     // APPEARANCE — blend mode + object opacity.
     const opC = common((n) => (n.hasAttribute("opacity") ? parseFloat(n.getAttribute("opacity")) : 1));
@@ -2795,6 +3071,13 @@ const editor = {
       blendRow,
       this._sliderRow("Opacity", opC.value == null ? 1 : opC.value, (v) => { this.beginCoalesce(); this.applyOpacity(v); }, () => this.commitCoalesce("Opacity"), !!opC.mixed),
     ]));
+    // PROCESS — a single raster gets the pipeline stages (upscale / remove-bg /
+    // vectorize) inline. app.js owns the jobs + live trace, so it's injected via a
+    // hook; the editor stays vector-pure and just hosts the returned DOM.
+    if (isRaster && nodes.length === 1 && typeof this.rasterTools === "function") {
+      const tools = this.rasterTools(reads[0]);
+      if (tools) wrap.appendChild(tools);
+    }
     return wrap;
   },
   // Parametric editor for ONE live shape: a Type switch (rect/poly/star), the kind's

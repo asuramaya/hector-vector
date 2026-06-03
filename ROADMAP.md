@@ -175,7 +175,7 @@ The processing pipeline (this document's subject) and the vector editor are kept
 
 So "combining" is always vector-on-vector (layers / groups / booleans) — an image is composited only *after* it has been vectorized. This keeps the editor's document model clean and is why there is no pipeline panel *inside* the editor.
 
-**Deferred future track — raster as a first-class canvas object.** Placing a raster on the canvas, processing/tracing it in place, and mixed raster+vector documents are explicitly **not** built. That capability is the only thing that would justify bringing the raster pipeline *inside* the editor; until then the boundary above holds. Most of the categories above (inpainting/cleanup, SR, denoise, face restore) only become in-editor operations once a raster can live on the canvas — until then they belong to the batch workspace.
+**Raster as a first-class canvas object — IN PROGRESS (track un-deferred 2026-05-31).** The boundary above is being dissolved: rasters now *can* coexist on the canvas. `editor.placeImage()` drops a source PNG into the stage as an `<image>` node (selectable/movable/scalable like any object), reachable via the gallery's **Load** action and the Info modal. Mixed raster+vector documents follow; in-place processing/tracing and the categories above (inpainting/cleanup, SR, denoise, face restore) become in-editor operations as the Process workspace ("Q") is progressively dissolved into contextual editor panels. Open edges: SVG export must bake `<image href>` to a data-URI to stay self-contained; raster nodes have no meaningful fill/stroke.
 
 ## Key references
 
