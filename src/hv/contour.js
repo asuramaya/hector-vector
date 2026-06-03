@@ -1,13 +1,20 @@
 // hv core — contour extraction from a region predicate (marching squares) +
-// loop stitching + Douglas-Peucker simplification. Pure.
+// loop stitching + cubic-bezier refit. Pure.
 //
 // Booleans (union / subtract / intersect) and invert-space all reduce to "trace
 // the boundary of the region where predicate(x,y) is true". Marching squares over
 // a grid gives the topology; bisecting each crossing edge (predicate is an exact
 // inside-test) snaps the boundary to ~7 bits, so coarse grids still trace smoothly.
 // Robust for any overlap, winding, or shape count — and always yields valid loops.
+//
+// The stitched boundary is dense (one point per grid crossing). Rather than emit
+// that as a heavy `L` polyline — wasteful, and incongruent with the trace pipeline
+// — each loop is refit to its minimal cubics through the shared fitcurve core (the
+// same Schneider fit tools/simplify_svg.py runs server-side). So a boolean result
+// comes out as a handful of smooth cubics with crisp corners, not hundreds of segs.
 
 import { nfmt } from "./path.js";
+import { fitLoop, cubicsToPath } from "./fitcurve.js";
 
 export function marchingSquares(predicate, bbox, res) {
   const W = bbox.x1 - bbox.x0, H = bbox.y1 - bbox.y0;
@@ -73,37 +80,13 @@ export function chainSegments(segs, tol) {
       used.add(cur); coords.push(e.pt); cur = e.endKey;
       if (cur === startKey) break;
     }
-    const simp = simplifyLoop(coords, tol);
-    if (simp.length >= 3) d += " M" + simp.map((p) => nfmt(p.x) + " " + nfmt(p.y)).join(" L") + " Z";
+    // Refit the dense boundary to minimal cubics (shared fitcurve core) — the fit
+    // tolerance is the same grid-relative budget DP used, so corners stay crisp and
+    // smooth runs collapse to a few curves instead of a long `L` chain.
+    if (coords.length >= 3) {
+      const segs = fitLoop(coords.map((p) => [p.x, p.y]), tol);
+      if (segs.length) d += " " + cubicsToPath(segs, nfmt);
+    }
   }
   return d.trim();
-}
-
-// Douglas-Peucker on a closed loop: collapses straight runs to their endpoints
-// while keeping enough curve points to stay within `tol`. (A per-triple collinear
-// test fails on gentle curves — each step's deviation is sub-tolerance, so the
-// whole arc would wrongly flatten to a chord.) Split at the point farthest from
-// coords[0] so DP gets stable endpoints on the loop.
-export function simplifyLoop(coords, tol) {
-  const n = coords.length; if (n < 4) return coords;
-  let far = 0, fd = -1;
-  for (let i = 1; i < n; i++) { const d = (coords[i].x - coords[0].x) ** 2 + (coords[i].y - coords[0].y) ** 2; if (d > fd) { fd = d; far = i; } }
-  const r = dpSimplify(coords.slice(0, far + 1), tol).slice(0, -1)
-    .concat(dpSimplify(coords.slice(far).concat([coords[0]]), tol).slice(0, -1));
-  return r.length >= 3 ? r : coords;
-}
-
-export function dpSimplify(pts, tol) {
-  if (pts.length < 3) return pts;
-  const a = pts[0], b = pts[pts.length - 1];
-  let idx = 0, dmax = 0;
-  for (let i = 1; i < pts.length - 1; i++) { const d = pointSegDist(pts[i], a, b); if (d > dmax) { dmax = d; idx = i; } }
-  if (dmax > tol) return dpSimplify(pts.slice(0, idx + 1), tol).slice(0, -1).concat(dpSimplify(pts.slice(idx), tol));
-  return [a, b];
-}
-
-export function pointSegDist(p, a, b) {
-  const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy);
-  if (L < 1e-9) return Math.hypot(p.x - a.x, p.y - a.y);
-  return Math.abs((p.x - a.x) * dy - (p.y - a.y) * dx) / L;
 }

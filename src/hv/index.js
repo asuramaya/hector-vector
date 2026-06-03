@@ -5,6 +5,7 @@
 export * from "./constants.js";
 export * from "./path.js";
 export * from "./color.js";
+export * from "./fitcurve.js";
 export * from "./contour.js";
 export * from "./raster.js";
 export * from "./transform.js";
