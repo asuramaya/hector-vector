@@ -1704,8 +1704,21 @@ const editor = {
   _eachSel(fn) { this._effectiveLeaves().forEach(fn); this._renderSelection(); },
   // A raster <image> is a first-class canvas object but carries NO fill/stroke/shape —
   // paint operations skip it (writing fill/stroke onto an <image> is inert markup the
-  // renderer ignores; we keep the DOM clean). Geometry/opacity/blend still apply.
-  isRaster(n) { return !!(n && n.tagName && n.tagName.toLowerCase() === "image"); },
+  // renderer ignores; we keep the DOM clean). Geometry/opacity/blend still apply. A <use>
+  // that references an <image> is rastern too (the editor doesn't mint those today, but the
+  // check future-proofs the model so no paint setter can ever write inert attrs onto one).
+  isRaster(n) {
+    if (!n || !n.tagName) return false;
+    const tag = n.tagName.toLowerCase();
+    if (tag === "image") return true;
+    if (tag === "use" && this.stage) {
+      const ref = (n.getAttribute("href") || n.getAttribute("xlink:href") || "").replace(/^#/, "");
+      if (!ref) return false;
+      const t = this.stage.querySelector("#" + (window.CSS && CSS.escape ? CSS.escape(ref) : ref));
+      return !!(t && t.tagName && t.tagName.toLowerCase() === "image");
+    }
+    return false;
+  },
   applyFill(color) { this.style.fill = color || "none"; this._eachSel((n) => { if (this.isRaster(n)) return; n.setAttribute("fill", color || "none"); }); },
   applyStroke(color, width) {
     this.style.stroke = width > 0 ? color : "none"; this.style.strokeWidth = width > 0 ? width : 0;
@@ -1794,6 +1807,7 @@ const editor = {
   setStrokeAlign(mode) {
     this.push("Stroke align");
     this._eachSel((n) => {
+      if (this.isRaster(n)) return;   // rasters have no stroke to align
       if (mode === "center") n.removeAttribute("data-hv-stroke-align");
       else n.setAttribute("data-hv-stroke-align", mode);
       this._syncStrokeAlign(n);
@@ -2191,8 +2205,8 @@ const editor = {
     this.push("Blend mode");
     this._eachSel((n) => { if (!mode || mode === "normal") n.style.removeProperty("mix-blend-mode"); else n.style.mixBlendMode = mode; });
   },
-  // Generic attribute setter across the fillable leaves (fill-rule, etc.).
-  setAttrAll(attr, value) { this.push(attr); this._eachSel((n) => { if (value == null || value === "") n.removeAttribute(attr); else n.setAttribute(attr, String(value)); }); },
+  // Generic attribute setter across the fillable leaves (fill-rule, etc.) — inert on rasters.
+  setAttrAll(attr, value) { this.push(attr); this._eachSel((n) => { if (this.isRaster(n)) return; if (value == null || value === "") n.removeAttribute(attr); else n.setAttribute(attr, String(value)); }); },
   // Rounded-rect corner radius (rx/ry) on selected <rect>s; 0 squares the corners.
   setRectRadius(r) {
     this.push("Corner radius");

@@ -2096,13 +2096,18 @@ def main():
         rfc = page.evaluate("""() => {
             const id=[...editor.selection][0]; const img=editor.nodeById(id);
             editor.applyFill('#ff0000'); editor.applyStroke('#00ff00', 4);   // must NO-OP on a raster
+            editor.applyFillOpacity(0.5); editor.applyStrokeOpacity(0.5);     // ditto
+            editor.setStrokeAttr('stroke-linecap','square'); editor.setStrokeAlign('outside');
+            editor.setAttrAll('fill-rule','evenodd');                         // ditto — every paint setter
             editor._renderLayers();
             const sw=document.querySelector(`#layers-list .layer-row[data-id="${id}"] .layer-swatch`);
             return { isRaster: editor.isRaster(img), noFill: !img.hasAttribute('fill'), noStroke: !img.hasAttribute('stroke'),
+                     noPaint: !img.hasAttribute('fill-opacity') && !img.hasAttribute('stroke-opacity') && !img.hasAttribute('stroke-linecap')
+                              && !img.hasAttribute('data-hv-stroke-align') && !img.hasAttribute('fill-rule'),
                      swatchRaster: !!(sw && sw.classList.contains('raster')),
                      swatchThumb: !!(sw && /url\\(/.test(sw.style.backgroundImage)) }; }""")
-        check("raster first-class: fill/stroke no-op + layers row shows a thumbnail (not a colour chip)",
-              rfc["isRaster"] and rfc["noFill"] and rfc["noStroke"] and rfc["swatchRaster"] and rfc["swatchThumb"], str(rfc))
+        check("raster first-class: ALL paint setters no-op (#39) + layers row shows a thumbnail (not a colour chip)",
+              rfc["isRaster"] and rfc["noFill"] and rfc["noStroke"] and rfc["noPaint"] and rfc["swatchRaster"] and rfc["swatchThumb"], str(rfc))
 
         # ---- pipeline dissolves into the editor: an on-canvas raster is runnable in place
         #      (no library name needed) and the Run label is honest about where it lands ----
