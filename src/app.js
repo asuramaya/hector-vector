@@ -3157,6 +3157,12 @@ function buildRasterTools(node) {
       renderShelf();
       syncChrome();
       renderPanels();   // (re)fill Properties / Colour bodies for their current state
+      // Re-clamp on ANY layout change (boot/state-restore, fold, dock/float/shelve), not just
+      // window resize — a persisted rect saved on a bigger screen, or a programmatic move, can
+      // strand a float/group off-screen. In a normally-sized window this only repositions
+      // (width/height are kept unless the element genuinely overflows), so group internals
+      // and split fractions stay pristine.
+      clampFloatsOnResize();
     }
     const isFloatWanted = (n) => state[n].loc === "float";
     function detachWinKeepSection(name) { const s = sectionEl(name); const w = s && s.closest(".dock-window"); if (w) { if (w._ro) w._ro.disconnect(); w.remove(); document.body.appendChild(s); } }

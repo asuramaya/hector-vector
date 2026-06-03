@@ -2168,21 +2168,51 @@ def main():
             window.__docks.joinGroup('history','library','bottom');
             const g = document.querySelector('.dock-group');
             if (!g) return { nogroup: true };
-            g.style.left = (innerWidth + 500) + 'px'; g.style.top = '8px';
+            g.style.left = (innerWidth + 500) + 'px'; g.style.top = '8px';   // width still fits → reposition-only
+            const members = () => [...g.querySelectorAll('.rail-section[data-section]')].map(s => {
+                const r = s.getBoundingClientRect(); return { n: s.dataset.section, w: Math.round(r.width), h: Math.round(r.height), vis: s.offsetWidth > 0 && s.offsetHeight > 0 }; });
+            const mBefore = members();
             const before = g.getBoundingClientRect().left >= innerWidth;
             window.__docks.clampFloats();
             const r = g.getBoundingClientRect();
             const after = r.left >= 0 && r.right <= innerWidth + 1;
+            const mAfter = members();
+            // internals pristine: a reposition-only clamp must NOT reflow the group's flex
+            // children — same members, all visible, same sizes (±1px).
+            const pristine = mBefore.length >= 2 && mBefore.length === mAfter.length
+                && mAfter.every((m, i) => m.vis && m.n === mBefore[i].n
+                    && Math.abs(m.w - mBefore[i].w) <= 1 && Math.abs(m.h - mBefore[i].h) <= 1);
             // Restore EXACTLY (don't leave persisted float rects — a stranded Library float
             // would otherwise re-open over the rail toggle after the suite's ?app=1 reload).
             const restore = (n, was) => { if (was === 'left' || was === 'right') window.__docks.dock(n, was); else window.__docks.shelve(n); };
             restore('history', wasH); restore('library', wasL);
-            // Drop the off-screen test rect so a LATER test that re-floats these panels
-            // doesn't reopen them at the clamped right-edge position (over the rail toggle).
             const st = window.__docks.state(); if (st.history) delete st.history.rect; if (st.library) delete st.library.rect;
+            return { before, after, pristine, members: mAfter.length }; }""")
+        check("floating GROUP container re-clamps into the viewport AND its members stay pristine (#41)",
+              gclamp.get("nogroup") or (gclamp.get("before") and gclamp.get("after") and gclamp.get("pristine")), str(gclamp))
+
+        # ---- #41: the clamp fires on ANY layout reconcile (fold / dock / restore), not only
+        #      window resize — a float stranded by a programmatic move is recovered the next time
+        #      the layout reconciles, WITHOUT an explicit clampFloats() call. ----
+        recl = page.evaluate("""() => {
+            const was = window.__docks.loc('history');
+            window.__docks.float('history');
+            const w = document.querySelector('.dock-window[data-dock-window="history"]');
+            if (!w) return { nofloat: true };
+            // strand it off-screen in BOTH the live style and the persisted rect (so however
+            // reconcile re-places a float, it starts off-screen) — then DON'T call clampFloats.
+            const st = window.__docks.state();
+            if (st.history) st.history.rect = { x: innerWidth + 600, y: 8, w: 240, h: 200 };
+            w.style.left = (innerWidth + 600) + 'px'; w.style.top = '8px';
+            const before = w.getBoundingClientRect().left >= innerWidth;
+            window.__docks.toggleFold(); window.__docks.toggleFold();   // reconcile() runs twice → should re-clamp
+            const a = w.getBoundingClientRect();
+            const after = a.left >= 0 && a.right <= innerWidth + 1;
+            if (was === 'left' || was === 'right') window.__docks.dock('history', was); else window.__docks.shelve('history');
+            const st2 = window.__docks.state(); if (st2.history) delete st2.history.rect;
             return { before, after }; }""")
-        check("floating GROUP container re-clamps into the viewport on resize/shrink",
-              gclamp.get("nogroup") or (gclamp.get("before") and gclamp.get("after")), str(gclamp))
+        check("floats re-clamp on a non-resize layout change too (reconcile-driven, #41)",
+              recl.get("nofloat") or (recl.get("before") and recl.get("after")), str(recl))
 
         # ---- Task 3 end-to-end (real job): a FOCUSED on-canvas run returns the result IN PLACE.
         #      (a) vectorize → the raster becomes an editable vector group; the resolution
