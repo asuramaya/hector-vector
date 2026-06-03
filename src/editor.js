@@ -1702,6 +1702,36 @@ const editor = {
     return out;
   },
   _eachSel(fn) { this._effectiveLeaves().forEach(fn); this._renderSelection(); },
+  // Paint a small, CACHED thumbnail into a layer-row raster swatch. The href can be a
+  // multi-MB baked data: URL; assigning it straight to background-image (every _renderLayers)
+  // made the browser hold/decode the full image just to paint a ~20px chip. Instead decode it
+  // ONCE into a tiny canvas PNG (~1–2 KB), cache by node id (with an href fingerprint so a
+  // re-processed raster regenerates), and reuse that. Cap the cache so it can't grow unbounded.
+  _rasterSwatchThumb(n, el, href) {
+    const id = n.getAttribute("data-hv-id") || href;
+    const fp = href.length + ":" + href.slice(-24);   // cheap identity — avoids retaining the big URL
+    const cache = this._rasterThumbCache || (this._rasterThumbCache = new Map());
+    const set = (url) => { el.textContent = ""; el.style.backgroundImage = `url("${url}")`; el.style.backgroundSize = "cover"; el.style.backgroundPosition = "center"; };
+    const hit = cache.get(id);
+    if (hit && hit.fp === fp) { set(hit.thumb); return; }
+    el.textContent = "🖼";   // placeholder until the thumbnail is ready
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const S = 40;   // ~20px chip at 2× DPR
+        const c = document.createElement("canvas"); c.width = c.height = S;
+        const ctx = c.getContext("2d");
+        const r = Math.max(S / img.naturalWidth, S / img.naturalHeight);   // cover-fit
+        const w = img.naturalWidth * r, h = img.naturalHeight * r;
+        ctx.drawImage(img, (S - w) / 2, (S - h) / 2, w, h);
+        const thumb = c.toDataURL("image/png");
+        cache.set(id, { fp, thumb });
+        if (cache.size > 128) cache.delete(cache.keys().next().value);   // evict oldest
+        if (el.isConnected) set(thumb);
+      } catch { /* tainted canvas (cross-origin) — leave the placeholder */ }
+    };
+    img.src = href;
+  },
   // A raster <image> is a first-class canvas object but carries NO fill/stroke/shape —
   // paint operations skip it (writing fill/stroke onto an <image> is inert markup the
   // renderer ignores; we keep the DOM clean). Geometry/opacity/blend still apply. A <use>
@@ -2823,12 +2853,12 @@ const editor = {
     swatch.className = "layer-swatch" + (isGroup ? " group" : "");
     if (isGroup) { swatch.textContent = "▤"; swatch.title = "Group"; }
     else if (this.isRaster(n)) {
-      // Rasters have no fill — show a live thumbnail of the image instead of a colour chip.
+      // Rasters have no fill — show a small thumbnail of the image instead of a colour chip.
       const href = n.getAttribute("href") || n.getAttribute("xlink:href") || "";
       swatch.classList.add("raster");
-      if (href) { swatch.style.backgroundImage = `url("${href}")`; swatch.style.backgroundSize = "cover"; swatch.style.backgroundPosition = "center"; }
-      else swatch.textContent = "🖼";
       swatch.title = "Raster image";
+      if (href) this._rasterSwatchThumb(n, swatch, href);
+      else swatch.textContent = "🖼";
     }
     else {
       const fill = toHexColor(n.getAttribute("fill"));

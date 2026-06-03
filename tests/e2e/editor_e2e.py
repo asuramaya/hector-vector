@@ -2094,7 +2094,7 @@ def main():
             const px='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
             editor.placeImage(px,'fc.png',60,60); return false; }""", timeout=6000)
         rfc = page.evaluate("""() => {
-            const id=[...editor.selection][0]; const img=editor.nodeById(id);
+            const id=[...editor.selection][0]; const img=editor.nodeById(id); window.__rasterId=id;
             editor.applyFill('#ff0000'); editor.applyStroke('#00ff00', 4);   // must NO-OP on a raster
             editor.applyFillOpacity(0.5); editor.applyStrokeOpacity(0.5);     // ditto
             editor.setStrokeAttr('stroke-linecap','square'); editor.setStrokeAlign('outside');
@@ -2104,10 +2104,19 @@ def main():
             return { isRaster: editor.isRaster(img), noFill: !img.hasAttribute('fill'), noStroke: !img.hasAttribute('stroke'),
                      noPaint: !img.hasAttribute('fill-opacity') && !img.hasAttribute('stroke-opacity') && !img.hasAttribute('stroke-linecap')
                               && !img.hasAttribute('data-hv-stroke-align') && !img.hasAttribute('fill-rule'),
-                     swatchRaster: !!(sw && sw.classList.contains('raster')),
-                     swatchThumb: !!(sw && /url\\(/.test(sw.style.backgroundImage)) }; }""")
-        check("raster first-class: ALL paint setters no-op (#39) + layers row shows a thumbnail (not a colour chip)",
-              rfc["isRaster"] and rfc["noFill"] and rfc["noStroke"] and rfc["noPaint"] and rfc["swatchRaster"] and rfc["swatchThumb"], str(rfc))
+                     swatchRaster: !!(sw && sw.classList.contains('raster')) }; }""")
+        # The swatch thumbnail is generated ASYNC + cached (#40): the full href is decoded once
+        # into a tiny canvas PNG, never re-embedded per render. Wait for it, then verify it's the
+        # generated thumb (a fresh data:image/png that ISN'T the raw href) and that it's cached.
+        page.wait_for_function("""() => { const sw=document.querySelector(`#layers-list .layer-row[data-id="${window.__rasterId}"] .layer-swatch`);
+            return !!sw && /url\\(/.test(sw.style.backgroundImage); }""", timeout=4000)
+        thumb = page.evaluate("""() => { const sw=document.querySelector(`#layers-list .layer-row[data-id="${window.__rasterId}"] .layer-swatch`);
+            const bg=sw.style.backgroundImage, href=editor.nodeById(window.__rasterId).getAttribute('href')||'';
+            return { isPng:/url\\("data:image\\/png/.test(bg), notRawHref: bg.indexOf(href)===-1,
+                     cached: !!(editor._rasterThumbCache && editor._rasterThumbCache.size>=1) }; }""")
+        check("raster first-class: ALL paint setters no-op (#39) + layers swatch is a small cached thumbnail, not the raw href (#40)",
+              rfc["isRaster"] and rfc["noFill"] and rfc["noStroke"] and rfc["noPaint"] and rfc["swatchRaster"]
+              and thumb["isPng"] and thumb["notRawHref"] and thumb["cached"], str({**rfc, **thumb}))
 
         # ---- pipeline dissolves into the editor: an on-canvas raster is runnable in place
         #      (no library name needed) and the Run label is honest about where it lands ----
