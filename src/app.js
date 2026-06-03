@@ -2591,23 +2591,39 @@ function buildRasterTools(node) {
       }
     }
     const sepUnder = (t) => isSep(t) ? t : (t && t.closest ? t.closest(".tool-sep, .tool-vsep, .vp-sep") : null);
+    // Right-click any frame bar → the Layout menu (this replaces the old header "Layout ▾"
+    // button). It's always available so customization is discoverable from the frame itself;
+    // while customizing it also offers add/remove-divider at the click point.
     const onBarContext = (e) => {
-      if (!editing) return;
+      if (e.target.closest && e.target.closest("input, select, textarea, .panel-x, .menu")) return;   // leave real controls their native menu
       e.preventDefault(); e.stopPropagation();
       const cont = e.currentTarget, bar = barFor(cont), onSep = sepUnder(e.target);
-      const items = [{ label: "Add divider here", onClick: () => {
-        const ref = insertionRef(cont, e.clientX, e.clientY, bar);
-        const s = makeSep(bar); cont.insertBefore(s, ref === dragEl ? null : ref); wireMovable(s, true); persist();
-      } }];
-      if (onSep) items.push({ label: "Remove divider", onClick: () => { wireMovable(onSep, false); onSep.remove(); persist(); } });
-      showContextMenu(e.clientX, e.clientY, items);
+      const cx = e.clientX, cy = e.clientY;
+      const build = () => {
+        const items = MENU_ITEMS.layout();
+        if (editing) {
+          items.push({ type: "sep" });
+          items.push({ label: "Add divider here", onClick: () => {
+            const ref = insertionRef(cont, cx, cy, bar);
+            const s = makeSep(bar); cont.insertBefore(s, ref === dragEl ? null : ref); wireMovable(s, true); persist();
+          } });
+          if (onSep) items.push({ label: "Remove divider", onClick: () => { wireMovable(onSep, false); onSep.remove(); persist(); } });
+        }
+        return items;
+      };
+      showRichContextMenu(cx, cy, build);
     };
+    // The Layout right-click lives on the bar permanently (independent of customize mode).
+    function wireBarContext(bar) {
+      const cont = barOf(bar); if (!cont || cont._layoutCtxWired) return;
+      cont._layoutCtxWired = true; cont.addEventListener("contextmenu", onBarContext);
+    }
 
     function wireBar(bar, on) {
       const cont = barOf(bar); if (!cont) return;
       for (const m of movable(bar)) wireMovable(m, on);
-      if (on) { cont.addEventListener("dragover", onBarOver); cont.addEventListener("drop", onBarDrop); cont.addEventListener("contextmenu", onBarContext); }
-      else { cont.removeEventListener("dragover", onBarOver); cont.removeEventListener("drop", onBarDrop); cont.removeEventListener("contextmenu", onBarContext); }
+      if (on) { cont.addEventListener("dragover", onBarOver); cont.addEventListener("drop", onBarDrop); }
+      else { cont.removeEventListener("dragover", onBarOver); cont.removeEventListener("drop", onBarDrop); }
     }
     // Register a panel header's action area as a customize-layout bar (drop receiver). The
     // panel headers are built dynamically (after this module), so they opt in on creation.
@@ -2619,8 +2635,10 @@ function buildRasterTools(node) {
       const saved = loadSaved();
       if (saved && saved[name]) applyBar(bar, saved[name]);   // restore this bar's saved arrangement
       if (editing) wireBar(bar, true);
+      wireBarContext(bar);   // Layout right-click is permanent, regardless of customize mode
       el.classList.add("layout-bar");   // CSS hook for the customize drop outline
     }
+    BARS.forEach(wireBarContext);   // arm the Layout right-click on the static frame bars at boot
     function setEditing(on) {
       editing = on;
       appEl.classList.toggle("customizing", on);
@@ -3653,25 +3671,27 @@ function closeMenus() {
   openMenuEl.classList.remove("open");
   openMenuEl = null;
 }
-function openMenu(menuEl) {
-  closeMenus();
-  const itemsFn = MENU_ITEMS[menuEl.dataset.menu];
-  const list = menuEl.querySelector(".menu-list");
-  if (!itemsFn || !list) return;
+// Render menu items into a list element. Shared by the header dropdowns (openMenu) and
+// the right-click rich context menu (showRichContextMenu). `dismiss` closes the host menu
+// on activation; `refresh` rebuilds it in place (used by the manageable profile rows after
+// a rename/delete so the list reflects the mutation).
+function populateMenuList(list, items, opts = {}) {
+  const dismiss = opts.dismiss || (() => {});
+  const refresh = opts.refresh || (() => {});
   list.innerHTML = "";
-  for (const item of itemsFn()) {
+  for (const item of items) {
     if (item.type === "sep") { const sep = document.createElement("div"); sep.className = "menu-sep"; list.appendChild(sep); continue; }
     // a manageable row: a label that activates the item + inline rename / delete buttons
-    // (used by the Layout profiles). Re-open the menu after a mutation so the list refreshes.
+    // (used by the Layout profiles). Refresh the menu after a mutation so the list updates.
     const badgeHTML = item.badge ? `<span class="menu-badge">${item.badge}</span>` : "";
     if (item.onRename || item.onDelete) {
       const row = document.createElement("div"); row.className = "menu-item menu-row" + (item.checked ? " checked" : "");
       const lab = document.createElement("button"); lab.type = "button"; lab.className = "menu-rowlabel" + (item.checked ? " checked" : ""); lab.setAttribute("role", "menuitemradio"); lab.setAttribute("aria-checked", item.checked ? "true" : "false");
       lab.innerHTML = `<span class="menu-check">${item.checked ? "✓" : ""}</span><span class="menu-label"></span>${badgeHTML}`;
       lab.querySelector(".menu-label").textContent = item.label;
-      lab.addEventListener("click", async () => { closeMenus(); try { await item.onClick(); } catch (e) { setStatus(e.message || String(e), 3000); } });
+      lab.addEventListener("click", async () => { dismiss(); try { await item.onClick(); } catch (e) { setStatus(e.message || String(e), 3000); } });
       row.appendChild(lab);
-      const reopen = (mut) => { const m = openMenuEl; try { mut(); } catch (e) { setStatus(e.message || String(e), 3000); } closeMenus(); if (m) openMenu(m); };
+      const reopen = (mut) => { try { mut(); } catch (e) { setStatus(e.message || String(e), 3000); } refresh(); };
       if (item.onRename) { const r = document.createElement("button"); r.type = "button"; r.className = "menu-rowbtn"; r.textContent = "✎"; r.title = "Rename"; r.addEventListener("click", (e) => { e.stopPropagation(); reopen(item.onRename); }); row.appendChild(r); }
       if (item.onDelete) { const d = document.createElement("button"); d.type = "button"; d.className = "menu-rowbtn"; d.textContent = "✕"; d.title = "Delete"; d.addEventListener("click", (e) => { e.stopPropagation(); reopen(item.onDelete); }); row.appendChild(d); }
       list.appendChild(row); continue;
@@ -3684,11 +3704,18 @@ function openMenu(menuEl) {
     btn.innerHTML = `<span class="menu-check">${item.checked ? "✓" : ""}</span><span class="menu-label"></span>${badgeHTML}`;
     btn.querySelector(".menu-label").textContent = item.label;
     btn.addEventListener("click", async () => {
-      closeMenus();
+      dismiss();
       try { await item.onClick(); } catch (e) { setStatus(e.message || String(e), 3000); }
     });
     list.appendChild(btn);
   }
+}
+function openMenu(menuEl) {
+  closeMenus();
+  const itemsFn = MENU_ITEMS[menuEl.dataset.menu];
+  const list = menuEl.querySelector(".menu-list");
+  if (!itemsFn || !list) return;
+  populateMenuList(list, itemsFn(), { dismiss: closeMenus, refresh: () => { const m = openMenuEl; closeMenus(); if (m) openMenu(m); } });
   list.hidden = false;
   const trigger = menuEl.querySelector(".menu-trigger");
   if (trigger) trigger.setAttribute("aria-expanded", "true");
@@ -3752,6 +3779,20 @@ function showContextMenu(x, y, items) {
   menu.className = "context-menu menu-list";
   menu.setAttribute("role", "menu");
   appendMenuItems(menu, items, null);
+  document.body.appendChild(menu);
+  placeAt(menu, x, y);
+  ctxMenuEl = menu;
+}
+// Rich right-click menu — the full menu vocabulary (toggles, badges, manageable rows with
+// rename/delete). `itemsFn` is re-evaluated when a row mutates so the list stays current.
+// This is how the Layout menu (formerly a header button) now reaches the user: right-click
+// the blank space of any frame toolbar.
+function showRichContextMenu(x, y, itemsFn) {
+  hideContextMenu();
+  const menu = document.createElement("div");
+  menu.className = "context-menu menu-list";
+  menu.setAttribute("role", "menu");
+  populateMenuList(menu, itemsFn(), { dismiss: hideContextMenu, refresh: () => showRichContextMenu(x, y, itemsFn) });
   document.body.appendChild(menu);
   placeAt(menu, x, y);
   ctxMenuEl = menu;

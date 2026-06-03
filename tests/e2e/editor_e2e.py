@@ -715,16 +715,22 @@ def main():
               page.evaluate("!!document.querySelector('.rail-section.color .panel-actions.hdr-slots.layout-bar')"))
         page.evaluate("window.__docks.close('color')"); page.wait_for_timeout(40)
 
-        # --- customizable picture-frame layout (Layout header dropdown; auto-save + profiles) ---
+        # --- customizable picture-frame layout (right-click a frame bar; auto-save + profiles) ---
         # all four bars share the one .tool-button object so they match
         check("every frame bar uses the shared .tool-button class",
               page.evaluate("""['.toolstrip','.stage-toolbar','.actionbar','.viewport-controls']
                 .every(s => document.querySelectorAll(s + ' .tool-button').length > 0)
                 && !document.querySelector('.vp-btn')"""))
-        # the Layout control is a header dropdown next to File (not footer buttons)
-        check("Layout is a header dropdown next to File",
-              page.evaluate("""!!document.querySelector('.doc-actions-left .menu[data-menu="layout"]')
-                && !document.querySelector('#layout-save') && !document.querySelector('#layout-edit')"""))
+        # the Layout control is no longer a header button — it's the frame's right-click menu
+        check("Layout header button is gone; right-clicking a frame bar opens the Layout menu",
+              page.evaluate("""() => {
+                if (document.querySelector('.menu[data-menu="layout"]')) return false;   // header dropdown removed
+                document.querySelector('.toolstrip').dispatchEvent(new MouseEvent('contextmenu',
+                  {bubbles:true, cancelable:true, clientX:20, clientY:20}));
+                const menu = document.querySelector('.context-menu');
+                const ok = !!menu && [...menu.querySelectorAll('.menu-item')]
+                  .some(b => /Customize layout/.test(b.textContent));
+                document.body.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true})); return ok; }"""))
         # customize mode (via the exposed controller) makes frame tiles draggable
         page.evaluate("window.__layout.toggleEdit()")
         check("customize mode makes frame tiles draggable",
@@ -759,13 +765,15 @@ def main():
                 const L = window.__layout.listProfiles(); return L.includes('Renamed') && !L.includes('Test'); }"""))
         check("a profile can be deleted",
               page.evaluate("""() => { window.__layout.deleteProfile('Renamed'); return !window.__layout.listProfiles().includes('Renamed'); }"""))
-        # the Layout dropdown renders each profile as a manageable row (rename ✎ / delete ✕)
-        check("Layout dropdown shows rename/delete on a profile row",
+        # the Layout right-click menu renders each profile as a manageable row (rename ✎ / delete ✕)
+        check("Layout right-click menu shows rename/delete on a profile row",
               page.evaluate("""() => { window.__layout.saveProfile('Row');
-                document.querySelector('.menu[data-menu=layout] .menu-trigger').click();
-                const rows=[...document.querySelectorAll('.menu[data-menu=layout] .menu-row')];
+                document.querySelector('.toolstrip').dispatchEvent(new MouseEvent('contextmenu',
+                  {bubbles:true, cancelable:true, clientX:20, clientY:20}));
+                const rows=[...document.querySelectorAll('.context-menu .menu-row')];
                 const ok = rows.some(r => r.querySelector('.menu-rowlabel') && r.querySelectorAll('.menu-rowbtn').length===2);
-                document.body.click(); window.__layout.deleteProfile('Row'); return ok; }"""))
+                document.body.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true}));
+                window.__layout.deleteProfile('Row'); return ok; }"""))
         # --- active-profile STATE: selection is tracked, divergence shows as "edited" ---
         page.evaluate("window.__layout.reset()")
         check("Default is the active baseline after reset",
@@ -780,16 +788,17 @@ def main():
         page.evaluate("() => { const pen=document.querySelector('.toolstrip [data-tool=pen]'); document.querySelector('.actionbar').appendChild(pen); window.__layout.save(); }")
         check("editing a selected profile marks it dirty without losing the selection",
               page.evaluate("window.__layout.activeProfile() === 'StateP' && window.__layout.isDirty() === true"))
-        # the dropdown reflects state: active row checked + an "edited" badge
-        page.evaluate("document.querySelector('.menu[data-menu=layout] .menu-trigger').click()")
-        check("dropdown shows the active profile checked with an edited badge",
-              page.evaluate("""() => { const rows=[...document.querySelectorAll('.menu[data-menu=layout] .menu-row')];
+        # the right-click menu reflects state: active row checked + an "edited" badge
+        page.evaluate("""document.querySelector('.toolstrip').dispatchEvent(new MouseEvent('contextmenu',
+            {bubbles:true, cancelable:true, clientX:20, clientY:20}))""")
+        check("right-click menu shows the active profile checked with an edited badge",
+              page.evaluate("""() => { const rows=[...document.querySelectorAll('.context-menu .menu-row')];
                 const r = rows.find(r => /StateP/.test(r.textContent));
                 const checked = !!r && r.querySelector('.menu-rowlabel.checked') && r.querySelector('.menu-check').textContent.trim()==='✓';
                 const badge = !!r && !!r.querySelector('.menu-badge');
-                const upd = [...document.querySelectorAll('.menu[data-menu=layout] .menu-item')].some(i=>/Update/.test(i.textContent));
+                const upd = [...document.querySelectorAll('.context-menu .menu-item')].some(i=>/Update/.test(i.textContent));
                 return checked && badge && upd; }"""))
-        page.evaluate("document.body.click()")
+        page.evaluate("document.body.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true}))")
         # Update folds the live edit back into the profile → clean again
         page.evaluate("window.__layout.updateActive()")
         check("Update writes the live arrangement back into the active profile",
