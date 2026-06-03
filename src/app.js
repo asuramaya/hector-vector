@@ -4194,16 +4194,26 @@ async function runProcess(btn) {
   }
 }
 
-// Poll a single job id to a terminal state (the job poller also runs on its own timer;
-// this just lets a focused run await *its* job before placing the result).
-async function awaitJob(id, { timeoutMs = 180000, intervalMs = 600 } = {}) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+// Poll a single job to a terminal state (the shared job-poller also runs on its own timer;
+// this lets a focused run await *its* job before auto-placing the result). No 3-minute cliff:
+// a genuinely heavy trace can run for many minutes, so poll up to a generous safety cap with
+// back-off, and distinguish the outcomes for an honest hand-off:
+//   terminal job  → the job object
+//   { gone:true } → the job left the list (cleared/cancelled out from under us)
+//   null          → still running past the cap (keep going in the background; manual Place)
+async function awaitJob(id, { capMs = 1800000 } = {}) {
+  const start = Date.now();
+  let interval = 500;
+  while (Date.now() - start < capMs) {
     let jobs = null;
     try { jobs = await fetchJobs(); } catch { /* transient — retry */ }
-    const job = (jobs || []).find((j) => j.id === id);
-    if (job && TERMINAL_STATES.has(job.status)) return job;
-    await new Promise((r) => setTimeout(r, intervalMs));
+    if (jobs) {
+      const job = jobs.find((j) => j.id === id);
+      if (!job) return { gone: true };
+      if (TERMINAL_STATES.has(job.status)) return job;
+    }
+    await new Promise((r) => setTimeout(r, interval));
+    interval = Math.min(2000, interval + 250);   // back off so a long job doesn't spam the poll
   }
   return null;
 }
@@ -4212,8 +4222,13 @@ async function awaitAndPlaceOnNode(jobId, node) {
   setStatus("Processing on canvas… (the raster is replaced when it finishes)", 0);
   const job = await awaitJob(jobId);
   await loadJobs();   // reflect the terminal state in the Jobs panel
-  if (!job) { setStatus("Still processing — use Place in the Jobs panel when it finishes.", 5000); return; }
+  if (!job) { setStatus("Still processing — it keeps running in the background; use Place in the Jobs panel when it finishes.", 6000); return; }
+  if (job.gone) { setStatus("Processing was cancelled.", 3000); return; }
   if (job.status !== "done") { setStatus(`Processing ${job.status}. See the Jobs panel.`, 4500); return; }
+  // The result lands async — the user may have edited/selected elsewhere while it ran. We
+  // place onto the ORIGINAL node by reference (not the current selection), and only if it's
+  // still a live raster — so a vanished/already-converted node is a clean no-op hand-off
+  // rather than a surprise edit on the wrong object.
   if (!node.isConnected || !editor.isRaster(node)) {
     setStatus("Processed — the canvas raster changed meanwhile; use Place in the Jobs panel.", 5000); return;
   }
@@ -4227,17 +4242,21 @@ async function placeJobResultOnNode(job, node) {
   const rel = chooseFinalOutput(job);
   if (!rel) { setStatus("The job produced no placeable output.", 3500); return false; }
   const url = jobOutputUrl(job, rel), name = jobOutputName(rel);
+  const label = rasterName(node);
+  // Each branch is exactly ONE undo step (commitRasterToVector / a single push), so if this
+  // lands after the user moved on, a single Undo cleanly reverses it. Status names the raster
+  // so an async canvas change reads clearly rather than appearing out of nowhere.
   try {
     if (jobOutputKind(name) === "svg") {
       const text = await (await fetch(url)).text();
-      const ok = editor.commitRasterToVector(node, text, rasterName(node));
+      const ok = editor.commitRasterToVector(node, text, label);
       if (!ok) setStatus("Couldn't place the traced vector.", 3500);
       return ok;
     }
     node.setAttribute("href", url);
     editor.push("Process raster");
     editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
-    setStatus("Processed on canvas — result placed in place.", 3000);
+    setStatus(`Replaced “${label}” on the canvas with the processed result.`, 3200);
     return true;
   } catch (e) { setStatus(`Couldn't place the result: ${e.message}`, 4000); return false; }
 }
