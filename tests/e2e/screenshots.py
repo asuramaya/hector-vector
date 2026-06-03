@@ -16,8 +16,9 @@ BASE = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:2002"
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DOCS = ROOT / "docs"
 
-# A real VTracer output (bold red/black trace) used as the hero document.
-HERO_SVG = (ROOT / "outputs/raster-panel-test/BEST_monsterhouse.svg").read_text()
+# The project's own logo (a hand-built SVG) as the hero document — on-brand, and a
+# clean vector to show off editing/selection/nodes against.
+HERO_SVG = (ROOT / "assets/hv_logo.svg").read_text()
 
 
 def boot(page):
@@ -99,16 +100,19 @@ def cap_processor(page):
 
 def cap_nodes(page):
     boot(page); reset_panels(page); mount(page, HERO_SVG)
+    # Pick the curviest path (most cubic segments) so the bézier anchors + handles read.
     page.evaluate("""() => {
         const paths = [...editor.stage.querySelectorAll('path[data-hv-id]')];
-        const pick = paths.slice(1).sort((a,b) => b.getBBox().width*b.getBBox().height - a.getBBox().width*a.getBBox().height)[0] || paths[0];
+        const curves = (p) => (p.getAttribute('d')||'').split(/[Cc]/).length;
+        const pick = paths.slice().sort((a,b) => curves(b) - curves(a))[0] || paths[0];
         const id = pick.getAttribute('data-hv-id');
         editor.selection = new Set([id]); editor.artboardSelected = false;
-        editor._renderSelection(); editor.setTool('node');
+        editor._renderSelection(); editor._renderInspector(); editor.setTool('node');
+        // frame the selection so its handles are on-screen
+        fitVp(viewports.output);
     }""")
     page.wait_for_timeout(150)
-    # Zoom in a touch so the anchors + handles read clearly.
-    page.evaluate("() => { for (let i=0;i<4;i++) zoomVp(viewports.output, 1.18); }")
+    page.evaluate("() => { for (let i=0;i<2;i++) zoomVp(viewports.output, 1.12); }")
     page.wait_for_timeout(250)
     shot(page, "editor-nodes.png")
 
