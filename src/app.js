@@ -4158,6 +4158,7 @@ async function runProcess(btn) {
     if (!t.batch) {
       if (returnNode) {
         payload.input_url = rasterHref(returnNode);
+        payload.input_name = rasterName(returnNode);   // friendly output stem; the result lands on the canvas (hidden dir)
       } else {
         // Library-only target (raster not on the canvas): a background job into the library.
         if (!t.name) {

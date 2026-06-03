@@ -2231,6 +2231,18 @@ def main():
             return { stillImage: !!im, href: (im && (im.getAttribute('href')||'')).slice(0,9) }; }""")
         check("focused upscale run swaps the PNG result onto the same raster IN PLACE (Task 3, raster branch)",
               brun["stillImage"] and brun["href"] == "/outputs/", str(brun))
+        # #33: a focused run does NOT litter the library — its output lands in a HIDDEN
+        # (.pipeline-*) dir under a FRIENDLY stem (the raster's name, not inline-<hash>),
+        # and the result file is absent from /api/outputs (the library listing).
+        lit = page.evaluate("""async () => { const im=editor.stage.querySelector('image[data-hv-id]');
+            const href = (im && (im.getAttribute('href')||'')) || '';
+            const file = decodeURIComponent(href.split('/').pop() || '');
+            const outs = await (await fetch('/api/outputs')).json();
+            return { hiddenDir: /\\/outputs\\/\\.pipeline-/.test(href), friendly: /^focusup\\b/.test(file),
+                     noInlineHash: !/inline-[0-9a-f]/.test(file),
+                     notInLibrary: !(outs||[]).some(o => o.name === file) }; }""")
+        check("focused run output is hidden from the library + friendly-named (#33)",
+              lit["hiddenDir"] and lit["friendly"] and lit["noInlineHash"] and lit["notInLibrary"], str(lit))
         # Clean up after the real jobs: clear the queue (so the background job-poller doesn't
         # keep re-rendering panels and destabilising later clicks) and reset the stage flags.
         page.evaluate("""async () => {

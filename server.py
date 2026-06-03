@@ -358,9 +358,13 @@ def require_path(path_str: str, kind: str) -> Path:
     return path
 
 
-def output_dir(label: str) -> Path:
+def output_dir(label: str, hidden: bool = False) -> Path:
     stamp = time.strftime('%Y%m%d-%H%M%S')
-    base = OUTPUTS_DIR / f"{label}-{stamp}-{int(time.time() * 1000) % 1000:03d}"
+    # A hidden dir is dot-prefixed: still served under /outputs/ (so the canvas can fetch
+    # its result) but skipped by list_outputs — used for focused on-canvas runs whose output
+    # lands on the canvas, not in the library.
+    name = f"{'.' if hidden else ''}{label}-{stamp}-{int(time.time() * 1000) % 1000:03d}"
+    base = OUTPUTS_DIR / name
     out = base
     suffix = 1
     while out.exists():
@@ -368,6 +372,61 @@ def output_dir(label: str) -> Path:
         suffix += 1
     out.mkdir(parents=True, exist_ok=False)
     return out
+
+
+def _safe_stem(name: str | None) -> str | None:
+    """A filesystem-safe stem from a display name (drops any extension + path bits), or
+    None if there's nothing usable — callers fall back to the source file's own stem."""
+    if not name:
+        return None
+    s = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(str(name)).stem).strip("-.")
+    return s or None
+
+
+def _prune_focused_pipeline_dirs(keep: int = 24) -> None:
+    """Bound the hidden focused-run output dirs (`.pipeline-*`). Their results have already
+    been placed on the canvas, so they're recovery scratch, not deliverables. Remove EMPTY
+    ones, and SVG-terminal ones (the vector was inlined into the canvas → the files are
+    disposable) beyond the most-recent `keep`. NEVER touch a PNG-only dir: an upscale /
+    remove-bg result is referenced by the live canvas <image href>, so deleting it would
+    break the image on the canvas."""
+    try:
+        dirs = sorted(OUTPUTS_DIR.glob(".pipeline-*"), key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return
+    now = time.time()
+    svg_terminal_seen = 0
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        try:
+            files = [f for f in d.iterdir() if f.is_file()]
+        except OSError:
+            continue
+        if not files:                                   # empty → safe to drop, but only once
+            try:                                         # it's clearly stale (never race an
+                stale = (now - d.stat().st_mtime) > 120  # in-flight job that just mkdir'd it)
+            except OSError:
+                stale = False
+            if stale:
+                _rmtree_quiet(d)
+            continue
+        has_svg = any(f.suffix.lower() == ".svg" for f in files)
+        if not has_svg:                                 # PNG-only → may back a live canvas href; keep
+            continue
+        svg_terminal_seen += 1
+        if svg_terminal_seen > keep:
+            _rmtree_quiet(d)
+
+
+def _rmtree_quiet(path: Path) -> None:
+    try:
+        for child in path.iterdir():
+            if child.is_file():
+                child.unlink()
+        path.rmdir()
+    except OSError:
+        pass
 
 
 def build_chromakey_cutout(input_path: Path, output_path: Path) -> None:
@@ -2222,21 +2281,29 @@ def run_pipeline(payload: dict) -> dict:
         targets = kept
     if not targets:
         return {"message": _skip_message("run pipeline on", skipped), "started": 0, "skipped": skipped}
-    out_dir = output_dir("pipeline")
-    total = sum((up, rb, vec)) + 1   # +1 for the closing "Done" tick
-    # A focused on-canvas run (input_url) is the interactive path — trace it at the same
-    # resolution the live preview uses, so a focused vectorize matches what a preview would
-    # show (WYSIWYG). A user-set target_max_dim already downscaled the intermediate above,
-    # so don't second-guess it; and batch/library runs (no input_url) keep the full ceiling.
+    # A focused on-canvas run (input_url) is the interactive path: the canvas is the
+    # destination, so its outputs are NOT library deliverables. Write them to a HIDDEN
+    # output dir (dot-prefixed → excluded from list_outputs) under a friendly stem from the
+    # raster's name (not the materialized inline-<hash> input), and trace at the same
+    # resolution the live preview uses so a focused vectorize matches the preview (WYSIWYG).
+    # A user-set target_max_dim already downscaled the intermediate above, so don't second-
+    # guess it; batch/library runs (no input_url) keep the full ceiling and a visible dir.
     focused = bool(payload.get("input_url", "").strip())
     vec_dim = TRACE_PREVIEW_DIM if (focused and mask_cfg["target_max_dim"] is None) else None
+    if focused:
+        _prune_focused_pipeline_dirs()   # bound old hidden focused-run dirs BEFORE we mint a new one
+    out_dir = output_dir("pipeline", hidden=focused)
+    friendly = _safe_stem(payload.get("input_name")) if focused else None
+    total = sum((up, rb, vec)) + 1   # +1 for the closing "Done" tick
     jobs_started = []
     for src in targets:
-        upscale_dest = out_dir / f"{src.stem}.png"
-        mask_dest = out_dir / f"{src.stem}.mask.png"
-        cutout_dest = out_dir / f"{src.stem}.cutout.png"
-        vector_dest = out_dir / f"{src.stem}.svg"
-        def worker(log, src=src, upscale_dest=upscale_dest, mask_dest=mask_dest, cutout_dest=cutout_dest, vector_dest=vector_dest) -> None:
+        stem = friendly or src.stem
+        job_name = (payload.get("input_name") or src.name) if focused else src.name
+        upscale_dest = out_dir / f"{stem}.png"
+        mask_dest = out_dir / f"{stem}.mask.png"
+        cutout_dest = out_dir / f"{stem}.cutout.png"
+        vector_dest = out_dir / f"{stem}.svg"
+        def worker(log, src=src, stem=stem, upscale_dest=upscale_dest, mask_dest=mask_dest, cutout_dest=cutout_dest, vector_dest=vector_dest) -> None:
             step = {"n": 0}
             def tick(label):
                 step["n"] += 1
@@ -2262,7 +2329,7 @@ def run_pipeline(payload: dict) -> dict:
 
             # Optional downscale before the heavier stages, on whatever's current.
             if mask_cfg["target_max_dim"] is not None and (rb or vec):
-                preview_path = out_dir / f"{src.stem}.preview.png"
+                preview_path = out_dir / f"{stem}.preview.png"
                 staged = apply_preprocess(current, preview_path, target_max_dim=mask_cfg["target_max_dim"])
                 if staged is not current:
                     log(f"Resized intermediate to max dim {mask_cfg['target_max_dim']}.")
@@ -2307,8 +2374,8 @@ def run_pipeline(payload: dict) -> dict:
 
         jobs_started.append(
             launch_internal_job(
-                "pipeline", _pipeline_summary(src.name, st), worker,
-                source_name=src.name, output_dir=str(out_dir),
+                "pipeline", _pipeline_summary(job_name, st), worker,
+                source_name=job_name, output_dir=str(out_dir),
             )
         )
     msg = f"Started {len(jobs_started)} pipeline job(s)."
