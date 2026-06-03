@@ -395,6 +395,11 @@ button:disabled {
 .dock-group.col { flex-direction: column; }
 .dock-group.dragging { opacity: 0.92; cursor: grabbing; }
 .dock-group > .rail-section { min-width: 0; min-height: 0; overflow: hidden; }
+/* An EXPANDED grouped member can't shrink below a usable size — a near-zero fraction
+   otherwise leaves a thin empty "ghost" strip you can't grab back (collapsed members
+   still hug their header via flex:0 0 auto, so this only floors live ones). */
+.dock-group:not(.col) > .rail-section:not(.collapsed) { min-width: 130px; }
+.dock-group.col > .rail-section:not(.collapsed) { min-height: 96px; }
 .dock-group > .rail-section > .section-body, .dock-group > .rail-section .layers-list,
 .dock-group .fp-body { flex: 1 1 auto; min-height: 0; max-height: none; }
 .dock-group > .rail-section .panel-x { display: none; }   /* × redocks → splits; use the bezel */
@@ -672,7 +677,11 @@ button:disabled {
 
 /* layers panel */
 .rail-section.layers { flex: 1 1 auto; min-height: 120px; }
-.rail-section.library { flex: 0 0 auto; }
+/* In a side dock the Library hugs its content (so it doesn't starve Layers); scope this
+   to the docks ONLY. When floated/grouped the section must FILL its window so the list
+   scrolls inside it (see .dock-window > .rail-section) — otherwise a detached Library
+   grew to full content height, lost its scroll, and ran out of bounds. */
+.leftdock .rail-section.library, .rightdock .rail-section.library { flex: 0 0 auto; }
 .layers-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
 .layer-row {
   display: flex; align-items: center; gap: 6px;

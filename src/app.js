@@ -2881,7 +2881,12 @@ function buildRasterTools(node) {
       // (e.g. the Library) opens on-screen and scrolls inside instead of running off.
       const naturalW = r.width > 40 ? r.width : 280;
       const ww = Math.min((detaching ? Math.max(240, naturalW) : (prev?.w || Math.max(240, naturalW))), innerWidth - 16);
-      const wh = Math.min((detaching ? Math.max(180, contentHeight(s)) : (prev?.h || Math.max(180, contentHeight(s)))), innerHeight - 16);
+      // Fit the content, but soft-cap a FRESH float to 80% of the viewport so a long panel
+      // (e.g. the Library) opens at a workable size and scrolls inside — not pinned to full
+      // height. A remembered float size (prev) always wins.
+      const fit = Math.max(180, contentHeight(s));
+      const fresh = Math.min(fit, Math.round(innerHeight * 0.8));
+      const wh = Math.min((prev?.h || fresh), innerHeight - 16);
       // POSITION — an explicit drop point wins, then remembered position (memory), then an
       // algorithmically ideal slot: right-of-centre, cascading to avoid overlapping panels.
       let x, y;
@@ -2989,7 +2994,7 @@ function buildRasterTools(node) {
           if (e.button !== 0) return; e.preventDefault(); e.stopPropagation();
           const r = cont.getBoundingClientRect();
           const sx = e.clientX, sy = e.clientY, x0 = r.left, y0 = r.top, w0 = r.width, h0 = r.height;
-          const MINW = 220, MINH = 140;
+          const MINW = 280, MINH = 210;   // fit ≥2 members at their per-member floors (see .dock-group min-width/height)
           const mv = (ev) => {
             let x = x0, y = y0, ww = w0, wh = h0; const dx = ev.clientX - sx, dy = ev.clientY - sy;
             if (dir.includes("e")) ww = Math.max(MINW, w0 + dx);
