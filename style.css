@@ -1125,12 +1125,12 @@ button:disabled {
 .proc-stage .pipeline-detail-body { border-top: 1px solid var(--hair); padding: 8px 10px; margin: 0; }
 /* Standard chin: pinned below the scrolling stage list, ink top-border (matches
    .library-chin / .insp-foot). Run is pushed to the right edge. */
-.processor-chin { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--ink); padding: 7px 8px; }
+.processor-chin { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--ink); padding: 5px 8px; }
 .processor-chin:empty { display: none; }
-/* Run — one inky chin control (black-on-white, hover punches to black). Standard
-   field height, not the divergent blue primary-button. */
+/* Run — one inky chin control (black-on-white, hover punches to black). Compact, not the
+   divergent blue primary-button. */
 .processor-chin .proc-run {
-  margin-left: auto; height: var(--field-h); padding: 0 14px; font-size: 12px; font-weight: 600;
+  margin-left: auto; height: 24px; padding: 0 12px; font-size: 11.5px; font-weight: 600;
   border: 1px solid var(--ink); background: #fff; color: var(--ink); cursor: pointer; border-radius: var(--r);
 }
 .processor-chin .proc-run:hover:not(:disabled) { background: var(--ink); color: #fff; }
@@ -1141,7 +1141,7 @@ button:disabled {
 .rail-section.processor.dimmed .processor-body, .rail-section.processor.dimmed .processor-chin { opacity: 0.45; }
 .rail-section.processor.dimmed .sec-label::after { content: " · idle"; color: var(--muted); font-weight: 400; }
 .proc-foot-hint { font-size: 11px; color: var(--muted); }
-.proc-foot-load { font: inherit; font-size: 11px; height: var(--field-h); padding: 0 10px; border: 1px solid var(--ink); background: #fff; color: var(--ink); cursor: pointer; border-radius: var(--r); }
+.proc-foot-load { font: inherit; font-size: 11px; height: 24px; padding: 0 10px; border: 1px solid var(--ink); background: #fff; color: var(--ink); cursor: pointer; border-radius: var(--r); }
 .proc-foot-load:hover { background: var(--ink); color: #fff; }
 /* compact Properties "Process" pointer (the pipeline lives in the Processor panel now) */
 .raster-tools-compact { display: flex; flex-direction: column; gap: 8px; }
@@ -1632,6 +1632,15 @@ button:disabled {
 .info-sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .info-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 .info-actions .primary-button, .info-actions .ghost-button { font-size: 12px; padding: 5px 10px; }
+/* The dock-panel primary CTAs (Info "Load into canvas", raster Keep/Revert) used the
+   divergent blue primary-button. In the inky palette the emphasised action is a SOLID
+   ink fill (black-on-white peers stay outlined); hover inverts for feedback. */
+.info-actions .primary-button, .rt-actions .primary-button {
+  border-color: var(--ink); background: var(--ink); color: #fff; font-weight: 600;
+}
+.info-actions .primary-button:hover, .rt-actions .primary-button:hover {
+  filter: none; background: #fff; color: var(--ink);
+}
 /* Delete sits in the detail action row — muted until hover, loud once armed
    (first click arms, second within the open modal confirms). */
 .info-actions .danger-button { margin-left: auto; color: #b42318; }

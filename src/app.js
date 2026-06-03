@@ -4886,8 +4886,10 @@ function buildProcessorRail() {
 // The pinned chin (standard ink-top-bordered footer): the Run action, plus a compact
 // "Load to preview" affordance when the target raster isn't on the canvas yet. The name
 // isn't repeated here — it already shows in the target row above.
-function buildProcessorChin(t) {
-  const chin = document.createElement("div"); chin.className = "processor-chin";
+// Populate the chin host (#processor-chin, itself a .processor-chin) IN PLACE — building a
+// nested .processor-chin inside it doubled the ink top-border into a stray orphan line.
+function fillProcessorChin(chin, t) {
+  chin.innerHTML = "";
   if (!t.batch && !t.live && t.name) {
     const wi = workItems.find((i) => i.name === t.name);
     const load = document.createElement("button"); load.type = "button"; load.className = "proc-foot-load";
@@ -4910,7 +4912,6 @@ function buildProcessorChin(t) {
   else if (!t.batch && !t.canRun) run.title = "Select a raster to run";
   run.addEventListener("click", () => runProcess(run));
   chin.appendChild(run);
-  return chin;
 }
 function renderProcessorPanel() {
   if (!pipelineConstsReady) return;   // called by renderPanels before the pipeline consts init (module eval) → no-op until ready
@@ -4920,7 +4921,7 @@ function renderProcessorPanel() {
   host.appendChild(buildProcessorRail());
   host.scrollTop = keepScroll;
   const chinHost = document.querySelector("#processor-chin");
-  if (chinHost) { chinHost.innerHTML = ""; chinHost.appendChild(buildProcessorChin(processTarget())); }
+  if (chinHost) fillProcessorChin(chinHost, processTarget());
   const out = outputChipInfo();
   const outEl = document.querySelector("#processor-out"); if (outEl) outEl.textContent = out ? out.label : "";
   const runBtn = document.querySelector("#processor-run");
