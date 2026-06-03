@@ -1653,7 +1653,12 @@ async function setSourceDir(next) {
   } catch (error) { setStatus(error.message, 4000); }
 }
 
-function openAppSettings() {
+// Install / configuration is consolidated in Settings → "AI models & tools". Stages never
+// install inline; they point here so install prompts don't pop up scattered around the UI.
+function openToolsSettings() { openAppSettings({ focus: "tools" }); }
+function installJobActive(kind) { return jobsCache.some((j) => j.kind === kind && (j.status === "running" || j.status === "queued")); }
+
+function openAppSettings(opts = {}) {
   openModal("Settings", true);
   modalSearchEl.hidden = true;
   appSettingsOpen = true;
@@ -1696,12 +1701,19 @@ function openAppSettings() {
 
   // One place to see and install the optional heavy deps. Status + endpoints already
   // exist server-side (tool_status / /api/install/*); installs run as background jobs.
-  root.appendChild(sectionTitle("AI models & tools"));
+  const toolsTitle = sectionTitle("AI models & tools");
+  root.appendChild(toolsTitle);
   const aiTools = [
-    { key: "rembg_installed",     name: "rembg (AI cutout)",      endpoint: "/api/install/rembg",     size: "~500MB",     note: "High-quality background removal.", ok: () => true },
-    { key: "realesrgan_installed", name: "Real-ESRGAN (upscale)", endpoint: "/api/install/realesrgan", size: "~25MB",      note: "4× photo / anime upscaling.", ok: (w) => w && w.curl_available && w.unzip_available, need: "Needs curl + unzip." },
-    { key: "vtracer_installed",   name: "VTracer (tracing)",      endpoint: "/api/install/vtracer",   size: "cargo build", note: "Raster → vector tracing engine.", ok: (w) => w && w.cargo_available, need: "Needs cargo (Rust toolchain)." },
+    { key: "rembg_installed",     kind: "install-rembg",     name: "rembg (AI cutout)",      endpoint: "/api/install/rembg",     size: "~500MB",     note: "High-quality background removal.", ok: () => true },
+    { key: "realesrgan_installed", kind: "install-realesrgan", name: "Real-ESRGAN (upscale)", endpoint: "/api/install/realesrgan", size: "~25MB",      note: "4× photo / anime upscaling.", ok: (w) => w && w.curl_available && w.unzip_available, need: "Needs curl + unzip." },
+    { key: "vtracer_installed",   kind: "install-vtracer",   name: "VTracer (tracing)",      endpoint: "/api/install/vtracer",   size: "cargo build", note: "Raster → vector tracing engine.", ok: (w) => w && w.cargo_available, need: "Needs cargo (Rust toolchain)." },
   ];
+  const reopenTools = () => { if (appSettingsOpen) openAppSettings({ focus: "tools" }); };
+  const installTool = async (t, btn, reset) => {
+    btn.disabled = true; btn.textContent = "Starting…";
+    try { const data = await api(t.endpoint, "POST", {}); setStatus(data.message || "Install started.", 3000); await loadJobs(); reopenTools(); }
+    catch (e) { setStatus(e.message, 3000); btn.disabled = false; btn.textContent = reset; }
+  };
   for (const t of aiTools) {
     const row = document.createElement("div"); row.className = "form-row";
     const label = document.createElement("span"); label.className = "form-label"; label.textContent = t.name;
@@ -1709,19 +1721,15 @@ function openAppSettings() {
     const box = document.createElement("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "6px";
     if (workspace && workspace[t.key]) {
       const s = document.createElement("span"); s.className = "form-hint"; s.textContent = "Installed ✓"; box.appendChild(s);
+    } else if (installJobActive(t.kind)) {
+      const b = ghostBtn("Installing…", () => {}); b.disabled = true; box.appendChild(b);
+      const s = document.createElement("span"); s.className = "form-hint"; s.textContent = "Running in the background — watch Jobs."; box.appendChild(s);
     } else if (!t.ok(workspace)) {
       const b = ghostBtn("Install unavailable", () => {}); b.disabled = true; box.appendChild(b);
       const s = document.createElement("span"); s.className = "form-hint"; s.textContent = t.need; box.appendChild(s);
     } else {
       const reset = `Install (${t.size})`;
-      const btn = ghostBtn(reset, async () => {
-        btn.disabled = true; btn.textContent = "Installing…";
-        try {
-          const data = await api(t.endpoint, "POST", {});
-          setStatus(data.message || "Install started.", 3000);
-          await loadJobs();
-        } catch (e) { setStatus(e.message, 3000); btn.disabled = false; btn.textContent = reset; }
-      });
+      const btn = ghostBtn(reset, () => installTool(t, btn, reset));
       box.appendChild(btn);
       const s = document.createElement("span"); s.className = "form-hint"; s.textContent = `${t.note} Runs in background — watch Jobs.`; box.appendChild(s);
     }
@@ -1729,8 +1737,18 @@ function openAppSettings() {
     root.appendChild(row);
   }
   const refreshWrap = document.createElement("div"); refreshWrap.className = "form-actions";
+  const missing = aiTools.filter((t) => !(workspace && workspace[t.key]) && t.ok(workspace) && !installJobActive(t.kind));
+  if (missing.length >= 2) {
+    const reset = `Install all missing (${missing.length})`;
+    const allBtn = ghostBtn(reset, async () => {
+      allBtn.disabled = true; allBtn.textContent = "Starting…";
+      try { for (const m of missing) await api(m.endpoint, "POST", {}); setStatus(`Started ${missing.length} installs — watch Jobs.`, 3500); await loadJobs(); reopenTools(); }
+      catch (e) { setStatus(e.message, 3000); allBtn.disabled = false; allBtn.textContent = reset; }
+    });
+    refreshWrap.appendChild(allBtn);
+  }
   refreshWrap.appendChild(ghostBtn("Refresh status", async () => {
-    try { applyStatusData(await fetchStatus()); if (appSettingsOpen) openAppSettings(); }
+    try { applyStatusData(await fetchStatus()); reopenTools(); }
     catch (e) { setStatus(e.message, 2500); }
   }));
   root.appendChild(refreshWrap);
@@ -1783,6 +1801,17 @@ function openAppSettings() {
   root.appendChild(actions);
 
   modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
+  // Deep-link: when opened from a stage that needs a missing tool, scroll to + briefly
+  // highlight the tools section so the user lands exactly where they install it.
+  if (opts.focus === "tools") {
+    setTimeout(() => {
+      try {
+        toolsTitle.scrollIntoView({ block: "start", behavior: "smooth" });
+        toolsTitle.classList.add("settings-focus");
+        setTimeout(() => toolsTitle.classList.remove("settings-focus"), 1500);
+      } catch {}
+    }, 30);
+  }
 }
 
 let layoutCtl = null;   // set by the layout-customize module; drives the header Layout dropdown
@@ -2230,6 +2259,15 @@ function rasterActionRow(label, onClick, primary = true) {
   b.disabled = rasterStageBusy; b.addEventListener("click", onClick);
   row.appendChild(b); return row;
 }
+// A stage whose tool isn't installed points at Settings (one install hub) instead of
+// installing inline — message explains what's needed, the button opens Settings → tools.
+function toolSetupNote(message, ctaLabel = "Set up in Settings") {
+  const wrap = document.createElement("div"); wrap.className = "rt-actions rt-tool-setup";
+  const note = document.createElement("div"); note.className = "form-hint"; note.textContent = message;
+  const b = document.createElement("button"); b.type = "button"; b.className = "ghost-button"; b.textContent = "⚙ " + ctaLabel;
+  b.addEventListener("click", () => openToolsSettings());
+  wrap.appendChild(note); wrap.appendChild(b); return wrap;
+}
 // A raster-op stage (upscale / remove-bg): schema controls + a live preview that swaps
 // the canvas image to the result (Keep / Revert). Mirrors the Vectorize stage.
 function renderRasterOpStage(body, opId, node, rerender = rasterReRender) {
@@ -2243,16 +2281,9 @@ function renderRasterOpStage(body, opId, node, rerender = rasterReRender) {
   const whenKeys = new Set();
   for (const p of op.schema) if (p.when) Object.keys(p.when).forEach((kk) => whenKeys.add(kk));
   for (const p of op.schema) { if (!schemaWhenOk(p)) continue; body.appendChild(schemaControl(p, whenKeys, liveKick, rerender)); }
-  // rembg install CTA (AI method, not installed) — an action, not a schema param.
+  // AI cutout needs rembg — point at the one install hub (Settings), don't install inline.
   if (opId === "removebg" && settings.removebg_method === "ai" && !op.rembg_installed) {
-    const cta = document.createElement("button");
-    cta.type = "button"; cta.className = "ghost-button"; cta.textContent = "Install rembg (one-time, ~500MB)";
-    cta.addEventListener("click", async () => {
-      cta.disabled = true; cta.textContent = "Installing rembg…";
-      try { const d = await api("/api/install/rembg", "POST", {}); setStatus(d.message || "Install started.", 3000); await loadJobs(); }
-      catch (e) { setStatus(e.message, 3000); cta.disabled = false; cta.textContent = "Install rembg (one-time, ~500MB)"; }
-    });
-    const wrap = document.createElement("div"); wrap.className = "rt-actions"; wrap.appendChild(cta); body.appendChild(wrap);
+    body.appendChild(toolSetupNote("AI cutout needs rembg (~500MB).", "Install rembg in Settings"));
   }
   if (live) {
     const row = document.createElement("div"); row.className = "rt-actions";
@@ -2263,10 +2294,12 @@ function renderRasterOpStage(body, opId, node, rerender = rasterReRender) {
     row.appendChild(keep); row.appendChild(revert); body.appendChild(row);
     const hint = document.createElement("div"); hint.className = "form-hint"; hint.textContent = "Live — adjust settings to update the canvas.";
     body.appendChild(hint);
+  } else if (op.available === false) {
+    // Tool missing (e.g. Upscale needs Real-ESRGAN) → route to Settings instead of a dead button.
+    const tool = opId === "upscale" ? "Real-ESRGAN" : "the required tool";
+    body.appendChild(toolSetupNote(`${op.label || "This stage"} needs ${tool}.`, `Install ${tool} in Settings`));
   } else if (node) {
-    const row = rasterActionRow("Live preview ▸", () => startRasterOpLive(node, opId));
-    if (op.available === false) { const b = row.querySelector("button"); b.disabled = true; b.title = "Required tool not installed"; }
-    body.appendChild(row);
+    body.appendChild(rasterActionRow("Live preview ▸", () => startRasterOpLive(node, opId)));
   }
 }
 // The Vectorize stage: engine selector + auto-detect + the engine's own param schema
@@ -2284,6 +2317,14 @@ function renderVectorizeStage(body, node, rerender = rasterReRender) {
     engineSchemas.map((e) => [e.id, e.available === false ? `${e.label} (unavailable)` : e.label]),
     (val) => { const t = engineSchemas.find((e) => e.id === val); if (t && t.available === false) return; setEngine(val); structural(); });
   body.appendChild(fieldRow("Engine", engSel, eng && eng.caps && eng.caps.planar ? "Planar — keeps holes/counters, no halos." : undefined));
+
+  // Selected engine's tool is missing → route to Settings (and stop: its params/preview are
+  // moot until it's installed). The selector above still lets you switch to an available engine.
+  if (eng && eng.available === false) {
+    const tool = (eng.caps && eng.caps.needs && eng.caps.needs.includes("vtracer")) ? "VTracer" : "the required tool";
+    body.appendChild(toolSetupNote(`The “${eng.label}” engine needs ${tool}.`, `Install ${tool} in Settings`));
+    return;
+  }
 
   const autoRow = document.createElement("div"); autoRow.className = "rt-actions";
   const auto = document.createElement("button");
@@ -4884,8 +4925,11 @@ function infoForCurrentContext() {
 window.refillInfoContext = infoForCurrentContext;
 
 loadVersion();   // cache the version early so the About panel shows it instantly
-api("/api/bootstrap", "POST")
-  .then(() => refreshAll())
+// Boot does NOT auto-install heavy deps anymore — that used to kick a Real-ESRGAN download +
+// a cargo build on every cold start with tools missing. Installs are deliberate now, from
+// Settings → "AI models & tools". refreshAll() still fetches tool status so the UI knows
+// what's available and the stage panels can route to Settings when something's missing.
+refreshAll()
   .then(async () => {
     // Startup: resume the last document only if the user opted in AND there is
     // one to restore; otherwise fall back to a blank canvas. (The Process view is
@@ -5551,6 +5595,7 @@ window.app = {
   serializeForSave,  // self-contained save serializer (bake, or linked with explicit consent) — for the E2E
   setSaveByteCap(n) { _saveByteCap = n; },   // test seam: force/clear the save cap without a giant raster
   get workItems() { return workItems; },     // exposed for the E2E (library auto-load-on-run test)
+  openToolsSettings,                          // deep-link to Settings → AI models & tools (install hub)
   get engineSchemas() { return engineSchemas; },
   get rasterOpSchemas() { return rasterOpSchemas; },
   get rasterLiveKicks() { return rasterLiveKicks; },

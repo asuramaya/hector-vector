@@ -1932,7 +1932,7 @@ def _op_upscale(src, dest_dir, stem, stamp, payload, log):
         old.unlink(missing_ok=True)
     dest = dest_dir / f"{stem}.up.{stamp}.png"
     scale = int(payload.get("scale", "4"))
-    if source_has_alpha(src):                       # ESRGAN drops alpha → nearest-neighbour keeps it
+    if source_has_alpha(src):                       # ESRGAN drops alpha → Lanczos resize keeps it
         deterministic_upscale(src, dest, scale)
     else:
         ensure_tools_ready("realesrgan")

@@ -1501,6 +1501,15 @@ button:disabled {
   padding-bottom: 4px;
   margin-top: 6px;
 }
+/* Brief highlight when Settings is deep-linked to a section (e.g. a stage routing here to
+   install a missing tool), so the user lands exactly where the action is. */
+.form-section.settings-focus { animation: settings-focus-pulse 1.5s ease-out; border-radius: 4px; }
+@keyframes settings-focus-pulse {
+  0%, 30% { background: var(--accent, #2f7fe0); color: #fff; box-shadow: 0 0 0 4px var(--accent, #2f7fe0); }
+  100% { background: transparent; box-shadow: 0 0 0 0 transparent; }
+}
+/* A stage whose tool is missing: the "set up in Settings" affordance stacks the note + button. */
+.rt-tool-setup { flex-direction: column; align-items: stretch; gap: 6px; }
 
 .form-row {
   display: grid;

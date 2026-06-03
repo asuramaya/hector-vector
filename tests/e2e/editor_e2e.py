@@ -197,7 +197,7 @@ def main():
         page = browser.new_page(viewport={"width": 1500, "height": 900})
         page.goto(BASE, wait_until="networkidle")
         page.wait_for_function("typeof editor!=='undefined' && typeof mountStageFromText==='function'", timeout=20000)
-        # Boot is async (api/bootstrap → refreshAll → mountBlankCanvas) and refreshAll
+        # Boot is async (refreshAll → mountBlankCanvas; no auto-install) and refreshAll
         # awaits mounting the newest library preview first, so the gap to the blank canvas
         # swings ~60ms–1s with disk/load. Wait for the canvas to mount (no fixed sleep).
         page.wait_for_function("()=>!!editor.stage", timeout=15000)
@@ -1730,6 +1730,14 @@ def main():
         check("Settings lists an AI models & tools panel with each dep",
               ai["section"] and ai["rembg"] and ai["vtracer"] and ai["esrgan"], str(ai))
         page.evaluate("closeModal();")
+        # Install is consolidated: a stage needing a missing tool routes here rather than
+        # installing inline. openToolsSettings() deep-links straight to the install hub.
+        page.evaluate("() => window.app.openToolsSettings()")
+        page.wait_for_function("""() => { const m=document.querySelector('#modal-root');
+            return m && !m.hidden && /AI models & tools/.test((document.querySelector('#modal-body')||{}).textContent||''); }""", timeout=3000)
+        deep = page.evaluate("() => /AI models & tools/.test((document.querySelector('#modal-body')||{}).textContent||'')")
+        page.evaluate("closeModal();")
+        check("openToolsSettings deep-links to the centralized install hub (no scattered inline installers)", deep)
 
         # serialize cleanliness
         mount_ctl(page)
