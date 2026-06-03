@@ -4000,7 +4000,9 @@ function processTarget() {
   return {
     batch: false, node, name,
     label: node ? rasterName(node) : (name || "No raster selected"),
-    live: !!node, canRun: !!name,
+    // Runnable when there's a canvas raster (process its href in place) OR a library
+    // selection (background job). `live` = the raster is on the canvas right now.
+    live: !!node, canRun: !!(node || name),
   };
 }
 
@@ -4015,21 +4017,29 @@ async function runProcess(btn) {
       return;
     }
     // The stage strip always drives the generalized pipeline route; the enabled
-    // stage flags travel in the payload (via {...settings}). A focused (non-batch)
-    // run sends an explicit input, which the server processes unconditionally — so
-    // this guard (matching the server's stage-aware batch skip) stops a needless re-run.
+    // stage flags travel in the payload (via {...settings}).
     const payload = { ...settings };
     const force = processForce;
     const t = processTarget();
+    // FOCUSED + ON-CANVAS: process EXACTLY the selected canvas raster (its href, full
+    // resolution) and return the result to it in place — the batch pipeline dissolves
+    // into the editor (input is the canvas image, output replaces it). `input_url` is
+    // the highest-priority target in the server's select_inputs.
+    const returnNode = (!t.batch && t.node && editor.isRaster(t.node)) ? t.node : null;
     if (!t.batch) {
-      if (!t.name) {
-        setStatus("Select a raster to process, or switch to Whole library (batch).", 3500);
-        return;
-      }
-      payload.inputs = [t.name];
-      if (!force && pipelineProcessed(t.name)) {
-        setStatus(`“${t.name}” is already processed — turn on Force to re-run.`, 4000);
-        return;   // finally{} restores the button; no wasteful re-run
+      if (returnNode) {
+        payload.input_url = rasterHref(returnNode);
+      } else {
+        // Library-only target (raster not on the canvas): a background job into the library.
+        if (!t.name) {
+          setStatus("Select a raster to process, or switch to Whole library (batch).", 3500);
+          return;
+        }
+        payload.inputs = [t.name];
+        if (!force && pipelineProcessed(t.name)) {
+          setStatus(`“${t.name}” is already processed — turn on Force to re-run.`, 4000);
+          return;   // finally{} restores the button; no wasteful re-run
+        }
       }
     }
     if (force) payload.force = true;
@@ -4038,12 +4048,68 @@ async function runProcess(btn) {
     const hold = data.started === 0 ? 4000 : 1800;
     setStatus(data.message || "Started.", hold);
     await refreshExceptCanvas();   // queue background work without disturbing the canvas
+    // A focused on-canvas run returns its single job's output onto the raster (SVG →
+    // editable vector in place; PNG → new href, same box). Do NOT block the Run button on
+    // it — the job runs in the background (visible + cancellable in the Jobs panel), and the
+    // result lands on the canvas when ready. A heavy trace could take many seconds; freezing
+    // the button that whole time made the panel feel hung.
+    if (returnNode && Array.isArray(data.jobs) && data.jobs.length === 1 && data.started === 1) {
+      awaitAndPlaceOnNode(data.jobs[0], returnNode).catch((e) => setStatus(e.message, 3000));
+    }
   } catch (error) {
     setStatus(error.message, 3000);
   } finally {
     btn.disabled = false;
     btn.textContent = originalLabel;
   }
+}
+
+// Poll a single job id to a terminal state (the job poller also runs on its own timer;
+// this just lets a focused run await *its* job before placing the result).
+async function awaitJob(id, { timeoutMs = 180000, intervalMs = 600 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    let jobs = null;
+    try { jobs = await fetchJobs(); } catch { /* transient — retry */ }
+    const job = (jobs || []).find((j) => j.id === id);
+    if (job && TERMINAL_STATES.has(job.status)) return job;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return null;
+}
+
+async function awaitAndPlaceOnNode(jobId, node) {
+  setStatus("Processing on canvas… (the raster is replaced when it finishes)", 0);
+  const job = await awaitJob(jobId);
+  await loadJobs();   // reflect the terminal state in the Jobs panel
+  if (!job) { setStatus("Still processing — use Place in the Jobs panel when it finishes.", 5000); return; }
+  if (job.status !== "done") { setStatus(`Processing ${job.status}. See the Jobs panel.`, 4500); return; }
+  if (!node.isConnected || !editor.isRaster(node)) {
+    setStatus("Processed — the canvas raster changed meanwhile; use Place in the Jobs panel.", 5000); return;
+  }
+  await placeJobResultOnNode(job, node);
+}
+
+// Swap a finished focused-run output onto its source raster, in place:
+//   SVG  → replace the raster with an editable vector fit to its box (commitRasterToVector)
+//   PNG  → swap the raster href to the result, keeping the same box (upscale / remove-bg only)
+async function placeJobResultOnNode(job, node) {
+  const rel = chooseFinalOutput(job);
+  if (!rel) { setStatus("The job produced no placeable output.", 3500); return false; }
+  const url = jobOutputUrl(job, rel), name = jobOutputName(rel);
+  try {
+    if (jobOutputKind(name) === "svg") {
+      const text = await (await fetch(url)).text();
+      const ok = editor.commitRasterToVector(node, text, rasterName(node));
+      if (!ok) setStatus("Couldn't place the traced vector.", 3500);
+      return ok;
+    }
+    node.setAttribute("href", url);
+    editor.push("Process raster");
+    editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
+    setStatus("Processed on canvas — result placed in place.", 3000);
+    return true;
+  } catch (e) { setStatus(`Couldn't place the result: ${e.message}`, 4000); return false; }
 }
 
 function jobLastLine(job) {
@@ -4592,7 +4658,10 @@ function buildProcessorChin(t) {
     chin.appendChild(hint);
   }
   const run = document.createElement("button"); run.type = "button"; run.className = "primary-button proc-run";
-  run.textContent = t.batch ? "Run library" : "Run → canvas";
+  // Honest label: on-canvas focused run edits the canvas in place; a library-only target
+  // runs a background job into the library (bring it on-canvas via "Load to preview" first
+  // to get the in-place result).
+  run.textContent = t.batch ? "Run library" : (t.live ? "Run → canvas" : "Run → library");
   run.disabled = !anyStageEnabled() || (!t.batch && !t.canRun);
   if (!anyStageEnabled()) run.title = "Enable at least one stage";
   else if (!t.batch && !t.canRun) run.title = "Select a raster to run";

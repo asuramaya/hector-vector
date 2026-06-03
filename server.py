@@ -2199,7 +2199,8 @@ def run_pipeline(payload: dict) -> dict:
     # the client guards those — so we only filter the discover branch here.
     targets, _ = select_inputs(payload)
     skipped: list[str] = []
-    explicit = bool(payload.get("inputs")) or bool(payload.get("input_path", "").strip())
+    explicit = bool(payload.get("inputs")) or bool(payload.get("input_path", "").strip()) \
+        or bool(payload.get("input_url", "").strip())   # a canvas raster's href is an explicit single target
     if not explicit and not payload.get("force"):
         kept: list[Path] = []
         for f in targets:
