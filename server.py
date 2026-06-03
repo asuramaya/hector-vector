@@ -610,12 +610,61 @@ def resolve_work_item(name: str) -> Path | None:
     return None
 
 
+def _materialize_data_url(url: str) -> Path | None:
+    """Decode a `data:` URI raster into the scratch dir so a self-contained SVG
+    (its <image> hrefs baked to base64 on save/export) stays re-processable by the
+    pipeline — reopen a portable .svg and you can still upscale / cutout / re-trace
+    its rasters. Keyed by content hash so repeated runs reuse one file."""
+    m = re.match(r"data:([^;,]*)((?:;[^,]*)*),(.*)$", url, re.DOTALL)
+    if not m:
+        return None
+    mime, params, payload = m.group(1), m.group(2), m.group(3)
+    try:
+        if ";base64" in params:
+            data = base64.b64decode(payload, validate=False)
+        else:
+            data = urllib.parse.unquote_to_bytes(payload)
+    except (binascii.Error, ValueError):
+        return None
+    if not data:
+        return None
+    ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
+           "image/gif": ".gif", "image/bmp": ".bmp"}.get(mime.strip().lower()) \
+        or mimetypes.guess_extension((mime.split(";")[0] or "").strip()) or ".png"
+    SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+    out = SCRATCH_DIR / f"inline-{hashlib.sha1(data).hexdigest()[:16]}{ext}"
+    if not out.exists():
+        out.write_bytes(data)
+    _prune_scratch_inline(keep=40, exclude=out)
+    return out
+
+
+def _prune_scratch_inline(keep: int = 40, exclude: Path | None = None) -> None:
+    """Cap the materialized `inline-*` data-URI scratch files so they don't accumulate
+    across reopen-and-reprocess cycles. Keep the most-recently-modified `keep`; the file
+    just written is always kept (exclude)."""
+    try:
+        files = sorted(SCRATCH_DIR.glob("inline-*"), key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return
+    for p in files[keep:]:
+        if p == exclude:
+            continue
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+
 def resolve_source_url(url: str) -> Path | None:
-    """Resolve a canvas raster's href (`/work-items/<name>` or `/outputs/<rel>`) to
-    a real file on disk. The raster panel runs pipeline stages on the selected
-    image without the client ever needing the absolute path — it just hands back
-    the node's href. Returns None for data: URLs or anything outside the tree."""
-    raw = urllib.parse.unquote((url or "").strip())
+    """Resolve a canvas raster's href (`/work-items/<name>`, `/outputs/<rel>`, or an
+    inlined `data:` URI) to a real file on disk. The raster panel runs pipeline stages
+    on the selected image without the client ever needing the absolute path — it just
+    hands back the node's href. Returns None for anything outside the tree."""
+    s = (url or "").strip()
+    if s.startswith("data:"):
+        return _materialize_data_url(s)
+    raw = urllib.parse.unquote(s)
     if raw.startswith("/work-items/"):
         return resolve_work_item(raw.removeprefix("/work-items/"))
     if raw.startswith("/outputs/"):

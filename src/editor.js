@@ -17,7 +17,7 @@ import {
 } from "./hv/index.js";
 import {
   setStatus, api, refreshAll, viewports, measureFit, outputPreviewEl,
-  selectedOutput, setManualOutputName,
+  selectedOutput, setManualOutputName, serializeForSave,
 } from "./app.js";
 
 function editorSvgEl() {
@@ -3304,8 +3304,8 @@ const editor = {
   async save() {
     if (!this.stage) return;
     if (!selectedOutput) { setStatus("Save needs an imported or opened document for now.", 3500); return; }
-    const svgText = this.serialize(); if (!svgText) return;
     try {
+      const svgText = await serializeForSave(); if (!svgText) return;   // self-contained: bake raster hrefs → data URIs (linked fallback if too large)
       const data = await api("/api/save-svg", "POST", { folder: selectedOutput.folder, name: selectedOutput.name, svg: svgText });
       setManualOutputName(data.name);
       this.pinned = false;

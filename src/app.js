@@ -1454,8 +1454,10 @@ async function saveDocument() {
 }
 
 async function saveCanvasInPlace() {
-  const svg = editor.serialize(); if (!svg) return;
   try {
+    // Self-contained: bake raster hrefs → data URIs (the live editor keeps its server
+    // hrefs — only the saved bytes are inlined; falls back to linked if too large).
+    const svg = await serializeForSave(); if (!svg) return;
     const data = await api("/api/save-svg-as", "POST", { name: selectedOutput.name, svg, overwrite: true });
     applySavedCanvas(data);
     setStatus(data.message || "Saved.", 2500);
@@ -1479,8 +1481,8 @@ function saveAsDocument(onDone) {
   const doSave = async () => {
     const name = inp.value.trim(); if (!name) { inp.focus(); return; }
     closeModal();
-    const svg = editor.serialize(); if (!svg) return;
     try {
+      const svg = await serializeForSave(); if (!svg) return;   // self-contained .svg (bake rasters; linked fallback if too large)
       const data = await api("/api/save-svg-as", "POST", { name, svg });
       applySavedCanvas(data);
       setStatus(data.message || "Saved.", 2500);
@@ -1508,6 +1510,9 @@ function saveProject() {
   const doSave = async () => {
     const name = inp.value.trim(); if (!name) { inp.focus(); return; }
     closeModal();
+    // .hv is the in-app WORKING format (markup + full undo history) — kept linked to
+    // /work-items|/outputs, not baked: it lives alongside them and stays small + lets the
+    // rasters re-process trivially. The deliverable .svg (Download / Save) is the portable one.
     const svg = editor._historyMarkup ? editor._historyMarkup() : editor.serialize();
     if (!svg) return;
     try {
@@ -3709,6 +3714,23 @@ async function inlineSvgImages(svgText) {
   return new XMLSerializer().serializeToString(doc);
 }
 
+// Serialize the canvas for PERSISTENCE: bake placed-raster hrefs → data URIs so the saved
+// .svg is self-contained (portable off-machine, robust if a source work-item is deleted).
+// Embedding a big raster can blow past the server's save cap — rather than fail the whole
+// save, fall back to the linked (unbaked) markup so the save still lands, and say so.
+const SAVE_BYTE_CAP = 16_000_000;   // mirrors the server's /api/save-svg* guard
+async function serializeForSave() {
+  const raw = editor.serialize();
+  if (!raw) return raw;
+  let baked = raw;
+  try { baked = await inlineSvgImages(raw); } catch { baked = raw; }
+  if (baked.length > SAVE_BYTE_CAP && raw.length <= SAVE_BYTE_CAP) {
+    setStatus("Rasters too large to embed — saved with linked references (not portable off-machine).", 5000);
+    return raw;
+  }
+  return baked;
+}
+
 // Rasterise an SVG string to a PNG Blob on a canvas — the browser's own SVG renderer,
 // so curves/strokes/gradients all work without cairosvg or any system tool.
 function renderSvgToPngBlob(svgText, w, h, background) {
@@ -5261,7 +5283,7 @@ document.addEventListener("visibilitychange", () => {
 // are read-only.
 // =========================================================================
 export function setManualOutputName(v) { manualOutputName = v; }
-export { setStatus, api, refreshAll, viewports, measureFit, outputPreviewEl, selectedOutput };
+export { setStatus, api, refreshAll, viewports, measureFit, outputPreviewEl, selectedOutput, inlineSvgImages, serializeForSave };
 
 // =========================================================================
 // Window bridge — exposes the library, the editor, and a small mutable app
