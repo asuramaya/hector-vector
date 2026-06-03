@@ -44,12 +44,18 @@ def _subpaths(d: str, samples: int = 12):
                 px, py = n[i], n[i + 1]
                 cur.append((px, py))
         elif u == "C":
+            # Vectorised cubic flattening: the per-sample Bernstein weights are constant,
+            # so precompute them once and evaluate each cubic with numpy (a path with tens
+            # of thousands of cubics — an upscaled-raster trace — used to flatten through a
+            # ~12×-per-command Python loop, which alone could take tens of seconds).
+            ts = np.linspace(0, 1, samples)[1:]
+            mt = 1 - ts
+            b0, b1, b2, b3 = mt**3, 3*mt**2*ts, 3*mt*ts*ts, ts**3
             for i in range(0, len(n), 6):
                 x1, y1, x2, y2, x, y = n[i:i + 6]
-                for t in np.linspace(0, 1, samples)[1:]:
-                    mt = 1 - t
-                    cur.append((mt**3*px + 3*mt**2*t*x1 + 3*mt*t*t*x2 + t**3*x,
-                                mt**3*py + 3*mt**2*t*y1 + 3*mt*t*t*y2 + t**3*y))
+                xs = b0*px + b1*x1 + b2*x2 + b3*x
+                ys = b0*py + b1*y1 + b2*y2 + b3*y
+                cur.extend(zip(xs.tolist(), ys.tolist()))
                 px, py = x, y
         elif u == "Z":
             if cur:
@@ -192,11 +198,20 @@ def _dedup(run):
     return run[keep]
 
 
-def _fit_loop(P, tol, corner_ang):
+def _fit_loop(P, tol, corner_ang, max_pts=6000):
     """Locate corners on an RDP-decimated copy (so spike tips are crisp single
     vertices), but fit cubics to the *dense* points in each run between corners —
     accurate curves, minimal segments, response that tracks the tolerance."""
     dense = np.vstack([P, P[0]])              # close the loop
+    if len(dense) > max_pts:
+        # Pathologically dense subpath — e.g. a huge connected region traced at high
+        # resolution (an upscaled raster → one boundary with tens of thousands of
+        # points). The iterative RDP below is ~O(n²) on a convoluted boundary, so such
+        # a subpath alone can wedge the refit for tens of seconds. Uniformly pre-decimate
+        # to a bound: at these feature-relative tolerances the result is visually
+        # identical, and normal subpaths (< max_pts) are never touched.
+        sel = np.unique(np.linspace(0, len(dense) - 1, max_pts).round().astype(int))
+        dense = dense[sel]
     mask = _rdp_mask(dense, tol)
     idx = np.nonzero(mask)[0]                  # dense indices kept by RDP
     if len(idx) < 3:

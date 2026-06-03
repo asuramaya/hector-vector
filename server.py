@@ -42,6 +42,14 @@ OUTPUTS_DIR = APP_DIR / "outputs"
 # can still resolve the URL.
 SCRATCH_DIR = OUTPUTS_DIR / ".scratch"
 INPUTS_DIR = APP_DIR / "inputs"
+# Safety ceiling for the vectorize stage. Tracing scales with PIXELS, not display size,
+# so an oversized raster — most acutely an upscaled one (Real-ESRGAN x4 → a 7000px+ image)
+# fed straight into Vectorize — overproduces a giant SVG (one connected region's boundary
+# becomes tens of thousands of nodes) and can wedge the simplify refit for minutes. Vectors
+# gain no perceptible fidelity past this, so normalise the trace resolution. The live
+# preview already caps tighter (1000); this keeps the committed/job trace in the same league
+# instead of exploding to full res. Images at/under this are passed through untouched.
+TRACE_MAX_DIM = 1600
 ASSETS_DIR = APP_DIR / "assets"
 SRC_DIR = APP_DIR / "src"          # ES-module tree: hv/ library + editor + app shell
 WORKSPACE_DIR = APP_DIR
@@ -1680,7 +1688,13 @@ def _km_palette(rgb: Image.Image, k: int, iters: int = 6):
     samp = arr[::step]
     coarse = (samp // 16).astype(int)
     key = coarse[:, 0] * 1024 + coarse[:, 1] * 32 + coarse[:, 2]
-    seeds = [samp[int(np.argmax(np.bincount(key)))]]
+    # Seed from a pixel that actually lives in the densest coarse bin. NOTE: argmax over
+    # the bincount returns the most-frequent KEY VALUE (0..15855), not a sample index —
+    # indexing `samp` with it is a bug that only stayed hidden on large images (where samp
+    # happened to be long enough to be in-bounds) and crashed on small ones. Map back to a
+    # real sample in that bin instead.
+    dominant = int(np.argmax(np.bincount(key)))
+    seeds = [samp[int(np.flatnonzero(key == dominant)[0])]]
     for _ in range(k - 1):
         d = np.min([np.sum((samp - s) ** 2, 1) for s in seeds], 0)
         seeds.append(samp[int(np.argmax(d))])
@@ -2003,10 +2017,13 @@ def vectorize_svg(src: Path, payload: dict, *, max_dim: int | None = None, log=N
     with tempfile.TemporaryDirectory(prefix="hv-vec-") as td:
         tmp = Path(td)
         cur = src
-        if max_dim:
-            # Cached downscale: live preview re-traces on every drag, so resizing
-            # the full-res source each time was pure waste (see preprocess_for_trace).
-            cur = preprocess_for_trace(src, max_dim)
+        # An explicit max_dim (the live preview's tight cap) wins; otherwise fall back to
+        # the safety ceiling so a full-res / upscaled raster doesn't overproduce. Cached
+        # downscale: the live preview re-traces on every drag, so resizing the full-res
+        # source each time was pure waste (see preprocess_for_trace).
+        cap = max_dim or TRACE_MAX_DIM
+        if cap:
+            cur = preprocess_for_trace(src, cap)
         return VECTORIZE_ENGINES[eng]["trace"](cur, payload, trace, mask_cfg, pv, tmp, log)
 
 
