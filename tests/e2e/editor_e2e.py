@@ -2052,6 +2052,37 @@ def main():
         check("persisted .svg bakes the raster href → data URI; live editor keeps its server href",
               baked["savedData"] and baked["liveNotBaked"], str(baked))
 
+        # ---- self-contained save degrades EXPLICITLY, not silently (#32): when baking would
+        #      exceed the save cap, the user is ASKED — Cancel aborts, "Save linked" keeps
+        #      (non-portable) refs. Force a cap just under the baked size so a small raster
+        #      trips it (no giant image needed). The cap itself is sourced from the server.
+        lim = page.evaluate("async () => (await (await fetch('/api/limits')).json())")
+        page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+              + '<rect class="hv-artboard" x="0" y="0" width="100" height="100" fill="#fff"/></svg>','linked-fallback.svg'); }""")
+        page.wait_for_function("editor && editor.stage", timeout=4000)
+        page.wait_for_function("""() => { if (!editor || !editor.stage) return false;
+            if (editor.stage.querySelector('image[data-hv-id]')) return true;
+            editor.placeImage('/assets/hv_logo.svg','lf',80,80); return false; }""", timeout=6000)
+        sizes = page.evaluate("""async () => { const raw = editor.serialize();
+            const baked = await window.app.inlineSvgImages(raw); return { raw: raw.length, baked: baked.length }; }""")
+        cap = sizes["raw"] + 1   # raw <= cap (so not the "even linked is over-cap" branch), baked > cap
+        # (a) Cancel → save aborts (serializeForSave resolves null)
+        page.evaluate(f"() => {{ window.app.setSaveByteCap({cap}); window.__sfs = window.app.serializeForSave(); }}")
+        page.wait_for_function("() => !document.querySelector('#modal-root').hidden && !!document.querySelector('#modal-body .form-actions .primary-button')", timeout=4000)
+        page.click('#modal-body .form-actions .ghost-button:has-text("Cancel")')
+        cancelled = page.evaluate("async () => (await window.__sfs) === null")
+        # (b) "Save linked" → returns the linked markup (href kept, NOT a data: URI)
+        page.evaluate(f"() => {{ window.app.setSaveByteCap({cap}); window.__sfs2 = window.app.serializeForSave(); }}")
+        page.wait_for_function("() => !document.querySelector('#modal-root').hidden && !!document.querySelector('#modal-body .form-actions .primary-button')", timeout=4000)
+        page.click('#modal-body .form-actions .primary-button')
+        linked = page.evaluate("""async () => { const out = await window.__sfs2;
+            return { isLinked: !!out && /href="\\/assets\\/hv_logo\\.svg"/.test(out) && !/href="data:/.test(out) }; }""")
+        page.evaluate("() => window.app.setSaveByteCap(null)")   # restore (next save re-fetches the real cap)
+        check("self-contained save degrades EXPLICITLY: over-cap baking asks; Cancel aborts, 'Save linked' keeps refs; cap from /api/limits (#32)",
+              isinstance(lim.get("max_svg_bytes"), int) and lim["max_svg_bytes"] >= 1 and cancelled and linked["isLinked"],
+              str({"cap": lim, "cancelled": cancelled, **linked}))
+
         # ---- raster is a first-class object: fill/stroke no-op on <image> (clean DOM), and
         #      its layers row shows a live thumbnail instead of a colour chip ----
         page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;

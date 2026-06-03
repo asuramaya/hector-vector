@@ -57,6 +57,10 @@ TRACE_MAX_DIM = 1600
 # runs (no preview to match) still trace up to TRACE_MAX_DIM. Mirrors the client's
 # TRACE_PREVIEW_DIM; the preview route clamps any requested value to 64..2048.
 TRACE_PREVIEW_DIM = 1000
+# Single source of truth for the editor-SVG save guard. The client mirrors this via
+# /api/limits so the two can't drift (it decides whether to bake rasters or fall back to
+# linked refs BEFORE sending, to avoid a doomed round-trip).
+MAX_SVG_SAVE_BYTES = 16_000_000
 ASSETS_DIR = APP_DIR / "assets"
 SRC_DIR = APP_DIR / "src"          # ES-module tree: hv/ library + editor + app shell
 WORKSPACE_DIR = APP_DIR
@@ -1547,8 +1551,8 @@ def save_svg(payload: dict) -> dict:
         raise ValueError("Source output must be an .svg file.")
     if not isinstance(svg_text, str) or "<svg" not in svg_text.lower():
         raise ValueError("Missing or invalid 'svg' markup.")
-    if len(svg_text) > 16_000_000:
-        raise ValueError("SVG is too large to save (>16 MB).")
+    if len(svg_text) > MAX_SVG_SAVE_BYTES:
+        raise ValueError(f"SVG is too large to save (>{MAX_SVG_SAVE_BYTES // 1_000_000} MB).")
     target_dir = (OUTPUTS_DIR / folder).resolve()
     try:
         target_dir.relative_to(OUTPUTS_DIR.resolve())
@@ -1645,8 +1649,8 @@ def save_svg_as(payload: dict) -> dict:
         raise ValueError("Missing 'name'.")
     if not isinstance(svg_text, str) or "<svg" not in svg_text.lower():
         raise ValueError("Missing or invalid 'svg' markup.")
-    if len(svg_text) > 16_000_000:
-        raise ValueError("SVG is too large to save (>16 MB).")
+    if len(svg_text) > MAX_SVG_SAVE_BYTES:
+        raise ValueError(f"SVG is too large to save (>{MAX_SVG_SAVE_BYTES // 1_000_000} MB).")
     # Reduce the caller's name to a single safe stem; force a .svg extension.
     stem = Path(raw).name
     if stem.lower().endswith(".svg"):
@@ -2843,6 +2847,10 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/raster-ops":
             self.send_json(raster_ops_info())
+            return
+        if parsed.path == "/api/limits":
+            # Save guards the client mirrors (so the bake-vs-link decision uses the real cap).
+            self.send_json({"max_svg_bytes": MAX_SVG_SAVE_BYTES})
             return
         if parsed.path.startswith("/work-items/"):
             path = resolve_work_item(parsed.path.removeprefix("/work-items/"))

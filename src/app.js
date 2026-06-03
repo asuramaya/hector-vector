@@ -835,6 +835,36 @@ function closeModal() {
   appSettingsOpen = false;
 }
 
+// A yes/no modal → resolves true (confirmed) or false (cancelled, incl. Esc / backdrop).
+// Used where an action would otherwise degrade silently (e.g. a save falling back to
+// non-portable linked refs) so the user actively chooses instead of being surprised.
+function confirmDialog({ title = "Confirm", message = "", okLabel = "OK", cancelLabel = "Cancel" } = {}) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const onKey = (e) => { if (e.key === "Escape" && !modalRootEl.hidden) finish(false); };
+    function finish(val) {
+      if (settled) return; settled = true;
+      document.removeEventListener("keydown", onKey, true);
+      closeModal(); resolve(val);
+    }
+    openModal(title, true);
+    modalSearchEl.hidden = true;
+    const root = document.createElement("div"); root.className = "form";
+    const msg = document.createElement("div"); msg.className = "form-hint"; msg.style.whiteSpace = "pre-line"; msg.textContent = message;
+    root.appendChild(msg);
+    const actions = document.createElement("div"); actions.className = "form-actions";
+    const ok = ghostBtn(okLabel, () => finish(true)); ok.classList.add("primary-button");
+    actions.appendChild(ghostBtn(cancelLabel, () => finish(false)));
+    actions.appendChild(ok);
+    root.appendChild(actions);
+    modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
+    // Capture-phase so this settles BEFORE the generic backdrop/Esc closers (which call
+    // closeModal but wouldn't resolve the promise).
+    document.addEventListener("keydown", onKey, true);
+    setTimeout(() => ok.focus(), 0);
+  });
+}
+
 // The standalone Process VIEW was dissolved into dock panels (Library / Processor / Jobs)
 // — the Edit canvas is the only view now. revealPanel un-collapses + scrolls a dock panel
 // into view (used by the "click for Jobs" error toast).
@@ -3782,21 +3812,43 @@ async function inlineSvgImages(svgText) {
   return new XMLSerializer().serializeToString(doc);
 }
 
+// The save byte cap is the SERVER's guard, fetched once via /api/limits (so the client
+// mirror can't drift). Falls back to the historical value if the server predates the route.
+const FALLBACK_SAVE_BYTE_CAP = 16_000_000;
+let _saveByteCap = null;
+async function saveByteCap() {
+  if (_saveByteCap != null) return _saveByteCap;
+  try { const r = await api("/api/limits"); if (r && Number.isFinite(r.max_svg_bytes)) _saveByteCap = r.max_svg_bytes; }
+  catch { /* older server: use the fallback (and don't poison the cache) */ }
+  return _saveByteCap || FALLBACK_SAVE_BYTE_CAP;
+}
+
 // Serialize the canvas for PERSISTENCE: bake placed-raster hrefs → data URIs so the saved
 // .svg is self-contained (portable off-machine, robust if a source work-item is deleted).
-// Embedding a big raster can blow past the server's save cap — rather than fail the whole
-// save, fall back to the linked (unbaked) markup so the save still lands, and say so.
-const SAVE_BYTE_CAP = 16_000_000;   // mirrors the server's /api/save-svg* guard
+// Embedding big rasters can exceed the server's save cap. Rather than SILENTLY downgrade to
+// a non-portable linked file (the user would think they got a portable one), ask: the
+// fallback only happens if they confirm it. Returns null to abort the save (caller bails).
 async function serializeForSave() {
   const raw = editor.serialize();
   if (!raw) return raw;
   let baked = raw;
   try { baked = await inlineSvgImages(raw); } catch { baked = raw; }
-  if (baked.length > SAVE_BYTE_CAP && raw.length <= SAVE_BYTE_CAP) {
-    setStatus("Rasters too large to embed — saved with linked references (not portable off-machine).", 5000);
-    return raw;
+  const cap = await saveByteCap();
+  if (baked.length <= cap) return baked;
+  if (raw.length > cap) {
+    // Even linked, it's over the cap — the server would reject it either way; say so plainly.
+    setStatus(`This document is ${fmtBytes(raw.length)}, over the ${fmtBytes(cap)} save limit. Simplify it and try again.`, 6000);
+    return null;
   }
-  return baked;
+  const ok = await confirmDialog({
+    title: "Rasters too large to embed",
+    message: `Embedding this document's images would make the file ${fmtBytes(baked.length)}, over the ${fmtBytes(cap)} save limit.\n\n`
+      + "Save with LINKED image references instead? The file stays small but is NOT portable off this machine — it points at local /work-items and /outputs files.",
+    okLabel: "Save linked", cancelLabel: "Cancel",
+  });
+  if (!ok) { setStatus("Save cancelled.", 2500); return null; }
+  setStatus("Saved with linked image references (not portable off-machine).", 4500);
+  return raw;
 }
 
 // Rasterise an SVG string to a PNG Blob on a canvas — the browser's own SVG renderer,
@@ -5469,6 +5521,8 @@ window.app = {
   // Live-vectorize introspection / test harness (no network): arm the live state so a
   // control's change handler exercises the real wiring, then read the re-trace counter.
   inlineSvgImages,   // exposed for the E2E: bake <image> hrefs → data URIs (self-contained export)
+  serializeForSave,  // self-contained save serializer (bake, or linked with explicit consent) — for the E2E
+  setSaveByteCap(n) { _saveByteCap = n; },   // test seam: force/clear the save cap without a giant raster
   get engineSchemas() { return engineSchemas; },
   get rasterOpSchemas() { return rasterOpSchemas; },
   get rasterLiveKicks() { return rasterLiveKicks; },
