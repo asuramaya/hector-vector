@@ -51,6 +51,9 @@ INPUTS_DIR = APP_DIR / "inputs"
 # ceiling, keeping a headless library trace in the same league instead of exploding to full
 # res. Images at/under this are passed through untouched.
 TRACE_MAX_DIM = 1600
+# Absolute upper bound on a user-chosen trace size (the "Max trace size" override): even an
+# explicit opt-in is clamped here so a pathological value can't OOM / wedge the tracer.
+TRACE_ABS_MAX_DIM = 6000
 # The WYSIWYG resolution: both the live preview and a FOCUSED on-canvas run trace at this,
 # so what you preview is what you commit. Tighter than the batch ceiling above on purpose —
 # the focused/interactive path favours a clean, fast, preview-identical result. Batch/library
@@ -2062,6 +2065,10 @@ VECTORIZE_ENGINES = {
              "options": [["off", "Off — raw"], ["light", "Light"], ["medium", "Medium — recommended"], ["strong", "Strong — fewest nodes"]]},
             {"key": "filter_speckle", "type": "range", "min": 0, "max": 32, "step": 1, "default": 6,
              "label": "Filter speckle", "advanced": True, "hint": "Drop blobs smaller than N px."},
+            {"key": "target_max_dim", "type": "number", "default": None, "label": "Max trace size", "advanced": True,
+             "placeholder": f"auto (≤{TRACE_MAX_DIM}px)",
+             "hint": f"Longest side fed to the tracer. Blank = the {TRACE_MAX_DIM}px default; raise it for "
+                     f"full-fidelity large art (slower, more nodes), up to {TRACE_ABS_MAX_DIM}px."},
         ],
         "trace": _engine_clean,
     },
@@ -2082,8 +2089,10 @@ VECTORIZE_ENGINES = {
              "options": [["off", "Off — raw vtracer"], ["light", "Light"], ["medium", "Medium — recommended"], ["strong", "Strong — fewest nodes"]]},
             {"key": "trace_mode", "type": "select", "default": "spline", "label": "Curves",
              "options": [["spline", "Spline (curves)"], ["polygon", "Polygon"], ["pixel", "Pixel (no smoothing)"]]},
-            {"key": "target_max_dim", "type": "number", "default": None, "label": "Target max dim",
-             "placeholder": "auto (no resize)", "hint": "Resize the longest side before tracing."},
+            {"key": "target_max_dim", "type": "number", "default": None, "label": "Max trace size",
+             "placeholder": f"auto (≤{TRACE_MAX_DIM}px)",
+             "hint": f"Longest side fed to the tracer. Blank = the {TRACE_MAX_DIM}px default (tames oversized / "
+                     f"upscaled input); raise it for full-fidelity large art — slower, more nodes — up to {TRACE_ABS_MAX_DIM}px."},
             {"key": "segment_length", "type": "range", "min": 3.5, "max": 10, "step": 0.5, "default": 4.5, "label": "Smooth (segment length)", "advanced": True},
             {"key": "filter_speckle", "type": "range", "min": 0, "max": 16, "step": 1, "default": 6, "label": "Filter speckle", "advanced": True},
             {"key": "corner_threshold", "type": "range", "min": 30, "max": 180, "step": 5, "default": 85, "label": "Corner threshold", "advanced": True},
@@ -2136,14 +2145,26 @@ def vectorize_svg(src: Path, payload: dict, *, max_dim: int | None = None, log=N
     with tempfile.TemporaryDirectory(prefix="hv-vec-") as td:
         tmp = Path(td)
         cur = src
-        # An explicit max_dim (the live preview's tight cap) wins; otherwise fall back to
-        # the safety ceiling so a full-res / upscaled raster doesn't overproduce. Cached
-        # downscale: the live preview re-traces on every drag, so resizing the full-res
-        # source each time was pure waste (see preprocess_for_trace).
-        cap = max_dim or TRACE_MAX_DIM
+        # An explicit max_dim (the live preview's / focused run's tight cap) wins; otherwise
+        # use the trace ceiling: the user's explicit "Max trace size" (target_max_dim) if set
+        # — so genuinely large clean art can be traced at full fidelity — else the safety
+        # default so an oversized / upscaled raster doesn't overproduce. Cached downscale: the
+        # live preview re-traces on every drag, so resizing the full-res source each time was
+        # pure waste (see preprocess_for_trace).
+        cap = max_dim if max_dim is not None else _trace_ceiling(mask_cfg)
         if cap:
             cur = preprocess_for_trace(src, cap)
         return VECTORIZE_ENGINES[eng]["trace"](cur, payload, trace, mask_cfg, pv, tmp, log)
+
+
+def _trace_ceiling(mask_cfg: dict) -> int | None:
+    """The longest-side cap for a commit/batch trace. An explicit user target_max_dim is an
+    OPT-IN (it can exceed the default — that's the point: full-fidelity large art), clamped to
+    the absolute safety bound. Unset → the default ceiling that tames oversized/upscaled input."""
+    target = mask_cfg.get("target_max_dim")
+    if target:
+        return min(int(target), TRACE_ABS_MAX_DIM)
+    return TRACE_MAX_DIM
 
 
 def vectorize_engines_info() -> list[dict]:

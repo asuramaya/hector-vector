@@ -222,6 +222,26 @@ def check_pipeline_skip() -> None:
     print("ok: stage-aware skip — expected output + is_pipeline_processed track the live stage-set")
 
 
+def check_trace_ceiling() -> None:
+    """The trace ceiling honours an explicit 'Max trace size' (target_max_dim) opt-in so
+    large clean art can be traced at full fidelity, falls back to the safety default when
+    unset, and clamps a pathological value to the absolute bound."""
+    sys.path.insert(0, str(ROOT))
+    import server
+
+    assert server._trace_ceiling({"target_max_dim": None}) == server.TRACE_MAX_DIM, "unset → safety default"
+    assert server._trace_ceiling({}) == server.TRACE_MAX_DIM, "missing → safety default"
+    # an explicit value ABOVE the default is honoured (the whole point — opt-in fidelity)
+    hi = server.TRACE_MAX_DIM + 800
+    assert server._trace_ceiling({"target_max_dim": hi}) == hi, "explicit > default must be honoured"
+    assert server._trace_ceiling({"target_max_dim": 900}) == 900, "explicit < default honoured too"
+    # a pathological value is clamped to the absolute bound
+    assert server._trace_ceiling({"target_max_dim": 99999}) == server.TRACE_ABS_MAX_DIM, "clamp to abs bound"
+    # mask_config parses the raw payload field into target_max_dim (range-clamped)
+    assert server.mask_config({"target_max_dim": "2400"})["target_max_dim"] == 2400
+    print("ok: trace ceiling honours the Max-trace-size override + clamps to the safety bound")
+
+
 def main() -> int:
     check_parses()
     svg = check_pixelvec()
@@ -231,6 +251,7 @@ def main() -> int:
     check_path_simplify()
     check_pipeline_stages()
     check_pipeline_skip()
+    check_trace_ceiling()
     for tmp in ["_out.svg", "_out.png"]:
         (ROOT / "tests" / tmp).unlink(missing_ok=True)
     print("\nALL SMOKE TESTS PASSED")
