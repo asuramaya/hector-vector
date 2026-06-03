@@ -451,25 +451,31 @@ def validate_cutout_png(path: Path) -> None:
     alpha = rgba.getchannel("A")
     bbox = alpha.getbbox()
     if bbox is None:
-        raise ValueError(f"Blank cutout: {path.name}")
+        raise ValueError(f"Blank cutout: {path.name} — nothing opaque (no subject found).")
+    # Reject only an ESSENTIALLY-empty cutout, not a legitimately small subject. The bar is a
+    # low absolute floor + a tight proportional term, so a tiny logo passes while a
+    # background-key that found nothing still fails with a clear message.
     opaque = sum(1 for value in alpha.getdata() if value >= 8)
-    if opaque < max(32, rgba.width * rgba.height // 4000):
-        raise ValueError(f"Cutout too sparse: {path.name}")
+    if opaque < max(8, rgba.width * rgba.height // 40000):
+        raise ValueError(f"Cutout nearly empty: {path.name} — the image looks flat / has no distinct subject.")
 
 
 def validate_mask_png(path: Path) -> None:
     mask = Image.open(path).convert("L")
     black = sum(1 for value in mask.getdata() if value < 128)
-    if black < max(32, mask.width * mask.height // 4000):
-        raise ValueError(f"Mask too sparse: {path.name}")
+    if black < max(8, mask.width * mask.height // 40000):
+        raise ValueError(f"Mask nearly empty: {path.name} — the image looks flat / has no distinct subject.")
 
 
 def validate_svg_file(path: Path) -> None:
     text = path.read_text(encoding="utf-8", errors="ignore")
     if "<svg" not in text or "<path" not in text:
         raise ValueError(f"SVG missing paths: {path.name}")
-    if len(text) < 256:
-        raise ValueError(f"SVG too small: {path.name}")
+    # Non-empty iff some path carries real geometry — a draw command (L/C/Q/A/H/V, either
+    # case), not just a lone moveto. This separates a genuinely empty/failed trace from a
+    # legitimately SIMPLE one: a single small shape can be far under any byte threshold.
+    if not any(re.search(r"[lcqahv]", d, re.IGNORECASE) for d in re.findall(r'd="([^"]*)"', text)):
+        raise ValueError(f"SVG has no drawable geometry: {path.name}")
 
 
 # Post-trace simplification strength → (per-subpath tolerance fraction, corner angle).
@@ -1541,8 +1547,6 @@ def validate_pixelvec_svg(path: Path) -> None:
     text = path.read_text(encoding="utf-8", errors="ignore")
     if "<svg" not in text or ("<rect" not in text and "<path" not in text):
         raise ValueError(f"Pixel SVG missing shapes: {path.name}")
-    if len(text) < 80:
-        raise ValueError(f"Pixel SVG too small: {path.name}")
 
 
 def _resolve_output_svg(payload: dict) -> Path:

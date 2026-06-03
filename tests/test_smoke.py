@@ -242,6 +242,45 @@ def check_trace_ceiling() -> None:
     print("ok: trace ceiling honours the Max-trace-size override + clamps to the safety bound")
 
 
+def check_validation_guards() -> None:
+    """Simple-but-legitimate trace/cutout outputs pass; only genuinely empty/blank ones are
+    rejected — so a single small shape no longer errors as 'too small' (#38)."""
+    sys.path.insert(0, str(ROOT))
+    import server, tempfile
+    from PIL import Image
+
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        # a tiny single-shape SVG (well under the old 256-byte floor) is VALID
+        ok_svg = d / "small.svg"
+        ok_svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"><path d="M0 0 L4 0 L4 4 Z" fill="#000"/></svg>')
+        server.validate_svg_file(ok_svg)                       # must NOT raise
+        # an "empty" trace — a path with only a moveto, no geometry — is INVALID
+        empty_svg = d / "empty.svg"
+        empty_svg.write_text('<svg xmlns="http://www.w3.org/2000/svg"><path d="M2 2"/></svg>')
+        try:
+            server.validate_svg_file(empty_svg); assert False, "moveto-only must fail"
+        except ValueError:
+            pass
+        # a single-rect pixel SVG (tiny) is VALID (the byte floor is gone; shapes suffice)
+        pv = d / "pv.svg"
+        pv.write_text('<svg xmlns="http://www.w3.org/2000/svg"><rect x="0" y="0" width="1" height="1" fill="#000"/></svg>')
+        server.validate_pixelvec_svg(pv)                       # must NOT raise
+        # a small-but-real cutout passes; a blank one fails clearly
+        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        for y in range(22, 32):
+            for x in range(22, 32):
+                img.putpixel((x, y), (255, 0, 0, 255))         # 100 opaque px
+        cut = d / "cut.png"; img.save(cut)
+        server.validate_cutout_png(cut)                        # must NOT raise
+        blank = d / "blank.png"; Image.new("RGBA", (64, 64), (0, 0, 0, 0)).save(blank)
+        try:
+            server.validate_cutout_png(blank); assert False, "blank cutout must fail"
+        except ValueError:
+            pass
+    print("ok: validation guards accept simple outputs, reject only empty/blank (#38)")
+
+
 def main() -> int:
     check_parses()
     svg = check_pixelvec()
@@ -252,6 +291,7 @@ def main() -> int:
     check_pipeline_stages()
     check_pipeline_skip()
     check_trace_ceiling()
+    check_validation_guards()
     for tmp in ["_out.svg", "_out.png"]:
         (ROOT / "tests" / tmp).unlink(missing_ok=True)
     print("\nALL SMOKE TESTS PASSED")
