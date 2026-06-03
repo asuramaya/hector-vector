@@ -81,6 +81,22 @@ def _bez(ctrl, t):
     return (mt**3*ctrl[0] + 3*mt**2*t*ctrl[1] + 3*mt*t*t*ctrl[2] + t**3*ctrl[3])
 
 
+def _cross2(a, b):
+    """2D scalar cross a×b = ax·by − ay·bx, broadcasting over leading axes. numpy's np.cross
+    routes 2D vectors through normalize_axis_tuple/moveaxis machinery that dominated the RDP
+    distance loop — this is the same number, ~free."""
+    return a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0]
+
+
+def _bez_at(ctrl, u):
+    """Evaluate the cubic at every parameter in `u` at once → (n, 2). The Schneider fit
+    re-evaluates this on every iteration and at every recursion level, so the per-point
+    Python loop it replaces was the dominant cost on dense subpaths (many-path traces)."""
+    u = np.asarray(u, float)[:, None]
+    mt = 1 - u
+    return (mt**3) * ctrl[0] + (3*mt**2*u) * ctrl[1] + (3*mt*u*u) * ctrl[2] + (u**3) * ctrl[3]
+
+
 def _chord_param(P):
     d = np.concatenate(([0.0], np.cumsum(np.hypot(*(np.diff(P, axis=0).T)))))
     return d / d[-1] if d[-1] > 0 else np.linspace(0, 1, len(P))
@@ -108,21 +124,26 @@ def _generate_bezier(P, u, t1, t2):
 
 
 def _max_error(P, ctrl, u):
-    pts = np.array([_bez(ctrl, ui) for ui in u])
+    pts = _bez_at(ctrl, u)
     d2 = ((pts - P)**2).sum(1)
     i = int(d2.argmax())
     return math.sqrt(d2[i]), i
 
 
 def _reparam(P, ctrl, u):
-    out = u.copy()
-    for i, ui in enumerate(u):
-        q = _bez(ctrl, ui)
-        d1 = 3*(1-ui)**2*(ctrl[1]-ctrl[0]) + 6*(1-ui)*ui*(ctrl[2]-ctrl[1]) + 3*ui*ui*(ctrl[3]-ctrl[2])
-        d2 = 6*(1-ui)*(ctrl[2]-2*ctrl[1]+ctrl[0]) + 6*ui*(ctrl[3]-2*ctrl[2]+ctrl[1])
-        num = ((q - P[i]) * d1).sum()
-        den = (d1 * d1).sum() + ((q - P[i]) * d2).sum()
-        out[i] = ui if abs(den) < 1e-12 else ui - num / den
+    # Newton step toward each point's true foot on the curve — vectorised over all u (was a
+    # per-point Python loop, run up to 4× per fit iteration). Identical formula per element.
+    u = np.asarray(u, float)
+    uu = u[:, None]; mt = 1 - uu
+    q  = (mt**3)*ctrl[0] + (3*mt**2*uu)*ctrl[1] + (3*mt*uu*uu)*ctrl[2] + (uu**3)*ctrl[3]
+    d1 = (3*mt**2)*(ctrl[1]-ctrl[0]) + (6*mt*uu)*(ctrl[2]-ctrl[1]) + (3*uu*uu)*(ctrl[3]-ctrl[2])
+    d2 = (6*mt)*(ctrl[2]-2*ctrl[1]+ctrl[0]) + (6*uu)*(ctrl[3]-2*ctrl[2]+ctrl[1])
+    diff = q - P
+    num = (diff * d1).sum(1)
+    den = (d1 * d1).sum(1) + (diff * d2).sum(1)
+    bad = np.abs(den) < 1e-12
+    out = u - num / np.where(bad, 1.0, den)
+    out[bad] = u[bad]
     return np.clip(out, 0.0, 1.0)
 
 
@@ -173,7 +194,7 @@ def _rdp_mask(P, eps):
         seg = P[a:b + 1]
         d = seg[-1] - seg[0]; L = math.hypot(*d)
         dist = (np.hypot(*((seg - seg[0]).T)) if L < 1e-9
-                else np.abs(np.cross(d / L, seg - seg[0])))
+                else np.abs(_cross2(d / L, seg - seg[0])))
         i = int(dist.argmax())
         if dist[i] > eps:
             keep[a + i] = True
@@ -253,7 +274,7 @@ def _emit(segs, prec):
         chord = s[3] - s[0]; cl = np.hypot(*chord)
         if cl > 1e-6:
             cdir = chord / cl
-            dev = max(abs(np.cross(cdir, s[1]-s[0])), abs(np.cross(cdir, s[2]-s[0])))
+            dev = max(abs(_cross2(cdir, s[1]-s[0])), abs(_cross2(cdir, s[2]-s[0])))
         else:
             dev = 1.0
         if dev < 0.25:
