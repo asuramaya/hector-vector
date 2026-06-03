@@ -1702,10 +1702,15 @@ const editor = {
     return out;
   },
   _eachSel(fn) { this._effectiveLeaves().forEach(fn); this._renderSelection(); },
-  applyFill(color) { this.style.fill = color || "none"; this._eachSel((n) => n.setAttribute("fill", color || "none")); },
+  // A raster <image> is a first-class canvas object but carries NO fill/stroke/shape —
+  // paint operations skip it (writing fill/stroke onto an <image> is inert markup the
+  // renderer ignores; we keep the DOM clean). Geometry/opacity/blend still apply.
+  isRaster(n) { return !!(n && n.tagName && n.tagName.toLowerCase() === "image"); },
+  applyFill(color) { this.style.fill = color || "none"; this._eachSel((n) => { if (this.isRaster(n)) return; n.setAttribute("fill", color || "none"); }); },
   applyStroke(color, width) {
     this.style.stroke = width > 0 ? color : "none"; this.style.strokeWidth = width > 0 ? width : 0;
     this._eachSel((n) => {
+      if (this.isRaster(n)) return;
       if (width > 0) {
         n.setAttribute("stroke", color); n.setAttribute("stroke-width", nfmt(width));
         n.setAttribute("vector-effect", "non-scaling-stroke");
@@ -1722,11 +1727,11 @@ const editor = {
     });
   },
   applyOpacity(v) { this._eachSel((n) => { if (v >= 1) n.removeAttribute("opacity"); else n.setAttribute("opacity", nfmt(v)); }); },
-  applyFillOpacity(a) { this._eachSel((n) => { if (a == null || a >= 1) n.removeAttribute("fill-opacity"); else n.setAttribute("fill-opacity", nfmt(Math.max(0, a))); }); },
-  applyStrokeOpacity(a) { this._eachSel((n) => { if (a == null || a >= 1) n.removeAttribute("stroke-opacity"); else n.setAttribute("stroke-opacity", nfmt(Math.max(0, a))); }); },
+  applyFillOpacity(a) { this._eachSel((n) => { if (this.isRaster(n)) return; if (a == null || a >= 1) n.removeAttribute("fill-opacity"); else n.setAttribute("fill-opacity", nfmt(Math.max(0, a))); }); },
+  applyStrokeOpacity(a) { this._eachSel((n) => { if (this.isRaster(n)) return; if (a == null || a >= 1) n.removeAttribute("stroke-opacity"); else n.setAttribute("stroke-opacity", nfmt(Math.max(0, a))); }); },
   // Generic stroke-style setter (cap / join / miterlimit / dasharray); empty value clears.
   setStrokeAttr(attr, value) {
-    this._eachSel((n) => { if (value === "" || value == null) n.removeAttribute(attr); else n.setAttribute(attr, String(value)); });
+    this._eachSel((n) => { if (this.isRaster(n)) return; if (value === "" || value == null) n.removeAttribute(attr); else n.setAttribute(attr, String(value)); });
   },
   // ---- stroke alignment (SVG has no native stroke-alignment) ----
   // The `stroke-width` ATTRIBUTE stays the user's nominal width (the Width control is
@@ -2803,6 +2808,14 @@ const editor = {
     const swatch = document.createElement("span");
     swatch.className = "layer-swatch" + (isGroup ? " group" : "");
     if (isGroup) { swatch.textContent = "▤"; swatch.title = "Group"; }
+    else if (this.isRaster(n)) {
+      // Rasters have no fill — show a live thumbnail of the image instead of a colour chip.
+      const href = n.getAttribute("href") || n.getAttribute("xlink:href") || "";
+      swatch.classList.add("raster");
+      if (href) { swatch.style.backgroundImage = `url("${href}")`; swatch.style.backgroundSize = "cover"; swatch.style.backgroundPosition = "center"; }
+      else swatch.textContent = "🖼";
+      swatch.title = "Raster image";
+    }
     else {
       const fill = toHexColor(n.getAttribute("fill"));
       if (fill && n.getAttribute("fill") !== "none") { swatch.style.background = fill; swatch.style.backgroundImage = "none"; }
@@ -2926,7 +2939,7 @@ const editor = {
   // Rasters have no fill/stroke/shape, so the inspector + colour panel adapt.
   _selectionIsRaster() {
     const ns = this.selectedNodes();
-    return ns.length > 0 && ns.every((n) => n.tagName.toLowerCase() === "image");
+    return ns.length > 0 && ns.every((n) => this.isRaster(n));
   },
   _objectPanel(nodes) {
     // Read style from the leaf shapes (a selected group carries none of its own), and
@@ -2938,7 +2951,7 @@ const editor = {
     const common = (read) => { let v, set = false; for (const n of reads) { const c = read(n); if (!set) { v = c; set = true; } else if (c !== v) return { mixed: true, value: read(first) }; } return { value: v }; };
     const wrap = document.createElement("div");
     const tags = new Set(reads.map((n) => n.tagName.toLowerCase()));
-    const isRaster = reads.every((n) => n.tagName.toLowerCase() === "image");   // no fill/stroke/shape
+    const isRaster = reads.every((n) => this.isRaster(n));   // no fill/stroke/shape
     const r2 = (v) => Math.round(v * 100) / 100;
 
     // Fill / stroke COLOUR live in the persistent Colour panel now (summoned from the

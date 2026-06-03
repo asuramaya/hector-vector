@@ -4560,7 +4560,7 @@ let procDragId = null;
 function currentRasterTarget() {
   if (!editor.stage) return null;
   const ns = editor.selectedNodes();
-  return (ns.length === 1 && ns[0].tagName.toLowerCase() === "image") ? ns[0] : null;
+  return (ns.length === 1 && editor.isRaster(ns[0])) ? ns[0] : null;
 }
 function procInsertBefore(list, y) {
   for (const card of list.querySelectorAll(".proc-stage:not(.dragging)")) {

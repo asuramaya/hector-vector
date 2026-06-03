@@ -709,6 +709,8 @@ button:disabled {
     linear-gradient(45deg, transparent 75%, #ccc 75%), linear-gradient(-45deg, transparent 75%, #ccc 75%);
   background-size: 8px 8px; background-position: 0 0, 0 4px, 4px -4px, -4px 0;
 }
+/* Raster rows show a live image thumbnail (background-image set inline). */
+.layer-swatch.raster { background-repeat: no-repeat; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15); display: inline-grid; place-items: center; }
 .layer-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .layer-btn {
   flex: 0 0 auto; width: 20px; height: 20px; padding: 0;
