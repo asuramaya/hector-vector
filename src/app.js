@@ -3380,9 +3380,45 @@ function buildRasterTools(node) {
       });
     }
 
+    // Floating panels + groups carry absolute pixel rects. The window can SHRINK below
+    // those coords (e.g. moving a 4K layout onto a 1080p screen, or just narrowing the
+    // window), which would strand a float off-screen — and off-screen means its drag
+    // handle is gone too, so it's unreachable. On resize, clamp every float/group back
+    // into the viewport (and re-store its rect so the position sticks + persists).
+    function clampFloatsOnResize() {
+      let changed = false;
+      const fit = (el, store) => {
+        const r = el.getBoundingClientRect();
+        const w = Math.min(r.width, innerWidth - 8);
+        const h = Math.min(r.height, innerHeight - 8);
+        const x = Math.max(0, Math.min(r.left, innerWidth - w));
+        const y = Math.max(0, Math.min(r.top, innerHeight - h));
+        if (x === r.left && y === r.top && w === r.width && h === r.height) return;
+        el.style.left = x + "px"; el.style.top = y + "px";
+        el.style.width = w + "px"; el.style.height = h + "px";
+        if (store) store({ x, y, w, h });
+        changed = true;
+      };
+      document.querySelectorAll(".dock-window").forEach((el) => {
+        const name = el.dataset.dockWindow;
+        fit(el, (rect) => { if (state[name]) state[name].rect = rect; });
+      });
+      document.querySelectorAll(".dock-group").forEach((el) => {
+        const gid = el.dataset.group;
+        fit(el, (rect) => { if (groups[gid]) groups[gid].rect = rect; });
+      });
+      if (changed) persist();
+    }
+    let _clampRAF = 0;
+    window.addEventListener("resize", () => {
+      if (_clampRAF) return;
+      _clampRAF = requestAnimationFrame(() => { _clampRAF = 0; clampFloatsOnResize(); });
+    });
+
     reconcile();
     window.__docks = {
       float: (n) => setLoc(n, "float"), dock: (n, side, before) => setLoc(n, side || "right", before),
+      clampFloats: clampFloatsOnResize,
       loc: curLoc, isFolded: () => folded, toggleFold: () => { folded = !folded; reconcile(); persist(); },
       summonProps, showColor, showInfo, close, shelve, unshelve, syncContextual, renderProps, renderPanels, renderColor, propsVisible,
       relayout: () => { relayoutDock("left"); relayoutDock("right"); },
