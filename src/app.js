@@ -11,16 +11,12 @@ import { editor, ghostBtn } from "./editor.js";
 const fileInputEl = document.querySelector("#file-input");
 const outputPreviewEl = document.querySelector("#output-preview");
 const statusTextEl = document.querySelector("#status-text");
-const libraryHeaderEl = document.querySelector("#process-count");
 const outputLabelEl = document.querySelector("#output-label");
 const modalRootEl = document.querySelector("#modal-root");
 const modalTitleEl = document.querySelector("#modal-title");
 const modalBodyEl = document.querySelector("#modal-body");
 const modalSearchEl = document.querySelector("#modal-search");
 const appShellEl = document.querySelector(".app.editor");
-const processViewEl = document.querySelector("#process-view");
-const processViewBodyEl = document.querySelector("#process-view-body");
-const processViewTitleEl = document.querySelector("#process-view-title");
 const shortcutButtonEl = document.querySelector("#shortcut-button");
 
 const SETTINGS_DEFAULTS = {
@@ -58,12 +54,6 @@ const SETTINGS_DEFAULTS = {
   pv_key_corner: false,
 };
 
-const TRACE_PRESETS = {
-  draft:    { filter_speckle: "12", corner_threshold: "120", segment_length: "8",   splice_threshold: "80",  path_precision: "1" },
-  balanced: { filter_speckle: "6",  corner_threshold: "85",  segment_length: "4.5", splice_threshold: "45",  path_precision: "2" },
-  smooth:   { filter_speckle: "4",  corner_threshold: "150", segment_length: "9",   splice_threshold: "120", path_precision: "3" },
-  sharp:    { filter_speckle: "2",  corner_threshold: "45",  segment_length: "3.5", splice_threshold: "20",  path_precision: "4" },
-};
 const SETTINGS_STORAGE_KEY = "hector-vector:settings";
 let settings = loadSettings();
 
@@ -143,26 +133,17 @@ async function resumeLastDoc() {
 
 let workItems = [];
 let outputs = [];
+let projects = [];            // saved .hv projects (Canvas tab)
+let libraryMode = "raster";   // canvas (.hv projects) | raster (input images) | vector (output SVGs)
+let librarySortKey = "name";  // name | date
+let librarySortDir = "asc";   // asc | desc
+let librarySelectedUrl = null;  // visual selection for the V/C tabs (R uses selectedName)
 let selectedName = null;
 let selectedOutput = null;
 let manualOutputName = null;
 let workspace = null;
 let statusHoldUntil = 0;
-let sourceInfo = { source_dir: "", default_dir: "", is_default: true };
 let outputsDir = "";
-
-function joinAbsPath(...parts) {
-  return parts
-    .filter((p) => p !== undefined && p !== null && p !== "")
-    .map((p, i) => (i === 0 ? String(p).replace(/\/+$/, "") : String(p).replace(/^\/+|\/+$/g, "")))
-    .join("/");
-}
-
-function absInputPath(item) {
-  if (!item) return "";
-  if (item.path && item.path.startsWith("/")) return item.path;
-  return joinAbsPath(sourceInfo.source_dir, item.name);
-}
 
 async function copyToClipboard(text, label) {
   if (!text) return false;
@@ -544,24 +525,19 @@ function clearViewport(vp, text) {
   vp.el.textContent = text;
 }
 
-function updateLibraryHeader() {
-  if (!libraryHeaderEl) return;
-  libraryHeaderEl.textContent = workItems.length ? String(workItems.length) : "";   // corner badge on the Process icon
-}
-
 function itemIsProcessed(name) {
   return latestOutputsFor(name).length > 0;
 }
 
-// Reconcile library state after work-items change: keep the corner-badge count
-// current and ensure selectedName still points at a real item (default to the
-// first). The library list IS the Process gallery now — repaint it when it's the
-// active view. (There's no separate hidden queue to render anymore.)
+// Reconcile library state after work-items change: ensure selectedName still
+// points at a real item (default to the first), then repaint the Library dock
+// panel (self-guards if not mounted).
 function refreshLibrary() {
-  updateLibraryHeader();
   if (!workItems.length) selectedName = null;
   else if (!workItems.some((item) => item.name === selectedName)) selectedName = workItems[0].name;
-  if (processViewActive) renderProcessGallery();
+  renderLibrary();   // dock panel (self-guards if not mounted)
+  if (typeof renderProcessorPanel === "function") renderProcessorPanel();   // library selection drives the Processor target + contextual reveal/dim
+  syncDockContext();
 }
 
 async function renderPreviews() {
@@ -621,11 +597,6 @@ async function fetchStatus() {
 function applyStatusData(data) {
   workspace = data;
   outputsDir = workspace.outputs_dir || "";
-  sourceInfo = {
-    source_dir: workspace.source_dir || "",
-    default_dir: workspace.default_source_dir || "",
-    is_default: workspace.source_dir === workspace.default_source_dir,
-  };
 }
 
 async function fetchOutputs() {
@@ -647,7 +618,6 @@ let activityState = "idle"; // "idle" | "busy"
 const knownJobStates = new Map();
 const TERMINAL_STATES = new Set(["done", "failed", "cancelled"]);
 let jobsCache = [];
-let processViewActive = false;
 
 function stem_(n) { return n.replace(/\.[^.]+$/, ""); }
 
@@ -700,7 +670,7 @@ function applyJobsData(jobs) {
     if (!seen.has(id)) knownJobStates.delete(id);
   }
 
-  if (processViewActive) renderProcessJobs();
+  renderJobsPanel();   // keep the dock Jobs panel live
 
   const running = jobs.find((job) => job.status === "running");
   updateFooterProgress(running, jobs.filter((j) => j.status === "queued").length);
@@ -742,7 +712,7 @@ function applyJobsData(jobs) {
     setStatus(
       `Failed${stage}: ${short || `${failedCount} job(s) failed${note}.`} — click for Jobs.`,
       8000,
-      { error: true, onClick: () => showProcessView(true), title: tail }
+      { error: true, onClick: () => revealPanel("jobs"), title: tail }
     );
   } else if (failedCount === 0 && cancelledCount === 0) {
     setStatus(`Done. ${latest.summary}`);
@@ -768,6 +738,23 @@ async function refreshAll(preferredSelection = null) {
   await renderPreviews();
 }
 
+// Like refreshAll, but DOES NOT re-render the canvas preview. Background processing
+// (a batch run, or any job starting) must never clear or replace the live editor
+// document — the canvas only changes on explicit user action (open/load/place/view).
+async function refreshExceptCanvas(preferredSelection = null) {
+  const [statusData, queueData, outputsData, jobsData] = await Promise.all([
+    fetchStatus(),
+    fetchQueue(),
+    fetchOutputs(),
+    fetchJobs(),
+  ]);
+  applyStatusData(statusData);
+  applyQueueData(queueData, preferredSelection);
+  applyOutputsData(outputsData);
+  applyJobsData(jobsData);
+  refreshLibrary();
+}
+
 function bindViewportDragging(vp) {
   let dragging = false;
   let lastX = 0;
@@ -788,7 +775,13 @@ function bindViewportDragging(vp) {
     lastY = event.clientY;
     applyViewportState(vp);
   });
-  const stop = () => { dragging = false; };
+  const stop = () => {
+    if (!dragging) return;
+    dragging = false;
+    // Pan moved the view → re-cull node handles to the new region (LOD virtualization).
+    // On pan-end only (not per-frame): handles ride the content transform while dragging.
+    if (vp === viewports.output) editor.onViewportChanged();
+  };
   vp.el.addEventListener("pointerup", stop);
   vp.el.addEventListener("pointercancel", stop);
 }
@@ -811,32 +804,20 @@ document.querySelectorAll("[data-vp]").forEach((button) => {
   });
 });
 
-async function setSourceDir(next) {
-  next = (next || "").trim();
-  try {
-    const data = await api("/api/source", "POST", { path: next });
-    setStatus(data.message || "Source updated.", 2500);
-    sourceInfo = data;
-    await refreshAll();
-  } catch (error) { setStatus(error.message, 4000); }
-}
-
-// Change the image source folder (the inline rail editor moved into the header
-// Import ▾ menu, so source-change now opens a small modal).
-function openSourceModal() {
-  openModal("Source folder", true);
-  modalSearchEl.hidden = true;
-  const root = document.createElement("div"); root.className = "form";
-  root.appendChild(sectionTitle("Library source"));
-  const inp = document.createElement("input");
-  inp.type = "text"; inp.value = sourceInfo.source_dir || ""; inp.placeholder = "/absolute/path/to/folder";
-  root.appendChild(fieldRow("Folder", inp, sourceInfo.is_default ? "Currently the default folder." : ""));
-  const actions = document.createElement("div"); actions.className = "form-actions";
-  actions.appendChild(ghostBtn("Set source", async () => { await setSourceDir(inp.value); closeModal(); }));
-  if (!sourceInfo.is_default) actions.appendChild(ghostBtn("Reset to default", async () => { await setSourceDir(""); closeModal(); }));
-  root.appendChild(actions);
-  modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
-  inp.focus();
+// A small floating text input that replaces window.prompt for in-app renames/saves
+// (the browser prompt is ugly + blocking). Commits on Enter/blur, cancels on Escape.
+function floatingInput({ value = "", placeholder = "", title = "", x, y, onCommit }) {
+  document.querySelectorAll(".hv-float-input").forEach((e) => e.remove());
+  const wrap = document.createElement("div"); wrap.className = "hv-float-input"; wrap.style.position = "fixed";
+  wrap.style.left = Math.max(8, Math.min((x == null ? window.innerWidth / 2 - 130 : x), window.innerWidth - 268)) + "px";
+  wrap.style.top = Math.max(8, (y == null ? Math.round(window.innerHeight / 3) : y)) + "px";
+  if (title) { const t = document.createElement("div"); t.className = "hv-float-label"; t.textContent = title; wrap.appendChild(t); }
+  const inp = document.createElement("input"); inp.type = "text"; inp.value = value; if (placeholder) inp.placeholder = placeholder;
+  wrap.appendChild(inp); document.body.appendChild(wrap); inp.focus(); inp.select();
+  let done = false;
+  const finish = (commit) => { if (done) return; done = true; const v = inp.value.trim(); wrap.remove(); if (commit && v) onCommit(v); };
+  inp.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); finish(true); } else if (e.key === "Escape") { e.preventDefault(); finish(false); } });
+  inp.addEventListener("blur", () => finish(true));
 }
 
 function openModal(title, narrow = false) {
@@ -854,34 +835,13 @@ function closeModal() {
   appSettingsOpen = false;
 }
 
-// Reflect the active view on the Edit/Process swap (Ableton-style): Process is
-// active while its view is showing; otherwise Edit (the canvas) is active.
-function updateViewSwap() {
-  const edit = document.querySelector("#view-edit");
-  const proc = document.querySelector("#process-button");
-  if (edit) edit.classList.toggle("active", !processViewActive);
-  if (proc) proc.classList.toggle("active", !!processViewActive);
+// The standalone Process VIEW was dissolved into dock panels (Library / Processor / Jobs)
+// — the Edit canvas is the only view now. revealPanel un-collapses + scrolls a dock panel
+// into view (used by the "click for Jobs" error toast).
+function revealPanel(name) {
+  const sec = document.querySelector(`.rail-section.${name}`);
+  if (sec) { sec.classList.remove("collapsed"); sec.scrollIntoView({ block: "nearest" }); }
 }
-
-// The two top-level views. Process is a first-class view (not a modal): toggling
-// `.process-active` on the shell hides `.editor-grid` and shows `#process-view`
-// in the same grid row. Switching views never touches modal-root, so File/Browse/
-// Info modals open over whichever view is up.
-function showProcessView(focusJobs = false) {
-  if (modalRootEl && !modalRootEl.hidden) closeModal();   // don't leave a canvas modal hanging over Process
-  processViewActive = true;
-  appShellEl.classList.add("process-active");
-  updateViewSwap();
-  renderProcessWorkspace();
-  if (focusJobs) { const j = document.querySelector("#process-jobs"); if (j) j.scrollIntoView({ block: "nearest" }); }
-  loadJobs().catch(() => {});
-}
-function showEditView() {
-  processViewActive = false;
-  appShellEl.classList.remove("process-active");
-  updateViewSwap();
-}
-function toggleProcessView() { if (processViewActive) showEditView(); else showProcessView(); }
 
 modalRootEl.addEventListener("click", (event) => {
   if (event.target.matches("[data-modal-close]") || event.target.closest("[data-modal-close]")) {
@@ -954,13 +914,13 @@ function openColorPicker(opts) {
         <label class="cp-inp cp-alpha-num">A<input data-k="a" type="number" min="0" max="100" /></label>
       </div>
     </div>
-    <div class="cp-recent" hidden><span class="cp-strip-lab">Recent</span><div class="cp-recent-row"></div></div>
     <div class="cp-swatches"></div>
     <div class="cp-actions">
       ${opts.allowNone ? `<button type="button" class="ghost-button cp-none">None</button>` : ""}
       <span class="cp-spacer"></span>
       ${opts.host ? "" : `<button type="button" class="ghost-button cp-cancel">Cancel</button><button type="button" class="ghost-button cp-ok">OK</button>`}
-    </div>`;
+    </div>
+    <div class="cp-recent cp-chin" hidden><div class="cp-recent-row"></div></div>`;
   // Embedded (host) mode = a live, persistent panel editor (no backdrop / OK / Cancel);
   // otherwise the classic transactional floating picker.
   const host = opts.host || null;
@@ -1162,7 +1122,7 @@ function openColorPicker(opts) {
       b.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         showContextMenu(e.clientX, e.clientY, [
-          { label: "Rename…", onClick: () => { const n = window.prompt("Swatch name:", it.name || ""); if (n == null) return; const arr = loadSwatches(); const m = arr.find((x) => x.c === it.c); if (m) { m.name = n.trim() || undefined; saveSwatches(arr); renderSwatches(); } } },
+          { label: "Rename…", onClick: () => floatingInput({ title: "Swatch name", value: it.name || "", onCommit: (n) => { const arr = loadSwatches(); const m = arr.find((x) => x.c === it.c); if (m) { m.name = n || undefined; saveSwatches(arr); renderSwatches(); } } }) },
           { label: "Remove", onClick: () => { saveSwatches(loadSwatches().filter((x) => x.c !== it.c)); renderSwatches(); } },
         ]);
       });
@@ -1249,6 +1209,21 @@ function galleryActionRow({ name, absPath, url, onInfo }) {
   return actions;
 }
 
+// Load a raster into the editor viewport as an <image> node (coexists with vectors).
+// Reads natural pixel size first so the node fits + centres correctly.
+async function loadRasterToCanvas(item) {
+  if (!item) return;
+  try {
+    const dim = await new Promise((res, rej) => {
+      const im = new Image();
+      im.onload = () => res({ w: im.naturalWidth, h: im.naturalHeight });
+      im.onerror = () => rej(new Error(`Couldn't load ${item.name}`));
+      im.src = item.url;
+    });
+    editor.placeImage(item.url, item.name, dim.w, dim.h);
+  } catch (e) { setStatus(e.message, 3000); }
+}
+
 function renderGalleryGrid(items, onPick) {
   if (!items.length) {
     modalBodyEl.innerHTML = `<div class="gallery-empty">Nothing to show.</div>`;
@@ -1300,9 +1275,10 @@ async function revealInFileManager(absPath) {
 }
 
 async function copySvgSource() {
-  const text = editor.serialize() ||
+  let text = editor.serialize() ||
     (viewports.output.url ? await (await fetch(viewports.output.url)).text() : "");
   if (!text) return;
+  text = await inlineSvgImages(text);   // bake placed-raster hrefs → data URIs so the copy is self-contained
   await copyToClipboard(text, `SVG (${text.length} chars)`);
 }
 
@@ -1317,10 +1293,11 @@ function downloadBlob(filename, data, mime) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function downloadCurrentSvg() {
+async function downloadCurrentSvg() {
   if (!editor.stage) { setStatus("Open or create a canvas first.", 2500); return; }
-  const text = editor.serialize();
+  let text = editor.serialize();
   if (!text) { setStatus("Nothing to download.", 2500); return; }
+  text = await inlineSvgImages(text);   // bake placed-raster hrefs → data URIs so the .svg is portable off-machine
   const name = (defaultSaveName() || "untitled") + ".svg";
   downloadBlob(name, text, "image/svg+xml");
   setStatus(`Downloaded ${name}.`, 2000);
@@ -1518,6 +1495,58 @@ function saveAsDocument(onDone) {
   setTimeout(() => { inp.focus(); inp.select(); }, 0);
 }
 
+// ---------- .hv projects (Canvas tab): full document = markup + undo/redo history ----------
+function saveProject() {
+  if (!editor.stage) { setStatus("Open or create a canvas first, then save the project.", 3000); return; }
+  openModal("Save project", true);
+  modalSearchEl.hidden = true;
+  const root = document.createElement("div"); root.className = "form";
+  root.appendChild(sectionTitle("Save project (.hv)"));
+  const inp = document.createElement("input");
+  inp.type = "text"; inp.value = defaultSaveName().replace(/\.svg$/i, ""); inp.placeholder = "project name";
+  root.appendChild(fieldRow("Name", inp, "Saves the canvas + undo history as .hv in the canvas folder."));
+  const doSave = async () => {
+    const name = inp.value.trim(); if (!name) { inp.focus(); return; }
+    closeModal();
+    const svg = editor._historyMarkup ? editor._historyMarkup() : editor.serialize();
+    if (!svg) return;
+    try {
+      const data = await api("/api/save-hv", "POST", { name, svg, history: editor.history || [], redo: editor.redo || [] });
+      setStatus(data.message || "Project saved.", 2500);
+      await loadProjects();
+    } catch (e) { setStatus(`Save failed: ${e.message}`, 4000); }
+  };
+  const actions = document.createElement("div"); actions.className = "form-actions";
+  actions.appendChild(ghostBtn("Save", doSave));
+  root.appendChild(actions);
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doSave(); } });
+  modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
+  setTimeout(() => { inp.focus(); inp.select(); }, 0);
+}
+
+async function openProject(item) {
+  let data;
+  try { data = await (await fetch(item.url)).json(); }
+  catch (e) { setStatus(`Couldn't open ${item.name}: ${e.message}`, 3500); return; }
+  if (!data || typeof data.svg !== "string" || !/<svg[\s>]/i.test(data.svg)) { setStatus("That .hv project is invalid.", 3000); return; }
+  selectedName = null; manualOutputName = null; selectedOutput = null;
+  mountStageFromText(data.svg, item.name);
+  // mountStageFromText syncs (→ editor.adopt, which RESETS history) inside a rAF; restore
+  // the saved stacks on the following frame so they survive the adopt.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    editor.history = Array.isArray(data.history) ? data.history : [];
+    editor.redo = Array.isArray(data.redo) ? data.redo : [];
+    if (editor._renderHistory) editor._renderHistory();
+    if (editor._updateButtons) editor._updateButtons();
+  }));
+  setStatus(`Opened project ${item.name}.`, 2000);
+}
+
+async function loadProjects() {
+  try { projects = await api("/api/projects"); } catch { projects = []; }
+  renderLibrary();
+}
+
 // A freshly Save-As'd canvas becomes a tracked-but-pinned doc: it owns a concrete
 // selectedOutput (so Export + plain Save work) without being a library item, and
 // stays mounted from memory (no disk remount that would drop the editor state).
@@ -1535,11 +1564,11 @@ function applySavedCanvas(data) {
   refreshAll();
 }
 
-async function exportFlow() {
+function exportFlow() {
+  // Export renders the LIVE canvas in the browser (no save/round-trip needed), so an
+  // unsaved doc can export straight to a download. A save target is only needed to ALSO
+  // drop the PNG in the library (offered as a secondary action in the result step).
   if (!editor.stage) { setStatus("Open or create a canvas first.", 2500); return; }
-  // No save target yet → route through Save-As, then continue to Export (no dead end).
-  if (!selectedOutput) { saveAsDocument(() => openExportModal()); return; }
-  if (editor.dirty) await saveDocument();
   openExportModal();
 }
 
@@ -1577,6 +1606,18 @@ function prefToggleRow(label, checked, onChange, hint) {
   inp.addEventListener("change", () => onChange(inp.checked));
   return fieldRow(label, inp, hint);
 }
+// Point the library at a different source folder. Re-fetches the whole workspace
+// (refreshAll → fetchStatus → applyStatusData updates `workspace`), so the Settings
+// section and the gallery both reflect the new source.
+async function setSourceDir(next) {
+  next = (next || "").trim();
+  try {
+    const data = await api("/api/source", "POST", { path: next });
+    setStatus(data.message || "Source updated.", 2500);
+    await refreshAll();
+  } catch (error) { setStatus(error.message, 4000); }
+}
+
 function openAppSettings() {
   openModal("Settings", true);
   modalSearchEl.hidden = true;
@@ -1585,11 +1626,24 @@ function openAppSettings() {
 
   root.appendChild(sectionTitle("General"));
   root.appendChild(fieldRow("On launch",
-    makeSelectRaw(prefs.startup, [["blank", "Blank canvas + Process"], ["resume", "Resume last document"]],
+    makeSelectRaw(prefs.startup, [["blank", "Blank canvas"], ["resume", "Resume last document"]],
       (v) => { prefs.startup = v; persistPrefs(); }),
-    "What to show when the app opens. Blank starts fresh and opens the Process workspace."));
+    "What to show when the app opens. Blank starts fresh with an empty canvas."));
   root.appendChild(prefToggleRow("Smart guides", editor.smartGuides,
     (v) => { editor.smartGuides = v; prefs.smartGuides = v; persistPrefs(); }, "Snap to other objects' edges/centres while moving."));
+
+  // Where the library reads source images from (the backend /api/source endpoint).
+  root.appendChild(sectionTitle("Library source"));
+  const srcInput = document.createElement("input");
+  srcInput.type = "text"; srcInput.value = (workspace && workspace.source_dir) || "";
+  srcInput.placeholder = "/absolute/path/to/folder";
+  const isDefaultSrc = !!(workspace && workspace.source_dir === workspace.default_source_dir);
+  root.appendChild(fieldRow("Folder", srcInput,
+    isDefaultSrc ? "Currently the default folder." : "The library scans this folder for source images."));
+  const srcActions = document.createElement("div"); srcActions.className = "form-actions";
+  srcActions.appendChild(ghostBtn("Set source", async () => { await setSourceDir(srcInput.value); if (appSettingsOpen) openAppSettings(); }));
+  if (!isDefaultSrc) srcActions.appendChild(ghostBtn("Reset to default", async () => { await setSourceDir(""); if (appSettingsOpen) openAppSettings(); }));
+  root.appendChild(srcActions);
 
   root.appendChild(sectionTitle("Install"));
   const installWrap = document.createElement("div"); installWrap.className = "form-row";
@@ -1733,6 +1787,7 @@ const MENU_ITEMS = {
       { type: "sep" },
       { label: "Save (.svg)", onClick: saveDocument },
       { label: "Save as…", onClick: () => saveAsDocument() },
+      { label: "Save project (.hv)…", onClick: saveProject },
       { label: "Download .svg", onClick: downloadCurrentSvg },
       { type: "sep" },
       { label: "Export PNG…", onClick: exportFlow },
@@ -1779,6 +1834,21 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
   const colApplyBg = (hex) => { if (!coalescing) { editor.beginCoalesce(); coalescing = true; } editor.applyArtboardBg(hex); scheduleColorCommit(); };
   editor._renderColorPanel = (hostEl) => {
     if (colorCtl) { colorCtl.destroy(); colorCtl = null; }
+    const sect = hostEl.closest && hostEl.closest(".rail-section");
+    const ftitle = sect && sect.querySelector(".fp-title");
+    // Nothing selected → an empty state, NOT the full (tall) duo picker. Rendering the
+    // picker with no target made the panel overflow when expanded-but-empty.
+    if (!editor.artboardSelected && (!editor.selection || editor.selection.size === 0)) {
+      if (ftitle) ftitle.textContent = "Colour";
+      hostEl.innerHTML = '<div class="insp-empty">Select an object to colour.</div>';
+      return;
+    }
+    if (editor._selectionIsRaster()) {   // images carry no fill/stroke — the panel title says so, body blank
+      if (ftitle) ftitle.textContent = "No Colour";
+      hostEl.innerHTML = "";
+      return;
+    }
+    if (ftitle) ftitle.textContent = "Colour";
     if (editor.artboardSelected) {     // the Colour panel edits the artboard background (solo)
       const ab = editor.artboardEl();
       colorCtl = openColorPicker({ title: "Background", allowNone: true, host: hostEl,
@@ -1796,7 +1866,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     });
   };
   editor._summonColor = () => { if (window.__docks) window.__docks.showColor(); };
-  const pickFor = (which) => { active = which; refreshSwatches(); if (window.__docks) window.__docks.showColor(which); };
+  const pickFor = (which) => { active = which; refreshSwatches(); if (window.__docks) window.__docks.showColor(); };
   const doSwap = () => {
     const f = cur("fill"), s = cur("stroke");
     editor.push("Swap fill/stroke");
@@ -1830,7 +1900,384 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
   editor.pickColor = openColorPicker;   // single-target callers (artboard bg, object rows) reuse the same modal
   editor.pickPaint = pickFor;           // duo fill/stroke picker (the "main" colour picker + X)
   editor.openContextPanel = showContextPanel;   // layers-row right-click → same object panel as the canvas
+  editor.rasterTools = buildRasterTools;         // raster panel: inline pipeline stages + live vectorize
+  // Prefetch so the Process panels render without a flash. Deferred to a microtask:
+  // this block runs during top-level module eval, but engineSchemas/rasterOpSchemas are
+  // `let`s declared further down — calling now would hit their temporal dead zone (the
+  // async fn swallows it as an unhandled rejection, leaving the cache null). The
+  // microtask runs after module eval completes, when those bindings are initialised.
+  queueMicrotask(() => { ensureEngineSchemas(); ensureRasterOpSchemas(); });
   refreshSwatches();
+}
+
+// ---------- raster panel: pipeline stages inline (upscale / remove-bg / vectorize) ----------
+// A selected raster <image> docks the pipeline into its Properties panel. Upscale +
+// Remove-BG run as async jobs and swap the result onto the canvas in place. Vectorize
+// drives a LIVE, debounced trace that swaps the canvas to the vector (keep / revert) —
+// packing the full vectorize settings into the panel. Server: input_url resolves the
+// node's href to the source file; /api/trace-preview is a synchronous capped trace.
+let rasterLive = false;          // live-vectorize preview active?
+let rasterLiveNode = null;       // the <image> being previewed
+let rasterLiveSvg = null;        // last previewed SVG (commit fallback)
+let rasterLiveSeq = 0;           // guards out-of-order debounced traces
+let rasterLiveTimer = null;
+let rasterStageBusy = false;     // an upscale/bg job in flight (disables buttons)
+
+function rasterHref(node) { return (node && (node.getAttribute("href") || node.getAttribute("xlink:href"))) || ""; }
+function rasterName(node) { return (node && (node.getAttribute("data-hv-name") || "")).replace(/^Image:\s*/, "") || "trace"; }
+
+// ---- engine schema (single source of truth: /api/vectorize/engines) -------------
+// The vectorize panel is rendered PURELY from each engine's param schema, so a
+// control is shown iff that engine actually consumes it (no phantom knobs) and every
+// control is wired identically. Fetched once and cached; prefetched at startup.
+let engineSchemas = null;
+async function ensureEngineSchemas() {
+  if (engineSchemas) return engineSchemas;
+  try { const r = await api("/api/vectorize/engines"); if (Array.isArray(r)) engineSchemas = r; }
+  catch { /* leave null so the next render retries — don't poison the cache */ }
+  return engineSchemas || [];
+}
+// Which engine the current settings resolve to — mirrors server resolve_engine:
+// explicit `engine` wins, else legacy-derive from method / colormode / style.
+function currentEngineId() {
+  if ((engineSchemas || []).some((e) => e.id === settings.engine && e.available !== false)) return settings.engine;
+  if (settings.vectorize_method === "pixel") return "pixel";
+  if (settings.trace_colormode === "color" && settings.trace_color_style === "clean") return "clean";
+  return "vtracer";
+}
+// Pick an engine: set the explicit key AND keep the legacy fields coherent, so the
+// Process workspace + the payload stay consistent and the server resolves the same.
+function setEngine(id) {
+  settings.engine = id;
+  if (id === "pixel") settings.vectorize_method = "pixel";
+  else {
+    settings.vectorize_method = "trace";
+    if (id === "clean") { settings.trace_colormode = "color"; settings.trace_color_style = "clean"; }
+    else if (settings.trace_color_style === "clean") settings.trace_color_style = "poster";
+  }
+  persistSettings();
+}
+// A schema param's `when` guard: render only when every condition key matches.
+function schemaWhenOk(param) {
+  if (!param.when) return true;
+  return Object.entries(param.when).every(([k, v]) => String(settings[k]) === String(v));
+}
+// Build ONE control from a schema param, wired to a debounced live re-trace. A param
+// that other params' `when` depends on rebuilds the panel on change (to show/hide the
+// dependents); every plain value control only kicks the trace — NO panel rebuild, so
+// dragging a slider never destroys the thumb mid-drag (the old half-wired failure).
+function schemaControl(param, whenKeys, liveKick, structural) {
+  const k = param.key;
+  if (settings[k] === undefined && param.default !== undefined && param.default !== null) settings[k] = param.default;
+  const onChange = whenKeys.has(k) ? structural : liveKick;
+  let control;
+  if (param.type === "range") {
+    control = makeRange(k, param.min, param.max, param.step || 1);
+    control.addEventListener("input", liveKick);          // continuous → live only, never structural
+  } else if (param.type === "checkbox") {
+    control = document.createElement("input"); control.type = "checkbox"; control.checked = !!settings[k];
+    control.addEventListener("change", () => { settings[k] = control.checked; persistSettings(); onChange(); });
+  } else if (param.type === "number") {
+    control = makeNumber(k, { min: param.min, max: param.max, step: param.step || 1, placeholder: param.placeholder || "" });
+    control.addEventListener("input", liveKick);
+  } else {
+    control = makeSelect(k, param.options || []);          // [value, label] pairs from the schema
+    control.addEventListener("change", onChange);
+  }
+  return fieldRow(param.label || k, control, param.hint);
+}
+
+// The settings payload the pipeline/preview endpoints read — the whole settings
+// object (server picks the keys it knows) + the raster's source URL + overrides.
+function stagePayload(node, overrides) {
+  return Object.assign({}, settings, { input_url: rasterHref(node) }, overrides || {});
+}
+
+function rasterSourceUsable(node) {
+  const href = rasterHref(node);
+  if (!href) { setStatus("This image has no file source to process.", 3200); return false; }
+  if (href.startsWith("data:")) { setStatus("Import this image to the library first, then process it.", 3800); return false; }
+  return true;
+}
+
+// ---- raster-op schema (single source of truth: /api/raster-ops) ----------------
+// Upscale + Remove-bg are rendered + live-wired from this, exactly like the vectorize
+// engines — so all three pipeline stages share one schema-driven panel mechanism.
+let rasterOpSchemas = null;
+async function ensureRasterOpSchemas() {
+  if (rasterOpSchemas) return rasterOpSchemas;
+  try { const r = await api("/api/raster-ops"); if (Array.isArray(r)) rasterOpSchemas = r; }
+  catch { /* leave null so the next render retries — don't poison the cache */ }
+  return rasterOpSchemas || [];
+}
+function rasterOpById(id) { return (rasterOpSchemas || []).find((o) => o.id === id) || null; }
+
+// ---- live raster ops (upscale / remove-bg): debounced transform → swap the canvas
+// image href to the result (keep / revert). Same shape as live vectorize, but the
+// preview is a transient href swap (raster→raster), not a vector overlay. ALWAYS
+// re-runs from the ORIGINAL href so settings never compound on a prior preview. ----
+let rasterOp = false;       // a raster-op live preview active?
+let rasterOpNode = null;
+let rasterOpName = null;    // "upscale" | "removebg"
+let rasterOpOrig = null;    // original href — revert target AND the re-run source
+let rasterOpSeq = 0;
+let rasterOpTimer = null;
+let rasterOpKicks = 0;      // test-observable: a control fired a re-run
+
+function startRasterOpLive(node, op) {
+  if (!rasterSourceUsable(node)) return;
+  if (rasterLive) endRasterLive(true);     // one live preview at a time
+  if (rasterOp) endRasterOpLive(true);
+  rasterOp = true; rasterOpNode = node; rasterOpName = op; rasterOpOrig = rasterHref(node);
+  editor._renderInspector();
+  scheduleRasterOpLive(true);
+}
+function endRasterOpLive(revert) {
+  if (revert && rasterOpNode && rasterOpOrig != null) rasterOpNode.setAttribute("href", rasterOpOrig);
+  rasterOp = false; rasterOpNode = null; rasterOpName = null; rasterOpOrig = null;
+  rasterOpSeq++;
+  if (rasterOpTimer) { clearTimeout(rasterOpTimer); rasterOpTimer = null; }
+}
+function scheduleRasterOpLive(immediate) {
+  if (!rasterOp || !rasterOpNode) return;
+  rasterOpKicks++;
+  if (rasterOpTimer) clearTimeout(rasterOpTimer);
+  rasterOpTimer = setTimeout(doRasterOpLive, immediate ? 30 : 500);   // ops are heavier → longer debounce
+}
+async function doRasterOpLive() {
+  if (!rasterOp || !rasterOpNode) return;
+  const node = rasterOpNode, op = rasterOpName, seq = ++rasterOpSeq;
+  setStatus(`${op === "upscale" ? "Upscaling" : "Removing background"}… (a few seconds)`, 0);
+  try {
+    // Re-run from the ORIGINAL source (not the current preview href) — no compounding.
+    const res = await api("/api/raster-op", "POST", Object.assign({}, settings, { input_url: rasterOpOrig, op }));
+    if (seq !== rasterOpSeq || !rasterOp) return;   // superseded or cancelled mid-flight
+    if (!res.url) throw new Error(res.message || res.error || "No result produced.");
+    node.setAttribute("href", res.url);
+    setStatus(`Preview — ${op === "upscale" ? "upscaled" : "background removed"} (not saved).`, 1800);
+  } catch (e) {
+    if (seq !== rasterOpSeq) return;
+    const stale = /\b404\b/.test(e.message || "");
+    setStatus(stale ? "Restart the local server (server.py) — the raster-op endpoint is new."
+                    : `${op === "upscale" ? "Upscale" : "Remove background"} failed: ${e.message}`, 5000);
+  }
+}
+// Keep: the canvas IS the preview (href already points at the scratch result) — just
+// push history. Revert: restore the original href.
+function commitRasterOpLive() {
+  const node = rasterOpNode;
+  if (!node) return;
+  if (rasterOpOrig != null && rasterHref(node) === rasterOpOrig) { setStatus("Adjust a setting to generate a preview first.", 2800); return; }
+  rasterOp = false; rasterOpNode = null; rasterOpName = null; rasterOpOrig = null; rasterOpSeq++;
+  if (rasterOpTimer) { clearTimeout(rasterOpTimer); rasterOpTimer = null; }
+  editor.push("Process raster");
+  editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
+  setStatus("Applied on canvas (not saved to library).", 3000);
+}
+
+// ---- live vectorize: debounced trace → swap the canvas to the vector ----
+function startRasterLive(node) {
+  if (!rasterSourceUsable(node)) return;
+  rasterLive = true; rasterLiveNode = node; rasterLiveSvg = null;
+  editor._renderInspector();
+  scheduleRasterLive(true);
+}
+function endRasterLive(revert) {
+  rasterLive = false; rasterLiveNode = null; rasterLiveSvg = null;
+  rasterLiveSeq++;
+  if (rasterLiveTimer) { clearTimeout(rasterLiveTimer); rasterLiveTimer = null; }
+  if (revert) editor.clearRasterPreview(true);
+}
+let rasterLiveKicks = 0;   // counts re-trace requests (a test-observable signal that a control is live-wired)
+function scheduleRasterLive(immediate) {
+  if (!rasterLive || !rasterLiveNode) return;
+  rasterLiveKicks++;
+  if (rasterLiveTimer) clearTimeout(rasterLiveTimer);
+  // 250ms settle: traces are ~1.5s now (was 11s), so a short debounce feels live
+  // without spamming — superseded in-flight traces are dropped by the seq guard.
+  rasterLiveTimer = setTimeout(doRasterLiveTrace, immediate ? 30 : 250);
+}
+async function doRasterLiveTrace() {
+  if (!rasterLive || !rasterLiveNode) return;
+  const node = rasterLiveNode, seq = ++rasterLiveSeq;
+  setStatus("Tracing preview…", 0);
+  try {
+    const res = await api("/api/trace-preview", "POST", stagePayload(node, { preview_max_dim: 1000 }));
+    if (seq !== rasterLiveSeq || !rasterLive) return;   // superseded or cancelled mid-flight
+    if (res.svg) { rasterLiveSvg = res.svg; editor.showRasterPreview(node, res.svg); setStatus(`Preview — ${res.nodes} nodes`, 1800); }
+  } catch (e) {
+    if (seq !== rasterLiveSeq) return;
+    // 404 = a server predating the /api/trace-preview route → ask for a restart.
+    const stale = /\b404\b/.test(e.message || "");
+    setStatus(stale ? "Restart the local server (server.py) — the live-trace endpoint is new." : `Preview failed: ${e.message}`, 4500);
+  }
+}
+// Commit: keep exactly what's previewed on the canvas — replace the raster with a
+// real vector layer built from the live preview SVG (the canvas IS the preview, so
+// the kept result matches it 1:1, and it's instant — no second trace round-trip).
+function commitRasterLive() {
+  const node = rasterLiveNode, svg = rasterLiveSvg;
+  if (!node) return;
+  if (!svg) { setStatus("Adjust a setting to generate a trace first.", 2800); return; }
+  const name = rasterName(node);
+  rasterLive = false; rasterLiveNode = null; rasterLiveSvg = null; rasterLiveSeq++;
+  if (rasterLiveTimer) { clearTimeout(rasterLiveTimer); rasterLiveTimer = null; }
+  editor.commitRasterToVector(node, svg, name);
+}
+
+// T1 "Auto": ask the server to recommend vectorize settings from image stats,
+// apply them to the panel, and (if live) re-trace so the canvas updates at once.
+async function autoSuggestTrace(node) {
+  if (!rasterSourceUsable(node)) return;
+  setStatus("Analyzing image…", 0);
+  try {
+    const res = await api("/api/trace-suggest", "POST", { input_url: rasterHref(node) });
+    // Apply the derived params, then the explicit engine — the panel now has an Engine
+    // selector, so reflecting the suggestion there (instead of leaving it implicit) is
+    // exactly what the user expects. setEngine keeps the legacy fields coherent too.
+    for (const k of ["vectorize_method", "trace_colormode", "trace_color_style", "color_precision", "trace_simplify"]) {
+      if (res[k] !== undefined) settings[k] = res[k];
+    }
+    if (res.engine && (engineSchemas || []).some((e) => e.id === res.engine)) setEngine(res.engine);
+    persistSettings();
+    editor._renderInspector();
+    if (rasterLive) scheduleRasterLive(false);
+    setStatus(res.reason || "Applied suggested settings.", 4500);
+  } catch (e) {
+    const stale = /\b404\b/.test(e.message || "");
+    setStatus(stale ? "Restart the local server (server.py) — the auto-detect endpoint is new." : `Auto-detect failed: ${e.message}`, 4500);
+  }
+}
+
+// ---- Schema-driven pipeline stage renderers (shared) ----------------------------
+// These render ONE stage's settings + live-preview controls into `body`, targeting
+// raster `node` (null = no live target, e.g. batch config). They live at module level
+// so the Processor dock panel hosts them; `rerender` rebuilds the host panel and
+// re-kicks whichever live preview is active. (The pipeline used to be crammed into the
+// raster Properties panel via buildRasterTools — now it's the Processor panel.)
+function rasterReRender() { editor._renderInspector(); if (rasterLive) scheduleRasterLive(false); if (rasterOp) scheduleRasterOpLive(false); }
+function rasterActionRow(label, onClick, primary = true) {
+  const row = document.createElement("div"); row.className = "rt-actions";
+  const b = document.createElement("button"); b.type = "button";
+  b.className = primary ? "primary-button" : "ghost-button"; b.textContent = label;
+  b.disabled = rasterStageBusy; b.addEventListener("click", onClick);
+  row.appendChild(b); return row;
+}
+// A raster-op stage (upscale / remove-bg): schema controls + a live preview that swaps
+// the canvas image to the result (Keep / Revert). Mirrors the Vectorize stage.
+function renderRasterOpStage(body, opId, node, rerender = rasterReRender) {
+  if (!rasterOpSchemas) {
+    const h = document.createElement("div"); h.className = "form-hint"; h.textContent = "Loading…";
+    body.appendChild(h); ensureRasterOpSchemas().then(rerender); return;
+  }
+  const op = rasterOpById(opId); if (!op) return;
+  const live = rasterOp && rasterOpName === opId;
+  const liveKick = () => { if (rasterOp && rasterOpName === opId) scheduleRasterOpLive(false); };
+  const whenKeys = new Set();
+  for (const p of op.schema) if (p.when) Object.keys(p.when).forEach((kk) => whenKeys.add(kk));
+  for (const p of op.schema) { if (!schemaWhenOk(p)) continue; body.appendChild(schemaControl(p, whenKeys, liveKick, rerender)); }
+  // rembg install CTA (AI method, not installed) — an action, not a schema param.
+  if (opId === "removebg" && settings.removebg_method === "ai" && !op.rembg_installed) {
+    const cta = document.createElement("button");
+    cta.type = "button"; cta.className = "ghost-button"; cta.textContent = "Install rembg (one-time, ~500MB)";
+    cta.addEventListener("click", async () => {
+      cta.disabled = true; cta.textContent = "Installing rembg…";
+      try { const d = await api("/api/install/rembg", "POST", {}); setStatus(d.message || "Install started.", 3000); await loadJobs(); }
+      catch (e) { setStatus(e.message, 3000); cta.disabled = false; cta.textContent = "Install rembg (one-time, ~500MB)"; }
+    });
+    const wrap = document.createElement("div"); wrap.className = "rt-actions"; wrap.appendChild(cta); body.appendChild(wrap);
+  }
+  if (live) {
+    const row = document.createElement("div"); row.className = "rt-actions";
+    const keep = document.createElement("button"); keep.type = "button"; keep.className = "primary-button"; keep.textContent = "Keep result";
+    keep.addEventListener("click", () => commitRasterOpLive());
+    const revert = document.createElement("button"); revert.type = "button"; revert.className = "ghost-button"; revert.textContent = "Revert";
+    revert.addEventListener("click", () => { endRasterOpLive(true); rerender(); });
+    row.appendChild(keep); row.appendChild(revert); body.appendChild(row);
+    const hint = document.createElement("div"); hint.className = "form-hint"; hint.textContent = "Live — adjust settings to update the canvas.";
+    body.appendChild(hint);
+  } else if (node) {
+    const row = rasterActionRow("Live preview ▸", () => startRasterOpLive(node, opId));
+    if (op.available === false) { const b = row.querySelector("button"); b.disabled = true; b.title = "Required tool not installed"; }
+    body.appendChild(row);
+  }
+}
+// The Vectorize stage: engine selector + auto-detect + the engine's own param schema
+// (basic inline, advanced behind a toggle) + live trace preview (Keep / Revert).
+function renderVectorizeStage(body, node, rerender = rasterReRender) {
+  if (!engineSchemas) {
+    const h = document.createElement("div"); h.className = "form-hint"; h.textContent = "Loading engines…";
+    body.appendChild(h); ensureEngineSchemas().then(rerender); return;
+  }
+  const liveKick = () => { if (rasterLive) scheduleRasterLive(false); };   // value change → retrace, NO rebuild
+  const structural = rerender;                                            // rebuild panel + retrace
+  const engId = currentEngineId();
+  const eng = engineSchemas.find((e) => e.id === engId) || engineSchemas[0];
+  const engSel = makeSelectRaw(engId,
+    engineSchemas.map((e) => [e.id, e.available === false ? `${e.label} (unavailable)` : e.label]),
+    (val) => { const t = engineSchemas.find((e) => e.id === val); if (t && t.available === false) return; setEngine(val); structural(); });
+  body.appendChild(fieldRow("Engine", engSel, eng && eng.caps && eng.caps.planar ? "Planar — keeps holes/counters, no halos." : undefined));
+
+  const autoRow = document.createElement("div"); autoRow.className = "rt-actions";
+  const auto = document.createElement("button");
+  auto.type = "button"; auto.className = "ghost-button"; auto.textContent = "✨ Auto-detect settings";
+  auto.title = node ? "Inspect the image and pick sensible vectorize settings" : "Select a raster to auto-detect";
+  auto.disabled = rasterStageBusy || !node;
+  auto.addEventListener("click", () => autoSuggestTrace(node));
+  autoRow.appendChild(auto); body.appendChild(autoRow);
+
+  const schema = (eng && eng.schema) || [];
+  const whenKeys = new Set();
+  for (const p of schema) if (p.when) Object.keys(p.when).forEach((kk) => whenKeys.add(kk));
+  const advanced = [];
+  for (const p of schema) {
+    if (!schemaWhenOk(p)) continue;
+    if (p.advanced) { advanced.push(p); continue; }
+    body.appendChild(schemaControl(p, whenKeys, liveKick, structural));
+  }
+  if (advanced.length) {
+    const advToggle = document.createElement("input");
+    advToggle.type = "checkbox"; advToggle.checked = !!settings.trace_advanced;
+    advToggle.addEventListener("change", () => { settings.trace_advanced = advToggle.checked; persistSettings(); structural(); });
+    body.appendChild(fieldRow("Advanced", advToggle));
+    if (settings.trace_advanced) for (const p of advanced) if (schemaWhenOk(p)) body.appendChild(schemaControl(p, whenKeys, liveKick, structural));
+  }
+  if (rasterLive) {
+    const row = document.createElement("div"); row.className = "rt-actions";
+    const keep = document.createElement("button"); keep.type = "button"; keep.className = "primary-button"; keep.textContent = "Keep vector";
+    keep.addEventListener("click", () => commitRasterLive());
+    const revert = document.createElement("button"); revert.type = "button"; revert.className = "ghost-button"; revert.textContent = "Revert to raster";
+    revert.addEventListener("click", () => { endRasterLive(true); rerender(); });
+    row.appendChild(keep); row.appendChild(revert); body.appendChild(row);
+    const hint = document.createElement("div"); hint.className = "form-hint"; hint.textContent = "Live — drag any control to update the trace on canvas.";
+    body.appendChild(hint);
+  } else if (node) {
+    body.appendChild(rasterActionRow("Live preview ▸", () => startRasterLive(node)));
+  }
+}
+// Render one stage's settings (dispatch by id). Used by the Processor panel cards.
+function renderStageSettings(body, id, node, rerender = rasterReRender) {
+  if (id === "vectorize") renderVectorizeStage(body, node, rerender);
+  else renderRasterOpStage(body, id, node, rerender);
+}
+
+// The raster Properties panel no longer crams the pipeline — it points at the Processor
+// dock panel (the pipeline's home). A selected raster still shows a compact card so you
+// know where to process it; if a live preview is mid-flight, Keep/Revert stay reachable.
+// The raster Properties panel no longer carries a "Process / Open Processor" pointer —
+// the Processor panel is contextual now (it auto-reveals when a raster is the subject), so
+// the pointer was redundant. The only thing kept here is committing an in-progress live
+// preview (the canvas IS the preview), shown only while one is running.
+function buildRasterTools(node) {
+  if (!(rasterLive && rasterLiveNode === node)) return null;
+  const root = document.createElement("div"); root.className = "raster-tools raster-tools-compact";
+  const row = document.createElement("div"); row.className = "rt-actions";
+  const keep = document.createElement("button"); keep.type = "button"; keep.className = "primary-button"; keep.textContent = "Keep vector";
+  keep.addEventListener("click", () => commitRasterLive());
+  const revert = document.createElement("button"); revert.type = "button"; revert.className = "ghost-button"; revert.textContent = "Revert to raster";
+  revert.addEventListener("click", () => { endRasterLive(true); editor._renderInspector(); });
+  row.appendChild(keep); row.appendChild(revert); root.appendChild(row);
+  return root;
 }
 // ---------- object action bar (right) + Layers-header structure controls ----------
 // The clipboard/boolean/transform actions and the reorder/group controls moved out of
@@ -1852,7 +2299,6 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
   wire("#act-rotate-ccw", () => editor.transform("rotateCCW"));
   wire("#act-flip-h", () => editor.transform("flipH"));
   wire("#act-flip-v", () => editor.transform("flipV"));
-  wire("#act-invert", () => editor.invertSpace());
   wire("#layer-front", () => editor.reorder("front"));
   wire("#layer-forward", () => editor.reorder("forward"));
   wire("#layer-backward", () => editor.reorder("backward"));
@@ -1875,23 +2321,33 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     set("#act-cut", hasSel); set("#act-copy", hasSel); set("#act-duplicate", hasSel);
     set("#act-paste", has && hasClip);
     set("#act-union", fillable); set("#act-subtract", fillable); set("#act-intersect", fillable);
-    // rotate/flip/invert act on the selection, or on the artboard itself when it's selected;
-    // grey when nothing is selected (no objects, no artboard)
+    // rotate/flip act on the selection, or on the artboard itself when it's selected;
+    // grey when nothing is selected (no objects, no artboard).
+    const isRaster = hasSel && editor._selectionIsRaster();
     const canXform = hasSel || (has && editor.artboardSelected);
-    ["#act-rotate-cw", "#act-rotate-ccw", "#act-flip-h", "#act-flip-v", "#act-invert"].forEach((id) => set(id, canXform));
+    ["#act-rotate-cw", "#act-rotate-ccw", "#act-flip-h", "#act-flip-v"].forEach((id) => set(id, canXform));
+    // Invert-space (fill the gaps) is a VECTOR op — meaningless on a raster. Gates the
+    // Object-panel-header ⊠ tile (the single, movable home of invert).
+    const canInvert = (hasSel && !isRaster) || (has && editor.artboardSelected);
+    set("#hdr-invert", canInvert);
     // Layers header: reorder/group/ungroup/rename/delete (selection-gated) + cleanup/merge (whole doc)
     ["#layer-front", "#layer-forward", "#layer-backward", "#layer-back", "#layer-delete"].forEach((id) => set(id, hasSel));
     set("#layer-group", n >= 2); set("#layer-ungroup", hasGroup); set("#layer-rename", n === 1);
     set("#layer-cleanup", has); set("#layer-merge", has);
   };
   const prevOnInspect = editor.onInspect;
-  editor.onInspect = () => { if (prevOnInspect) prevOnInspect(); refreshActionButtons(); renderFloatPanel(); updateSelLabel(); };
+  editor.onInspect = () => {
+    if (prevOnInspect) prevOnInspect();
+    // Tear down a live preview (vectorize OR raster-op) if its raster is no longer the sole selection.
+    if (rasterLive && !(editor.selection.size === 1 && rasterLiveNode && editor.selection.has(rasterLiveNode.getAttribute("data-hv-id")))) endRasterLive(true);
+    if (rasterOp && !(editor.selection.size === 1 && rasterOpNode && editor.selection.has(rasterOpNode.getAttribute("data-hv-id")))) endRasterOpLive(true);
+    refreshActionButtons(); renderFloatPanel(); updateSelLabel();
+    renderProcessorPanel();   // keep the Processor target + contextual reveal/dim in sync with the canvas selection
+    syncDockContext();        // park/return contextual panels (Processor, Colour) for the new selection
+  };
   refreshActionButtons();
 }
 {
-  const procBtn = document.querySelector("#process-button"); if (procBtn) procBtn.addEventListener("click", () => showProcessView());
-  const editBtn = document.querySelector("#view-edit"); if (editBtn) editBtn.addEventListener("click", () => showEditView());
-  const procClose = document.querySelector("#process-close"); if (procClose) procClose.addEventListener("click", () => showEditView());
   const undoBtn = document.querySelector("#undo-button"); if (undoBtn) undoBtn.addEventListener("click", () => editor.undo());
   const redoBtn = document.querySelector("#redo-button"); if (redoBtn) redoBtn.addEventListener("click", () => editor.redoAction());
   // Canvas-level controls in the bottom viewport bar (moved off the artboard right-click).
@@ -1998,7 +2454,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     }
     const onDragStart = (e) => { dragEl = e.currentTarget; e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", ""); } catch {} dragEl.classList.add("dragging"); };
     const onDragEnd = () => { if (dragEl) dragEl.classList.remove("dragging"); dragEl = null; };
-    const HDR_TILE_CAP = 3;   // panel headers stay sane at min width — at most 3 action tiles
+    const HDR_TILE_CAP = 8;   // headers scroll on overflow now (tile-scroll), so allow more tiles
     const onBarOver = (e) => {
       if (!dragEl) return;
       const cont = e.currentTarget, bar = barFor(cont);
@@ -2095,13 +2551,8 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       saveProfile, updateActive,
       activeProfile: () => activeProfile,
       isDirty,
-      saveProfilePrompt: () => {
-        const n = window.prompt("Save current layout as a profile:", activeProfile || "");
-        if (n == null) return; const nm = n.trim(); if (!nm) return;
-        if ((nm in loadProfiles()) && !window.confirm(`A profile named "${nm}" exists. Overwrite it?`)) return;
-        if (saveProfile(nm)) setStatus(`Saved layout profile "${nm}".`, 1800);
-      },
-      renamePrompt: (name) => { const n = window.prompt("Rename layout profile:", name); if (n == null) return; if (!renameProfile(name, n) && n.trim() && n.trim() !== name) setStatus(`A profile named "${n.trim()}" already exists.`, 2400); },
+      saveProfilePrompt: () => floatingInput({ title: "Save layout as profile", value: activeProfile || "", placeholder: "profile name", onCommit: (nm) => { if (saveProfile(nm)) setStatus(`Saved layout profile "${nm}".`, 1800); } }),
+      renamePrompt: (name) => floatingInput({ title: "Rename profile", value: name, onCommit: (n) => { if (!renameProfile(name, n) && n !== name) setStatus(`A profile named "${n}" already exists.`, 2400); } }),
       listProfiles: () => Object.keys(loadProfiles()),
     };
     window.__layout = layoutCtl;
@@ -2148,7 +2599,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       try { localStorage.setItem(key, c ? "1" : "0"); } catch {}
       const win = head.closest(".dock-window");
       if (win) win.style.height = c ? "auto" : "";   // floating: shrink to the header when collapsed
-      if (window.__docks) window.__docks.relayout();   // docked: recompute the height split
+      if (window.__docks) { window.__docks.relayout(); window.__docks.reflowGroups(); }   // docks split + grouped (snapped) members hug
     });
   }
   document.querySelectorAll(".rail-section[data-section]").forEach(wireSectionCollapse);
@@ -2162,7 +2613,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     const grid = document.querySelector(".editor-grid");
     const railToggle = document.querySelector("#rail-toggle");
     const DOCKS_KEY = "hector-vector:docks", FOLD_KEY = "hector-vector:sides-folded";
-    const ORDER = ["history", "layers", "properties", "color"];   // home identity order
+    const ORDER = ["history", "layers", "library", "processor", "properties", "color", "info", "jobs"];   // home identity order
     const dockElFor = (side) => (side === "left" ? leftDock : rightDock);
     let folded = localStorage.getItem(FOLD_KEY) === "1";
 
@@ -2193,37 +2644,64 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       if (window.__layout && window.__layout.registerBar) window.__layout.registerBar("hdr-" + name, actions);
       return s;
     };
-    let propsSection = null, colorSection = null;
+    let propsSection = null, colorSection = null, infoSection = null;
     function ensureProps() { if (!propsSection) propsSection = mkPanel("properties", "Properties", "context-panel"); return propsSection; }
     function ensureColor() { if (!colorSection) colorSection = mkPanel("color", "Colour"); return colorSection; }
-    const sectionEl = (name) => name === "properties" ? propsSection : name === "color" ? colorSection : document.querySelector(`.rail-section[data-section="${name}"]`);
+    function ensureInfo() { if (!infoSection) infoSection = mkPanel("info", "Info"); return infoSection; }   // a standard panel object (no ghostly context-panel chrome)
+    const sectionEl = (name) => name === "properties" ? propsSection : name === "color" ? colorSection : name === "info" ? infoSection : document.querySelector(`.rail-section[data-section="${name}"]`);
     const isFloat = (name) => { const s = sectionEl(name); return !!(s && s.closest(".dock-window")); };
-    const curLoc = (name) => { const s = sectionEl(name); if (!s || !s.parentElement) return null; if (s.closest(".dock-window")) return "float"; return s.parentElement === leftDock ? "left" : "right"; };
+    const curLoc = (name) => { if (state[name] && state[name].loc === "shelf") return "shelf"; if (groupOf(name)) return "float"; const s = sectionEl(name); if (!s || !s.parentElement) return null; if (s.closest(".dock-window")) return "float"; return s.parentElement === leftDock ? "left" : "right"; };
 
-    const DEFAULT_LOC = { history: "right", layers: "right", properties: "right", color: "right" };
+    const DEFAULT_LOC = { history: "right", layers: "right", library: "right", processor: "right", properties: "right", color: "right", info: "shelf", jobs: "right" };
+    // Shelf squares: a glyph + label per panel (parked/unused panels show as these).
+    const SHELF_GLYPH = { history: "⟲", layers: "▤", library: "⊞", processor: "▸", properties: "☰", color: "◧", info: "ⓘ", jobs: "☷" };
+    const PANEL_LABEL = { history: "History", layers: "Layers", library: "Library", processor: "Processor", properties: "Properties", color: "Colour", info: "Info", jobs: "Jobs" };
     let state = {};
     ORDER.forEach((n, i) => state[n] = { loc: DEFAULT_LOC[n], order: i, rect: null, visible: false });
     try { const s = JSON.parse(localStorage.getItem(DOCKS_KEY) || "null"); if (s) for (const n of ORDER) if (s[n]) state[n] = { ...state[n], ...s[n] }; } catch {}
     // Properties + Colour are permanent panel items now — a previously CLOSED one (float +
     // invisible) returns to its dock so panels can never go missing.
     for (const n of ["properties", "color"]) if (state[n].loc === "float" && !state[n].visible) state[n].loc = DEFAULT_LOC[n] || "right";
-    const persist = () => { try { localStorage.setItem(DOCKS_KEY, JSON.stringify(state)); localStorage.setItem(FOLD_KEY, folded ? "1" : "0"); } catch {} };
-    const isShown = (name) => state[name].loc !== "float" || state[name].visible;
+    // Locking-bezel groups: snapped floating panels tiled in one container (one axis).
+    //   gid -> { axis:"row"|"col", members:[name…], rect:{x,y,w,h}, frac:[n…] (sums to 1) }
+    const GROUPS_KEY = "hector-vector:dock-groups";
+    let groups = {};
+    try { const g = JSON.parse(localStorage.getItem(GROUPS_KEY) || "null"); if (g && typeof g === "object") groups = g; } catch {}
+    // Drop members that no longer exist / empties / singletons (a group needs ≥2 panels).
+    for (const gid of Object.keys(groups)) {
+      const gp = groups[gid];
+      if (!gp || !Array.isArray(gp.members)) { delete groups[gid]; continue; }
+      gp.members = gp.members.filter((n) => ORDER.includes(n));
+      if (gp.members.length < 2) delete groups[gid];
+    }
+    const groupOf = (name) => Object.keys(groups).find((gid) => groups[gid].members.includes(name)) || null;
+    let gidSeq = 0;
+    const persist = () => { try { localStorage.setItem(DOCKS_KEY, JSON.stringify(state)); localStorage.setItem(GROUPS_KEY, JSON.stringify(groups)); localStorage.setItem(FOLD_KEY, folded ? "1" : "0"); } catch {} };
+    const isShown = (name) => { const l = state[name].loc; if (l === "left" || l === "right") return true; if (l === "float") return state[name].visible; return false; };   // "shelf" / anything else → not shown
     const propsVisible = () => isShown("properties");
 
     function renderProps() {
       if (!propsSection || !propsSection.parentElement || !propsVisible()) return;
       const title = propsSection.querySelector(".fp-title"), body = propsSection.querySelector(".fp-body");
-      if (!body) return; body.innerHTML = "";
+      if (!body) return;
+      // Preserve scroll across the rebuild. The raster Process stages live in this
+      // body, and toggling live-preview / changing a stage setting re-renders the
+      // whole panel — without this, scrollTop snaps to 0 and the content jumps out
+      // from under the cursor (the reported "pressing buttons jumps the scroll" bug).
+      const keepScroll = body.scrollTop;
+      body.innerHTML = "";
       // Bottom chin: the align-to-artboard bar (null unless a non-artboard object is selected).
       const foot = propsSection.querySelector(".insp-foot");
       if (foot) { foot.innerHTML = ""; const bar = editor._alignBar && editor._alignBar(); if (bar) foot.appendChild(bar); }
       if (!editor.stage) { title.textContent = "Properties"; body.innerHTML = `<div class="insp-empty">No canvas.</div>`; return; }
-      if (editor.artboardSelected) { title.textContent = "Artboard"; body.appendChild(editor._artboardPanel()); return; }
+      if (editor.artboardSelected) { title.textContent = "Artboard"; body.appendChild(editor._artboardPanel()); body.scrollTop = keepScroll; return; }
       let nodes = editor._effectiveLeaves(); if (!nodes.length) nodes = editor.selectedNodes();
       if (!nodes.length) { title.textContent = "Properties"; body.innerHTML = `<div class="insp-empty">Select an object, or right-click the canvas for the artboard.</div>`; return; }
-      title.textContent = nodes.length === 1 ? "Object" : `${nodes.length} objects`;
+      title.textContent = editor._selectionIsRaster()
+        ? (nodes.length === 1 ? "Raster" : `${nodes.length} rasters`)
+        : (nodes.length === 1 ? "Object" : `${nodes.length} objects`);
       body.appendChild(editor._objectPanel(nodes));
+      body.scrollTop = keepScroll;
     }
     // Colour panel hosts the live duo editor (built by the swatch block). Only rebuild on a
     // real selection-SET change — colour edits don't change the set, so the editor isn't
@@ -2236,26 +2714,74 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       if (key === lastColorKey && body.querySelector(".cp-window")) return;
       lastColorKey = key; editor._renderColorPanel(body);
     }
-    function renderPanels() { renderProps(); renderColor(); }
+    function renderPanels() { renderProps(); renderColor(); if (typeof renderLibrary === "function") renderLibrary(); if (typeof renderJobsPanel === "function") renderJobsPanel(); if (typeof renderProcessorPanel === "function") renderProcessorPanel(); }
 
+    // Hidden holding area for parked (shelved / contextually-hidden) sections. They stay
+    // in the DOM here (display:none) so HTML panels remain querySelector-able and can be
+    // re-homed later — removing them outright orphans them (the disappearing-panel class).
+    let attic = null;
+    const theAttic = () => { if (!attic) { attic = document.createElement("div"); attic.id = "dock-attic"; attic.style.display = "none"; document.body.appendChild(attic); } return attic; };
     function detachFromWindow(name) {
       const s = sectionEl(name); if (!s) return;
       const w = s.closest(".dock-window");
-      if (w) { if (w._ro) w._ro.disconnect(); s.remove(); w.remove(); }
-      else if (s.parentElement) s.remove();
+      theAttic().appendChild(s);   // park (keeps it in the DOM) instead of removing
+      if (w) { if (w._ro) w._ro.disconnect(); w.remove(); }
     }
-    const SUMMONED = new Set(["properties", "color"]);   // built on demand, summon/close-able
-    function ensureSection(name) { return name === "properties" ? ensureProps() : name === "color" ? ensureColor() : sectionEl(name); }
+    const SUMMONED = new Set(["properties", "color", "info"]);   // built on demand, summon/close-able
+    function ensureSection(name) { return name === "properties" ? ensureProps() : name === "color" ? ensureColor() : name === "info" ? ensureInfo() : sectionEl(name); }
+    // Preferred height to FIT the panel's content (header + full body + chin), so a panel
+    // dragged out of a dock floats at a size that matches its content rather than whatever
+    // slice of the rail it happened to occupy. Falls back to a sane default when collapsed.
+    function contentHeight(s) {
+      const head = s.querySelector(".panel-head, .section-head");
+      const body = s.querySelector(".section-body, .fp-body");
+      const chin = s.querySelector(".library-chin, .insp-foot, .layers-foot, .processor-chin");
+      let h = 10;
+      if (head) h += head.offsetHeight;
+      h += (body && body.scrollHeight > 20) ? body.scrollHeight : 280;
+      if (chin && chin.offsetHeight) h += chin.offsetHeight;
+      return h;
+    }
+    // Footprints of every currently-floating panel/group (to place new floats clear of them).
+    function floatingRects() {
+      const out = [];
+      document.querySelectorAll(".dock-window, .dock-group").forEach((el) => { const r = el.getBoundingClientRect(); out.push({ x: r.left, y: r.top, w: r.width, h: r.height }); });
+      return out;
+    }
+    const rectsOverlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+    // An ideal spot for a fresh float: start right-of-centre (clear of the canvas + left
+    // tools), cascade down-right until it doesn't overlap an existing float, clamp on-screen.
+    function idealFloatPlacement(w, h) {
+      const existing = floatingRects();
+      const baseX = Math.max(8, Math.round((innerWidth - w) * 0.6));
+      const baseY = 72, step = 30;
+      let fallback = null;
+      for (let i = 0; i < 8; i++) {
+        const x = Math.min(baseX + i * step, Math.max(8, innerWidth - w - 8));
+        const y = Math.min(baseY + i * step, Math.max(8, innerHeight - h - 8));
+        if (!fallback) fallback = { x, y };
+        if (!existing.some((e) => rectsOverlap({ x, y, w, h }, e))) return { x, y };
+      }
+      return fallback || { x: baseX, y: baseY };
+    }
     function ensureFloatWin(name, atX, atY) {
       const s = ensureSection(name); if (!s) return null;
       let w = s.closest(".dock-window"); if (w) return w;
       const r = s.getBoundingClientRect(), prev = state[name].rect, detaching = atX != null;
-      // Keep the panel's current size when it's dragged out of a dock; otherwise reuse the
-      // last float size (or a sensible default).
-      const ww = (detaching && r.width > 40) ? r.width : (prev?.w || Math.max(220, r.width || 260));
-      const wh = (detaching && r.height > 40) ? r.height : (prev?.h || Math.max(200, r.height || 320));
-      const x = atX != null ? atX : (prev?.x ?? Math.max(8, Math.min((r.left || innerWidth - ww - 12), innerWidth - ww - 8)));
-      const y = atY != null ? atY : (prev?.y ?? Math.max(64, r.top || 80));
+      // SIZE — remembered float size wins (memory); otherwise fit the content: a sane panel
+      // width + the content's natural height. Always clamp to the viewport so a tall panel
+      // (e.g. the Library) opens on-screen and scrolls inside instead of running off.
+      const naturalW = r.width > 40 ? r.width : 280;
+      const ww = Math.min((detaching ? Math.max(240, naturalW) : (prev?.w || Math.max(240, naturalW))), innerWidth - 16);
+      const wh = Math.min((detaching ? Math.max(180, contentHeight(s)) : (prev?.h || Math.max(180, contentHeight(s)))), innerHeight - 16);
+      // POSITION — an explicit drop point wins, then remembered position (memory), then an
+      // algorithmically ideal slot: right-of-centre, cascading to avoid overlapping panels.
+      let x, y;
+      if (atX != null) { x = atX; y = atY; }
+      else if (prev) { x = prev.x; y = prev.y; }
+      else { const p = idealFloatPlacement(ww, wh); x = p.x; y = p.y; }
+      x = Math.max(0, Math.min(x, innerWidth - ww));   // keep fully on-screen
+      y = Math.max(0, Math.min(y, innerHeight - wh));
       w = document.createElement("div");
       w.className = "dock-window" + (SUMMONED.has(name) ? " float-panel" : "");
       w.dataset.dockWindow = name;
@@ -2263,23 +2789,305 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       document.body.appendChild(w); w.appendChild(s);
       s.style.flex = "";   // shed the docked flex (inline 0 0 Npx) so the section fills the float window instead of staying fixed-height
       s.classList.remove("collapsed");
+      addResizeHandles(w, name);
       w._ro = new ResizeObserver(() => { const b = w.getBoundingClientRect(); state[name].rect = { x: b.left, y: b.top, w: b.width, h: b.height }; persist(); });
       w._ro.observe(w);
       return w;
+    }
+    // 8-way resize: thin edge + corner handles adjust left/top/width/height, clamped to
+    // min size and the viewport, then persist the rect.
+    function addResizeHandles(win, name) {
+      for (const dir of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
+        const h = document.createElement("div");
+        h.className = "dock-rs dock-rs-" + dir;
+        h.addEventListener("pointerdown", (e) => {
+          if (e.button !== 0) return;
+          e.preventDefault(); e.stopPropagation();
+          const r = win.getBoundingClientRect();
+          const sx = e.clientX, sy = e.clientY, x0 = r.left, y0 = r.top, w0 = r.width, h0 = r.height;
+          const MINW = 190, MINH = 120;
+          const mv = (ev) => {
+            let x = x0, y = y0, ww = w0, wh = h0;
+            const dx = ev.clientX - sx, dy = ev.clientY - sy;
+            if (dir.includes("e")) ww = Math.max(MINW, w0 + dx);
+            if (dir.includes("s")) wh = Math.max(MINH, h0 + dy);
+            if (dir.includes("w")) { ww = Math.max(MINW, w0 - dx); x = x0 + (w0 - ww); }
+            if (dir.includes("n")) { wh = Math.max(MINH, h0 - dy); y = y0 + (h0 - wh); }
+            ww = Math.min(ww, innerWidth - 8); wh = Math.min(wh, innerHeight - 8);
+            x = Math.max(0, Math.min(x, innerWidth - ww)); y = Math.max(0, Math.min(y, innerHeight - wh));
+            win.style.left = x + "px"; win.style.top = y + "px"; win.style.width = ww + "px"; win.style.height = wh + "px";
+          };
+          const up = () => {
+            window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up);
+            const b = win.getBoundingClientRect(); state[name].rect = { x: b.left, y: b.top, w: b.width, h: b.height }; persist();
+          };
+          window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
+        });
+        win.appendChild(h);
+      }
+    }
+
+    // ====================== Locking-bezel groups (floating only) ======================
+    const SNAP = 16;   // px proximity to snap a dragged panel flush to another's edge
+    const normFrac = (gp) => { const s = gp.frac.reduce((a, b) => a + b, 0) || 1; gp.frac = gp.frac.map((f) => f / s); };
+
+    // The seam between two adjacent members: drag to redistribute, double-click to split.
+    function mkBezel(gid, i) {
+      const bz = document.createElement("div");
+      bz.className = "dock-bezel";
+      bz.title = "Drag to resize · double-click to detach";
+      bz.addEventListener("dblclick", (e) => { e.preventDefault(); e.stopPropagation(); splitGroup(gid, i); });
+      bz.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault(); e.stopPropagation();
+        const gp = groups[gid]; if (!gp) return;
+        const cont = bezelContainer(gid); if (!cont) return;
+        const row = gp.axis === "row";
+        const total = row ? cont.getBoundingClientRect().width : cont.getBoundingClientRect().height;
+        const f0 = gp.frac[i - 1], f1 = gp.frac[i], sum = f0 + f1;
+        const start = row ? e.clientX : e.clientY;
+        const mv = (ev) => {
+          const d = ((row ? ev.clientX : ev.clientY) - start) / Math.max(1, total);
+          const lo = 0.12 * sum;   // keep both members usefully sized
+          const a = Math.max(lo, Math.min(sum - lo, f0 + d));
+          gp.frac[i - 1] = a; gp.frac[i] = sum - a; applyFracs(gid);
+        };
+        const up = () => { window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); persist(); };
+        window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
+      });
+      return bz;
+    }
+    const bezelContainer = (gid) => document.querySelector(`.dock-group[data-group="${gid}"]`);
+    // Collapsed members hug their header (flex 0 0 auto) so they don't reserve a blank
+    // slot; expanded members share the space by fraction. With ALL members collapsed the
+    // container folds to the stacked headers (height auto), else it keeps its rect height.
+    function applyFracs(gid) {
+      const gp = groups[gid], cont = bezelContainer(gid); if (!gp || !cont) return;
+      let allCollapsed = true;
+      gp.members.forEach((name, i) => {
+        const s = sectionEl(name); if (!s) return;
+        const col = s.classList.contains("collapsed");
+        if (!col) allCollapsed = false;
+        s.style.flex = col ? "0 0 auto" : (gp.frac[i] * gp.members.length).toFixed(4) + " 1 0%";
+      });
+      cont.style.height = allCollapsed ? "auto" : ((gp.rect && gp.rect.h) ? gp.rect.h + "px" : "");
+    }
+
+    // 8-way resize of the whole group container — flex children scale together.
+    function addGroupResize(cont, gid) {
+      for (const dir of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
+        const h = document.createElement("div"); h.className = "dock-rs dock-rs-" + dir;
+        h.addEventListener("pointerdown", (e) => {
+          if (e.button !== 0) return; e.preventDefault(); e.stopPropagation();
+          const r = cont.getBoundingClientRect();
+          const sx = e.clientX, sy = e.clientY, x0 = r.left, y0 = r.top, w0 = r.width, h0 = r.height;
+          const MINW = 220, MINH = 140;
+          const mv = (ev) => {
+            let x = x0, y = y0, ww = w0, wh = h0; const dx = ev.clientX - sx, dy = ev.clientY - sy;
+            if (dir.includes("e")) ww = Math.max(MINW, w0 + dx);
+            if (dir.includes("s")) wh = Math.max(MINH, h0 + dy);
+            if (dir.includes("w")) { ww = Math.max(MINW, w0 - dx); x = x0 + (w0 - ww); }
+            if (dir.includes("n")) { wh = Math.max(MINH, h0 - dy); y = y0 + (h0 - wh); }
+            ww = Math.min(ww, innerWidth - 8); wh = Math.min(wh, innerHeight - 8);
+            x = Math.max(0, Math.min(x, innerWidth - ww)); y = Math.max(0, Math.min(y, innerHeight - wh));
+            cont.style.left = x + "px"; cont.style.top = y + "px"; cont.style.width = ww + "px"; cont.style.height = wh + "px";
+          };
+          const up = () => {
+            window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up);
+            const b = cont.getBoundingClientRect(); if (groups[gid]) { groups[gid].rect = { x: b.left, y: b.top, w: b.width, h: b.height }; persist(); }
+          };
+          window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
+        });
+        cont.appendChild(h);
+      }
+    }
+
+    // Drag any member's header to MOVE the whole group (bound once per container).
+    function bindGroupMove(cont, gid) {
+      cont.addEventListener("pointerdown", (e) => {
+        const head = e.target.closest(".section-head"); if (!head || e.button !== 0) return;
+        if (e.target.closest(".panel-actions")) return;   // × / header tiles keep their own handlers
+        const gp = groups[gid]; if (!gp) return;
+        const r = cont.getBoundingClientRect(); const offX = e.clientX - r.left, offY = e.clientY - r.top;
+        const sx = e.clientX, sy = e.clientY; let moved = false;
+        const mv = (ev) => {
+          if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
+          moved = true; cont.classList.add("dragging"); head._docking = true;
+          const x = Math.max(0, Math.min(ev.clientX - offX, innerWidth - 60));
+          const y = Math.max(0, Math.min(ev.clientY - offY, innerHeight - 30));
+          cont.style.left = x + "px"; cont.style.top = y + "px";
+        };
+        const up = () => {
+          window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up);
+          cont.classList.remove("dragging");
+          if (moved && groups[gid]) { const b = cont.getBoundingClientRect(); groups[gid].rect = { x: b.left, y: b.top, w: b.width, h: b.height }; persist(); setTimeout(() => { head._docking = false; }, 0); }
+        };
+        window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
+      });
+    }
+
+    // (Re)build every group container from `groups`: tile the member sections along the
+    // group axis with a draggable bezel between each pair; scale via flex.
+    function renderGroups() {
+      // Build/populate live group containers FIRST — moving member sections into them
+      // while they're still in the DOM — THEN remove stale containers. (HTML panels are
+      // located by querySelector, so a stale container removed first would take its child
+      // sections with it and orphan them — the disappearing-panel bug.)
+      for (const gid of Object.keys(groups)) {
+        const gp = groups[gid];
+        if (!gp.frac || gp.frac.length !== gp.members.length) gp.frac = gp.members.map(() => 1 / gp.members.length);
+        normFrac(gp);
+        let cont = bezelContainer(gid);
+        if (!cont) {
+          cont = document.createElement("div"); cont.className = "dock-group"; cont.dataset.group = gid;
+          document.body.appendChild(cont); addGroupResize(cont, gid); bindGroupMove(cont, gid);
+          cont._ro = new ResizeObserver(() => { const b = cont.getBoundingClientRect(); if (groups[gid]) { groups[gid].rect = { x: b.left, y: b.top, w: b.width, h: b.height }; } });
+          cont._ro.observe(cont);
+        }
+        cont.classList.toggle("col", gp.axis === "col");
+        const rc = gp.rect || { x: 80, y: 80, w: 520, h: 320 };
+        cont.style.left = rc.x + "px"; cont.style.top = rc.y + "px"; cont.style.width = rc.w + "px"; cont.style.height = rc.h + "px";
+        // Re-order children: section, bezel, section, … (appendChild moves existing nodes).
+        cont.querySelectorAll(":scope > .dock-bezel").forEach((b) => b.remove());
+        const handles = [...cont.querySelectorAll(":scope > .dock-rs")];
+        gp.members.forEach((name, i) => {
+          const s = ensureSection(name); if (!s) return;
+          const w = s.closest(".dock-window"); if (w && w !== cont) { if (w._ro) w._ro.disconnect(); w.remove(); }
+          if (i > 0) cont.appendChild(mkBezel(gid, i));
+          cont.appendChild(s);
+        });
+        handles.forEach((h) => cont.appendChild(h));   // keep resize handles on top
+        applyFracs(gid);   // size members by fraction (collapsed ones hug their header)
+      }
+      // now-empty stale containers (their sections were re-homed above or floated by reconcile)
+      document.querySelectorAll(".dock-group").forEach((c) => { if (!groups[c.dataset.group]) { if (c._ro) c._ro.disconnect(); c.remove(); } });
+    }
+
+    // Pull a floating panel (or a whole group) into a group with `target` on `side`.
+    // target: a panel name (standalone float) OR a gid (string starting "g:"). side:
+    // "left"|"right" → row, "top"|"bottom" → col.
+    function joinGroup(dragName, target, side) {
+      const axis = (side === "left" || side === "right") ? "row" : "col";
+      const before = (side === "left" || side === "top");
+      const dragRect = winRect(dragName);
+      const along = axis === "row" ? "w" : "h";
+      let gid = (typeof target === "string" && groups[target]) ? target : null;
+      if (gid) {
+        const gp = groups[gid]; if (gp.axis !== axis) return false;
+        const share = Math.max(0.12, Math.min(0.6, (dragRect[along]) / (gp.rect[along] + dragRect[along])));
+        gp.frac = gp.frac.map((f) => f * (1 - share));
+        if (before) { gp.members.unshift(dragName); gp.frac.unshift(share); }
+        else { gp.members.push(dragName); gp.frac.push(share); }
+        if (axis === "row") gp.rect.w += dragRect.w; else gp.rect.h += dragRect.h;
+      } else {
+        // target is a standalone panel → make a new 2-member group
+        const tname = target; const tRect = winRect(tname);
+        gid = "g:" + (++gidSeq) + ":" + Date.now().toString(36);
+        const members = before ? [dragName, tname] : [tname, dragName];
+        const fa = dragRect[along], fb = tRect[along], sum = fa + fb || 1;
+        const frac = before ? [fa / sum, fb / sum] : [fb / sum, fa / sum];
+        const rect = axis === "row"
+          ? { x: Math.min(dragRect.x, tRect.x), y: tRect.y, w: dragRect.w + tRect.w, h: Math.max(dragRect.h, tRect.h) }
+          : { x: tRect.x, y: Math.min(dragRect.y, tRect.y), w: Math.max(dragRect.w, tRect.w), h: dragRect.h + tRect.h };
+        groups[gid] = { axis, members, frac, rect };
+      }
+      // both panels are now grouped → mark float + drop their standalone windows
+      for (const n of [dragName, target].filter((n) => state[n])) { state[n].loc = "float"; if (SUMMONED.has(n)) state[n].visible = true; }
+      reconcile(); persist();
+      return true;
+    }
+    const winRect = (name) => { const s = sectionEl(name); const w = s && s.closest(".dock-window"); const r = (w || s)?.getBoundingClientRect(); return r ? { x: r.left, y: r.top, w: r.width, h: r.height } : { x: 80, y: 80, w: 260, h: 300 }; };
+
+    // Split a group at member index `i`: members [0..i) stay, [i..) leave. A side that
+    // ends up with a single member becomes a standalone floating window again.
+    function splitGroup(gid, i) {
+      const gp = groups[gid]; if (!gp || i <= 0 || i >= gp.members.length) return;
+      const leftNames = gp.members.slice(0, i), rightNames = gp.members.slice(i);
+      const rc = gp.rect, row = gp.axis === "row";
+      const cont = bezelContainer(gid);
+      const total = cont ? (row ? cont.getBoundingClientRect().width : cont.getBoundingClientRect().height) : (row ? rc.w : rc.h);
+      const leftFrac = gp.frac.slice(0, i).reduce((a, b) => a + b, 0);
+      const sizeL = Math.round(total * leftFrac), sizeR = (row ? rc.w : rc.h) - sizeL;
+      delete groups[gid];
+      const mkSide = (names, offset, size) => {
+        if (names.length === 1) {
+          const n = names[0];
+          state[n].rect = row ? { x: rc.x + offset, y: rc.y, w: size, h: rc.h } : { x: rc.x, y: rc.y + offset, w: rc.w, h: size };
+          state[n].loc = "float"; if (SUMMONED.has(n)) state[n].visible = true;
+        } else {
+          const ngid = "g:" + (++gidSeq) + ":" + Date.now().toString(36);
+          const fr = names.map((n) => gp.frac[gp.members.indexOf(n)]);
+          const rect = row ? { x: rc.x + offset, y: rc.y, w: size, h: rc.h } : { x: rc.x, y: rc.y + offset, w: rc.w, h: size };
+          groups[ngid] = { axis: gp.axis, members: names, frac: fr, rect };
+          normFrac(groups[ngid]);
+        }
+      };
+      mkSide(leftNames, 0, sizeL);
+      mkSide(rightNames, sizeL + 8, sizeR - 8);
+      reconcile(); persist();
+    }
+
+    // While dragging window `rect` (excluding `self`), find a flush-snap target: the
+    // nearest standalone-float panel or group whose opposite edge is within SNAP and
+    // overlaps on the perpendicular axis. Returns { target, side } or null.
+    function snapTarget(rect, self) {
+      const cands = [];
+      document.querySelectorAll(".dock-window").forEach((w) => {
+        const s = w.querySelector(".rail-section"); const n = s && s.dataset.section;
+        if (n && n !== self && !groupOf(n)) cands.push({ kind: "panel", id: n, r: w.getBoundingClientRect() });
+      });
+      for (const gid of Object.keys(groups)) { const c = bezelContainer(gid); if (c) cands.push({ kind: "group", id: gid, axis: groups[gid].axis, r: c.getBoundingClientRect() }); }
+      let best = null;
+      const overlapY = (a, b) => Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+      const overlapX = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left);
+      const R = { left: rect.x, right: rect.x + rect.w, top: rect.y, bottom: rect.y + rect.h };
+      for (const c of cands) {
+        const cr = c.r;
+        // horizontal adjacency (row): drag's right↔target left, or drag's left↔target right
+        if (overlapY(R, cr) > 24) {
+          if (Math.abs(R.right - cr.left) <= SNAP) best = pick(best, { target: c.id, side: "left", d: Math.abs(R.right - cr.left), kind: c.kind, axis: c.axis });
+          if (Math.abs(R.left - cr.right) <= SNAP) best = pick(best, { target: c.id, side: "right", d: Math.abs(R.left - cr.right), kind: c.kind, axis: c.axis });
+        }
+        if (overlapX(R, cr) > 24) {
+          if (Math.abs(R.bottom - cr.top) <= SNAP) best = pick(best, { target: c.id, side: "top", d: Math.abs(R.bottom - cr.top), kind: c.kind, axis: c.axis });
+          if (Math.abs(R.top - cr.bottom) <= SNAP) best = pick(best, { target: c.id, side: "bottom", d: Math.abs(R.top - cr.bottom), kind: c.kind, axis: c.axis });
+        }
+      }
+      if (best && best.kind === "group") { const want = (best.side === "left" || best.side === "right") ? "row" : "col"; if (best.axis !== want) return null; }
+      return best;
+    }
+    const pick = (a, b) => (!a || b.d < a.d) ? b : a;
+    let snapEl = null;
+    const snapInd = () => { if (!snapEl) { snapEl = document.createElement("div"); snapEl.className = "dock-snapline hidden"; document.body.appendChild(snapEl); } return snapEl; };
+    function showSnap(t, rect) {
+      if (!t) { if (snapEl) snapEl.classList.add("hidden"); return; }
+      const tr = t.kind === "group" ? bezelContainer(t.target).getBoundingClientRect() : (sectionEl(t.target).closest(".dock-window")).getBoundingClientRect();
+      const ind = snapInd(); ind.classList.remove("hidden");
+      const vert = (t.side === "left" || t.side === "right");
+      const x = t.side === "left" ? tr.left : t.side === "right" ? tr.right : tr.left;
+      const y = t.side === "top" ? tr.top : t.side === "bottom" ? tr.bottom : tr.top;
+      ind.style.left = (vert ? x - 2 : tr.left) + "px";
+      ind.style.top = (vert ? tr.top : y - 2) + "px";
+      ind.style.width = (vert ? "4px" : tr.width + "px");
+      ind.style.height = (vert ? tr.height + "px" : "4px");
     }
 
     // Reconcile the DOM from `state` (placement + ordering + dock visibility + grid).
     function reconcile() {
       for (const name of ORDER) {
         const st = state[name];
+        if (st.loc === "shelf") { detachFromWindow(name); continue; }   // parked on the shelf
+        if (groupOf(name)) continue;   // grouped members are placed by renderGroups()
         if (SUMMONED.has(name) && st.loc === "float" && !st.visible) { detachFromWindow(name); continue; }
         if (st.loc === "float") ensureFloatWin(name);
       }
       for (const side of ["left", "right"]) {
         const dock = dockElFor(side);
-        const items = ORDER.filter((n) => state[n].loc === side && !isFloatWanted(n)).sort((a, b) => (state[a].order || 0) - (state[b].order || 0));
+        const items = ORDER.filter((n) => state[n].loc === side && !isFloatWanted(n) && !groupOf(n)).sort((a, b) => (state[a].order || 0) - (state[b].order || 0));
         for (const n of items) { const s = ensureSection(n); if (!s) continue; detachWinKeepSection(n); s.style.flex = ""; dock.appendChild(s); }
       }
+      renderGroups();
+      renderShelf();
       syncChrome();
       renderPanels();   // (re)fill Properties / Colour bodies for their current state
     }
@@ -2292,10 +3100,16 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       const dock = dockElFor(side);
       dock.querySelectorAll(".dock-vsep").forEach((s) => s.remove());
       const secs = [...dock.querySelectorAll(":scope > .rail-section")];
+      const dockH = dock.getBoundingClientRect().height || 600;
+      const even = Math.round(dockH / Math.max(1, secs.length));
       secs.forEach((sec, i) => {
         const name = sec.dataset.section, collapsed = sec.classList.contains("collapsed");
         if (i < secs.length - 1 && !collapsed) {
-          sec.style.flex = "0 0 " + (state[name].h || Math.max(120, Math.round((dock.getBoundingClientRect().height || 600) / secs.length))) + "px";
+          // A user-resized panel keeps its explicit height; an untouched one opens at its
+          // CONTENT height (so a small panel shrinks to fit instead of claiming a full even
+          // slice of empty space), capped at the even share so the stack never overflows.
+          const h = state[name].h != null ? state[name].h : Math.max(110, Math.min(even, contentHeight(sec)));
+          sec.style.flex = "0 0 " + h + "px";
           const sep = document.createElement("div"); sep.className = "dock-vsep"; sep.title = "Drag to resize";
           bindVSep(sep, sec, name); sec.after(sep);
         } else { sec.style.flex = collapsed ? "0 0 auto" : "1 1 auto"; }
@@ -2326,7 +3140,21 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       requestAnimationFrame(() => measureFit(viewports.output));
     }
 
+    // Pull a panel out of its group (if any). A group left with one member dissolves —
+    // that member becomes a standalone floating window at the group's current footprint.
+    function removeFromGroup(name) {
+      const gid = groupOf(name); if (!gid) return;
+      const gp = groups[gid], i = gp.members.indexOf(name);
+      gp.members.splice(i, 1); gp.frac.splice(i, 1);
+      if (gp.members.length < 2) {
+        const last = gp.members[0];
+        if (last) { const r = (bezelContainer(gid) || {}).getBoundingClientRect ? bezelContainer(gid).getBoundingClientRect() : null; state[last].rect = r ? { x: r.left, y: r.top, w: r.width, h: r.height } : gp.rect; state[last].loc = "float"; if (SUMMONED.has(last)) state[last].visible = true; }
+        delete groups[gid];
+      } else { normFrac(gp); }
+    }
+
     function setLoc(name, loc, beforeName) {
+      removeFromGroup(name);
       if (loc === "float") { state[name].loc = "float"; if (SUMMONED.has(name)) state[name].visible = true; }
       else {
         // insert into `side`, ordered: before `beforeName` (or at the end)
@@ -2373,11 +3201,14 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     function bindHeaderDrag(section) {
       const head = section.querySelector(".section-head"); if (!head || head._dragBound) return;
       head._dragBound = true;
+      // Right-click a panel header → close it to the shelf (contextual close).
+      head.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); shelve(section.dataset.section); });
       head.addEventListener("pointerdown", (e) => {
         if (e.target.closest(".panel-actions") || e.button !== 0) return;
         const name = section.dataset.section;
+        if (groupOf(name)) return;   // grouped → the container's bindGroupMove drives the move
         const sx = e.clientX, sy = e.clientY;
-        let moved = false, win = section.closest(".dock-window"), offX = 24, offY = 12;
+        let moved = false, win = section.closest(".dock-window"), offX = 24, offY = 12, snap = null;
         if (win) { const r = win.getBoundingClientRect(); offX = sx - r.left; offY = sy - r.top; }
         const onMove = (ev) => {
           if (!moved) {
@@ -2389,15 +3220,23 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
           if (!win) return;
           win.style.left = Math.max(0, Math.min(ev.clientX - offX, innerWidth - 60)) + "px";
           win.style.top = Math.max(0, Math.min(ev.clientY - offY, innerHeight - 30)) + "px";
-          showDrop(dropTarget(ev.clientX, ev.clientY));
+          // Prefer snapping to a floating panel/group edge; fall back to the dock drop zones.
+          const r = win.getBoundingClientRect();
+          snap = snapTarget({ x: r.left, y: r.top, w: r.width, h: r.height }, name);
+          if (snap) { hideDrop(); showSnap(snap, r); }
+          else { showSnap(null); showDrop(dropTarget(ev.clientX, ev.clientY)); }
         };
         const onUp = (ev) => {
           window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp);
-          hideDrop(); if (win) win.classList.remove("dragging");
+          hideDrop(); showSnap(null); if (win) win.classList.remove("dragging");
           if (moved) {
-            const t = dropTarget(ev.clientX, ev.clientY);
-            if (t) setLoc(name, t.side, t.before);
-            else { state[name].loc = "float"; if (win) { const b = win.getBoundingClientRect(); state[name].rect = { x: b.left, y: b.top, w: b.width, h: b.height }; } reconcile(); persist(); }
+            state[name].pinned = true;   // user placed it by hand → exempt from contextual auto-shelving
+            if (snap && joinGroup(name, snap.target, snap.side)) { /* grouped */ }
+            else {
+              const t = dropTarget(ev.clientX, ev.clientY);
+              if (t) setLoc(name, t.side, t.before);
+              else { state[name].loc = "float"; if (win) { const b = win.getBoundingClientRect(); state[name].rect = { x: b.left, y: b.top, w: b.width, h: b.height }; } reconcile(); persist(); }
+            }
             setTimeout(() => { head._docking = false; }, 0);
           }
         };
@@ -2410,20 +3249,115 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     // it at x,y if it has no home); close fully hides it (undocking if needed).
     function show(name, x, y) {
       ensureSection(name);
-      if (state[name].loc === "float") {
+      if (state[name].loc === "shelf") { unshelve(name); }   // bring it off the shelf to a dock
+      else if (state[name].loc === "float") {
         state[name].visible = true;
         if (!sectionEl(name).closest(".dock-window")) ensureFloatWin(name, (x != null ? x + 6 : null), (y != null ? y + 6 : null));
       }
       const sec = sectionEl(name);
       if (sec) { sec.classList.remove("collapsed"); try { localStorage.setItem("hv-sec-" + name, "0"); } catch {} }   // focusing a panel expands it
       syncChrome();
-      if (name === "color") { lastColorKey = null; renderColor(); } else renderProps();
+      if (name === "color") { lastColorKey = null; renderColor(); }
+      else if (name === "info") { /* content set by showInfo */ }
+      else renderProps();
       if (sec && sec.scrollIntoView) sec.scrollIntoView({ block: "nearest" });
     }
-    // The × on a floating panel re-docks it (panels are permanent items — never orphaned).
-    function close(name) { setLoc(name, "right"); }
+    // Closing ANY panel parks it on the shelf (as a square). Reopen by clicking the square
+    // or summoning it (e.g. ⓘ for Info, the swatch for Colour). Remembers its dock side.
+    function close(name) { shelve(name); }
+    // shelve(name, auto): a MANUAL close (auto falsy) is sticky — it clears the pin and
+    // won't auto-return. An AUTO shelve (the contextual sync parking an unused panel) sets
+    // autoShelved so it pops back the moment it's relevant again.
+    function shelve(name, auto) {
+      removeFromGroup(name);
+      const cur = state[name].loc;
+      // Remember the FULL prior placement (dock side OR float) so reopening restores it
+      // exactly — float panels keep their remembered rect (state.rect) too.
+      if (cur === "left" || cur === "right" || cur === "float") state[name].lastLoc = cur;
+      state[name].loc = "shelf";
+      state[name].autoShelved = !!auto;
+      if (!auto) state[name].pinned = false;   // manual close → no longer user-pinned
+      if (SUMMONED.has(name)) state[name].visible = false;
+      reconcile(); persist();
+    }
+    function unshelve(name) {
+      state[name].autoShelved = false;   // it's shown now; back under contextual management
+      const last = state[name].lastLoc;
+      if (last === "float") {   // restore it floating (ensureFloatWin uses the remembered rect)
+        state[name].loc = "float";
+        if (SUMMONED.has(name)) state[name].visible = true;
+        reconcile(); persist();
+        return;
+      }
+      const back = (last === "left" || last === "right") ? last
+        : ((DEFAULT_LOC[name] === "left" || DEFAULT_LOC[name] === "right") ? DEFAULT_LOC[name] : "right");
+      setLoc(name, back);   // setLoc clears the group + reconciles + persists
+    }
+    // Contextual auto-shelving. A contextual panel parks itself into a shelf square when
+    // there's nothing for it to act on, and pops back when it's relevant again — but only
+    // the ones the SYSTEM parked (autoShelved) return automatically, and a panel the user
+    // explicitly dragged into place (pinned) is never auto-parked (it stays put / dims).
+    const CTX_RELEVANT = {
+      processor: () => (typeof processorRelevant === "function" ? processorRelevant() : true),
+      color: () => !!(editor && (editor.artboardSelected || (editor.selection && editor.selection.size > 0))),
+    };
+    let syncingCtx = false;
+    function syncContextual() {
+      if (syncingCtx) return;   // shelve()/unshelve() reconcile → guard against re-entry
+      syncingCtx = true;
+      try {
+        for (const name of Object.keys(CTX_RELEVANT)) {
+          if (!state[name]) continue;
+          const relevant = !!CTX_RELEVANT[name]();
+          if (relevant) {
+            if (state[name].loc === "shelf" && state[name].autoShelved) unshelve(name);
+          } else if (isShown(name) && !state[name].pinned) {
+            shelve(name, true);
+          }
+        }
+      } finally { syncingCtx = false; }
+    }
+    // Bring a panel off the shelf. Info is special: its body is content-driven, so we
+    // refill it with the current context (last-inspected item, else a help state) rather
+    // than reopening whatever stale element it last held.
+    function openFromShelf(name) { unshelve(name); unshelveInfoCtx(name); }
+    function unshelveInfoCtx(name) { if (name === "info" && typeof window.refillInfoContext === "function") window.refillInfoContext(); }
+    // Render the shelf squares (one per shelved panel) into the header tray. A shelved
+    // contextual panel that isn't currently relevant reads as dimmed.
+    function renderShelf() {
+      const shelf = document.querySelector("#panel-shelf"); if (!shelf) return;
+      shelf.innerHTML = "";
+      for (const name of ORDER) {
+        if (state[name].loc !== "shelf") continue;
+        const b = document.createElement("button"); b.type = "button";
+        b.className = "shelf-sq" + (state[name].autoShelved ? " auto" : "");   // auto = parked-by-context (idle), reads muted
+        b.dataset.shelf = name;
+        b.textContent = SHELF_GLYPH[name] || (PANEL_LABEL[name] || name)[0];
+        const label = PANEL_LABEL[name] || name;
+        b.title = `${label}${state[name].autoShelved ? " (idle — nothing to act on)" : ""} — click to open, right-click for options`;
+        b.addEventListener("click", () => openFromShelf(name));
+        // Right-click → choose where it opens (restore / float / dock either side).
+        b.addEventListener("contextmenu", (e) => {
+          e.preventDefault(); e.stopPropagation();
+          showContextMenu(e.clientX, e.clientY, [
+            { label: `Open ${label}`, onClick: () => openFromShelf(name) },
+            { label: "Open floating", onClick: () => { state[name].lastLoc = "float"; state[name].rect = null; openFromShelf(name); } },
+            { type: "sep" },
+            { label: "Dock left", onClick: () => { unshelveInfoCtx(name); setLoc(name, "left"); state[name].pinned = true; } },
+            { label: "Dock right", onClick: () => { unshelveInfoCtx(name); setLoc(name, "right"); state[name].pinned = true; } },
+          ]);
+        });
+        shelf.appendChild(b);
+      }
+    }
+    // Fill the Info panel with a built content element and summon it (floating by default).
+    function showInfo(title, el) {
+      ensureInfo();
+      const t = infoSection.querySelector(".fp-title"); if (t) t.textContent = title || "Info";
+      const body = infoSection.querySelector(".fp-body"); if (body) { body.innerHTML = ""; if (el) body.appendChild(el); }
+      show("info");
+    }
     const summonProps = (x, y) => show("properties", x, y);
-    const hideProps = () => {};   // panels are permanent now; Esc no longer dismisses them
     const showColor = () => show("color");
 
     // Fold BOTH side docks in/out with one control.
@@ -2445,9 +3379,16 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     window.__docks = {
       float: (n) => setLoc(n, "float"), dock: (n, side, before) => setLoc(n, side || "right", before),
       loc: curLoc, isFolded: () => folded, toggleFold: () => { folded = !folded; reconcile(); persist(); },
-      summonProps, hideProps, showColor, close, renderProps, renderPanels, renderColor, propsVisible,
+      summonProps, showColor, showInfo, close, shelve, unshelve, syncContextual, renderProps, renderPanels, renderColor, propsVisible,
       relayout: () => { relayoutDock("left"); relayoutDock("right"); },
+      reflowGroups: () => { for (const gid of Object.keys(groups)) applyFracs(gid); },
       state: () => state,
+      // Locking-bezel groups (floating panels). join/split are also driven by drag + the
+      // bezel; these expose the same operations for scripting + E2E.
+      groups: () => groups,
+      groupOf,
+      joinGroup: (drag, target, side) => joinGroup(drag, target, side),
+      splitGroup: (gid, i) => splitGroup(gid, i),
     };
   }
 
@@ -2620,12 +3561,6 @@ document.addEventListener("keydown", (event) => {
   const tag = (event.target?.tagName || "").toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select" || event.target?.isContentEditable) return;
   if (document.querySelector(".cp-window:not(.cp-embedded)")) return;   // pause keys only for the MODAL picker, not the docked Colour panel
-  if (event.key === "Tab" || event.key === "q" || event.key === "Q") {
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
-    event.preventDefault();
-    toggleProcessView();
-    return;
-  }
   if ((event.key === "f" || event.key === "F") && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
     if (!modalRootEl.hidden) return;        // don't pop the File menu over a modal
     event.preventDefault();
@@ -2666,19 +3601,15 @@ function showContextMenu(x, y, items) {
   placeAt(menu, x, y);
   ctxMenuEl = menu;
 }
-// Redesigned object/canvas context: a persistent panel holding the style editors
-// (fill/stroke/opacity, or artboard size/background) plus all the actions in one
-// place. Style edits are live; actions execute and rebuild the panel in place
-// (closing if the selection empties). Dismiss with Esc or a click on the canvas.
-// ---------- floating Properties panel (persistent, summoned on right-click) ----------
-// One reusable window: a draggable titlebar (context title + close ×) over a live body
-// that mirrors the selection (object style / artboard / empty). It PERSISTS — no
-// click-away dismiss — and re-renders on every selection change, so it doubles as a
-// floating Properties/Appearance palette. Summon with right-click; close with ×.
-// The Properties panel is now a fully dockable object owned by the Dockable-panels
-// module (window.__docks). These remain as the names the rest of the app calls.
+// Properties is a fully dockable, permanent panel owned by the Dockable-panels module
+// (window.__docks): it lives in a dock (or float/shelf), and its body mirrors the current
+// selection (object style / artboard / empty). Right-click the canvas summons it (brings
+// it back from the shelf + scrolls it into view); it's never a transient palette. These
+// thin wrappers keep the names the rest of the app calls.
 function renderFloatPanel() { if (window.__docks) window.__docks.renderPanels(); }
-function hideFloatPanel() { if (window.__docks) window.__docks.hideProps(); }
+// Tuck a *floating* Properties panel back into its dock so it can't sit over the canvas.
+// No-op when it's already docked/shelved (the common case) — Properties never auto-floats.
+function hideFloatPanel() { if (window.__docks && window.__docks.loc("properties") === "float") window.__docks.dock("properties"); }
 // Header middle indicator: append the current selection after the document name
 // ("untitled.svg · Path" / "· 3 objects" / "· Artboard").
 function updateSelLabel() {
@@ -2689,14 +3620,9 @@ function updateSelLabel() {
   if (!sel.length) { el.textContent = ""; return; }
   el.textContent = " · " + (sel.length === 1 ? editor.nodeName(sel[0]) : `${sel.length} objects`);
 }
-function showContextPanel(x, y, _kind) {
+function showContextPanel(x, y) {
   hideContextMenu();
   if (window.__docks) window.__docks.summonProps(x, y);
-}
-function toggleFloatPanel() {
-  if (!window.__docks) return;
-  if (window.__docks.propsVisible()) window.__docks.hideProps();
-  else window.__docks.summonProps(window.innerWidth - 270, 96);
 }
 function pointMenuItems() {
   const n = editor._nodeSel.size;
@@ -2742,7 +3668,7 @@ function pointMenuItems() {
 document.addEventListener("pointerdown", (e) => {
   if (ctxMenuEl && !e.target.closest(".context-menu") && !e.target.closest(".cp-backdrop")) hideContextMenu();
 });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { hideContextMenu(); hideFloatPanel(); } });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideContextMenu(); });   // panels are permanent; Esc only dismisses the transient menu/picker
 window.addEventListener("blur", hideContextMenu);
 window.addEventListener("pagehide", () => { rememberLastDoc(); editor.dispose(); });   // remember the doc, then free its state on close
 // Pen tool: hold Ctrl/Cmd to temporarily act as Direct-Select (move anchors/handles).
@@ -2751,18 +3677,58 @@ document.addEventListener("keyup", (e) => { if (e.key === "Control" || e.key ===
 window.addEventListener("blur", () => editor.exitPenTempSelect());
 
 let exportState = { mode: "scale", scale: 16, longest: 1024, width: 0, height: 0, background: "transparent" };
+let lastExport = null;   // { blob, url, name, w, h } — the most recent client render, reused by the result actions
 
-async function svgNativeSize(url) {
-  try {
-    const res = await fetch(url);
-    const text = await res.text();
-    const vb = text.match(/viewBox\s*=\s*"\s*[-\d.]+\s+[-\d.]+\s+([\d.]+)\s+([\d.]+)/);
-    if (vb) return [Math.round(+vb[1]), Math.round(+vb[2])];
-    const w = text.match(/\bwidth\s*=\s*"([\d.]+)"/);
-    const h = text.match(/\bheight\s*=\s*"([\d.]+)"/);
-    if (w && h) return [Math.round(+w[1]), Math.round(+h[1])];
-  } catch {}
+// The SVG to export + its native size + an optional library save target. Prefer the
+// LIVE canvas (exports exactly what's shown, including unsaved edits) over the saved
+// file, and fall back to the on-disk output when there's no editor stage.
+function currentExportSource() {
+  if (editor && editor.stage) {
+    const vb = editor.stage.viewBox && editor.stage.viewBox.baseVal;
+    const native = vb && vb.width > 0 ? [Math.round(vb.width), Math.round(vb.height)] : null;
+    return { svg: editor.serialize(), native, target: selectedOutput || null };
+  }
   return null;
+}
+
+// Inline same-origin <image> hrefs as data URIs. An SVG loaded into an <img> renders
+// in "secure static mode" — external references (our /outputs, /work-items rasters)
+// are BLOCKED and would vanish from the PNG — so bake them in first.
+async function inlineSvgImages(svgText) {
+  if (!/<image\b/i.test(svgText)) return svgText;
+  const doc = new DOMParser().parseFromString(svgText, "image/svg+xml");
+  await Promise.all([...doc.querySelectorAll("image")].map(async (im) => {
+    const href = im.getAttribute("href") || im.getAttribute("xlink:href") || "";
+    if (!href || href.startsWith("data:")) return;
+    try {
+      const blob = await (await fetch(href)).blob();
+      const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(blob); });
+      im.setAttribute("href", dataUrl); im.removeAttribute("xlink:href");
+    } catch { /* leave the href; worst case that one raster is missing */ }
+  }));
+  return new XMLSerializer().serializeToString(doc);
+}
+
+// Rasterise an SVG string to a PNG Blob on a canvas — the browser's own SVG renderer,
+// so curves/strokes/gradients all work without cairosvg or any system tool.
+function renderSvgToPngBlob(svgText, w, h, background) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(new Blob([svgText], { type: "image/svg+xml;charset=utf-8" }));
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(w)); c.height = Math.max(1, Math.round(h));
+        const ctx = c.getContext("2d");
+        if (background && background !== "transparent") { ctx.fillStyle = background === "black" ? "#000000" : "#ffffff"; ctx.fillRect(0, 0, c.width, c.height); }
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        c.toBlob((b) => b ? resolve(b) : reject(new Error("The canvas produced no image.")), "image/png");
+      } catch (e) { URL.revokeObjectURL(url); reject(e); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("The browser couldn't load this SVG to rasterise it.")); };
+    img.src = url;
+  });
 }
 
 function targetSizeFor(native) {
@@ -2778,22 +3744,32 @@ function targetSizeFor(native) {
   return [exportState.width || nw, exportState.height || nh];
 }
 
-async function openExportModal() {
-  if (!selectedOutput || viewports.output.kind !== "svg") return;
+function blobToDataUrl(blob) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error("Could not read the rendered image.")); r.readAsDataURL(blob); });
+}
+
+function openExportModal() {
+  const src = currentExportSource();
+  if (!src) { setStatus("Open or create a canvas first.", 2500); return; }
+  const native = src.native;
   openModal("Export PNG", true);
   modalSearchEl.hidden = true;
-  const native = await svgNativeSize(selectedOutput.url);
   const root = document.createElement("div");
   root.className = "form";
 
+  // Preview of what's being exported (the live canvas), on a checker so transparency reads.
+  const preview = document.createElement("div"); preview.className = "export-preview";
+  const pimg = document.createElement("img");
+  const previewUrl = URL.createObjectURL(new Blob([src.svg], { type: "image/svg+xml;charset=utf-8" }));
+  pimg.src = previewUrl; pimg.alt = "Export preview";
+  pimg.addEventListener("load", () => URL.revokeObjectURL(previewUrl), { once: true });
+  preview.appendChild(pimg); root.appendChild(preview);
+
   const sizeOut = document.createElement("div");
   sizeOut.className = "form-hint";
-
   const refreshSizeOut = () => {
     const [w, h] = targetSizeFor(native);
-    sizeOut.textContent = native
-      ? `Native ${native[0]}×${native[1]} → output ${w}×${h} px`
-      : `Output ${w}×${h} px`;
+    sizeOut.textContent = native ? `Native ${native[0]}×${native[1]} → output ${w}×${h} px` : `Output ${w}×${h} px`;
   };
 
   root.appendChild(sectionTitle("Size"));
@@ -2807,7 +3783,7 @@ async function openExportModal() {
   if (exportState.mode === "scale") {
     const presets = [2, 4, 8, 16, 32, 64];
     const sel = makeSelectRaw(String(exportState.scale), presets.map((n) => [String(n), `×${n}`]), (v) => { exportState.scale = +v; refreshSizeOut(); });
-    root.appendChild(fieldRow("Scale", sel, "Pixel-exact — each native pixel becomes an N×N block."));
+    root.appendChild(fieldRow("Scale", sel, "Each native unit becomes an N×N block."));
   } else if (exportState.mode === "longest") {
     const presets = [256, 512, 1024, 2048, 4096];
     const sel = makeSelectRaw(String(exportState.longest), presets.map((n) => [String(n), `${n} px`]), (v) => { exportState.longest = +v; refreshSizeOut(); });
@@ -2833,31 +3809,22 @@ async function openExportModal() {
   const actions = document.createElement("div");
   actions.className = "form-actions";
   const go = document.createElement("button");
-  go.type = "button";
-  go.textContent = "Export PNG";
+  go.type = "button"; go.className = "primary-button";
+  go.textContent = "Render PNG";
   go.addEventListener("click", async () => {
-    go.disabled = true;
-    go.textContent = "Rendering…";
+    go.disabled = true; go.textContent = "Rendering…";
     const [w, h] = targetSizeFor(native);
-    const payload = { folder: selectedOutput.folder, name: selectedOutput.name, background: exportState.background };
-    if (exportState.mode === "scale") payload.scale = exportState.scale;
-    else if (exportState.mode === "longest") {
-      if (native && native[0] >= native[1]) payload.width = w; else payload.height = h;
-      if (!native) payload.width = exportState.longest;
-    } else { payload.width = w; payload.height = h; }
     try {
-      const data = await api("/api/render", "POST", payload);
-      manualOutputName = data.name;
-      await refreshAll();
-      setStatus(data.message || "Rendered.", 3000);
-      showExportResult(data);   // success step: Download PNG / Reveal / Done — not a dead end
+      // Browser-side rasterise (no cairosvg). Inline rasters first so they don't drop out.
+      const svgText = await inlineSvgImages(src.svg);
+      const blob = await renderSvgToPngBlob(svgText, w, h, exportState.background);
+      if (lastExport && lastExport.url) URL.revokeObjectURL(lastExport.url);
+      const base = src.target ? src.target.name.replace(/\.svg$/i, "") : (defaultSaveName() || "export");
+      lastExport = { blob, url: URL.createObjectURL(blob), name: `${base}@${w}x${h}.png`, w, h, target: src.target };
+      showExportResult();
     } catch (e) {
-      go.disabled = false;
-      go.textContent = "Export PNG";
-      const hint = document.createElement("div");
-      hint.className = "form-hint status-error";
-      hint.textContent = e.message;
-      actions.appendChild(hint);
+      go.disabled = false; go.textContent = "Render PNG";
+      const hint = document.createElement("div"); hint.className = "form-hint status-error"; hint.textContent = e.message; actions.appendChild(hint);
     }
   });
   actions.appendChild(go);
@@ -2867,27 +3834,40 @@ async function openExportModal() {
   modalBodyEl.appendChild(root);
 }
 
-// After a render, give the PNG a real exit: download it to disk, reveal it in the
-// file manager, or close. (Before, the modal just closed and the file was stranded
-// in the outputs folder.)
-function showExportResult(data) {
-  const url = `/outputs/${encodeURIComponent(data.folder)}/${encodeURIComponent(data.name)}`;
+// Success step: the PNG is already in-hand (a client-rendered blob). Download it, drop
+// it in the library (if there's an SVG to sit beside), open it, or close — no dead end,
+// and nothing is stranded on disk unless the user asks for it.
+function showExportResult() {
+  const ex = lastExport;
+  if (!ex) return;
   modalTitleEl.textContent = "Exported";
   const root = document.createElement("div"); root.className = "form";
   root.appendChild(sectionTitle("Rendered"));
+  const preview = document.createElement("div"); preview.className = "export-preview";
+  const im = document.createElement("img"); im.src = ex.url; im.alt = ex.name; preview.appendChild(im); root.appendChild(preview);
   const info = document.createElement("div"); info.className = "form-hint";
-  info.textContent = `${data.name} — ${data.size[0]}×${data.size[1]} px (${data.backend}).`;
+  info.textContent = `${ex.name} — ${ex.w}×${ex.h} px · ${fmtBytes(ex.blob.size)}`;
   root.appendChild(info);
+
   const actions = document.createElement("div"); actions.className = "form-actions";
-  actions.appendChild(ghostBtn("Download PNG", async () => {
-    try {
-      const blob = await (await fetch(url)).blob();
-      downloadBlob(data.name, blob, "image/png");
-      setStatus(`Downloaded ${data.name}.`, 2000);
-    } catch (e) { setStatus(`Download failed: ${e.message}`, 3000); }
-  }));
-  if (data.output) actions.appendChild(ghostBtn("Reveal", () => revealInFileManager(data.output)));
-  actions.appendChild(ghostBtn("Open", () => window.open(url, "_blank", "noopener")));
+  const dl = document.createElement("button"); dl.type = "button"; dl.className = "primary-button"; dl.textContent = "Download PNG";
+  dl.addEventListener("click", () => { downloadBlob(ex.name, ex.blob, "image/png"); setStatus(`Downloaded ${ex.name}.`, 2000); });
+  actions.appendChild(dl);
+  if (ex.target) {
+    const saveBtn = ghostBtn("Save to library", async () => {
+      saveBtn.disabled = true; saveBtn.textContent = "Saving…";
+      try {
+        const data = await api("/api/save-render", "POST", {
+          folder: ex.target.folder, name: ex.target.name, png_base64: await blobToDataUrl(ex.blob), width: ex.w, height: ex.h,
+        });
+        manualOutputName = data.name; await refreshAll();
+        saveBtn.textContent = "Saved ✓"; setStatus(data.message || "Saved to library.", 2500);
+      } catch (e) { saveBtn.disabled = false; saveBtn.textContent = "Save to library"; setStatus(`Save failed: ${e.message}`, 3500); }
+    });
+    actions.appendChild(saveBtn);
+  }
+  actions.appendChild(ghostBtn("Open", () => window.open(ex.url, "_blank", "noopener")));
+  actions.appendChild(ghostBtn("Back", () => openExportModal()));
   actions.appendChild(ghostBtn("Done", () => closeModal()));
   root.appendChild(actions);
   modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
@@ -2911,6 +3891,9 @@ window.addEventListener("dragleave", (event) => {
   clearDragState();
 });
 window.addEventListener("drop", async (event) => {
+  // A library drag carries our custom type and is handled on #output-preview; never
+  // treat it as a file import here (that's what duplicated dragged lib items).
+  if (event.dataTransfer?.types?.includes("application/x-hv-lib")) { clearDragState(); return; }
   if (!event.dataTransfer?.files?.length) {
     clearDragState();
     return;
@@ -2939,13 +3922,65 @@ fileInputEl.addEventListener("change", async () => {
     fileInputEl.value = "";
   }
 });
+// ⊕ in the Library dock panel header → same add-images gesture as the Process view.
+document.querySelector("#library-add")?.addEventListener("click", (e) => { e.stopPropagation(); fileInputEl.click(); });
+// Jobs header actions (square tool-buttons): cancel all queued / clear finished.
+document.querySelector("#jobs-cancel-all")?.addEventListener("click", (e) => { e.stopPropagation(); cancelAllQueuedJobs(); });
+document.querySelector("#jobs-clear")?.addEventListener("click", (e) => { e.stopPropagation(); clearFinishedJobs(); });
+// ▸ in the Processor header → run the pipeline (single if a raster is selected, else batch).
+document.querySelector("#processor-run")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  runProcess(e.currentTarget);
+});
 
-// Process run scope + force are owned by the Process view's own controls (module
-// state, not hidden DOM). Force persists; mode defaults to single each session.
+// Drop a library cell (raster / vector / project) onto the canvas to load it. Listener
+// lives on the persistent #output-preview frame (its children get replaced on mount, but
+// the frame element — and this handler — survive). Internal drags carry a custom type,
+// so they don't trip the window-level file-upload drop handler (which keys off `Files`).
+{
+  const dropHost = document.querySelector("#output-preview");
+  if (dropHost) {
+    const isLib = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("application/x-hv-lib");
+    dropHost.addEventListener("dragover", (e) => { if (!isLib(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; dropHost.classList.add("lib-drop-over"); });
+    dropHost.addEventListener("dragleave", (e) => { if (e.target === dropHost) dropHost.classList.remove("lib-drop-over"); });
+    dropHost.addEventListener("drop", (e) => {
+      if (!isLib(e)) return;
+      // Stop here — don't let the drop bubble to the window file-import handler (the
+      // native <img> drag can carry a file fallback, which re-imported the item).
+      e.preventDefault(); e.stopPropagation(); dropHost.classList.remove("lib-drop-over");
+      let d; try { d = JSON.parse(e.dataTransfer.getData("application/x-hv-lib")); } catch { return; }
+      if (d.mode === "raster") loadRasterToCanvas({ name: d.name, url: d.url });
+      else if (d.mode === "vector") { placeFromUrl(d.url, d.name).catch((er) => setStatus(er.message, 3000)); }
+      else if (d.mode === "canvas") openProject({ name: d.name, url: d.url });
+    });
+  }
+}
+
+// Process run scope + force (module state, not hidden DOM). Force persists.
 const FORCE_KEY = "hector-vector:force";
-let processMode = "single";   // "single" (selected image) | "batch" (whole library)
+let processBatch = false;     // explicit "Whole library" mode — OFF by default (single focus)
 let processForce = false;
 try { processForce = localStorage.getItem(FORCE_KEY) === "1"; } catch {}
+
+// Resolve what the Processor acts on. Default focus is the selected raster — the
+// canvas <image> (which also drives live preview) or, if none is on the canvas, the
+// library-selected raster (run target only; load it to preview). Batch is OPT-IN
+// (processBatch), never a silent fallback.
+//   node  — canvas <image> for live preview (null if not on the canvas)
+//   name  — server run input (the library file, with extension) = selectedName
+//   label — what the target row shows
+//   live  — live preview is available (a canvas node exists)
+//   canRun— single run is possible (we have a library file name to send)
+function processTarget() {
+  if (processBatch) return { batch: true, label: "Whole library (batch)", canRun: true };
+  const node = currentRasterTarget();
+  const name = selectedName || null;
+  return {
+    batch: false, node, name,
+    label: node ? rasterName(node) : (name || "No raster selected"),
+    live: !!node, canRun: !!name,
+  };
+}
 
 async function runProcess(btn) {
   if (!btn || btn.disabled) return;
@@ -2958,15 +3993,20 @@ async function runProcess(btn) {
       return;
     }
     // The stage strip always drives the generalized pipeline route; the enabled
-    // stage flags travel in the payload (via {...settings}). Single-mode runs send
-    // an explicit input, which the server processes unconditionally — so this guard
-    // (matching the server's stage-aware batch skip) stops a needless re-run.
+    // stage flags travel in the payload (via {...settings}). A focused (non-batch)
+    // run sends an explicit input, which the server processes unconditionally — so
+    // this guard (matching the server's stage-aware batch skip) stops a needless re-run.
     const payload = { ...settings };
     const force = processForce;
-    if (processMode === "single" && selectedName) {
-      payload.inputs = [selectedName];
-      if (!force && pipelineProcessed(selectedName)) {
-        setStatus(`“${selectedName}” is already processed — turn on Force to re-run.`, 4000);
+    const t = processTarget();
+    if (!t.batch) {
+      if (!t.name) {
+        setStatus("Select a raster to process, or switch to Whole library (batch).", 3500);
+        return;
+      }
+      payload.inputs = [t.name];
+      if (!force && pipelineProcessed(t.name)) {
+        setStatus(`“${t.name}” is already processed — turn on Force to re-run.`, 4000);
         return;   // finally{} restores the button; no wasteful re-run
       }
     }
@@ -2975,7 +4015,7 @@ async function runProcess(btn) {
     lastBatchFailCount = 0;
     const hold = data.started === 0 ? 4000 : 1800;
     setStatus(data.message || "Started.", hold);
-    await refreshAll();
+    await refreshExceptCanvas();   // queue background work without disturbing the canvas
   } catch (error) {
     setStatus(error.message, 3000);
   } finally {
@@ -3015,7 +4055,6 @@ function viewJobOutput(job) {
   const rel = chooseFinalOutput(job);
   if (job.source_name) selectedName = job.source_name;
   manualOutputName = rel ? jobOutputName(rel) : null;
-  showEditView();   // Process is a view now — switch to the canvas so the output is visible
   refreshLibrary();
   renderPreviews().catch((e) => setStatus(e.message, 2500));
 }
@@ -3029,36 +4068,22 @@ function progressBarHtml(progress) {
 
 // Job queue (toolbar + rows) for the Process workspace's jobs pane.
 // Returns the .jobs-panel node.
+// Cancel-all-queued / clear-finished moved OUT of the panel body into the Jobs
+// section header (square tool-buttons), so the scrollable body is just the queue
+// — pressing them no longer lives inside the list that re-renders under the cursor.
+async function cancelAllQueuedJobs() {
+  const queued = jobsCache.filter((j) => j.status === "queued");
+  for (const j of queued) { try { await api("/api/jobs/cancel", "POST", { id: j.id }); } catch {} }
+  await loadJobs();
+}
+async function clearFinishedJobs() {
+  try { await api("/api/jobs/clear", "POST", {}); await loadJobs(); }
+  catch (e) { setStatus(e.message, 3000); }
+}
+
 function buildJobsPanel() {
   const wrap = document.createElement("div");
   wrap.className = "jobs-panel";
-
-  const toolbar = document.createElement("div");
-  toolbar.className = "jobs-toolbar";
-  const cancelAllBtn = document.createElement("button");
-  cancelAllBtn.type = "button";
-  cancelAllBtn.className = "ghost-button";
-  cancelAllBtn.textContent = "Cancel all queued";
-  cancelAllBtn.addEventListener("click", async () => {
-    const queued = jobsCache.filter((j) => j.status === "queued");
-    for (const j of queued) {
-      try { await api("/api/jobs/cancel", "POST", { id: j.id }); } catch {}
-    }
-    await loadJobs();
-  });
-  const clearBtn = document.createElement("button");
-  clearBtn.type = "button";
-  clearBtn.className = "ghost-button";
-  clearBtn.textContent = "Clear finished";
-  clearBtn.addEventListener("click", async () => {
-    try {
-      await api("/api/jobs/clear", "POST", {});
-      await loadJobs();
-    } catch (e) { setStatus(e.message, 3000); }
-  });
-  toolbar.appendChild(cancelAllBtn);
-  toolbar.appendChild(clearBtn);
-  wrap.appendChild(toolbar);
 
   if (!jobsCache.length) {
     const empty = document.createElement("div");
@@ -3113,7 +4138,6 @@ function buildJobsPanel() {
         if (action.kind === "place") {
           const rel = chooseFinalOutput(job);
           if (rel) {
-            showEditView();   // reveal the canvas so the placed layer is visible
             await placeFromUrl(jobOutputUrl(job, rel), jobOutputName(rel));
           }
           return;
@@ -3151,6 +4175,10 @@ function buildJobsPanel() {
 // Vectorize's method). One generalized `/api/run/pipeline` honors the flags; the
 // strip drives it. Drag to reorder the blocks (shares the customize-layout drag
 // CSS); data flow stays canonical (you always upscale before tracing).
+// `var` (hoisted, NOT a TDZ const) so renderProcessorPanel can guard on it: the docks
+// IIFE calls renderPanels() at module-eval time — BEFORE these pipeline consts below
+// initialize — so the Processor panel must no-op on that first call and fill once ready.
+var pipelineConstsReady = false;
 const PIPELINE_STAGES = [
   { id: "upscale",   key: "stage_upscale",   label: "Upscale",   note: "Enlarge with Real-ESRGAN" },
   { id: "removebg",  key: "stage_removebg",  label: "Remove BG", note: "Isolate the subject" },
@@ -3169,6 +4197,11 @@ function stageOrder() {
 }
 const stageOn = (id) => !!settings[STAGE_BY_ID[id].key];
 const anyStageEnabled = () => CANON_ORDER.some(stageOn);
+// All pipeline consts + helpers above are initialized → the Processor panel may now
+// render. (The docks IIFE called renderPanels() during module eval, before this point;
+// the guard in renderProcessorPanel made that first call a no-op. Boot's onInspect →
+// renderPanels fills the panel for real once the canvas mounts.)
+pipelineConstsReady = true;
 
 // The legacy process kind the current stage-set is equivalent to — used only to
 // keep previews / skip-detection / the Settings-modal label working unchanged.
@@ -3214,444 +4247,406 @@ function pipelineProcessed(name) {
   );
 }
 
-// The expandable settings for one stage. Reuses the shared form helpers
-// (fieldRow/makeSelect/makeRange/makeNumber) so it matches the Settings modal.
-function stageBody(id) {
-  const body = document.createElement("div");
-  body.className = "pipeline-detail-body form";
-  const rerender = () => refreshProcessHead();
-
-  if (id === "upscale") {
-    body.appendChild(fieldRow("Model", makeSelect("model", [
-      ["realesrgan-x4plus", "ESRGAN x4+ (photo)"],
-      ["realesrnet-x4plus", "ESRNet x4+ (cleaner)"],
-      ["realesr-animevideov3", "Anime / line-art"],
-    ])));
-    body.appendChild(fieldRow("Scale", makeSelect("scale", [["2", "2×"], ["3", "3×"], ["4", "4×"]])));
-  }
-
-  else if (id === "removebg") {
-    if (settings.removebg_method === "ai") {
-      body.appendChild(fieldRow("AI model", makeSelect("cutout_model", [
-        ["u2net", "u2net — default, general (175MB)"],
-        ["u2netp", "u2netp — fast/light (5MB)"],
-        ["u2net_human_seg", "u2net_human_seg — humans"],
-        ["isnet-general-use", "ISNet — sharper general (~170MB)"],
-        ["isnet-anime", "ISNet anime"],
-        ["birefnet-general", "BiRefNet general — OSS SOTA (~440MB)"],
-        ["birefnet-general-lite", "BiRefNet lite"],
-        ["birefnet-portrait", "BiRefNet portrait"],
-        ["silueta", "silueta — quantized U²-Net (~40MB)"],
-      ]), "First run of each model downloads weights to ~/.u2net/"));
-      const am = document.createElement("input");
-      am.type = "checkbox"; am.checked = !!settings.alpha_matting;
-      am.addEventListener("change", () => { settings.alpha_matting = am.checked; persistSettings(); });
-      body.appendChild(fieldRow("Alpha matting", am, "Refines edges (hair). Slower."));
-      if (workspace && !workspace.rembg_installed) {
-        const cta = document.createElement("button");
-        cta.type = "button"; cta.className = "ghost-button"; cta.textContent = "Install rembg (one-time, ~500MB)";
-        cta.addEventListener("click", async () => {
-          cta.disabled = true; cta.textContent = "Installing rembg…";
-          try { const d = await api("/api/install/rembg", "POST", {}); setStatus(d.message || "Install started.", 3000); await loadJobs(); }
-          catch (e) { setStatus(e.message, 3000); cta.disabled = false; cta.textContent = "Install rembg (one-time, ~500MB)"; }
-        });
-        const wrap = document.createElement("div"); wrap.className = "form-actions"; wrap.appendChild(cta); body.appendChild(wrap);
-      }
-    } else if (settings.removebg_method === "green") {
-      const note = document.createElement("div"); note.className = "form-hint";
-      note.textContent = "Greenscreen keys out a green-dominant background (fixed threshold).";
-      body.appendChild(note);
-    } else {
-      const note = document.createElement("div"); note.className = "form-hint";
-      note.textContent = "Classical auto-detects a flat background with numpy — fast, no model download.";
-      body.appendChild(note);
-    }
-  }
-
-  else if (id === "vectorize") {
-    if (settings.vectorize_method === "pixel") {
-      body.appendChild(fieldRow("Native size (cells)", makeNumber("pv_grid", { min: 0, max: 4096, step: 1, placeholder: "auto-detect" }), "Blank = auto-detect the pixel grid; set a number to force it."));
-      body.appendChild(fieldRow("Cell color", makeSelect("pv_sample", [["mode", "Mode — most common"], ["median", "Median — robust to noise"], ["center", "Center pixel — fastest"]])));
-      body.appendChild(fieldRow("Quantize colors", makeNumber("pv_quantize", { min: 0, max: 256, step: 1, placeholder: "keep all" }), "Snap to an N-color palette. Blank/0 keeps every color."));
-      const keyCb = document.createElement("input"); keyCb.type = "checkbox"; keyCb.checked = !!settings.pv_key_corner;
-      keyCb.addEventListener("change", () => { settings.pv_key_corner = keyCb.checked; persistSettings(); });
-      body.appendChild(fieldRow("Key out corner", keyCb, "Make the dominant corner color transparent."));
-      body.appendChild(fieldRow("Shape mode", makeSelect("pv_mode", [["merged", "Merged rects — compact"], ["path", "Per-color paths — fewest nodes"], ["pixels", "One rect per pixel — exact"]])));
-      const note = document.createElement("div"); note.className = "form-hint";
-      note.textContent = "Pixel never smooths — it recovers the grid and emits squares (scales perfectly).";
-      body.appendChild(note);
-    } else {
-      const colorSel = makeSelect("trace_colormode", [["bw", "Black & white — silhouette"], ["color", "Color — full palette"]]);
-      colorSel.addEventListener("change", () => rerender());
-      body.appendChild(fieldRow("Output", colorSel, "B&W traces a 1-color silhouette; Color traces the image's real colors."));
-      const isColor = settings.trace_colormode === "color";
-      if (isColor) {
-        body.appendChild(fieldRow("Style", makeSelect("trace_color_style", [["poster", "Poster — flat, limited palette"], ["photo", "Photo — smooth gradients"]]), "Poster suits logos/illustration; Photo follows gradients."));
-        body.appendChild(fieldRow("Colors", makeRange("color_precision", 1, 8, 1), "Poster uses this as palette size; Photo as gradient precision."));
-        body.appendChild(fieldRow("Layers", makeSelect("trace_hierarchical", [["stacked", "Stacked — layered fills"], ["cutout", "Cutout — non-overlapping"]])));
-      }
-      const presetSel = makeSelect("trace_preset", [["draft", "Draft — fewest points"], ["balanced", "Balanced"], ["smooth", "Smooth — curvier"], ["sharp", "Sharp — keep detail"], ["custom", "Custom — sliders below"]]);
-      presetSel.addEventListener("change", () => { const pre = TRACE_PRESETS[presetSel.value]; if (pre) { Object.assign(settings, pre); persistSettings(); } rerender(); });
-      body.appendChild(fieldRow("Preset", presetSel, "Tunes the sliders below as a group."));
-      body.appendChild(fieldRow("Curves", makeSelect("trace_mode", [["spline", "Spline (curves)"], ["polygon", "Polygon"], ["pixel", "Pixel (no smoothing)"]])));
-      body.appendChild(fieldRow("Simplify", makeSelect("trace_simplify", [["off", "Off — raw vtracer"], ["light", "Light"], ["medium", "Medium — recommended"], ["strong", "Strong — fewest nodes"]]), "Refits to the fewest curves. Resolution-independent."));
-      if (!isColor) body.appendChild(fieldRow("Black threshold", makeNumber("mask_threshold", { min: 16, max: 240, step: 1, placeholder: "auto (otsu)" }), "Gray cutoff. Higher = more pixels as foreground."));
-      body.appendChild(fieldRow("Target max dim", makeNumber("target_max_dim", { min: 0, max: 16384, step: 64, placeholder: "auto (no resize)" }), "Resize the longest side before tracing."));
-      const advToggle = document.createElement("input"); advToggle.type = "checkbox"; advToggle.checked = !!settings.trace_advanced;
-      advToggle.addEventListener("change", () => { settings.trace_advanced = advToggle.checked; persistSettings(); rerender(); });
-      body.appendChild(fieldRow("Show VTracer sliders", advToggle));
-      if (settings.trace_advanced) {
-        const onSlider = () => { settings.trace_preset = "custom"; persistSettings(); };
-        const flag = (row) => { row.querySelectorAll("input").forEach((el) => el.addEventListener("input", onSlider)); return row; };
-        body.appendChild(flag(fieldRow("Smooth (segment_length)", makeRange("segment_length", 3.5, 10, 0.5))));
-        body.appendChild(flag(fieldRow("Filter speckle", makeRange("filter_speckle", 0, 16, 1))));
-        body.appendChild(flag(fieldRow("Corner threshold", makeRange("corner_threshold", 30, 180, 5))));
-        body.appendChild(flag(fieldRow("Splice threshold", makeRange("splice_threshold", 0, 180, 5))));
-        body.appendChild(flag(fieldRow("Path precision", makeRange("path_precision", 0, 10, 1))));
-      }
-    }
-  }
-  return body;
+function libraryFilterValue() { const f = document.querySelector("#library-filter"); return ((f && f.value) || "").trim().toLowerCase(); }
+function syncLibModeButtons() { document.querySelectorAll(".lib-mode").forEach((b) => b.classList.toggle("active", b.dataset.mode === libraryMode)); }
+function syncLibSortButtons() {
+  document.querySelectorAll(".lib-sort-dir").forEach((b) => b.classList.toggle("active", b.dataset.dir === librarySortDir));
+  const k = document.querySelector("#library-sortkey"); if (k) k.textContent = librarySortKey === "date" ? "D" : "N";
 }
-
-// --- presets: the 6 old processes as built-ins + user-saved sets ----------------
-// A preset is a snapshot of the pipeline-relevant settings. Built-ins reproduce
-// the old flat processes (locked); users save their own. Mirrors the layout-
-// profile verbs (save / apply / delete / "active" highlight) over a dedicated
-// store, so pipeline presets never tangle with the toolbar-layout profiles.
-const PIPELINE_PRESETS_KEY = "hector-vector:pipeline-presets";
-const PRESET_KEYS = [
-  "stage_upscale", "stage_removebg", "stage_vectorize", "removebg_method", "vectorize_method",
-  "pipeline_order", "model", "scale", "cutout_model", "alpha_matting",
-  "trace_colormode", "trace_color_style", "color_precision", "trace_hierarchical",
-  "trace_preset", "trace_mode", "trace_simplify", "mask_threshold", "target_max_dim",
-  "segment_length", "filter_speckle", "corner_threshold", "splice_threshold", "path_precision",
-  "trace_advanced", "pv_grid", "pv_sample", "pv_quantize", "pv_key_corner", "pv_mode",
-];
-// Built-ins list only their discriminating fields, so matching/highlighting is
-// lenient (a built-in stays "active" regardless of secondary tuning).
-const BUILTIN_PRESETS = [
-  { name: "Production SVG", p: { stage_upscale: true,  stage_removebg: true,  stage_vectorize: true,  removebg_method: "classical", vectorize_method: "trace", trace_colormode: "bw" } },
-  { name: "SVG Trace",      p: { stage_upscale: false, stage_removebg: false, stage_vectorize: true,  vectorize_method: "trace" } },
-  { name: "Pixel Art → SVG",p: { stage_upscale: false, stage_removebg: false, stage_vectorize: true,  vectorize_method: "pixel" } },
-  { name: "Cutout PNG",     p: { stage_upscale: false, stage_removebg: true,  stage_vectorize: false, removebg_method: "classical" } },
-  { name: "Upscale PNG",    p: { stage_upscale: true,  stage_removebg: false, stage_vectorize: false } },
-  { name: "Greenscreen",    p: { stage_upscale: false, stage_removebg: true,  stage_vectorize: false, removebg_method: "green" } },
-];
-const loadUserPresets = () => { try { return JSON.parse(localStorage.getItem(PIPELINE_PRESETS_KEY) || "{}") || {}; } catch { return {}; } };
-const saveUserPresets = (p) => { try { localStorage.setItem(PIPELINE_PRESETS_KEY, JSON.stringify(p)); } catch {} };
-const capturePreset = () => Object.fromEntries(PRESET_KEYS.map((k) => [k, settings[k]]));
-const presetMatches = (p) => Object.keys(p).every((k) => String(settings[k]) === String(p[k]));
-function applyPreset(p) { Object.assign(settings, p); persistSettings(); refreshProcessHead(); }
-
-function renderPresetBar() {
-  const bar = document.createElement("div");
-  bar.className = "pipeline-presets";
-  const lbl = document.createElement("span"); lbl.className = "presets-label"; lbl.textContent = "Preset"; bar.appendChild(lbl);
-  const chip = (name, active, onClick, builtin) => {
-    const b = document.createElement("button");
-    b.type = "button"; b.className = "preset-chip" + (active ? " active" : "") + (builtin ? " builtin" : "");
-    b.textContent = name; b.addEventListener("click", onClick); return b;
-  };
-  let matchedBuiltin = false;
-  for (const { name, p } of BUILTIN_PRESETS) {
-    const active = presetMatches(p);
-    if (active) matchedBuiltin = true;
-    bar.appendChild(chip(name, active, () => applyPreset(p), true));
-  }
-  const users = loadUserPresets();
-  const names = Object.keys(users);
-  if (names.length) { const sep = document.createElement("span"); sep.className = "presets-sep"; bar.appendChild(sep); }
-  for (const name of names) {
-    const active = !matchedBuiltin && presetMatches(users[name]);
-    const c = chip(name, active, () => applyPreset(users[name]), false);
-    c.title = "Click to apply · right-click to delete";
-    c.addEventListener("contextmenu", (e) => {
-      e.preventDefault();
-      if (window.confirm(`Delete preset "${name}"?`)) { const u = loadUserPresets(); delete u[name]; saveUserPresets(u); refreshProcessHead(); }
-    });
-    bar.appendChild(c);
-  }
-  const save = document.createElement("button");
-  save.type = "button"; save.className = "preset-save"; save.textContent = "Save…";
-  save.title = "Save the current stage set as a preset";
-  save.addEventListener("click", () => {
-    const n = window.prompt("Save current pipeline as a preset:", "");
-    if (n == null) return; const nm = n.trim(); if (!nm) return;
-    const u = loadUserPresets();
-    if ((nm in u) && !window.confirm(`A preset named "${nm}" exists. Overwrite it?`)) return;
-    u[nm] = capturePreset(); saveUserPresets(u); setStatus(`Saved preset "${nm}".`, 1800); refreshProcessHead();
+// Sort a list of {name, modified_at} by the active key + direction.
+function librarySort(items) {
+  const dir = librarySortDir === "desc" ? -1 : 1;
+  const val = librarySortKey === "date" ? ((it) => it.modified_at || 0) : ((it) => (it.name || "").toLowerCase());
+  return [...items].sort((a, b) => { const va = val(a), vb = val(b); return (va < vb ? -1 : va > vb ? 1 : 0) * dir; });
+}
+function wireLibraryChin() {
+  const filter = document.querySelector("#library-filter");
+  if (filter && !filter._wired) { filter._wired = true; filter.addEventListener("input", renderLibrary); }
+  document.querySelectorAll(".lib-mode").forEach((b) => {
+    if (b._wired) return; b._wired = true;
+    b.addEventListener("click", () => { libraryMode = b.dataset.mode; syncLibModeButtons(); if (libraryMode === "canvas") loadProjects(); else renderLibrary(); if (typeof renderProcessorPanel === "function") renderProcessorPanel(); syncDockContext(); });
   });
-  bar.appendChild(save);
-  return bar;
+  document.querySelectorAll(".lib-sort-dir").forEach((b) => {
+    if (b._wired) return; b._wired = true;
+    b.addEventListener("click", () => { librarySortDir = b.dataset.dir; syncLibSortButtons(); renderLibrary(); });
+  });
+  const keyBtn = document.querySelector("#library-sortkey");
+  if (keyBtn && !keyBtn._wired) { keyBtn._wired = true; keyBtn.addEventListener("click", () => { librarySortKey = librarySortKey === "name" ? "date" : "name"; syncLibSortButtons(); renderLibrary(); }); }
+  // Make the library header a customizable tile bar like the other panels (drop receiver
+  // in Layout-customize mode); the overflow-scroll lets it hold more than a couple tiles.
+  if (window.__layout && window.__layout.registerBar) {
+    const acts = document.querySelector(".rail-section.library .panel-actions");
+    if (acts && !acts._tileScroll) { acts._tileScroll = true; acts.classList.add("tile-scroll-x"); observeOverflow(acts, "x"); window.__layout.registerBar("hdr-library", acts); }
+  }
+  syncLibModeButtons(); syncLibSortButtons();
 }
 
-// --- strip drag-reorder (mirrors the customize-layout DnD; shares its CSS) ------
-let stripDragId = null;
-function stripInsertBefore(host, x) {
-  for (const card of host.querySelectorAll(".pipeline-stage")) {
-    if (card === stripDragEl()) continue;
+// Library dock panel — the same gallery as a first-class panel object (drag/float/
+// dock like History & Layers). Renders into #library-list whenever the panel is in
+// the DOM; self-guards (no-ops if the panel isn't mounted). Clicking a thumbnail is
+// SELECT-ONLY — it sets the pipeline target without swapping the edit canvas.
+function renderLibrary() {
+  const host = document.querySelector("#library-list"); if (!host) return;
+  wireLibraryChin();
+  // Preserve scroll across the rebuild — placing/opening an item or a finishing job
+  // re-renders the whole grid; an innerHTML reset would snap the gallery back to the
+  // top under the user's cursor (the "pressing a button jumps the scroll" bug).
+  const keepScroll = host.scrollTop;
+  host.innerHTML = "";
+  const q = libraryFilterValue();
+  if (libraryMode === "vector") renderLibraryVectors(host, q);
+  else if (libraryMode === "canvas") renderLibraryCanvases(host, q);
+  else renderLibraryRasters(host, q);
+  host.scrollTop = keepScroll;
+}
+function libSetCount(n) { const c = document.querySelector("#library-count"); if (c) c.textContent = n ? String(n) : ""; }
+function libEmpty(host, msg) { const e = document.createElement("div"); e.className = "gallery-empty"; e.textContent = msg; host.appendChild(e); }
+function libGrid(host) { const g = document.createElement("div"); g.className = "gallery-grid"; host.appendChild(g); return g; }
+
+// Client-side SVG thumbnails: load each vector ONCE, draw it to a small cached canvas,
+// then drop the full SVG. Bounds memory (a few in-flight at a time) so a big V/C tab
+// doesn't keep dozens of full traced SVGs live in the DOM (the crash risk). cairosvg
+// isn't installed, so server-side rasterising of curved vectors isn't available — this
+// is the reliable path.
+const TRANSPARENT_PX = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+const _svgThumbCache = new Map();
+const _svgThumbQueue = [];
+let _svgThumbActive = 0;
+const SVG_THUMB_MAX = 3, SVG_THUMB_SIZE = 192;
+function svgThumb(url, onReady) {
+  if (_svgThumbCache.has(url)) { onReady(_svgThumbCache.get(url)); return; }
+  _svgThumbQueue.push([url, onReady]); _pumpSvgThumbs();
+}
+function _pumpSvgThumbs() {
+  while (_svgThumbActive < SVG_THUMB_MAX && _svgThumbQueue.length) {
+    const [url, onReady] = _svgThumbQueue.shift(); _svgThumbActive++;
+    const img = new Image();
+    const finish = (data) => { _svgThumbActive--; if (data) _svgThumbCache.set(url, data); onReady(data); _pumpSvgThumbs(); };
+    img.onload = () => {
+      try {
+        const S = SVG_THUMB_SIZE, c = document.createElement("canvas"); c.width = S; c.height = S;
+        const ctx = c.getContext("2d");
+        const iw = img.naturalWidth || S, ih = img.naturalHeight || S, k = Math.min(S / iw, S / ih);
+        const w = Math.max(1, iw * k), h = Math.max(1, ih * k);
+        ctx.drawImage(img, (S - w) / 2, (S - h) / 2, w, h);
+        finish(c.toDataURL("image/png"));
+      } catch { finish(null); }
+    };
+    img.onerror = () => finish(null);
+    img.src = url;
+  }
+}
+
+// Toggle `.is-overflowing` on a tile-scroll bar so the edge-fade hint shows ONLY when
+// its tiles actually overflow (no fade — and no clipped tiles — when they fit).
+function observeOverflow(el, axis) {
+  if (!el || el._ovObserved) return; el._ovObserved = true;
+  const check = () => {
+    const over = axis === "y" ? (el.scrollHeight > el.clientHeight + 1) : (el.scrollWidth > el.clientWidth + 1);
+    el.classList.toggle("is-overflowing", over);
+  };
+  try { new ResizeObserver(check).observe(el); } catch {}
+  try { new MutationObserver(check).observe(el, { childList: true }); } catch {}
+  requestAnimationFrame(check);
+}
+// Apply the invisible-scroll-with-hint to the viewport strips (vertical tool/action
+// rails + the horizontal arrange/zoom bars) so they degrade gracefully when crowded.
+for (const [sel, axis] of [[".toolstrip", "y"], [".actionbar", "y"], [".stage-toolbar", "x"], [".viewport-controls", "x"]]) {
+  document.querySelectorAll(sel).forEach((el) => { el.classList.add(axis === "y" ? "tile-scroll-y" : "tile-scroll-x"); observeOverflow(el, axis); });
+}
+
+function libCell(grid, { url, name, active, processed, badge, title, onClick, onContext, svg, drag }) {
+  const cell = document.createElement("div");
+  cell.className = "gallery-cell" + (active ? " active" : "") + (processed ? " processed" : "");
+  const thumb = document.createElement("button");
+  thumb.type = "button"; thumb.className = "gallery-thumb-button"; thumb.title = title || name;
+  const initial = svg ? TRANSPARENT_PX : url;   // SVGs defer to a canvas thumbnail (no full load in-DOM)
+  thumb.innerHTML = `<div class="gallery-thumb${svg ? " gallery-thumb-loading" : ""}"><img src="${initial}" alt="${name}" loading="lazy" decoding="async" /></div>`;
+  if (onClick) thumb.addEventListener("click", onClick);
+  if (onContext) thumb.addEventListener("contextmenu", (e) => { e.preventDefault(); onContext(); });
+  if (drag) {   // drag a cell onto the canvas to load it (raster/vector/project)
+    thumb.draggable = true;
+    thumb.addEventListener("dragstart", (e) => { try { e.dataTransfer.setData("application/x-hv-lib", JSON.stringify(drag)); e.dataTransfer.effectAllowed = "copy"; } catch {} });
+  }
+  cell.appendChild(thumb);
+  const cap = document.createElement("div"); cap.className = "gallery-caption"; cap.title = name;
+  cap.textContent = name + (badge || "");
+  cell.appendChild(cap);
+  grid.appendChild(cell);
+  if (svg) svgThumb(url, (data) => { const im = cell.querySelector(".gallery-thumb img"); if (im && data) { im.src = data; im.parentElement.classList.remove("gallery-thumb-loading"); } });
+  return cell;
+}
+
+// R — input images (pipeline sources). Click = select-only; Info + Load actions.
+function renderLibraryRasters(host, q) {
+  libSetCount(workItems.length);
+  if (!workItems.length) return libEmpty(host, "No images yet — drop files here or use ⊕.");
+  const sorted = librarySort(workItems);
+  const items = q ? sorted.filter((it) => it.name.toLowerCase().includes(q)) : sorted;
+  if (!items.length) return libEmpty(host, `No images match “${q}”.`);
+  const grid = libGrid(host);
+  for (const item of items) {
+    libCell(grid, {
+      url: `${item.url}?w=256`, name: item.name,
+      active: item.name === selectedName, processed: itemIsProcessed(item.name),
+      badge: itemIsProcessed(item.name) ? " ✓" : "", title: `${item.name} — click to select, drag to the canvas, right-click for info`,
+      onClick: () => { selectedName = item.name; manualOutputName = null; refreshLibrary(); },
+      onContext: () => openInfoModal(item.name),
+      drag: { mode: "raster", url: item.url, name: item.name },
+    });
+  }
+}
+
+// V — output vectors. Click = place the SVG into the canvas (as a layer); ↗ opens raw.
+function renderLibraryVectors(host, q) {
+  const svgs = (outputs || []).filter((o) => (o.name || "").toLowerCase().endsWith(".svg"));
+  libSetCount(svgs.length);
+  if (!svgs.length) return libEmpty(host, "No output vectors yet — run a pipeline with Vectorize on.");
+  const sorted = librarySort(svgs);
+  const items = q ? sorted.filter((o) => o.name.toLowerCase().includes(q)) : sorted;
+  if (!items.length) return libEmpty(host, `No vectors match “${q}”.`);
+  const grid = libGrid(host);
+  for (const o of items) {
+    libCell(grid, {
+      url: o.url, name: o.name, active: o.url === librarySelectedUrl, svg: true,
+      title: `${o.name} — click to select, drag to the canvas, right-click for info`,
+      onClick: () => { librarySelectedUrl = o.url; renderLibrary(); },
+      onContext: () => openVectorInfoModal(o),
+      drag: { mode: "vector", url: o.url, name: o.name },
+    });
+  }
+}
+
+// C — saved .hv projects (canvas markup + undo history). Click/⤓ opens the project,
+// restoring layers AND history.
+function renderLibraryCanvases(host, q) {
+  libSetCount(projects.length);
+  if (!projects.length) return libEmpty(host, "No saved projects yet — File ▸ Save project.");
+  const sorted = librarySort(projects);
+  const items = q ? sorted.filter((p) => p.name.toLowerCase().includes(q)) : sorted;
+  if (!items.length) return libEmpty(host, `No projects match “${q}”.`);
+  const grid = libGrid(host);
+  for (const proj of items) {
+    const cell = document.createElement("div"); cell.className = "gallery-cell" + (proj.url === librarySelectedUrl ? " active" : "");
+    const thumb = document.createElement("button");
+    thumb.type = "button"; thumb.className = "gallery-thumb-button"; thumb.draggable = true;
+    thumb.title = `${proj.name} — click to select, drag to the canvas, right-click for info`;
+    thumb.innerHTML = `<div class="gallery-thumb gallery-thumb-proj">⛋</div>`;
+    thumb.addEventListener("click", () => { librarySelectedUrl = proj.url; renderLibrary(); });
+    thumb.addEventListener("contextmenu", (e) => { e.preventDefault(); openProjectInfo(proj); });
+    thumb.addEventListener("dragstart", (e) => { try { e.dataTransfer.setData("application/x-hv-lib", JSON.stringify({ mode: "canvas", url: proj.url, name: proj.name })); e.dataTransfer.effectAllowed = "copy"; } catch {} });
+    cell.appendChild(thumb);
+    const cap = document.createElement("div"); cap.className = "gallery-caption"; cap.title = proj.name; cap.textContent = proj.name;
+    cell.appendChild(cap);
+    grid.appendChild(cell);
+  }
+}
+
+// Jobs dock panel (right rail) — the batch queue, visible in the Edit view alongside the
+// canvas so jobs stay watchable after leaving Q. Same content as the Process view's pane
+// (one `buildJobsPanel`); the header count shows running+queued. Step toward dissolving Q.
+function renderJobsPanel() {
+  const host = document.querySelector("#jobs-list"); if (!host) return;
+  const keepScroll = host.scrollTop;   // preserve scroll across the queue rebuild (poll/cancel/clear)
+  host.innerHTML = "";
+  host.appendChild(buildJobsPanel());
+  host.scrollTop = keepScroll;
+  const count = document.querySelector("#jobs-count");
+  const active = jobsCache.filter((j) => j.status === "running" || j.status === "queued").length;
+  if (count) count.textContent = active ? String(active) : "";
+  // Header actions enable only when they'd do something.
+  const queued = jobsCache.some((j) => j.status === "queued");
+  const finished = jobsCache.some((j) => TERMINAL_STATES.has(j.status));
+  const cancelBtn = document.querySelector("#jobs-cancel-all"); if (cancelBtn) cancelBtn.disabled = !queued;
+  const clearBtn = document.querySelector("#jobs-clear"); if (clearBtn) clearBtn.disabled = !finished;
+}
+
+// ---------- Processor panel: the image→vector pipeline as a vertical flow rail ----------
+// Upscale → Remove BG → Vectorize as stacked, toggleable, reorderable stage cards with
+// flow connectors; click a card to expand its settings (shared schema renderers). When a
+// single raster is the target you can live-preview it on the canvas; Run drives the same
+// generalized pipeline as the (legacy) Process view. Lifts the pipeline out of the
+// cramped raster Properties panel into its own composable dock (the user-requested home).
+let procDragId = null;
+// The single selected raster <image> the panel targets (live preview + single-run), or null.
+function currentRasterTarget() {
+  if (!editor.stage) return null;
+  const ns = editor.selectedNodes();
+  return (ns.length === 1 && ns[0].tagName.toLowerCase() === "image") ? ns[0] : null;
+}
+function procInsertBefore(list, y) {
+  for (const card of list.querySelectorAll(".proc-stage:not(.dragging)")) {
     const r = card.getBoundingClientRect();
-    if (x < r.left + r.width / 2) return card;
+    if (y < r.top + r.height / 2) return card;
   }
   return null;
 }
-const stripDragEl = () => stripDragId && document.querySelector(`.pipeline-stage[data-stage="${stripDragId}"]`);
-
-function renderStage(id) {
+// Rebuild the Processor panel + re-kick whichever live preview is active (the structural
+// callback for the schema-driven stage controls hosted in the cards).
+function procRerender() { renderProcessorPanel(); if (rasterLive) scheduleRasterLive(false); if (rasterOp) scheduleRasterOpLive(false); }
+function buildProcStageCard(id, target) {
   const def = STAGE_BY_ID[id];
-  const on = stageOn(id);
-  const open = !!stageExpanded[id];
+  const on = stageOn(id), open = !!stageExpanded[id];
   const card = document.createElement("div");
-  card.className = "pipeline-stage" + (on ? "" : " off") + (open ? " expanded" : "");
-  card.dataset.stage = id;
-  card.id = `stage-${id}`;
-  card.draggable = true;
-  card.addEventListener("dragstart", (e) => { stripDragId = id; e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", id); } catch {} card.classList.add("dragging"); });
-  card.addEventListener("dragend", () => { card.classList.remove("dragging"); stripDragId = null; });
+  card.className = "proc-stage" + (on ? "" : " off") + (open ? " expanded" : "");
+  card.dataset.stage = id; card.draggable = true;
+  card.addEventListener("dragstart", (e) => { procDragId = id; e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", id); } catch {} card.classList.add("dragging"); });
+  card.addEventListener("dragend", () => { card.classList.remove("dragging"); procDragId = null; });
 
-  const head = document.createElement("div");
-  head.className = "pipeline-stage-head";
-  const toggle = document.createElement("input");
-  toggle.type = "checkbox"; toggle.className = "stage-toggle"; toggle.checked = on;
+  const head = document.createElement("div"); head.className = "proc-stage-head";
+  const grip = document.createElement("span"); grip.className = "proc-grip"; grip.textContent = "⠿"; grip.title = "Drag to reorder";
+  const toggle = document.createElement("input"); toggle.type = "checkbox"; toggle.className = "stage-toggle"; toggle.checked = on;
   toggle.title = on ? `${def.label} on` : `${def.label} off`;
-  toggle.addEventListener("change", () => { settings[def.key] = toggle.checked; persistSettings(); refreshProcessHead(); });
-  const title = document.createElement("button");
-  title.type = "button"; title.className = "pipeline-stage-title";
-  title.innerHTML = `<span class="stage-name">${def.label}</span><span class="stage-note">${def.note}</span>`;
+  toggle.addEventListener("change", () => { settings[def.key] = toggle.checked; persistSettings(); procRerender(); });
+  const title = document.createElement("button"); title.type = "button"; title.className = "proc-stage-title";
+  const nm = document.createElement("span"); nm.className = "stage-name"; nm.textContent = def.label;
+  const nt = document.createElement("span"); nt.className = "stage-note"; nt.textContent = def.note;
+  title.appendChild(nm); title.appendChild(nt);
   title.title = open ? "Hide settings" : "Show settings";
-  title.addEventListener("click", () => { stageExpanded[id] = !stageExpanded[id]; refreshProcessHead(); });
-  head.appendChild(toggle);
-  head.appendChild(title);
-
-  // method pill (Remove BG / Vectorize have alternative engines)
-  if (id === "removebg") {
-    const pill = makeSelectRaw(settings.removebg_method, [["classical", "Classical"], ["ai", "AI"], ["green", "Greenscreen"]], (v) => {
-      settings.removebg_method = v; settings.cutout_backend = v === "ai" ? "ai" : "classical"; persistSettings(); refreshProcessHead();
-    });
-    pill.className = "stage-method"; pill.title = "Background-removal engine"; head.appendChild(pill);
-  } else if (id === "vectorize") {
-    const pill = makeSelectRaw(settings.vectorize_method, [["trace", "Trace"], ["pixel", "Pixel"]], (v) => {
-      settings.vectorize_method = v; persistSettings(); refreshProcessHead();
-    });
-    pill.className = "stage-method"; pill.title = "Vectorize engine"; head.appendChild(pill);
-  }
-  const caret = document.createElement("span");
-  caret.className = "stage-caret"; caret.setAttribute("aria-hidden", "true"); caret.textContent = open ? "▾" : "▸";
+  title.addEventListener("click", () => { stageExpanded[id] = !stageExpanded[id]; renderProcessorPanel(); });
+  head.appendChild(grip); head.appendChild(toggle); head.appendChild(title);
+  const caret = document.createElement("span"); caret.className = "stage-caret"; caret.setAttribute("aria-hidden", "true"); caret.textContent = open ? "▾" : "▸";
   head.appendChild(caret);
   card.appendChild(head);
+  // Expanded body = the SCHEMA-DRIVEN stage settings + per-stage live preview (the
+  // controls that used to be crammed into the raster Properties panel), targeting the
+  // selected raster. Engine/method selectors live in the body now (not a head pill).
+  if (open) {
+    const sbody = document.createElement("div"); sbody.className = "pipeline-detail-body form";
+    renderStageSettings(sbody, id, target, procRerender);
+    card.appendChild(sbody);
+  }
   return card;
 }
+function buildProcessorRail() {
+  const rail = document.createElement("div"); rail.className = "proc-rail";
+  const t = processTarget();
 
-// The full-width settings panel for one expanded stage — sits BELOW the strip so
-// the cards stay uniform and the form gets real horizontal room (no tall column).
-function renderStageDetail(id) {
-  const def = STAGE_BY_ID[id];
-  const panel = document.createElement("div");
-  panel.className = "pipeline-detail";
-  panel.dataset.stage = id;
-  const head = document.createElement("div");
-  head.className = "pipeline-detail-head";
-  const h = document.createElement("span"); h.textContent = `${def.label} settings`; head.appendChild(h);
-  const x = document.createElement("button");
-  x.type = "button"; x.className = "pipeline-detail-close"; x.textContent = "×"; x.title = "Hide settings";
-  x.addEventListener("click", () => { stageExpanded[id] = false; refreshProcessHead(); });
-  head.appendChild(x);
-  panel.appendChild(head);
-  panel.appendChild(stageBody(id));
-  return panel;
-}
+  // Target row: the focused raster (default) or the whole library (explicit batch).
+  // The ▦/🖼 button on the right is the EXPLICIT batch toggle — batch is never silent.
+  const tgt = document.createElement("div"); tgt.className = "proc-target" + (t.batch ? " batch" : "");
+  const ic = document.createElement("span"); ic.className = "proc-target-ic"; ic.textContent = t.batch ? "▦" : "🖼";
+  const nm = document.createElement("span"); nm.className = "proc-target-name"; nm.textContent = t.label;
+  const swap = document.createElement("button");
+  swap.type = "button"; swap.className = "proc-target-swap tool-button" + (t.batch ? " on" : "");
+  swap.textContent = t.batch ? "🖼" : "▦";
+  swap.title = t.batch ? "Switch to the selected raster" : "Switch to the whole library (batch)";
+  swap.addEventListener("click", (e) => { e.stopPropagation(); processBatch = !processBatch; renderProcessorPanel(); syncDockContext(); });
+  tgt.appendChild(ic); tgt.appendChild(nm); tgt.appendChild(swap); rail.appendChild(tgt);
 
-// The strip: stages in saved order, → connectors, an output chip, a preset bar,
-// and (below) a detail panel per expanded stage.
-function renderPipelineStrip() {
-  const wrap = document.createElement("div");
-  wrap.className = "pipeline-strip-wrap";
-  wrap.appendChild(renderPresetBar());
-
-  const strip = document.createElement("div");
-  strip.className = "pipeline-strip";
-  strip.addEventListener("dragover", (e) => {
-    const el = stripDragEl(); if (!el) return;
-    e.preventDefault(); e.dataTransfer.dropEffect = "move";
-    const ref = stripInsertBefore(strip, e.clientX);
-    if (ref !== el) strip.insertBefore(el, ref);
+  // Stage cards in saved order, vertical flow, drag to reorder.
+  const list = document.createElement("div"); list.className = "proc-stages";
+  list.addEventListener("dragover", (e) => {
+    if (!procDragId) return; e.preventDefault(); e.dataTransfer.dropEffect = "move";
+    const el = list.querySelector(`.proc-stage[data-stage="${procDragId}"]`); if (!el) return;
+    const ref = procInsertBefore(list, e.clientY); if (ref !== el) list.insertBefore(el, ref);
   });
-  strip.addEventListener("drop", (e) => {
+  list.addEventListener("drop", (e) => {
     e.preventDefault();
-    const order = [...strip.querySelectorAll(".pipeline-stage")].map((c) => c.dataset.stage);
+    const order = [...list.querySelectorAll(".proc-stage")].map((c) => c.dataset.stage);
     if (order.length === CANON_ORDER.length) { settings.pipeline_order = order.join(","); persistSettings(); }
-    refreshProcessHead();
+    renderProcessorPanel();
   });
-
-  const order = stageOrder();
-  order.forEach((id, i) => {
-    strip.appendChild(renderStage(id));
-    if (i < order.length - 1) {
-      const arrow = document.createElement("span"); arrow.className = "pipeline-arrow"; arrow.textContent = "→"; arrow.setAttribute("aria-hidden", "true");
-      strip.appendChild(arrow);
-    }
-  });
+  // Live preview needs the raster ON the canvas; pass the node (null in batch / library-only).
+  const previewNode = t.batch ? null : (t.node || null);
+  stageOrder().forEach((id) => list.appendChild(buildProcStageCard(id, previewNode)));
+  rail.appendChild(list);
+  return rail;
+}
+// The pinned chin (standard ink-top-bordered footer): the Run action, plus a compact
+// "Load to preview" affordance when the target raster isn't on the canvas yet. The name
+// isn't repeated here — it already shows in the target row above.
+function buildProcessorChin(t) {
+  const chin = document.createElement("div"); chin.className = "processor-chin";
+  if (!t.batch && !t.live && t.name) {
+    const wi = workItems.find((i) => i.name === t.name);
+    const load = document.createElement("button"); load.type = "button"; load.className = "proc-foot-load";
+    load.textContent = "↓ Load to preview"; load.title = `Load “${t.name}” into the canvas for live preview`;
+    load.addEventListener("click", () => { if (wi) loadRasterToCanvas({ name: wi.name, url: wi.url }); });
+    chin.appendChild(load);
+  } else if (!t.batch && !t.name) {
+    const hint = document.createElement("span"); hint.className = "proc-foot-hint";
+    hint.textContent = "Select a raster, or switch to batch";
+    chin.appendChild(hint);
+  }
+  const run = document.createElement("button"); run.type = "button"; run.className = "primary-button proc-run";
+  run.textContent = t.batch ? "Run library" : "Run → canvas";
+  run.disabled = !anyStageEnabled() || (!t.batch && !t.canRun);
+  if (!anyStageEnabled()) run.title = "Enable at least one stage";
+  else if (!t.batch && !t.canRun) run.title = "Select a raster to run";
+  run.addEventListener("click", () => runProcess(run));
+  chin.appendChild(run);
+  return chin;
+}
+function renderProcessorPanel() {
+  if (!pipelineConstsReady) return;   // called by renderPanels before the pipeline consts init (module eval) → no-op until ready
+  const host = document.querySelector("#processor-body"); if (!host) return;
+  const keepScroll = host.scrollTop;
+  host.innerHTML = "";
+  host.appendChild(buildProcessorRail());
+  host.scrollTop = keepScroll;
+  const chinHost = document.querySelector("#processor-chin");
+  if (chinHost) { chinHost.innerHTML = ""; chinHost.appendChild(buildProcessorChin(processTarget())); }
   const out = outputChipInfo();
-  const arrow = document.createElement("span"); arrow.className = "pipeline-arrow"; arrow.textContent = "→"; arrow.setAttribute("aria-hidden", "true");
-  strip.appendChild(arrow);
-  const chip = document.createElement("span");
-  chip.className = "pipeline-out" + (out ? ` out-${out.kind.toLowerCase()}` : " out-none");
-  chip.textContent = out ? out.label : "—";
-  chip.title = out ? `Output: ${out.kind}` : "No stages enabled";
-  strip.appendChild(chip);
-
-  wrap.appendChild(strip);
-  // Detail panels (in strip order) for whichever stages are expanded.
-  for (const id of order) if (stageExpanded[id]) wrap.appendChild(renderStageDetail(id));
-  return wrap;
+  const outEl = document.querySelector("#processor-out"); if (outEl) outEl.textContent = out ? out.label : "";
+  const runBtn = document.querySelector("#processor-run");
+  if (runBtn) { runBtn.disabled = !anyStageEnabled(); runBtn.title = anyStageEnabled() ? "Run the pipeline → canvas" : "Enable at least one stage"; }
+  syncProcessorContext();
 }
 
-// The controls bar (run scope / force / add / source / run). Cheap to rebuild.
-function buildProcessControls() {
-  const bar = document.createElement("div");
-  bar.className = "process-controls";
-  const modeSel = makeSelectRaw(processMode, [["batch", "Batch — whole library"], ["single", "Single — selected image"]], (v) => { processMode = v; });
-  const force = document.createElement("label"); force.className = "process-force";
-  const forceBox = document.createElement("input"); forceBox.type = "checkbox"; forceBox.checked = processForce;
-  forceBox.addEventListener("change", () => { processForce = forceBox.checked; try { localStorage.setItem(FORCE_KEY, processForce ? "1" : "0"); } catch {} });
-  force.appendChild(forceBox); force.appendChild(document.createTextNode(" Force re-run"));
-  const runBtn = document.createElement("button"); runBtn.type = "button"; runBtn.className = "primary-button"; runBtn.textContent = "Run → canvas";
-  runBtn.disabled = !anyStageEnabled();
-  if (runBtn.disabled) runBtn.title = "Enable at least one pipeline stage";
-  runBtn.addEventListener("click", () => runProcess(runBtn));
-  bar.appendChild(modeSel);
-  bar.appendChild(force);
-  bar.appendChild(ghostBtn("Add images", () => fileInputEl.click()));
-  bar.appendChild(ghostBtn("Source…", openSourceModal));
-  bar.appendChild(runBtn);
-  return bar;
+// The Processor is contextual: relevant when there's a raster to act on. The CANVAS
+// selection wins — if you've selected something on the canvas, the Processor is relevant
+// only when that something is a raster <image> (so selecting a VECTOR dims it, instead of
+// staying lit because the library happens to have a raster selected). With nothing
+// selected on the canvas, fall back to the library's raster selection. Batch always lit.
+function processorRelevant() {
+  if (processBatch) return true;
+  const sel = editor.selection ? editor.selection.size : 0;
+  if (sel > 0 || editor.artboardSelected) return !!currentRasterTarget();   // canvas selection decides
+  return libraryMode === "raster" && !!selectedName;                        // else defer to the library
 }
-
-// Re-render ONLY the header (stage strip + controls) in place. Stage toggles /
-// preset changes use this so the O(n) gallery + jobs panes keep their DOM, scroll
-// position and focus instead of being torn down and rebuilt on every click.
-function refreshProcessHead() {
-  if (!processViewActive) return;
-  const head = document.querySelector("#process-head");
-  if (!head) { renderProcessWorkspace(); return; }
-  head.innerHTML = "";
-  head.appendChild(renderPipelineStrip());
-  head.appendChild(buildProcessControls());
-}
-
-function renderProcessWorkspace() {
-  if (!processViewActive) return;
-  processViewTitleEl.textContent = `Process — ${workItems.length} image(s)`;
-  processViewBodyEl.innerHTML = "";
-  const root = document.createElement("div");
-  root.className = "process-workspace";
-
-  // --- header: stage strip + controls bar (re-rendered together by refreshProcessHead) ---
-  const head = document.createElement("div");
-  head.id = "process-head";
-  head.appendChild(renderPipelineStrip());
-  head.appendChild(buildProcessControls());
-  root.appendChild(head);
-
-  // --- gallery (left) + jobs (right) ---
-  const panes = document.createElement("div");
-  panes.className = "process-panes";
-  const gallery = document.createElement("div"); gallery.id = "process-gallery"; gallery.className = "process-gallery";
-  const jobs = document.createElement("div"); jobs.id = "process-jobs"; jobs.className = "process-jobs";
-  panes.appendChild(gallery);
-  panes.appendChild(jobs);
-  root.appendChild(panes);
-
-  processViewBodyEl.appendChild(root);
-  // The gallery builds a thumbnail cell (image + action buttons + listeners) for
-  // every library image — O(n) synchronous DOM that stalls the view's first paint
-  // on big libraries. Defer it one frame so the chrome shows instantly, then fill in.
-  gallery.innerHTML = '<div class="gallery-empty">Loading library…</div>';
-  requestAnimationFrame(() => {
-    if (!processViewActive) return;
-    renderProcessGallery();
-    renderProcessJobs();
-  });
-}
-
-let processGalleryFilter = "";
-
-// Library gallery for the Process workspace. Folds in the old Browse modal's
-// filter + per-item actions (Copy / Path / Reveal / Open) and is the home for the
-// rescued Image-Info panel — right-click a thumbnail, or hit its Info button.
-function renderProcessGallery() {
-  const host = document.querySelector("#process-gallery"); if (!host) return;
-  host.innerHTML = "";
-  const q = processGalleryFilter.trim().toLowerCase();
-  const items = q ? workItems.filter((it) => it.name.toLowerCase().includes(q)) : workItems;
-
-  const head = document.createElement("div"); head.className = "process-pane-head";
-  const title = document.createElement("span");
-  title.textContent = q ? `Library (${items.length}/${workItems.length})` : `Library (${workItems.length})`;
-  head.appendChild(title);
-  const filter = document.createElement("input");
-  filter.type = "search"; filter.className = "modal-search process-filter"; filter.placeholder = "Filter…";
-  filter.value = processGalleryFilter;
-  filter.addEventListener("input", () => { processGalleryFilter = filter.value; renderProcessGallery(); });
-  head.appendChild(filter);
-  host.appendChild(head);
-
-  if (!workItems.length) {
-    const empty = document.createElement("div"); empty.className = "gallery-empty"; empty.textContent = "No images yet — drop files here or use Add images.";
-    host.appendChild(empty); return;
+let lastProcRelevant = null;
+// Auto-REVEAL the Processor the moment a raster becomes the subject (un-collapse + bring
+// into view — never moves/hides a panel the user placed), and DIM it when there's nothing
+// to process. Like Properties, it stays put and just reflects the current context.
+function syncProcessorContext() {
+  const sec = document.querySelector(".rail-section.processor"); if (!sec) return;
+  const rel = processorRelevant();
+  sec.classList.toggle("dimmed", !rel);
+  if (rel && lastProcRelevant === false) {
+    sec.classList.remove("collapsed"); try { localStorage.setItem("hv-sec-processor", "0"); } catch {}
+    if (sec.scrollIntoView) sec.scrollIntoView({ block: "nearest" });
   }
-  if (!items.length) {
-    const empty = document.createElement("div"); empty.className = "gallery-empty"; empty.textContent = `No images match “${processGalleryFilter}”.`;
-    host.appendChild(empty); return;
-  }
-
-  const grid = document.createElement("div"); grid.className = "gallery-grid";
-  for (const item of items) {
-    const abs = absInputPath(item);
-    const cell = document.createElement("div");
-    cell.className = "gallery-cell" + (item.name === selectedName ? " active" : "") + (itemIsProcessed(item.name) ? " processed" : "");
-    const thumb = document.createElement("button");
-    thumb.type = "button"; thumb.className = "gallery-thumb-button"; thumb.title = `Select ${item.name} (right-click for info)`;
-    thumb.innerHTML = `<div class="gallery-thumb"><img src="${item.url}" alt="${item.name}" loading="lazy" /></div>`;
-    thumb.addEventListener("click", () => {
-      selectedName = item.name; manualOutputName = null; editor.pinned = false;
-      refreshLibrary();
-      renderPreviews().catch((e) => setStatus(e.message, 2500));
-    });
-    thumb.addEventListener("contextmenu", (e) => { e.preventDefault(); openInfoModal(item.name); });   // rescued Info panel
-    cell.appendChild(thumb);
-
-    const cap = document.createElement("div"); cap.className = "gallery-caption"; cap.title = item.name;
-    cap.textContent = item.name + (itemIsProcessed(item.name) ? " ✓" : "");
-    cell.appendChild(cap);
-
-    cell.appendChild(galleryActionRow({ name: item.name, absPath: abs, url: item.url, onInfo: () => openInfoModal(item.name) }));
-
-    grid.appendChild(cell);
-  }
-  host.appendChild(grid);
+  lastProcRelevant = rel;
 }
+// Run the dock's contextual auto-shelve pass (parks unused panels into shelf squares,
+// pops relevant ones back). Called on every selection / library-context change.
+function syncDockContext() { if (window.__docks && window.__docks.syncContextual) window.__docks.syncContextual(); }
 
-function renderProcessJobs() {
-  const host = document.querySelector("#process-jobs"); if (!host) return;
-  host.innerHTML = "";
-  const head = document.createElement("div"); head.className = "process-pane-head"; head.textContent = `Jobs (${jobsCache.length})`;
-  host.appendChild(head);
-  host.appendChild(buildJobsPanel());
+// The Info panel's body is content-driven, so the shelf square remembers the LAST thing
+// that was inspected and re-renders it when reopened. Falls back to the current library
+// selection, then a help state. Each open*Info builder records its reopen thunk here.
+let lastInfoContext = null;
+function infoForCurrentContext() {
+  if (typeof lastInfoContext === "function") { lastInfoContext(); return; }
+  if (selectedName && libraryMode === "raster") { openInfoModal(selectedName); return; }
+  const help = document.createElement("div"); help.className = "insp-empty";
+  help.textContent = "Right-click an item in the Library — or an object on the canvas — to inspect it here.";
+  showInfoPanel("Info", help);
 }
+window.refillInfoContext = infoForCurrentContext;
 
 loadVersion();   // cache the version early so the About panel shows it instantly
 api("/api/bootstrap", "POST")
   .then(() => refreshAll())
   .then(async () => {
     // Startup: resume the last document only if the user opted in AND there is
-    // one to restore; otherwise fall back to the default — a blank canvas with
-    // the Process workspace open.
+    // one to restore; otherwise fall back to a blank canvas. (The Process view is
+    // gone — the pipeline lives in the Processor dock panel, visible alongside.)
     if (prefs.startup === "resume" && (await resumeLastDoc())) return;
     mountBlankCanvas();
-    showProcessView();
   })
+  .then(() => syncDockContext())   // initial park: shelve contextual panels with nothing selected yet
   .catch((error) => setStatus(error.message, 3000));
 
 window.addEventListener("resize", () => {
@@ -3766,32 +4761,254 @@ function fmtBytes(n) {
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }
 
+// Trigger a browser download of a URL under a chosen filename.
+function downloadUrl(url, filename) {
+  const a = document.createElement("a");
+  a.href = url; a.download = filename || "";
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+// Shared Rename / Download / Delete wiring for the C/R/V detail modals. `cfg`:
+//   kind     "raster" | "vector" | "project"  (label + endpoint selection)
+//   item     the library item — re-opened after a rename so the view stays live
+//   url      file URL (download source + outputs rename/remove key)
+//   nameBtn  the .info-name button — anchors the floating rename input
+//   reopen   (newItem) => void — re-renders the detail view after a rename
+//   refresh  async () => void — reloads the relevant library list after a change
+// Appends buttons via the modal's own `act(label, title, fn, primary)` builder.
+function wireDetailActions(act, cfg) {
+  const { kind, item, url, nameBtn } = cfg;
+  const isRaster = kind === "raster";
+  const renameEndpoint = isRaster ? "/api/work-items/rename" : "/api/outputs/rename";
+  const removeEndpoint = isRaster ? "/api/work-items/remove" : "/api/outputs/remove";
+  const keyPayload = isRaster ? { name: item.name } : { url: item.url };
+
+  const doRename = () => {
+    const r = (nameBtn || document.body).getBoundingClientRect();
+    floatingInput({
+      value: item.name,
+      placeholder: "New name",
+      title: `Rename ${kind}`,
+      x: r.left, y: r.bottom + 4,
+      onCommit: async (next) => {
+        const trimmed = (next || "").trim();
+        if (!trimmed || trimmed === item.name) return;
+        try {
+          const res = await api(renameEndpoint, "POST", { ...keyPayload, new_name: trimmed });
+          await cfg.refresh();
+          setStatus(res.message || "Renamed.", 2500);
+          // Re-open the detail view on the renamed file so it stays in sync.
+          const nextItem = { ...item, name: res.name, url: res.url, path: undefined };
+          if (cfg.reopen) cfg.reopen(nextItem);
+        } catch (e) { setStatus(e.message, 3500); }
+      },
+    });
+  };
+
+  let armed = false;
+  const doDelete = (btn) => {
+    if (!armed) {            // first click arms; second within the modal confirms
+      armed = true;
+      btn.classList.add("danger-armed");
+      btn.textContent = "Confirm delete?";
+      btn.title = "Click again to delete permanently";
+      return;
+    }
+    btn.disabled = true;
+    api(removeEndpoint, "POST", keyPayload)
+      .then(async (res) => { await cfg.refresh(); lastInfoContext = null; hideInfoPanel(); setStatus(res.message || "Deleted.", 2500); })
+      .catch((e) => { btn.disabled = false; setStatus(e.message, 3500); });
+  };
+
+  act("Rename", `Rename this ${kind}`, doRename);
+  act("Download", "Download a copy", () => downloadUrl(url, item.name));
+  const del = document.createElement("button");
+  del.type = "button"; del.className = "ghost-button danger-button"; del.textContent = "Delete";
+  del.title = `Delete this ${kind} permanently`;
+  del.addEventListener("click", () => doDelete(del));
+  // The modal's action rows are built by `act`, but Delete needs its own ref for
+  // the arm/confirm toggle — caller appends `cfg._deleteBtn` into the row.
+  cfg._deleteBtn = del;
+}
+
+// Info is a dock PANEL now (not a modal): the builders below render their content
+// element into the summoned Info panel via these helpers.
+function showInfoPanel(title, el) { if (window.__docks && window.__docks.showInfo) window.__docks.showInfo(title, el); }
+function hideInfoPanel() { if (window.__docks && window.__docks.close) window.__docks.close("info"); }
+function infoLoadingEl(text) { const d = document.createElement("div"); d.className = "form-section"; d.textContent = text; return d; }
+
 async function openInfoModal(name = selectedName) {
   if (!name) {
     setStatus("Select an image first.", 2000);
     return;
   }
-  openModal(`Info — ${name}`, true);
-  modalSearchEl.hidden = true;
-  modalBodyEl.innerHTML = `<div class="form-section">Loading…</div>`;
+  lastInfoContext = () => openInfoModal(name);
+  showInfoPanel(`Info — ${name}`, infoLoadingEl("Loading…"));
   let info;
   try {
     info = await api(`/api/work-items/info?name=${encodeURIComponent(name)}`);
   } catch (error) {
-    modalBodyEl.innerHTML = `<div class="form-section">${error.message}</div>`;
+    showInfoPanel(`Info — ${name}`, infoLoadingEl(error.message));
     return;
   }
   renderInfoModal(info);
 }
 
+// Info panel for an output VECTOR — mirrors the raster Info (preview + name + Load/
+// Open), reading dimensions/size client-side (there's no server info endpoint for SVGs).
+async function openVectorInfoModal(item) {
+  lastInfoContext = () => openVectorInfoModal(item);
+  showInfoPanel(`Info — ${item.name}`, infoLoadingEl("Loading…"));
+  let dims = "—", size = "—", elements = "—", colors = "—", viewBox = "—";
+  try {
+    const blob = await (await fetch(item.url)).blob(); size = fmtBytes(blob.size);
+    const svg = new DOMParser().parseFromString(await blob.text(), "image/svg+xml").documentElement;
+    const vbRaw = (svg.getAttribute("viewBox") || "").trim();
+    const vb = vbRaw.split(/[\s,]+/).map(Number);
+    const w = parseFloat(svg.getAttribute("width")) || (vb.length === 4 ? vb[2] : 0);
+    const h = parseFloat(svg.getAttribute("height")) || (vb.length === 4 ? vb[3] : 0);
+    if (w && h) dims = `${Math.round(w)} × ${Math.round(h)}`;
+    if (vbRaw) viewBox = vbRaw;
+    const shapes = svg.querySelectorAll("path, rect, circle, ellipse, line, polyline, polygon");
+    elements = String(shapes.length);
+    const fills = new Set();
+    shapes.forEach((s) => { const f = (s.getAttribute("fill") || "").trim().toLowerCase(); if (f && f !== "none") fills.add(f); });
+    colors = fills.size ? String(fills.size) : "—";
+  } catch { /* leave dashes */ }
+
+  const root = document.createElement("div"); root.className = "form info-modal";
+  const head = document.createElement("div"); head.className = "info-head";
+  const prev = document.createElement("div"); prev.className = "info-preview";
+  prev.innerHTML = `<img src="${item.url}" alt="${item.name}" decoding="async" />`;
+  head.appendChild(prev);
+  const meta = document.createElement("div"); meta.className = "info-headmeta";
+  const nm = document.createElement("button"); nm.type = "button"; nm.className = "info-name info-copy"; nm.textContent = item.name;
+  nm.title = `Click to copy filename: ${item.name}`; nm.addEventListener("click", () => copyToClipboard(item.name, "filename"));
+  const sub = document.createElement("div"); sub.className = "info-sub"; sub.textContent = `Vector · ${dims} · ${size}`;
+  meta.appendChild(nm); meta.appendChild(sub);
+  const actions = document.createElement("div"); actions.className = "info-actions";
+  const act = (label, title, fn, primary) => { const b = document.createElement("button"); b.type = "button"; b.className = primary ? "primary-button" : "ghost-button"; b.textContent = label; b.title = title; b.addEventListener("click", fn); actions.appendChild(b); };
+  act("⤓ Load into canvas", "Place this vector into the editor viewport", () => { placeFromUrl(item.url, item.name).catch((e) => setStatus(e.message, 3000)); }, true);
+  const abs = item.path || "";
+  if (abs) act("Reveal", "Reveal in the file manager", () => revealInFileManager(abs));
+  act("Open ↗", "Open the vector in a new tab", () => window.open(item.url, "_blank", "noopener"));
+  const vectorCfg = {
+    kind: "vector", item, url: item.url, nameBtn: nm,
+    reopen: (it) => openVectorInfoModal(it),
+    refresh: () => loadOutputs(),
+  };
+  wireDetailActions(act, vectorCfg);
+  actions.appendChild(vectorCfg._deleteBtn);
+  meta.appendChild(actions); head.appendChild(meta); root.appendChild(head);
+
+  // Core details — at parity with the raster Info (Path is click-to-copy).
+  root.appendChild(sectionTitle("Vector"));
+  const grid = document.createElement("div"); grid.className = "info-grid";
+  const entries = [
+    ["Path", abs || item.url],
+    ["Format", "SVG"],
+    ["Dimensions", dims],
+    ["viewBox", viewBox],
+    ["Size", size],
+    ["Elements", elements],
+    ["Fill colours", colors],
+  ];
+  for (const [k, v] of entries) {
+    const dt = document.createElement("div"); dt.className = "info-key"; dt.textContent = k;
+    let dd;
+    if (k === "Path" && v) {
+      dd = document.createElement("button"); dd.type = "button"; dd.className = "info-val info-copy"; dd.textContent = v;
+      dd.title = "Click to copy path"; dd.addEventListener("click", () => copyToClipboard(v, "path"));
+    } else { dd = document.createElement("div"); dd.className = "info-val"; dd.textContent = v; }
+    grid.appendChild(dt); grid.appendChild(dd);
+  }
+  root.appendChild(grid);
+  showInfoPanel(`Info — ${item.name}`, root);
+}
+
+// Project (.hv) detail — Open + Download + Rename + Delete (full parity with R/V).
+function openProjectInfo(item) {
+  lastInfoContext = () => openProjectInfo(item);
+  const root = document.createElement("div"); root.className = "form info-modal";
+  const head = document.createElement("div"); head.className = "info-head";
+  const prev = document.createElement("div"); prev.className = "info-preview info-preview-proj"; prev.textContent = "⛋";
+  head.appendChild(prev);
+  const meta = document.createElement("div"); meta.className = "info-headmeta";
+  const nm = document.createElement("button"); nm.type = "button"; nm.className = "info-name info-copy"; nm.textContent = item.name;
+  nm.title = `Click to copy: ${item.name}`; nm.addEventListener("click", () => copyToClipboard(item.name, "filename"));
+  const sub = document.createElement("div"); sub.className = "info-sub";
+  sub.textContent = item.modified_at ? `Project · ${new Date(item.modified_at * 1000).toLocaleString()}` : "Project (.hv)";
+  meta.appendChild(nm); meta.appendChild(sub);
+  const actions = document.createElement("div"); actions.className = "info-actions";
+  const act = (label, title, fn, primary) => { const b = document.createElement("button"); b.type = "button"; b.className = primary ? "primary-button" : "ghost-button"; b.textContent = label; b.title = title; b.addEventListener("click", fn); actions.appendChild(b); };
+  act("⤓ Open project", "Open this project (restores layers + history)", () => { openProject(item); }, true);
+  const projCfg = {
+    kind: "project", item, url: item.url, nameBtn: nm,
+    reopen: (it) => openProjectInfo(it),
+    refresh: () => loadProjects(),
+  };
+  wireDetailActions(act, projCfg);
+  actions.appendChild(projCfg._deleteBtn);
+  meta.appendChild(actions); head.appendChild(meta); root.appendChild(head);
+  showInfoPanel(`Project — ${item.name}`, root);
+}
+
 function renderInfoModal(info) {
+  const url = `/work-items/${encodeURIComponent(info.name)}`;
+  const absPath = info.path || "";
   const root = document.createElement("div");
-  root.className = "form";
+  root.className = "form info-modal";
+
+  // ---- header: preview + name/summary + the primary actions (Load) and the
+  //      secondary file actions (copy name / copy path / reveal / open) that used
+  //      to crowd the gallery thumbnail. Transforms are gone — handled on the
+  //      canvas once an object exists, not in-place on the source file.
+  const head = document.createElement("div");
+  head.className = "info-head";
+  const prev = document.createElement("div");
+  prev.className = "info-preview";
+  prev.innerHTML = `<img src="${url}?w=320" alt="${info.name}" decoding="async" />`;
+  head.appendChild(prev);
+
+  const meta = document.createElement("div");
+  meta.className = "info-headmeta";
+  // The name is click-to-copy (replaces the old "Copy name" button).
+  const nm = document.createElement("button");
+  nm.type = "button"; nm.className = "info-name info-copy"; nm.textContent = info.name;
+  nm.title = `Click to copy filename: ${info.name}`;
+  nm.addEventListener("click", () => copyToClipboard(info.name, "filename"));
+  const sub = document.createElement("div"); sub.className = "info-sub";
+  sub.textContent = `${info.width} × ${info.height} · ${info.format} · ${fmtBytes(info.size_bytes)}`;
+  meta.appendChild(nm); meta.appendChild(sub);
+
+  const actions = document.createElement("div");
+  actions.className = "info-actions";
+  const act = (label, title, fn, primary) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = primary ? "primary-button" : "ghost-button";
+    b.textContent = label; b.title = title;
+    b.addEventListener("click", fn);
+    actions.appendChild(b);
+  };
+  act("⤓ Load into canvas", "Place this image into the editor viewport", () => { loadRasterToCanvas({ name: info.name, url }); }, true);
+  if (absPath) act("Reveal", "Reveal in the file manager", () => revealInFileManager(absPath));
+  act("Open ↗", "Open the full image in a new tab", () => window.open(url, "_blank", "noopener"));
+  const rasterCfg = {
+    kind: "raster", item: { name: info.name, url, path: absPath }, url, nameBtn: nm,
+    reopen: (it) => openInfoModal(it.name),
+    refresh: () => refreshAll(),
+  };
+  wireDetailActions(act, rasterCfg);
+  actions.appendChild(rasterCfg._deleteBtn);
+  meta.appendChild(actions);
+  head.appendChild(meta);
+  root.appendChild(head);
+
+  // ---- IMAGE details (Name/dims/size live in the header now) ----
   root.appendChild(sectionTitle("Image"));
   const grid = document.createElement("div");
   grid.className = "info-grid";
   const entries = [
-    ["Name", info.name],
     ["Path", info.path],
     ["Dimensions", `${info.width} × ${info.height}`],
     ["Mode", info.mode],
@@ -3804,83 +5021,36 @@ function renderInfoModal(info) {
     ["Modified", info.modified_at ? new Date(info.modified_at * 1000).toLocaleString() : "—"],
   ];
   for (const [k, v] of entries) {
-    const dt = document.createElement("div");
-    dt.className = "info-key";
-    dt.textContent = k;
-    const dd = document.createElement("div");
-    dd.className = "info-val";
-    dd.textContent = v;
-    grid.appendChild(dt);
-    grid.appendChild(dd);
+    const dt = document.createElement("div"); dt.className = "info-key"; dt.textContent = k;
+    let dd;
+    if (k === "Path" && v) {   // Path is click-to-copy (replaces the old "Copy path" button)
+      dd = document.createElement("button");
+      dd.type = "button"; dd.className = "info-val info-copy"; dd.textContent = v;
+      dd.title = "Click to copy path";
+      dd.addEventListener("click", () => copyToClipboard(v, "path"));
+    } else {
+      dd = document.createElement("div"); dd.className = "info-val"; dd.textContent = v;
+    }
+    grid.appendChild(dt); grid.appendChild(dd);
   }
   root.appendChild(grid);
 
+  // ---- EXIF ----
+  root.appendChild(sectionTitle("EXIF"));
   if (info.exif && Object.keys(info.exif).length) {
-    root.appendChild(sectionTitle("EXIF"));
-    const exifGrid = document.createElement("div");
-    exifGrid.className = "info-grid";
+    const exifGrid = document.createElement("div"); exifGrid.className = "info-grid";
     for (const [k, v] of Object.entries(info.exif)) {
-      const dt = document.createElement("div");
-      dt.className = "info-key";
-      dt.textContent = k;
-      const dd = document.createElement("div");
-      dd.className = "info-val";
-      dd.textContent = v;
-      exifGrid.appendChild(dt);
-      exifGrid.appendChild(dd);
+      const dt = document.createElement("div"); dt.className = "info-key"; dt.textContent = k;
+      const dd = document.createElement("div"); dd.className = "info-val"; dd.textContent = v;
+      exifGrid.appendChild(dt); exifGrid.appendChild(dd);
     }
     root.appendChild(exifGrid);
   } else {
-    root.appendChild(sectionTitle("EXIF"));
-    const none = document.createElement("div");
-    none.className = "form-hint";
-    none.textContent = "No EXIF metadata.";
+    const none = document.createElement("div"); none.className = "form-hint"; none.textContent = "No EXIF metadata.";
     root.appendChild(none);
   }
 
-  root.appendChild(sectionTitle("Transform (in-place)"));
-  const ops = document.createElement("div");
-  ops.className = "form-actions";
-  const buttons = [
-    ["Rotate −90°", "rotate270"],
-    ["Rotate 180°", "rotate180"],
-    ["Rotate +90°", "rotate90"],
-    ["Flip H", "flip-h"],
-    ["Flip V", "flip-v"],
-    ["Auto-Orient", "auto-orient"],
-    ["Strip Metadata", "strip-metadata"],
-  ];
-  for (const [label, op] of buttons) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "ghost-button";
-    btn.textContent = label;
-    btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      try {
-        const updated = await api("/api/work-items/transform", "POST", { name: info.name, op });
-        setStatus(updated.message || "Applied.", 1500);
-        // In-place raster edit: the Info panel re-renders with the new metadata
-        // (dimensions swap on rotate); refreshAll re-reads the library so the
-        // Process gallery thumbnail reflects it next time the workspace opens.
-        renderInfoModal(updated);
-        refreshAll(info.name).catch((e) => setStatus(e.message, 3000));
-      } catch (error) {
-        setStatus(error.message, 3000);
-      } finally {
-        btn.disabled = false;
-      }
-    });
-    ops.appendChild(btn);
-  }
-  root.appendChild(ops);
-  const warn = document.createElement("div");
-  warn.className = "form-hint";
-  warn.textContent = "Transforms overwrite the source file. There is no undo.";
-  root.appendChild(warn);
-
-  modalBodyEl.innerHTML = "";
-  modalBodyEl.appendChild(root);
+  showInfoPanel(`Info — ${info.name}`, root);
 }
 
 function openShortcutsModal() {
@@ -4053,8 +5223,10 @@ function schedulePoll() {
     try {
       const { completionsHappened, completedNow } = await loadJobs();
       if (wasBusy || activityState === "busy" || completionsHappened) {
-        await loadOutputs();
-        if (processViewActive) renderProcessGallery();   // refresh processed badges
+        // refresh outputs + library, but NOT the canvas — auto-landing the result is
+        // handled below, and only for the item the user is actually viewing.
+        applyOutputsData(await fetchOutputs());
+        refreshLibrary();
       }
       if (completionsHappened) {
         const stem = selectedName ? stem_(selectedName) : null;
@@ -4107,15 +5279,16 @@ window.mountStageFromText = mountStageFromText;
 window.closeModal = closeModal;
 window.newBlankDoc = newBlankDoc;
 window.openOpenModal = openOpenModal;
-window.renderProcessWorkspace = renderProcessWorkspace;
-window.showProcessView = showProcessView;
-window.showEditView = showEditView;
+window.renderProcessorPanel = renderProcessorPanel;
 window.effectiveProcessKind = effectiveProcessKind;
 window.zoomVp = zoomVp;
 window.fitVp = fitVp;
 window.settings = settings;
 window.hideFloatPanel = hideFloatPanel;
-window.toggleFloatPanel = toggleFloatPanel;
+// Detail (Info) views — exposed for the gallery cells' right-click and for tests.
+window.openInfoModal = openInfoModal;
+window.openVectorInfoModal = openVectorInfoModal;
+window.openProjectInfo = openProjectInfo;
 // Mutable selection state goes through accessors (ESM module bindings can't be
 // reassigned by name from outside the module).
 window.app = {
@@ -4125,4 +5298,15 @@ window.app = {
   get selectedOutput() { return selectedOutput; }, set selectedOutput(v) { selectedOutput = v; },
   get manualOutputName() { return manualOutputName; }, set manualOutputName(v) { manualOutputName = v; },
   get versionInfo() { return versionInfo; },
+  // Live-vectorize introspection / test harness (no network): arm the live state so a
+  // control's change handler exercises the real wiring, then read the re-trace counter.
+  inlineSvgImages,   // exposed for the E2E: bake <image> hrefs → data URIs (self-contained export)
+  get engineSchemas() { return engineSchemas; },
+  get rasterOpSchemas() { return rasterOpSchemas; },
+  get rasterLiveKicks() { return rasterLiveKicks; },
+  get rasterOpKicks() { return rasterOpKicks; },
+  armRasterLive(id) { rasterLive = true; rasterLiveNode = editor.nodeById(id); },
+  disarmRasterLive() { endRasterLive(false); },
+  armRasterOp(id, op) { rasterOp = true; rasterOpNode = editor.nodeById(id); rasterOpName = op; rasterOpOrig = rasterHref(rasterOpNode); },
+  disarmRasterOp() { endRasterOpLive(false); },
 };

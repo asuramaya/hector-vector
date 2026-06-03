@@ -197,21 +197,21 @@ def main():
         page = browser.new_page(viewport={"width": 1500, "height": 900})
         page.goto(BASE, wait_until="networkidle")
         page.wait_for_function("typeof editor!=='undefined' && typeof mountStageFromText==='function'", timeout=20000)
-        # The live library may auto-load a PNG (no editable stage). Guarantee a stage
-        # so the suite doesn't depend on what's in the outputs dir.
-        page.wait_for_timeout(500)
-        # Default startup (prefs.startup === "blank"): a fresh canvas mounts and the
-        # Process view opens — a first-class view (not a modal): it hides the edit grid.
+        # Boot is async (api/bootstrap → refreshAll → mountBlankCanvas) and refreshAll
+        # awaits mounting the newest library preview first, so the gap to the blank canvas
+        # swings ~60ms–1s with disk/load. Wait for the canvas to mount (no fixed sleep).
+        page.wait_for_function("()=>!!editor.stage", timeout=15000)
+        # The standalone Process VIEW was dissolved into dock panels — startup mounts a
+        # blank canvas directly (no process-active, no #process-view), with the pipeline
+        # available in the Processor dock panel alongside.
         boot = page.evaluate("""() => ({
             stage: !!editor.stage,
-            processView: document.querySelector('.app.editor').classList.contains('process-active'),
-            title: document.querySelector('#process-view-title').textContent,
+            noProcessView: !document.querySelector('#process-view'),
+            notProcessActive: !document.querySelector('.app.editor').classList.contains('process-active'),
+            processorPanel: !!document.querySelector('.rail-section.processor'),
         })""")
-        check("startup mounts a blank canvas + opens Process",
-              boot["stage"] and boot["processView"] and "Process" in boot["title"], str(boot))
-        # switch to the Edit view so the stage is visible and the suite's clicks land.
-        if page.evaluate("document.querySelector('.app.editor').classList.contains('process-active')"):
-            page.click("#process-close"); page.wait_for_timeout(150)
+        check("startup mounts a blank canvas (Process view dissolved into the Processor dock panel)",
+              boot["stage"] and boot["noProcessView"] and boot["notProcessActive"] and boot["processorPanel"], str(boot))
         if not page.evaluate("!!editor.stage"):
             mount_ctl(page)
 
@@ -226,13 +226,27 @@ def main():
         else:
             check("save library doc (skipped, no selectedOutput)", True)
 
-        # ---- B. Node tool on a large doc refuses to mount thousands of handles ----
-        page.evaluate("editor.setTool('node')")
+        # ---- B. Node tool on a HUGE path: LOD instead of refusing. A 5000-anchor path
+        # must (a) mount handles (editable, not the old hard refuse) yet (b) stay bounded
+        # under the render budget so the DOM never blows up; zooming in reveals more. ----
+        big_d = "M10 10 " + " ".join(
+            f"L{10 + (i * 0.07) % 480:.1f} {10 + (i * 11 % 480)}" for i in range(5000))
+        page.evaluate("""(d) => { app.selectedOutput=null; app.manualOutputName=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'
+              + '<path data-hv-id="huge1" d="'+d+'" fill="none" stroke="#222" stroke-width="1"/></svg>', 'huge.svg'); }""", big_d)
         page.wait_for_timeout(120)
-        handles = page.evaluate("editor._overlayEl().querySelectorAll('.hv-handle').length")
-        big_anchor_guard = (big_nodes < 400) or (handles == 0)  # huge docs must NOT spray handles
-        check("node tool guards huge docs", big_anchor_guard, f"nodes={big_nodes} handles={handles}")
-        page.evaluate("editor.setTool('select')")
+        page.evaluate("() => { editor.selection = new Set(['huge1']); editor.artboardSelected = false; editor._renderSelection(); editor.setTool('node'); }")
+        page.wait_for_timeout(150)
+        lod = page.evaluate("""() => { const ov = editor._overlayEl();
+            const h = ov.querySelectorAll('.hv-handles .hv-node-anchor').length;
+            return { handles: h, lod: !!editor._nodeLOD }; }""")
+        check("node tool LOD: huge path mounts a bounded, editable handle set",
+              0 < lod["handles"] <= 1500 and lod["lod"], str(lod))
+        # zoom in: fewer anchors fall in view → finer detail (still bounded)
+        zoomed = page.evaluate("""() => { for (let i=0;i<14;i++) zoomVp(viewports.output, 1.2);
+            return editor._overlayEl().querySelectorAll('.hv-handles .hv-node-anchor').length; }""")
+        check("node tool LOD: zooming in keeps handles bounded", 0 < zoomed <= 1500, f"zoomed={zoomed}")
+        page.evaluate("() => { fitVp(viewports.output); editor.setTool('select'); }")
 
         # ---- C. Controlled 3-rect document for precise interaction tests ----
         mount_ctl(page)
@@ -637,28 +651,15 @@ def main():
         check("round → smooth and Alt-click → corner both work", rounded and cornered, f"round={rounded} corner={cornered}")
         page.evaluate("() => editor.setTool('select')")
 
-        # ---- F. Process workspace + rail collapse doesn't break the stage ----
-        page.click("#process-button"); page.wait_for_timeout(150)
-        ws = page.evaluate("""() => ({
-            open: document.querySelector('.app.editor').classList.contains('process-active'),
-            gallery: !!document.querySelector('#process-gallery'),
-            jobs: !!document.querySelector('#process-jobs'),
-            run: [...document.querySelectorAll('.process-controls .primary-button')].some(b => /Run/.test(b.textContent)),
-        })""")
-        check("Process workspace opens with gallery + jobs + run", ws["open"] and ws["gallery"] and ws["jobs"] and ws["run"], str(ws))
-        # rescued Browse: the gallery head carries a filter box (+ per-item actions)
-        check("Process gallery has a filter box (rescued Browse)",
-              page.evaluate("!!document.querySelector('#process-gallery .process-filter')"))
-        # processing defaults to Single
-        mode_default = page.evaluate("document.querySelector('.process-controls select').value")
-        check("processing defaults to Single", mode_default == "single", mode_default)
-        page.evaluate("showEditView()")
-        # footer Jobs button removed (redundant with header Process…)
+        # ---- F. Header structure (the standalone Process VIEW is dissolved into panels) ----
+        check("Process view fully removed (no #process-view, no Edit/Process view-swap buttons)",
+              page.evaluate("!document.querySelector('#process-view') && !document.querySelector('#process-button') && !document.querySelector('#view-edit')"))
+        # the q/Tab Process-view shortcut is GONE — its shims are removed (q is a free key now).
+        page.keyboard.press("q"); page.keyboard.press("Tab"); page.wait_for_timeout(40)
+        check("q / Tab Process-view shortcut + shims removed",
+              page.evaluate("() => typeof window.showProcessView === 'undefined' && typeof window.showEditView === 'undefined'"))
+        # footer Jobs button removed (redundant with the Jobs dock panel)
         check("footer Jobs button removed", page.evaluate("!document.querySelector('#jobs-button')"))
-        # 'q' opens the workspace instead
-        page.keyboard.press("q"); page.wait_for_timeout(120)
-        check("q opens the workspace", page.evaluate("!!document.querySelector('#process-jobs')"))
-        page.evaluate("showEditView()")
         # brand removed → header is action-only
         check("brand removed from header", page.evaluate("!document.querySelector('.brand')"))
         # header: File ▾ menu (left), Process centered, no loose New/Open/Save/Export buttons
@@ -676,65 +677,43 @@ def main():
             startup: !![...document.querySelectorAll('#modal-body .form-label')].find(e => e.textContent === 'On launch'),
             about: !!document.querySelector('#modal-body .about-block'),
             install: [...document.querySelectorAll('#modal-body .form-label')].some(e => e.textContent === 'Desktop app'),
+            source: [...document.querySelectorAll('#modal-body .form-label')].some(e => e.textContent === 'Folder')
+                    && [...document.querySelectorAll('#modal-body button')].some(b => b.textContent.trim() === 'Set source'),
         })""")
         check("Settings modal has prefs + install + about",
               settings["title"] == "Settings" and settings["toggles"] >= 1 and settings["startup"] and settings["about"] and settings["install"], str(settings))
+        # the library-source switcher has a UI entry point again (was orphaned; backend /api/source always worked)
+        check("Settings modal exposes the library source folder switcher", settings["source"], str(settings))
         # changing the startup choice persists to localStorage
         page.evaluate("""() => { const s = document.querySelector('#modal-body select');
             s.value = 'resume'; s.dispatchEvent(new Event('change', { bubbles: true })); }""")
         check("settings startup choice persists", page.evaluate("JSON.parse(localStorage.getItem('hector-vector:prefs')).startup") == "resume")
         page.evaluate("""() => { localStorage.setItem('hector-vector:prefs', JSON.stringify({startup:'blank', smartGuides:true})); closeModal(); }""")
-        # Edit/Process view-swap sits on the right; Process is the right-most, icon-only.
-        swap = page.evaluate("""() => {
-            const h=document.querySelector('.editor-bar').getBoundingClientRect();
-            const e=document.querySelector('#view-edit'), p=document.querySelector('#process-button');
-            const pr=p.getBoundingClientRect();
-            return {
-              pair: !!e && !!p && !!document.querySelector('.view-swap #process-button'),
-              right: pr.right > h.left + (h.width*0.6),         // process lives on the right half
-              order: e.getBoundingClientRect().left < pr.left,  // Edit before Process
-              iconOnly: p.textContent.replace(/\\d+/g,'').trim() === '▦',  // no "Process…" text (count badge digits stripped)
-            };
-        }""")
-        check("Edit/Process view-swap is right-aligned & icon-only",
-              swap["pair"] and swap["right"] and swap["order"] and swap["iconOnly"], str(swap))
-        # the swap reflects the active view: opening Process activates it, Edit deactivates
-        page.click("#process-button"); page.wait_for_timeout(120)
-        active_proc = page.evaluate("document.querySelector('#process-button').classList.contains('active') && !document.querySelector('#view-edit').classList.contains('active')")
-        page.click("#view-edit"); page.wait_for_timeout(120)
-        active_edit = page.evaluate("document.querySelector('#view-edit').classList.contains('active') && !document.querySelector('#process-button').classList.contains('active') && !document.querySelector('.app.editor').classList.contains('process-active')")
-        check("view-swap reflects + toggles the active view", active_proc and active_edit)
-        # undo/redo moved into the History panel header (and out of the viewport controls)
-        check("undo/redo sit in the History header",
-              page.evaluate("""!!document.querySelector('.rail-section.history .panel-actions #undo-button')
-                && !!document.querySelector('.rail-section.history .panel-actions #redo-button')
-                && !document.querySelector('.viewport-controls #undo-button')"""))
-        # top arrange bar carries reorder + group/ungroup + rename/delete; cleanup/merge moved to the Layers header
-        check("top stage toolbar carries reorder / group / delete",
-              page.evaluate("""['layer-front','layer-forward','layer-backward','layer-back','layer-group','layer-ungroup','layer-rename','layer-delete']
-                .every(id => !!document.querySelector('.stage-toolbar #' + id))
-                && !document.querySelector('.stage-toolbar #layer-cleanup')
-                && ['layer-cleanup','layer-merge'].every(id => !!document.querySelector('.rail-section.layers .section-head #' + id))
-                && !document.querySelector('.rail-section.layers .menu')"""))
-        # object clipboard/boolean/transform actions live on the right-side action bar (delete/rename
-        # moved to Layers; invert-space relocated to the Object panel header)
-        check("object action bar carries clipboard + transform",
-              page.evaluate("""['act-cut','act-copy','act-paste','act-duplicate','act-union','act-rotate-cw','act-flip-h']
-                .every(id => !!document.querySelector('.actionbar #' + id))
-                && !document.querySelector('.actionbar #act-delete') && !document.querySelector('.actionbar #act-invert')"""))
-        # the panel headers carry a default action tile: Object → invert-space, Colour → cycle-bg,
-        # and the header action area is a registered customize-layout receiver
-        check("Object panel header has the invert-space tile",
-              page.evaluate("""() => { const b = document.querySelector('.rail-section.properties .section-head #hdr-invert'); return !!b && /invert/i.test(b.title); }"""))
+        # NOTE: action buttons / header tiles are MOVABLE customize-layout tiles (any .tool-button
+        # can be dragged between the toolstrip / stage-toolbar / action bar / panel headers, and the
+        # arrangement persists). So we assert REACHABILITY — the control exists once and is wired —
+        # NOT which bar it currently sits in. Placement/move/persist/reset behaviour is covered by
+        # the customize-layout tests below; pinning a movable tile to a fixed bar is a fragile test.
+        check("undo/redo controls are reachable",
+              page.evaluate("""!!document.querySelector('#undo-button') && !!document.querySelector('#redo-button')"""))
+        check("reorder / group / rename / delete + cleanup / merge controls are reachable",
+              page.evaluate("""['layer-front','layer-forward','layer-backward','layer-back','layer-group','layer-ungroup','layer-rename','layer-delete','layer-cleanup','layer-merge']
+                .every(id => !!document.querySelector('#' + id))"""))
+        check("clipboard + boolean + transform controls are reachable",
+              page.evaluate("""['act-cut','act-copy','act-paste','act-duplicate','act-union','act-subtract','act-intersect','act-rotate-cw','act-rotate-ccw','act-flip-h','act-flip-v']
+                .every(id => !!document.querySelector('#' + id))"""))
+        # invert-space lives in exactly ONE place (the movable Object-panel-header ⊠ tile) — a count,
+        # not a location, so it survives the tile being dragged to another bar but catches duplication.
+        check("invert-space is a single reachable tile (not duplicated across bars)",
+              page.evaluate("""() => { const inv = [...document.querySelectorAll('.tool-button')].filter(b => /invert/i.test(b.title));
+                return inv.length === 1; }"""))
         page.evaluate("window.__docks.showColor()"); page.wait_for_timeout(60)
-        check("Colour panel header has the cycle-background tile",
-              page.evaluate("""() => { const b = document.querySelector('.rail-section.color .section-head #hdr-bg'); return !!b && /background/i.test(b.title); }"""))
+        check("cycle-background is a single reachable tile",
+              page.evaluate("""() => { const bg = [...document.querySelectorAll('.tool-button')].filter(b => /background/i.test(b.title));
+                return bg.length === 1; }"""))
         check("panel header action areas are layout-bar receivers",
               page.evaluate("!!document.querySelector('.rail-section.color .panel-actions.hdr-slots.layout-bar')"))
         page.evaluate("window.__docks.close('color')"); page.wait_for_timeout(40)
-        # the cycle-bg control left the viewport bar
-        check("cycle-background no longer in the viewport bar",
-              page.evaluate("!document.querySelector('.viewport-controls [data-action=\"bg\"]')"))
 
         # --- customizable picture-frame layout (Layout header dropdown; auto-save + profiles) ---
         # all four bars share the one .tool-button object so they match
@@ -1441,6 +1420,13 @@ def main():
         check("union keeps the ellipse bulge (curve not flattened)",
               result_inside(page, 170, 120) and result_inside(page, 50, 60)
               and not result_inside(page, 10, 10))
+        # The boundary is refit to minimal cubics (shared fitcurve core), NOT emitted
+        # as a dense `L` polyline — so the curved bulge is a few C's and the whole
+        # path is compact (the old polyline ran to dozens of segments).
+        bd = page.evaluate("""() => { const p=editor.stage.querySelector('path[data-hv-id]');
+            const d=p?p.getAttribute('d'):''; return { c:(d.match(/C/g)||[]).length, l:(d.match(/L/g)||[]).length, len:d.length }; }""")
+        check("boolean output is compact cubics, not a dense polyline",
+              bd["c"] >= 1 and (bd["c"] + bd["l"]) <= 24, str(bd))
 
         mount_bool(page)
         page.evaluate("editor.booleanOp('subtract')"); page.wait_for_timeout(120)
@@ -1711,107 +1697,27 @@ def main():
         mount_ctl(page); page.evaluate("editor.selection=new Set(['r1']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector();")
         check("header shows the selected object name", "Rectangle" in page.evaluate("document.querySelector('#sel-label').textContent"))
 
-        # ---- Process workspace: the pipeline stage strip (replaces the dropdown) ----
-        page.evaluate("""() => { Object.assign(settings, {stage_upscale:true, stage_removebg:true, stage_vectorize:true,
-            removebg_method:'classical', vectorize_method:'trace', trace_colormode:'bw',
-            pipeline_order:'upscale,removebg,vectorize'}); }""")
-        page.click("#process-button"); page.wait_for_timeout(150)
-        strip = page.evaluate("""() => ({
-            stages: [...document.querySelectorAll('.pipeline-strip .pipeline-stage')].map(s=>s.dataset.stage),
-            names: [...document.querySelectorAll('.pipeline-stage .stage-name')].map(s=>s.textContent),
-            out: (document.querySelector('.pipeline-out')||{}).textContent,
-            draggable: (document.querySelector('.pipeline-stage')||{}).draggable === true,
-        })""")
-        check("stage strip shows Upscale → Remove BG → Vectorize in order, output SVG, draggable",
-              strip["stages"] == ["upscale", "removebg", "vectorize"] and strip["out"] == "SVG" and strip["draggable"], str(strip))
-        # the stage set maps to an effective kind (all three on == pipeline) so previews/skip still work
-        check("all-three stage set maps to the pipeline kind", page.evaluate("effectiveProcessKind()") == "pipeline")
-        # toggling Vectorize off flips the output chip to PNG and remaps the effective kind to cutout
-        page.evaluate("""() => { const t=document.querySelector('.pipeline-stage[data-stage=vectorize] .stage-toggle');
-            t.checked=false; t.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
-        png_state = page.evaluate("() => ({chip:(document.querySelector('.pipeline-out')||{}).textContent, kind:effectiveProcessKind()})")
-        check("disabling Vectorize → PNG output + cutout kind", png_state["chip"] == "PNG" and png_state["kind"] == "cutout", str(png_state))
-        page.evaluate("""() => { const t=document.querySelector('.pipeline-stage[data-stage=vectorize] .stage-toggle');
-            t.checked=true; t.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
-        # all stages off disables Run and shows a dashed empty chip
-        page.evaluate("""() => { ['upscale','removebg','vectorize'].forEach(id=>{ const t=document.querySelector('.pipeline-stage[data-stage='+id+'] .stage-toggle'); t.checked=false; t.dispatchEvent(new Event('change')); }); }"""); page.wait_for_timeout(40)
-        off = page.evaluate("""() => ({ run: [...document.querySelectorAll('.process-controls .primary-button')][0].disabled,
-            chip: (document.querySelector('.pipeline-out')||{}).className })""")
-        check("no stages enabled disables Run + empties the output chip", off["run"] and "out-none" in off["chip"], str(off))
-        page.evaluate("""() => { ['upscale','removebg','vectorize'].forEach(id=>{ const t=document.querySelector('.pipeline-stage[data-stage='+id+'] .stage-toggle'); t.checked=true; t.dispatchEvent(new Event('change')); }); }"""); page.wait_for_timeout(40)
-
-        # Remove-BG method pill folds in Greenscreen; AI reveals the model picker in the stage body
-        page.evaluate("""() => { const p=document.querySelector('.pipeline-stage[data-stage=removebg] .stage-method'); p.value='ai'; p.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
-        page.evaluate("""() => { if(!document.querySelector('.pipeline-detail[data-stage=removebg]')) document.querySelector('.pipeline-stage[data-stage=removebg] .pipeline-stage-title').click(); }"""); page.wait_for_timeout(40)
-        rb = page.evaluate("""() => ({ method: settings.removebg_method,
-            body: [...document.querySelectorAll('.pipeline-detail[data-stage=removebg] .form-label')].map(s=>s.textContent),
-            green: [...document.querySelector('.pipeline-stage[data-stage=removebg] .stage-method').options].some(o=>o.value==='green') })""")
-        check("Remove-BG AI method reveals the model picker; Greenscreen is a method option",
-              rb["method"] == "ai" and "AI model" in rb["body"] and rb["green"], str(rb))
-        page.evaluate("""() => { const p=document.querySelector('.pipeline-stage[data-stage=removebg] .stage-method'); p.value='classical'; p.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
-
-        # Vectorize body (expanded by default): Output toggle + Simplify, and Color reveals Style/Colors/Layers
-        vbody = page.evaluate("() => [...document.querySelectorAll('.pipeline-detail[data-stage=vectorize] .form-label')].map(s=>s.textContent)")
-        check("Vectorize body surfaces Output + Simplify", "Output" in vbody and "Simplify" in vbody, str(vbody))
-        page.evaluate("""() => { const s=[...document.querySelectorAll('.pipeline-detail[data-stage=vectorize] select')].find(x=>[...x.options].some(o=>o.value==='color')&&[...x.options].some(o=>o.value==='bw')); s.value='color'; s.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
-        col = page.evaluate("() => [...document.querySelectorAll('.pipeline-detail[data-stage=vectorize] .form-label')].map(s=>s.textContent)")
-        check("Color output reveals Style/Colors/Layers + flows to the payload",
-              all(x in col for x in ["Style", "Colors", "Layers"]) and page.evaluate("settings.trace_colormode") == "color", str(col))
-        page.evaluate("""() => { const s=[...document.querySelectorAll('.pipeline-detail[data-stage=vectorize] select')].find(x=>[...x.options].some(o=>o.value==='strong')&&[...x.options].some(o=>o.value==='off')); s.value='strong'; s.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
-        check("Simplify flows to the payload", page.evaluate("settings.trace_simplify") == "strong")
-        page.evaluate("""() => { Object.assign(settings,{trace_simplify:'medium',trace_colormode:'bw'}); renderProcessWorkspace(); }"""); page.wait_for_timeout(40)
-        # Vectorize Pixel method folds in Pixel-Art → SVG (maps to the pixelvec kind, swaps the body)
-        page.evaluate("""() => { const p=document.querySelector('.pipeline-stage[data-stage=vectorize] .stage-method'); p.value='pixel'; p.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
-        pix = page.evaluate("""() => ({ method: settings.vectorize_method, kind: effectiveProcessKind(),
-            body: [...document.querySelectorAll('.pipeline-detail[data-stage=vectorize] .form-label')].map(s=>s.textContent) })""")
-        check("Vectorize Pixel method maps to pixelvec + shows pixel controls",
-              pix["method"] == "pixel" and pix["kind"] == "pixelvec" and "Cell color" in pix["body"] and "Shape mode" in pix["body"], str(pix))
-        page.evaluate("""() => { const p=document.querySelector('.pipeline-stage[data-stage=vectorize] .stage-method'); p.value='trace'; p.dispatchEvent(new Event('change')); }"""); page.wait_for_timeout(40)
-
-        # Presets: the 6 old processes are built-ins; applying one sets the stage set; user presets round-trip
-        presets = page.evaluate("() => [...document.querySelectorAll('.pipeline-presets .preset-chip')].map(b=>b.textContent)")
-        check("built-in presets reproduce the 6 old processes",
-              all(x in presets for x in ["Production SVG", "SVG Trace", "Pixel Art → SVG", "Cutout PNG", "Upscale PNG", "Greenscreen"]), str(presets))
-        page.evaluate("""() => { [...document.querySelectorAll('.pipeline-presets .preset-chip')].find(b=>b.textContent==='Cutout PNG').click(); }"""); page.wait_for_timeout(40)
-        cut = page.evaluate("() => ({u:settings.stage_upscale, r:settings.stage_removebg, v:settings.stage_vectorize, active: !!document.querySelector('.pipeline-presets .preset-chip.active')})")
-        check("applying a built-in preset sets its stages + highlights active",
-              cut["r"] and not cut["u"] and not cut["v"] and cut["active"], str(cut))
-        page.evaluate("""() => { localStorage.removeItem('hector-vector:pipeline-presets');
-            const u = { MyPipe: { stage_upscale:true, stage_removebg:false, stage_vectorize:true, vectorize_method:'trace' } };
-            localStorage.setItem('hector-vector:pipeline-presets', JSON.stringify(u)); renderProcessWorkspace(); }"""); page.wait_for_timeout(40)
-        check("user-saved presets render alongside built-ins",
-              page.evaluate("() => [...document.querySelectorAll('.pipeline-presets .preset-chip')].some(b=>b.textContent==='MyPipe')"))
-        page.evaluate("""() => { localStorage.removeItem('hector-vector:pipeline-presets');
-            [...document.querySelectorAll('.pipeline-presets .preset-chip')].find(b=>b.textContent==='Production SVG').click(); }"""); page.wait_for_timeout(40)
-        # gallery polish: no horizontal overflow, square thumbs, compact icon actions that fit the cell
-        page.evaluate("renderProcessWorkspace();"); page.wait_for_timeout(80)
-        poly = page.evaluate("""() => {
-          const body=document.querySelector('#process-view-body');
-          const cell=document.querySelector('.gallery-cell');
-          if(!cell) return {skip:true};
-          const t=document.querySelector('.gallery-thumb').getBoundingClientRect();
-          const a=document.querySelector('.gallery-actions');
-          const ab=a.getBoundingClientRect(), cb=cell.getBoundingClientRect();
-          return { overflowX: body.scrollWidth-body.clientWidth, square: Math.abs(t.width-t.height)<2,
-                   contain: getComputedStyle(document.querySelector('.gallery-thumb img')).objectFit,
-                   icons: a.children.length, fit: ab.right<=cb.right+0.5 && ab.left>=cb.left-0.5 };
+        # ---- Pipeline kind/output mapping (the standalone Process VIEW + its stage strip
+        # are gone; the Processor dock panel covers the stage UI — see the Processor checks
+        # above). effectiveProcessKind/outputChipInfo are still the shared mapping driving
+        # previews + skip-detection; verify them off `settings` via the Processor chip. ----
+        kinds = page.evaluate("""() => {
+          const r={}; const set=(o)=>{ Object.assign(settings,o); renderProcessorPanel(); };
+          const out=()=>document.querySelector('#processor-out').textContent;
+          set({stage_upscale:true, stage_removebg:true, stage_vectorize:true, vectorize_method:'trace'});
+          r.allThree=effectiveProcessKind(); r.allOut=out();
+          set({stage_vectorize:false}); r.noVec=effectiveProcessKind(); r.noVecOut=out();
+          set({stage_removebg:false}); r.upOnly=effectiveProcessKind();
+          set({stage_upscale:false}); r.none=effectiveProcessKind(); r.noneOut=out();
+          set({stage_upscale:true, stage_removebg:true, stage_vectorize:true, vectorize_method:'pixel'}); r.pixel=effectiveProcessKind();
+          set({vectorize_method:'trace'});
+          return r;
         }""")
-        check("process gallery: no overflow, square thumbs, icon actions fit",
-              poly.get("skip") or (poly["overflowX"] <= 0 and poly["square"] and poly["contain"] == "contain" and poly["icons"] >= 1 and poly["fit"]), str(poly))
-
-        # ---- Q-menu speed: chrome paints synchronously, the heavy gallery is deferred a frame ----
-        defer = page.evaluate("""() => {
-          renderProcessWorkspace();
-          const chrome = !!document.querySelector('.process-controls') && !!document.querySelector('.pipeline-strip');
-          const g = document.querySelector('#process-gallery');
-          const deferred = !!g && /Loading library/.test(g.textContent) && !g.querySelector('.gallery-grid');
-          return { chrome, deferred };
-        }""")
-        check("Process workspace paints chrome first, defers the gallery", defer["chrome"] and defer["deferred"], str(defer))
-        page.wait_for_timeout(90)
-        filled = page.evaluate("() => !!document.querySelector('#process-gallery .gallery-grid') || !!document.querySelector('#process-gallery .gallery-empty')")
-        check("deferred gallery fills in after a frame", filled)
-        page.evaluate("() => { Object.assign(settings,{trace_simplify:'medium',trace_colormode:'bw'}); showEditView(); }")
+        check("pipeline kind/output mapping (all3=pipeline/SVG · no-vec=cutout/PNG · up-only=upscale · none · pixel=pixelvec)",
+              kinds["allThree"] == "pipeline" and kinds["allOut"] == "SVG" and kinds["noVec"] == "cutout"
+              and kinds["noVecOut"] == "PNG" and kinds["upOnly"] == "upscale" and (kinds["none"] in (None, ""))
+              and kinds["noneOut"] == "" and kinds["pixel"] == "pixelvec", str(kinds))
+        page.evaluate("() => { Object.assign(settings,{trace_simplify:'medium', trace_colormode:'bw'}); }")
 
         # ---- Settings: centralized AI models & tools panel (status + install) ----
         file_menu_click(page, "Settings"); page.wait_for_timeout(100)
@@ -1850,6 +1756,191 @@ def main():
         check("gallery thumbs use <img>, not <object>",
               thumbs["objects"] == 0 and thumbs["imgs"] == thumbs["cells"], str(thumbs))
         page.evaluate("closeModal()")
+
+        # ---- Detail (Info) is a dock PANEL now (not a modal); carries Rename / Download /
+        # Delete for C/R/V. Drive the vector detail with a synthetic item; the body fetch may
+        # 404 (leaves dashes) but the action row is built regardless.
+        page.evaluate("""() => openVectorInfoModal({name:'probe.svg', url:'/outputs/__none__/probe.svg', path:''})""")
+        page.wait_for_function("() => !!document.querySelector('.rail-section.info .info-actions button')", timeout=2000)
+        det = page.evaluate("""() => {
+          const labels = [...document.querySelectorAll('.rail-section.info .info-actions button')].map(b=>b.textContent.trim());
+          return { rename: labels.includes('Rename'), download: labels.includes('Download'),
+                   del: labels.includes('Delete'), danger: !!document.querySelector('.rail-section.info .info-actions .danger-button'),
+                   panel: !!document.querySelector('.rail-section.info'), notModal: !document.querySelector('#modal-body .info-actions') };
+        }""")
+        check("Info is a dock panel with Rename / Download / Delete (not a modal)",
+              det["rename"] and det["download"] and det["del"] and det["danger"] and det["panel"] and det["notModal"], str(det))
+        # Delete is a two-click guard: first click arms ("Confirm delete?"), no request yet.
+        page.evaluate("""() => [...document.querySelectorAll('.rail-section.info .info-actions button')].find(b=>b.textContent.trim()==='Delete').click()""")
+        page.wait_for_timeout(40)
+        armed = page.evaluate("""() => { const b=document.querySelector('.rail-section.info .info-actions .danger-button');
+          return { armed: b.classList.contains('danger-armed'), text: b.textContent.trim() }; }""")
+        check("Delete arms on first click (no immediate destroy)",
+              armed["armed"] and armed["text"] == "Confirm delete?", str(armed))
+        # Rename opens the in-app floating input (no window.prompt).
+        page.evaluate("""() => [...document.querySelectorAll('.rail-section.info .info-actions button')].find(b=>b.textContent.trim()==='Rename').click()""")
+        page.wait_for_timeout(40)
+        check("Rename opens the floating input (no window.prompt)",
+              page.evaluate("() => !!document.querySelector('.hv-float-input')"))
+        page.evaluate("""() => { const i=document.querySelector('.hv-float-input input'); if(i){ i.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})); } window.__docks.close('info'); }""")
+
+        # ---- Processor panel: pipeline stages (de-crammed from Properties) + live preview ----
+        page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
+              + '<rect class="hv-artboard" x="0" y="0" width="200" height="200" fill="#fff"/></svg>','raster-host.svg'); }""")
+        page.wait_for_function("editor && editor.stage", timeout=4000)
+        # place a raster <image> node (a 1px data URL suffices for the editor mechanics).
+        # Re-place inside the wait: a concurrent stage remount (e.g. the job poller) can
+        # occasionally drop the freshly-placed node, so keep placing until it sticks.
+        page.wait_for_function("""() => {
+            if (!editor || !editor.stage) return false;
+            if (editor.stage.querySelector('image[data-hv-id]')) return true;
+            const px='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+            editor.placeImage(px,'shot.png',120,120); return false; }""", timeout=6000)
+        # Properties is now a COMPACT pointer — the pipeline was de-crammed into the Processor panel.
+        # raster Properties no longer carries a "Process / Open Processor" pointer — the
+        # Processor panel is contextual now, so rasterTools returns null when no live
+        # preview is running (it only surfaces Keep/Revert during a live trace).
+        decram = page.evaluate("""() => { const node=editor.stage.querySelector('image[data-hv-id]');
+            return { isImage: node.tagName.toLowerCase()==='image', noPointer: editor.rasterTools(node) === null }; }""")
+        check("raster Properties has no Process pointer (Processor is contextual)",
+              decram["isImage"] and decram["noPointer"], str(decram))
+        # The Processor panel hosts the 3 stages, targeting the selected raster.
+        stages = page.evaluate("""() => { renderProcessorPanel();
+            return { names:[...document.querySelectorAll('#processor-body .proc-stage .stage-name')].map(s=>s.textContent),
+                     target:(document.querySelector('#processor-body .proc-target-name')||{}).textContent }; }""")
+        check("Processor hosts Upscale / Remove BG / Vectorize for the selected raster",
+              stages["names"] == ["Upscale", "Remove BG", "Vectorize"] and stages["target"] != "Whole library (batch)", str(stages))
+        # batch is EXPLICIT: the focused raster is the default; the ▦ swap toggles to
+        # whole-library batch (and back). Was: silently defaulted to batch with no raster.
+        batch = page.evaluate("""() => {
+            const label = () => document.querySelector('#processor-body .proc-target-name').textContent;
+            const runTxt = () => document.querySelector('#processor-chin .proc-run').textContent;   // Run lives in the pinned chin now
+            const beforeLabel = label(), beforeRun = runTxt();
+            document.querySelector('#processor-body .proc-target-swap').click();
+            const afterLabel = label(), afterRun = runTxt();
+            document.querySelector('#processor-body .proc-target-swap').click();   // toggle back
+            return { beforeLabel, beforeRun, afterLabel, afterRun, restored: label() }; }""")
+        check("batch is an explicit toggle (focused raster default; ▦ → whole library)",
+              batch["beforeLabel"] != "Whole library (batch)" and batch["beforeRun"] == "Run → canvas"
+              and batch["afterLabel"] == "Whole library (batch)" and batch["afterRun"] == "Run library"
+              and batch["restored"] != "Whole library (batch)", str(batch))
+        # Run lives in a pinned standard chin below the scrolling stage list (not in the body).
+        chin = page.evaluate("""() => ({ runInChin: !!document.querySelector('.rail-section.processor > #processor-chin .proc-run'),
+            runNotInBody: !document.querySelector('#processor-body .proc-run') })""")
+        check("Run sits in the pinned Processor chin, not the scrolling body",
+              chin["runInChin"] and chin["runNotInBody"], str(chin))
+        # Vectorize card (expanded by default): Engine selector + Auto-detect + live preview + schema controls.
+        vec = page.evaluate("""() => { const body=document.querySelector('#processor-body .proc-stage[data-stage="vectorize"] .pipeline-detail-body');
+            return body ? { hasEngine:[...body.querySelectorAll('.form-label')].some(s=>/Engine/i.test(s.textContent)),
+                            auto:/Auto-detect/.test(body.textContent),
+                            live:[...body.querySelectorAll('button')].some(b=>/Live preview/i.test(b.textContent)),
+                            ctrls: body.querySelectorAll('select,input').length } : {nobody:true}; }""")
+        check("Vectorize card: Engine selector + Auto-detect + live preview + schema controls",
+              vec.get("hasEngine") and vec.get("auto") and vec.get("live") and vec.get("ctrls", 0) > 2, str(vec))
+        # Contextual: the Processor is un-dimmed when a raster is the subject, dimmed when idle
+        # (no canvas raster + library not on rasters). It stays put — only the emphasis changes.
+        ctx = page.evaluate("""() => {
+            const sec = document.querySelector('.rail-section.processor');
+            const img = editor.stage.querySelector('image[data-hv-id]');
+            editor.selection = new Set([img.getAttribute('data-hv-id')]); editor.artboardSelected = false; editor.onInspect();
+            const whenRaster = !sec.classList.contains('dimmed');
+            // canvas selection WINS: a non-raster selection dims it even while the library is on rasters
+            editor.selection = new Set(); editor.artboardSelected = true; editor.onInspect();
+            const whenNonRaster = sec.classList.contains('dimmed');
+            document.querySelector('.lib-mode[data-mode="vector"]').click();   // library → vectors (no raster focus)
+            editor.selection = new Set(); editor.artboardSelected = false; editor.onInspect();
+            const whenIdle = sec.classList.contains('dimmed');
+            document.querySelector('.lib-mode[data-mode="raster"]').click();   // restore library mode
+            editor.selection = new Set([img.getAttribute('data-hv-id')]); editor.artboardSelected = false; editor.onInspect();   // restore selection for later tests
+            return { whenRaster, whenNonRaster, whenIdle }; }""")
+        check("Processor: un-dims for a raster, dims for a non-raster selection + when idle (canvas wins)",
+              ctx["whenRaster"] and ctx["whenNonRaster"] and ctx["whenIdle"], str(ctx))
+
+        tri = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">'
+               '<path d="M10 10 L110 10 L60 100 Z" fill="#3366cc"/></svg>')
+        prev = page.evaluate("""(svg) => { const node=editor.nodeById([...editor.selection][0]);
+            const ok=editor.showRasterPreview(node,svg);
+            return { ok, preview: !!editor.stage.querySelector('g.hv-preview'),
+                     hidden: node.classList.contains('hv-raster-hidden') }; }""", tri)
+        check("live preview swaps the canvas (preview group up, raster hidden)",
+              prev["ok"] and prev["preview"] and prev["hidden"], str(prev))
+        ser = page.evaluate("editor.serialize()")
+        check("preview layer never leaks into serialized output",
+              "hv-preview" not in ser and "hv-raster-hidden" not in ser)
+        rev = page.evaluate("""() => { editor.clearRasterPreview(true);
+            const node=editor.nodeById([...editor.selection][0]);
+            return { gone: !editor.stage.querySelector('g.hv-preview'),
+                     visible: !!node && !node.classList.contains('hv-raster-hidden') }; }""")
+        check("revert clears the preview and restores the raster", rev["gone"] and rev["visible"], str(rev))
+
+        # ---- schema-driven Vectorize card + EVERY control live-wired (now in the Processor panel) ----
+        # Regression guard for the half-wired bug (only 3 of ~12 controls re-traced) and the
+        # phantom-knob bug (panel showed controls the active engine ignored). The card is
+        # rendered purely from /api/vectorize/engines → only the selected engine's params show.
+        eng = page.evaluate("""() => {
+            const body = (e) => { settings.engine=e; renderProcessorPanel();
+                return (document.querySelector('#processor-body .proc-stage[data-stage="vectorize"] .pipeline-detail-body')||{}).textContent||''; };
+            const clean=body('clean'), pixel=body('pixel'), vtr=body('vtracer');
+            delete settings.engine; renderProcessorPanel();
+            return { cleanScoped: /Colours/.test(clean) && /Simplify/.test(clean) && !/Output/.test(clean) && !/Curves/.test(clean),
+                     pixelScoped: /Shape mode/.test(pixel) && /Cell colour/.test(pixel) && !/Output/.test(pixel),
+                     vtrScoped: /Output/.test(vtr) && /Curves/.test(vtr) }; }""")
+        check("engine selector scopes the Vectorize card to only that engine's params (no phantom knobs)",
+              eng["cleanScoped"] and eng["pixelScoped"] and eng["vtrScoped"], str(eng))
+        wired = page.evaluate("""() => {
+            const id=[...editor.selection][0];
+            settings.engine='vtracer'; renderProcessorPanel();   // vtracer schema has a number + several selects
+            app.armRasterLive(id);
+            const body=document.querySelector('#processor-body .proc-stage[data-stage="vectorize"] .pipeline-detail-body');
+            const num=body.querySelector('input[type=number]');
+            const sel=[...body.querySelectorAll('select')].pop();   // a schema value select, not the Engine selector
+            const before=app.rasterLiveKicks;
+            if (num) { num.value='1234'; num.dispatchEvent(new Event('input',{bubbles:true})); }
+            const afterNum=app.rasterLiveKicks;
+            if (sel) sel.dispatchEvent(new Event('change',{bubbles:true}));
+            const afterSel=app.rasterLiveKicks;
+            app.disarmRasterLive(); delete settings.engine; renderProcessorPanel();
+            return { hadNum:!!num, hadSel:!!sel, before, afterNum, afterSel }; }""")
+        check("every Vectorize value control re-triggers the live trace (number + select)",
+              wired["hadNum"] and wired["hadSel"] and wired["afterNum"] > wired["before"] and wired["afterSel"] > wired["afterNum"], str(wired))
+
+        # ---- Upscale / Remove-bg cards: schema-driven + live-wired (raster ops) ----
+        rop = page.evaluate("""() => {
+            // expand the upscale + removebg cards
+            for (const sid of ['upscale','removebg']) { const c=[...document.querySelectorAll('#processor-body .proc-stage')].find(x=>x.dataset.stage===sid); if(c && !c.classList.contains('expanded')) c.querySelector('.proc-stage-title').click(); }
+            const txt=(sid)=>(document.querySelector(`#processor-body .proc-stage[data-stage="${sid}"] .pipeline-detail-body`)||{}).textContent||'';
+            const up=txt('upscale');
+            settings.removebg_method='classical'; renderProcessorPanel(); const classical=txt('removebg');
+            settings.removebg_method='ai';        renderProcessorPanel(); const ai=txt('removebg');
+            settings.removebg_method='classical'; renderProcessorPanel();
+            return { upScoped: /Model/.test(up) && /Scale/.test(up),
+                     classicalNoAi: !/AI model/.test(classical),
+                     aiShowsModel: /AI model/.test(ai) }; }""")
+        check("upscale + remove-bg cards are schema-driven (Model/Scale; AI model only when AI)",
+              rop["upScoped"] and rop["classicalNoAi"] and rop["aiShowsModel"], str(rop))
+        wop = page.evaluate("""() => {
+            const id=[...editor.selection][0];
+            const findSel=(sid,v)=>{ const body=document.querySelector(`#processor-body .proc-stage[data-stage="${sid}"] .pipeline-detail-body`); return body && [...body.querySelectorAll('select')].find(s=>[...s.options].some(o=>o.value===v)); };
+            app.armRasterOp(id,'upscale'); renderProcessorPanel();   // Scale = plain value control → live re-run
+            const scale=findSel('upscale','2'); const a=app.rasterOpKicks; if(scale) scale.dispatchEvent(new Event('change',{bubbles:true})); const b=app.rasterOpKicks;
+            app.disarmRasterOp();
+            app.armRasterOp(id,'removebg'); renderProcessorPanel();  // Method = when-driver → structural rebuild + re-run
+            const method=findSel('removebg','classical'); const c=app.rasterOpKicks; if(method) method.dispatchEvent(new Event('change',{bubbles:true})); const d=app.rasterOpKicks;
+            app.disarmRasterOp(); renderProcessorPanel();
+            return { scale:!!scale, method:!!method, a,b,c,d }; }""")
+        check("raster-op cards are live-wired (upscale scale + remove-bg method re-trigger the op)",
+              wop["scale"] and wop["method"] and wop["b"] > wop["a"] and wop["d"] > wop["c"], str(wop))
+
+        com = page.evaluate("""(svg) => { const node=editor.nodeById([...editor.selection][0]);
+            editor.showRasterPreview(node,svg); editor.commitRasterToVector(node,svg,'shot');
+            const g=editor.nodeById([...editor.selection][0]);
+            return { imgs: editor.stage.querySelectorAll('image').length,
+                     isGroup: !!g && g.tagName.toLowerCase()==='g',
+                     paths: g? g.querySelectorAll('path').length:0,
+                     preview: !!editor.stage.querySelector('g.hv-preview') }; }""", tri)
+        check("commit replaces the raster with an editable vector layer",
+              com["imgs"] == 0 and com["isGroup"] and com["paths"] >= 1 and not com["preview"], str(com))
 
         # ---- Save-As: a new/opened canvas (no selectedOutput) can be saved ----
         page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
@@ -1900,14 +1991,58 @@ def main():
         check("Open-from-file mounts a stage with no save target", opened["stage"] and opened["noTarget"], str(opened))
         os.remove(tmp_svg)
 
-        # Export on an unsaved canvas routes through Save-As (no dead-end toast)
+        # Export renders the LIVE canvas in-browser (no cairosvg, no save needed) — an
+        # unsaved doc opens the Export window directly and renders straight to a download.
         page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
             mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60"><rect data-hv-id="rx" x="5" y="5" width="30" height="30" fill="#c33"/></svg>','export-probe.svg'); }""")
         page.evaluate("window.app.exportFlow()")
-        page.wait_for_function("!document.querySelector('#modal-root').hidden && document.querySelector('#modal-title').textContent === 'Save as'", timeout=4000)
-        check("Export on unsaved canvas opens Save-As (no dead end)",
-              page.evaluate("document.querySelector('#modal-title').textContent") == "Save as")
+        page.wait_for_function("!document.querySelector('#modal-root').hidden && document.querySelector('#modal-title').textContent === 'Export PNG'", timeout=4000)
+        modal0 = page.evaluate("""() => ({ title: document.querySelector('#modal-title').textContent,
+            hasRender: [...document.querySelectorAll('#modal-body button')].some(b=>/Render PNG/.test(b.textContent)),
+            hasPreview: !!document.querySelector('#modal-body .export-preview img') })""")
+        check("Export on unsaved canvas opens the Export window directly (no Save-As dead end)",
+              modal0["title"] == "Export PNG" and modal0["hasRender"] and modal0["hasPreview"], str(modal0))
+        # stub the synthetic <a download> click so no real PNG lands on disk
+        page.evaluate("""() => { window.__png=null; const real=HTMLAnchorElement.prototype.click;
+            HTMLAnchorElement.prototype.click=function(){ if(this.download){ window.__png={name:this.download, blob:this.href.startsWith('blob:')}; return; } return real.call(this); }; }""")
+        page.evaluate("""() => { for (const b of document.querySelectorAll('#modal-body button')) if (/Render PNG/.test(b.textContent)) { b.click(); break; } }""")
+        page.wait_for_function("[...document.querySelectorAll('#modal-body button')].some(b=>/Download PNG/.test(b.textContent))", timeout=6000)
+        res = page.evaluate("""() => ({ info: (document.querySelector('#modal-body .form-hint')||{}).textContent || '',
+            buttons: [...document.querySelectorAll('#modal-body button')].map(b=>b.textContent.trim()) })""")
+        check("client-side render produces a downloadable PNG result (no cairosvg)",
+              "px" in res["info"] and "Download PNG" in res["buttons"], str(res))
+        page.evaluate("""() => { for (const b of document.querySelectorAll('#modal-body button')) if (/Download PNG/.test(b.textContent)) { b.click(); break; } }""")
+        png = page.evaluate("window.__png")
+        check("Download PNG emits an a[download$=.png] blob", bool(png) and str(png.get("name")).endswith(".png") and png.get("blob"), str(png))
         page.evaluate("closeModal()")
+
+        # ---- known-problem fix: SVG export bakes placed-raster hrefs to data URIs (self-contained) ----
+        inl = page.evaluate("""async () => {
+            const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><image href="/assets/hv_logo.svg" x="0" y="0" width="50" height="50"/></svg>';
+            const out = await window.app.inlineSvgImages(svg);
+            return { hasData: /href\\s*=\\s*"data:/.test(out), droppedUrl: !/\\/assets\\/hv_logo\\.svg/.test(out) }; }""")
+        check("SVG export inlines same-origin <image> hrefs to data URIs (portable off-machine)",
+              inl["hasData"] and inl["droppedUrl"], str(inl))
+
+        # ---- regression fix: stroke-align clip is re-anchored on clone (was sharing the source's clip id) ----
+        SA_DOC = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">'
+                  '<rect class="hv-artboard" x="0" y="0" width="200" height="200" fill="#fff"/>'
+                  '<path data-hv-id="sp" d="M40 40 L120 40 L120 120 Z" fill="#cde" stroke="#036" stroke-width="6"/></svg>')
+        page.evaluate("svg => { app.selectedOutput=null; app.manualOutputName=null; mountStageFromText(svg,'sa.svg'); }", SA_DOC)
+        page.wait_for_function("editor.nodeById('sp')", timeout=4000)
+        sa = page.evaluate("""() => {
+            editor.selection=new Set(['sp']); editor.artboardSelected=false; editor._renderSelection();
+            editor.setStrokeAlign('inside');
+            const origClip = editor.nodeById('sp').getAttribute('clip-path');
+            editor.duplicate();
+            const clone = editor.nodeById([...editor.selection][0]);
+            const cloneClip = clone.getAttribute('clip-path');
+            const refDef = (cp) => !!(cp && editor.stage.querySelector(cp.replace('url(#','#').replace(')','')));
+            return { origClip, cloneClip, distinct: !!origClip && !!cloneClip && origClip!==cloneClip,
+                     origDef: refDef(origClip), cloneDef: refDef(cloneClip),
+                     noIdCollision: editor.stage.querySelectorAll('#'+CSS.escape('sp')).length <= 1 }; }""")
+        check("stroke-align clip is re-anchored on clone (own clip def, no id collision)",
+              sa["distinct"] and sa["origDef"] and sa["cloneDef"] and sa["noIdCollision"], str(sa))
 
         # ---- Node tool under a transformed/grouped ancestor (anchors map through the CTM) ----
         XF_DOC = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300">'
@@ -2002,7 +2137,8 @@ def main():
         # no blank-slot placeholder box any more — an empty/partial header just shows its real button(s)
         check("panel headers render no blank-slot placeholder",
               page.evaluate("!document.querySelector('.hdr-slot-empty')"))
-        # 3-tile cap on panel headers: header now has hdr-invert + act-union (2); fill to 3, the 4th is refused
+        # Headers now scroll on overflow (tile-scroll), so the cap was raised past 3 — a
+        # 4th dropped tile is accepted (was refused under the old 3-tile cap).
         capped = page.evaluate("""() => {
             const hdr = document.querySelector('.rail-section.properties .panel-actions');
             const drop = (id) => { const tile = document.querySelector('.actionbar #'+id); if (!tile) return;
@@ -2011,11 +2147,11 @@ def main():
               hdr.dispatchEvent(new DragEvent('dragover',{bubbles:true,clientX:Math.round(r.right-4),clientY:Math.round(r.top+r.height/2),dataTransfer:dt}));
               hdr.dispatchEvent(new DragEvent('drop',{bubbles:true,dataTransfer:dt}));
               tile.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer:dt})); };
-            drop('act-cut');   // -> 3 tiles (at cap)
-            drop('act-copy');  // -> refused (would be 4)
+            drop('act-cut');
+            drop('act-copy');  // a 4th tile — now accepted (overflow-scrolls)
             const tiles = [...hdr.children].filter(c => c.classList.contains('tool-button') && !c.classList.contains('panel-x'));
             return { n: tiles.length, copyIn: !!hdr.querySelector('#act-copy') }; }""")
-        check("panel header is capped at 3 action tiles", capped["n"] == 3 and capped["copyIn"] is False, str(capped))
+        check("panel header accepts more than 3 tiles (overflow-scrolls)", capped["n"] >= 4 and capped["copyIn"] is True, str(capped))
         page.evaluate("window.__layout.toggleEdit(); window.__layout.reset()"); page.wait_for_timeout(60)
         check("Reset returns the moved tile to the action bar",
               page.evaluate("!!document.querySelector('.actionbar #act-union') && !document.querySelector('.rail-section.properties #act-union')"))
@@ -2025,9 +2161,9 @@ def main():
         # leftdock is the leftmost grid child (before the toolstrip)
         check("left dock is the leftmost column",
               page.evaluate("() => document.querySelector('.editor-grid').firstElementChild.id === 'leftdock'"))
-        # Properties + Colour default docked-right (permanent panels); float them out so the
-        # History/Layers checks below see a clean right dock.
-        page.evaluate("window.__docks.float('properties'); window.__docks.float('color')"); page.wait_for_timeout(60)
+        # Properties + Colour + Library + Jobs default docked-right (permanent panels); float
+        # them out so the History/Layers checks below see a clean right dock.
+        page.evaluate("window.__docks.float('properties'); window.__docks.float('color'); window.__docks.float('library'); window.__docks.float('jobs'); window.__docks.float('processor')"); page.wait_for_timeout(60)
         # float History (no detach button — controller / header-drag does it)
         page.evaluate("window.__docks.float('history')"); page.wait_for_timeout(80)
         check("a panel floats into a dock-window",
@@ -2056,6 +2192,76 @@ def main():
         order = page.evaluate("[...document.querySelectorAll('#rightdock .rail-section')].map(s=>s.dataset.section)")
         check("panels reorder within a dock (Layers above History)", order == ["layers", "history"], f"order={order}")
         page.evaluate("window.__docks.dock('history','right','layers'); window.__docks.dock('layers','right')"); page.wait_for_timeout(40)
+
+        # ---- Locking-bezel groups: snap two floating panels into one move/scale group ----
+        page.evaluate("window.__docks.float('history'); window.__docks.float('layers')"); page.wait_for_timeout(60)
+        grp = page.evaluate("""() => {
+            window.__docks.joinGroup('history','layers','right');   // what an auto-snap drop does
+            const cont = document.querySelector('.dock-group');
+            const gid = window.__docks.groupOf('history');
+            return { containers: document.querySelectorAll('.dock-group').length,
+                     sections: cont ? cont.querySelectorAll(':scope > .rail-section').length : 0,
+                     bezels: cont ? cont.querySelectorAll(':scope > .dock-bezel').length : 0,
+                     handles: cont ? cont.querySelectorAll(':scope > .dock-rs').length : 0,
+                     grouped: !!gid && gid === window.__docks.groupOf('layers'),
+                     noStandaloneWin: !document.querySelector('.dock-window > .rail-section.history') }; }""")
+        check("two panels snap-lock into one bezel group (resizable + move together)",
+              grp["containers"] == 1 and grp["sections"] == 2 and grp["bezels"] == 1
+              and grp["handles"] == 8 and grp["grouped"] and grp["noStandaloneWin"], str(grp))
+        # double-click the bezel → detach the group back into standalone floating panels
+        split = page.evaluate("""() => {
+            document.querySelector('.dock-group .dock-bezel').dispatchEvent(new MouseEvent('dblclick', {bubbles:true}));
+            return { containers: document.querySelectorAll('.dock-group').length,
+                     ungrouped: !window.__docks.groupOf('history') && !window.__docks.groupOf('layers'),
+                     floats: window.__docks.loc('history')==='float' && window.__docks.loc('layers')==='float' }; }""")
+        check("double-clicking the bezel detaches the group",
+              split["containers"] == 0 and split["ungrouped"] and split["floats"], str(split))
+        # Splitting a 3-panel group must NOT orphan the multi-panel side. (Regression: the
+        # stale container was removed before its HTML sections were re-homed → they vanished.)
+        vis3 = page.evaluate("""() => {
+            window.__docks.float('history'); window.__docks.float('layers'); window.__docks.float('jobs');
+            window.__docks.joinGroup('layers','history','right');
+            window.__docks.joinGroup('jobs', window.__docks.groupOf('history'), 'right');   // history|layers|jobs
+            window.__docks.splitGroup(window.__docks.groupOf('history'), 1);                // [history] | [layers,jobs]
+            const seen = (n) => { const e=document.querySelector('.rail-section.'+n); if(!e) return false;
+                const r=e.getBoundingClientRect(); return r.width>4 && r.height>4 && !!e.closest('.dock-window,.dock-group'); };
+            return { history: seen('history'), layers: seen('layers'), jobs: seen('jobs'),
+                     subgroup: Object.values(window.__docks.groups()).some(g => g.members.length===2) }; }""")
+        check("splitting a 3-panel group keeps every panel mounted (no orphaned side)",
+              vis3["history"] and vis3["layers"] and vis3["jobs"] and vis3["subgroup"], str(vis3))
+        # collapsing a grouped (snapped) member folds it to its header — flex 0 0 auto, no blank slot
+        fold = page.evaluate("""() => {
+            window.__docks.float('history'); window.__docks.float('layers'); window.__docks.joinGroup('layers','history','right');
+            const hs = document.querySelector('.dock-group .rail-section.history .section-head');
+            hs.dispatchEvent(new MouseEvent('click', {bubbles:true}));   // collapse history
+            const h = document.querySelector('.dock-group .rail-section.history');
+            const res = { collapsed: h.classList.contains('collapsed'), hugs: h.style.flex === '0 0 auto' };
+            hs.dispatchEvent(new MouseEvent('click', {bubbles:true}));   // un-collapse (cleanup)
+            return res; }""")
+        check("collapsing a snapped panel folds it to its header (no blank slot)",
+              fold["collapsed"] and fold["hugs"], str(fold))
+        page.evaluate("window.__docks.dock('history','right'); window.__docks.dock('layers','right'); window.__docks.dock('jobs','right')"); page.wait_for_timeout(40)
+        # Jobs is a first-class dock panel now (batch queue lifted out of the Process view → visible in Edit) — step toward dissolving Q
+        page.evaluate("window.__docks.dock('jobs','right')"); page.wait_for_timeout(40)
+        jb = page.evaluate("""() => ({ inDock: !!document.querySelector('#rightdock .rail-section.jobs'),
+            hasPanel: !!document.querySelector('#jobs-list .jobs-panel'),
+            canFloat: (window.__docks.float('jobs'), window.__docks.loc('jobs')==='float') })""")
+        page.evaluate("window.__docks.dock('jobs','right')"); page.wait_for_timeout(40)
+        check("Jobs is a dockable panel in the Edit view (batch queue out of the Process view)",
+              jb["inDock"] and jb["hasPanel"] and jb["canFloat"], str(jb))
+        # Processor: the pipeline as a vertical flow rail, a first-class dock panel.
+        page.evaluate("window.__docks.dock('processor','right')"); page.wait_for_timeout(60)
+        proc = page.evaluate("""() => {
+            const stages = [...document.querySelectorAll('#processor-body .proc-stage')].map(c => c.dataset.stage);
+            const up = document.querySelector('#processor-body .proc-stage[data-stage="upscale"] .stage-toggle');
+            const wasOn = up.checked; up.click(); const toggled = up.checked !== wasOn; up.click();
+            return { inDock: !!document.querySelector('#rightdock .rail-section.processor'),
+                     stages, hasStages: stages.length === 3, toggled,
+                     canFloat: (window.__docks.float('processor'), window.__docks.loc('processor') === 'float') };
+        }""")
+        page.evaluate("window.__docks.dock('processor','right')"); page.wait_for_timeout(40)
+        check("Processor is a dockable flow-rail panel with the 3 pipeline stages",
+              proc["inDock"] and proc["hasStages"] and proc["toggled"] and proc["canFloat"], str(proc))
         # Properties is the same kind of object — float it, then dock it back
         page.evaluate("window.__docks.float('properties')"); page.wait_for_timeout(60)
         check("Properties can float into a window",
@@ -2063,13 +2269,123 @@ def main():
         page.evaluate("window.__docks.dock('properties','right')"); page.wait_for_timeout(60)
         check("Properties docks like any other panel",
               page.evaluate("window.__docks.loc('properties')==='right' && !!document.querySelector('#rightdock .rail-section.properties')"))
-        # Colour is a dockable panel too — summon it and dock it
-        page.evaluate("window.__docks.showColor()"); page.wait_for_timeout(80)
+        # Colour is a dockable panel too — summon it (with a colourable object selected, so
+        # it shows the embedded picker rather than the empty "select an object" state) and dock it
+        page.evaluate("""() => { mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+            + '<rect class="hv-artboard" x="0" y="0" width="100" height="100" fill="#fff"/>'
+            + '<rect data-hv-id="cz" x="10" y="10" width="40" height="40" fill="#3366cc"/></svg>','color-host.svg'); }""")
+        page.wait_for_function("editor.stage && editor.nodeById('cz')", timeout=8000)
+        page.wait_for_timeout(80)   # let the mount's rAF sync settle before selecting
+        page.evaluate("""() => { editor.selection = new Set(['cz']); editor.artboardSelected = false; editor.onInspect(); window.__docks.showColor(); }""")
+        page.wait_for_timeout(80)
         check("Colour summons as a panel with the embedded editor",
               page.evaluate("!!document.querySelector('.rail-section.color .cp-window.cp-embedded')"))
+        # ...and with nothing selected it shows an empty state, not the (tall) picker (no overflow)
+        check("Colour shows an empty state when nothing is selected",
+              page.evaluate("""() => { editor.selection=new Set(); editor.artboardSelected=false; editor.onInspect();
+                  window.__docks.renderColor && window.__docks.renderColor();
+                  const b=document.querySelector('.rail-section.color .fp-body');
+                  return !!b && !b.querySelector('.cp-window') && /select/i.test(b.textContent); }"""))
         page.evaluate("window.__docks.dock('color','right')"); page.wait_for_timeout(60)
         check("Colour docks like any other panel",
               page.evaluate("window.__docks.loc('color')==='right' && !!document.querySelector('#rightdock .rail-section.color')"))
+        # ---- Shelf: closed/unused panels park in the top-right header as squares ----
+        shelf = page.evaluate("""() => {
+            const infoSq = !!document.querySelector('#panel-shelf .shelf-sq[data-shelf="info"]');   // Info is unused by default → shelved
+            window.__docks.dock('history','right'); window.__docks.close('history');                // close History → shelf
+            const histSq = !!document.querySelector('#panel-shelf .shelf-sq[data-shelf="history"]');
+            const histGone = !document.querySelector('#rightdock .rail-section.history');
+            document.querySelector('#panel-shelf .shelf-sq[data-shelf="history"]').click();          // click square → reopen
+            const histBack = !!document.querySelector('#rightdock .rail-section.history');
+            const sqGone = !document.querySelector('#panel-shelf .shelf-sq[data-shelf="history"]');
+            return { infoSq, histSq, histGone, histBack, sqGone }; }""")
+        check("shelf parks closed/unused panels as squares; clicking a square reopens them",
+              shelf["infoSq"] and shelf["histSq"] and shelf["histGone"] and shelf["histBack"] and shelf["sqGone"], str(shelf))
+        # right-click a panel header → close it to the shelf (contextual close)
+        rc = page.evaluate("""() => { window.__docks.dock('layers','right');
+            document.querySelector('#rightdock .rail-section.layers .section-head').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true}));
+            const shelved = !document.querySelector('#rightdock .rail-section.layers') && !!document.querySelector('#panel-shelf .shelf-sq[data-shelf="layers"]');
+            window.__docks.unshelve('layers'); return shelved; }""")
+        check("right-clicking a panel header shelves it", rc, str(rc))
+        # Info is a standard panel object — not the ghostly borderless context-panel
+        check("Info panel is a standard panel (no ghost context-panel chrome)",
+              page.evaluate("""() => { window.__docks.unshelve('info'); const s=document.querySelector('.rail-section.info');
+                  const ok = !!s && !s.classList.contains('context-panel'); window.__docks.shelve('info'); return ok; }"""))
+        # state memory: a FLOATING panel that's shelved reopens FLOATING (not docked), on-screen
+        mem = page.evaluate("""() => {
+            window.__docks.float('history'); window.__docks.shelve('history'); window.__docks.unshelve('history');
+            const win = document.querySelector('.dock-window .rail-section.history') &&
+                        document.querySelector('.dock-window .rail-section.history').closest('.dock-window');
+            const r = win ? win.getBoundingClientRect() : null;
+            const onScreen = !!r && r.left >= 0 && r.top >= 0 && r.right <= window.innerWidth + 1 && r.bottom <= window.innerHeight + 1;
+            return { floatedBack: window.__docks.loc('history') === 'float', onScreen }; }""")
+        check("a floated panel reopens floating, on-screen (open/close state memory)",
+              mem["floatedBack"] and mem["onScreen"], str(mem))
+        # ---- Contextual auto-shelving: an unused panel parks itself into a shelf square, and
+        # pops back the moment it's relevant again (Colour follows the canvas selection). ----
+        page.evaluate("""() => { mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+            + '<rect class="hv-artboard" x="0" y="0" width="100" height="100" fill="#fff"/>'
+            + '<rect data-hv-id="cz" x="10" y="10" width="40" height="40" fill="#3366cc"/></svg>','ctx-host.svg'); }""")
+        page.wait_for_function("editor.stage && editor.nodeById('cz')", timeout=8000)
+        page.wait_for_timeout(80)
+        auto = page.evaluate("""() => {
+            window.__docks.dock('color','right'); window.__docks.state().color.pinned = false;
+            editor.selection = new Set(); editor.artboardSelected = false; window.__docks.syncContextual();
+            const sq = document.querySelector('#panel-shelf .shelf-sq[data-shelf="color"]');
+            const shelved = !document.querySelector('#rightdock .rail-section.color')
+                            && !!sq && sq.classList.contains('auto');   // idle squares read as auto/dashed
+            const locShelf = window.__docks.loc('color') === 'shelf';   // loc() reports the shelf (not a stale dock side)
+            editor.selection = new Set(['cz']); editor.artboardSelected = false; editor.onInspect();
+            const back = !!document.querySelector('#rightdock .rail-section.color')
+                         && !document.querySelector('#panel-shelf .shelf-sq[data-shelf="color"]');
+            return { shelved, locShelf, back }; }""")
+        check("a contextual panel auto-shelves when unused and returns when relevant",
+              auto["shelved"] and auto["locShelf"] and auto["back"], str(auto))
+        # a panel the user placed by hand (pinned) is exempt — it stays put (dims, not parks)
+        pin = page.evaluate("""() => {
+            window.__docks.dock('color','right'); window.__docks.state().color.pinned = true;
+            editor.selection = new Set(); editor.artboardSelected = false; window.__docks.syncContextual();
+            const stayed = !!document.querySelector('#rightdock .rail-section.color');
+            window.__docks.state().color.pinned = false; return stayed; }""")
+        check("a user-pinned panel is exempt from contextual auto-shelving", pin, str(pin))
+        # clicking the Info shelf square fills it with the current context (not a blank panel)
+        info = page.evaluate("""() => {
+            window.__docks.shelve('info');
+            const sq = document.querySelector('#panel-shelf .shelf-sq[data-shelf="info"]');
+            if (!sq) return { ok:false, why:'no info square' };
+            sq.click();
+            const b = document.querySelector('.rail-section.info .fp-body');
+            return { ok: !!b && b.textContent.trim().length > 0, text:(b?b.textContent:'').slice(0,32) }; }""")
+        check("clicking the Info shelf square fills it with current context (not empty)", info["ok"], str(info))
+        # right-clicking a shelf square opens an options menu (open / float / dock either side)
+        menu = page.evaluate("""() => {
+            window.__docks.shelve('history');
+            const sq = document.querySelector('#panel-shelf .shelf-sq[data-shelf="history"]');
+            sq.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true, clientX:60, clientY:60}));
+            const m = document.querySelector('.context-menu');
+            const labels = m ? [...m.querySelectorAll('.menu-label')].map(e=>e.textContent) : [];
+            const float = m ? [...m.querySelectorAll('.menu-item')].find(b=>/floating/i.test(b.textContent)) : null;
+            if (float) float.click();
+            return { hasMenu: !!m, labels, floated: window.__docks.loc('history')==='float' }; }""")
+        check("right-clicking a shelf square opens an options menu (open / float / dock)",
+              menu["hasMenu"] and any('float' in l.lower() for l in menu["labels"]) and menu["floated"], str(menu))
+        # docked panels open at CONTENT height (capped at their even share) — a never-resized
+        # panel gets an explicit `0 0 Npx` basis sized to fit, not a blind even slice.
+        fit = page.evaluate("""() => {
+            window.__docks.dock('color','right'); window.__docks.dock('properties','right');
+            window.__docks.state().color.pinned = true; delete window.__docks.state().color.h;
+            window.__docks.relayout();
+            const dock = document.querySelector('#rightdock');
+            const secs = [...dock.querySelectorAll(':scope > .rail-section')];
+            const color = dock.querySelector('.rail-section.color');
+            const even = dock.getBoundingClientRect().height / Math.max(1, secs.length);
+            const parts = (color.style.flex || '').split(/\\s+/);
+            const basis = parseFloat(parts[2]) || 0;
+            window.__docks.state().color.pinned = false;
+            return { basis, even, nonLast: secs.indexOf(color) < secs.length - 1, fmt: parts.slice(0,2).join(' ') }; }""")
+        check("a docked panel opens at content height (capped at its even share)",
+              fit["nonLast"] and fit["fmt"] == "0 0" and fit["basis"] > 0 and fit["basis"] <= fit["even"] + 1, str(fit))
+        page.evaluate("window.__docks.dock('history','right')"); page.wait_for_timeout(40)
         check("docked panels hide the × (no close button in a rail)",
               page.evaluate("getComputedStyle(document.querySelector('#rightdock .rail-section.properties .panel-x')).display === 'none'"))
         # floating the Colour panel must KEEP it (was a disappearing bug: float left it !visible

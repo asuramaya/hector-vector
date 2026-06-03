@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>hector-vector</title>
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="icon" type="image/svg+xml" href="/assets/icon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/assets/hv_logo.svg" />
     <meta name="theme-color" content="#ffffff" />
     <meta name="application-name" content="hector-vector" />
     <link rel="stylesheet" href="/style.css" />
@@ -14,6 +14,7 @@
     <main class="app editor">
       <header class="topbar editor-bar">
         <div class="panel-actions doc-actions-left">
+          <img class="brand-logo" src="/assets/hv_logo.svg" alt="hector-vector" title="hector-vector" />
           <div class="menu" data-menu="file">
             <button class="icon-btn menu-trigger" data-key="⇧F" type="button" aria-haspopup="true" aria-expanded="false" title="File — New / Open / Save / Export (Shift+F)">≣</button>
             <div class="menu-list" role="menu" hidden></div>
@@ -25,11 +26,9 @@
         </div>
         <!-- the canvas name + current selection live in the header (frees the stage) -->
         <span class="doc-title" title="Current document"><span id="output-label">Canvas</span><span id="sel-label" class="doc-sel"></span></span>
-        <!-- Ableton-style view swap: Edit canvas ⇄ Process workspace -->
-        <div class="panel-actions view-swap" role="group" aria-label="View">
-          <button id="view-edit" class="view-btn active" type="button" title="Edit canvas">⛶</button>
-          <button id="process-button" class="view-btn" data-key="Q" type="button" title="Process — batch images to vectors (Q)">▦<span id="process-count" class="view-count"></span></button>
-        </div>
+        <!-- Shelf: closed/unused panels park here as squares (click to reopen). Lives in
+             the top-right header space; empty until a panel is closed. -->
+        <div class="panel-shelf" id="panel-shelf" role="toolbar" aria-label="Shelved panels"></div>
       </header>
 
       <section class="editor-grid">
@@ -135,19 +134,65 @@
             <div id="layers-list" class="layers-list section-body"></div>
             <div id="layers-foot" class="layers-foot"></div>
           </div>
+          <!-- Library: the image gallery, now a first-class dockable panel (drag the
+               header to float/redock). Replaces the gallery trapped in the Process view —
+               first step of dissolving Q into composable panels. -->
+          <div class="rail-section library" data-section="library">
+            <div class="panel-head section-head">
+              <span class="caret" title="Library — collapse / expand">▾</span><span class="sec-label">Library</span><span class="sec-count" id="library-count"></span>
+              <div class="panel-actions">
+                <button id="library-add" class="tool-button" type="button" title="Add images to the library">⊕</button>
+              </div>
+            </div>
+            <div id="library-list" class="library-list section-body"></div>
+            <!-- Chin: filter (≈2/3) + C/R/V source toggle (canvas / raster / vector). -->
+            <div id="library-chin" class="library-chin">
+              <div class="lib-sort" role="group" aria-label="Sort">
+                <button class="lib-sort-dir" data-dir="asc" type="button" title="Sort ascending">↑</button>
+                <button class="lib-sort-dir" data-dir="desc" type="button" title="Sort descending">↓</button>
+                <button id="library-sortkey" class="lib-sort-key" type="button" title="Sort by — click to change (Name / Date)">N</button>
+              </div>
+              <input id="library-filter" class="modal-search library-filter" type="search" placeholder="Filter…" />
+              <div class="lib-mode-btns" role="group" aria-label="Library source">
+                <button class="lib-mode" data-mode="canvas" type="button" title="Canvas — saved .hv projects">C</button>
+                <button class="lib-mode" data-mode="raster" type="button" title="Raster — input images">R</button>
+                <button class="lib-mode" data-mode="vector" type="button" title="Vector — output vectors">V</button>
+              </div>
+            </div>
+          </div>
+          <!-- Processor: the image→vector pipeline as a vertical flow rail (Upscale →
+               Remove BG → Vectorize) — toggle/reorder stages, expand for settings,
+               live-preview the selected raster, Run. Lifts the pipeline out of the
+               cramped raster Properties panel into its own composable dock. -->
+          <div class="rail-section processor" data-section="processor">
+            <div class="panel-head section-head">
+              <span class="caret" title="Processor — collapse / expand">▾</span><span class="sec-label">Processor</span><span class="sec-count" id="processor-out"></span>
+              <div class="panel-actions">
+                <button id="processor-run" class="tool-button" type="button" title="Run the pipeline → canvas" disabled>▸</button>
+              </div>
+            </div>
+            <div id="processor-body" class="processor-body section-body"></div>
+            <!-- Chin: the Run action (+ a Load-to-preview affordance), pinned below the
+                 scrolling stage list — the standard panel chin (ink top-border). -->
+            <div id="processor-chin" class="processor-chin"></div>
+          </div>
+          <!-- Jobs: the batch queue, now a dockable panel so it's visible in the Edit
+               view alongside the canvas (step toward dissolving the Process view). -->
+          <div class="rail-section jobs" data-section="jobs">
+            <div class="panel-head section-head">
+              <span class="caret" title="Jobs — collapse / expand">▾</span><span class="sec-label">Jobs</span><span class="sec-count" id="jobs-count"></span>
+              <div class="panel-actions">
+                <button id="jobs-cancel-all" class="tool-button" type="button" title="Cancel all queued jobs" disabled>⊗</button>
+                <button id="jobs-clear" class="tool-button" type="button" title="Clear finished jobs" disabled>⌦</button>
+              </div>
+            </div>
+            <div id="jobs-list" class="jobs-list section-body"></div>
+          </div>
         </aside>
       </section>
 
-      <!-- Process: a first-class view (peer to the Edit canvas), not a modal. The
-           view-swap in the header toggles `.process-active` on `.app`, which shows
-           this and hides `.editor-grid` (so exactly one occupies the middle row). -->
-      <section id="process-view" class="process-view" aria-label="Process workspace">
-        <header class="process-view-bar">
-          <span id="process-view-title" class="process-view-title">Process</span>
-          <button id="process-close" class="ghost-button" type="button" title="Back to the canvas (Q)">Close</button>
-        </header>
-        <div id="process-view-body" class="process-view-body"></div>
-      </section>
+      <!-- The standalone Process view was dissolved into dock panels: Library (pick an
+           image) → Processor (compose + run the pipeline) → Jobs (watch). -->
 
       <!-- Hidden file inputs: Add images (raster import) + File ▸ Open from file (svg). -->
       <input id="file-input" type="file" accept="image/*" multiple hidden />

@@ -162,6 +162,7 @@ button:disabled {
    viewport BG button; help/collapse live in the ready bar. */
 .editor-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .doc-actions-left { justify-self: start; }
+.brand-logo { height: 22px; width: auto; display: block; flex: 0 0 auto; }
 /* document name, centred in the header (moved out of the stage so the canvas gets the
    full height). flex:1 between the File icon and the view-swap → centred + truncates. */
 .doc-title { flex: 1 1 auto; min-width: 0; text-align: center; font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -325,9 +326,23 @@ button:disabled {
 .section-head .panel-actions .tool-button:hover:not(:disabled):not(.active):not(.on) { background: var(--surface); color: var(--ink); border-color: var(--hair-2); }
 .section-head .panel-actions .tool-button.active, .section-head .panel-actions .tool-button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
 .app.editor.customizing .section-head .panel-actions { min-width: 26px; min-height: 26px; outline: 1px dashed var(--ink); outline-offset: -1px; background: var(--surface); border-radius: var(--r); }
+/* Shelf: closed/unused panels parked as squares in the top-right header. Click to reopen,
+   right-click for a tiny menu. Empty → hidden so it takes no space. */
+.panel-shelf { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.panel-shelf:empty { display: none; }
+.shelf-sq { width: 26px; height: 26px; font-size: 13px; line-height: 1; border: 1px solid var(--hair); border-radius: var(--r); background: #fff; color: var(--ink); cursor: pointer; display: grid; place-items: center; padding: 0; }
+.shelf-sq:hover { background: var(--surface); border-color: var(--hair-2); }
+.shelf-sq.dimmed { opacity: 0.5; }   /* a shelved contextual panel that isn't currently relevant */
+/* Auto-parked (contextual/idle) square: dashed + muted, to read as "available, nothing to
+   act on yet" — distinct from a solid square (a panel you closed by hand). */
+.shelf-sq.auto { border-style: dashed; color: var(--muted, #8a8f98); }
+.shelf-sq.auto:hover { color: var(--ink); }
 /* Colour panel: the picker editor embedded in a panel body (no backdrop/window chrome). */
 .color .fp-body { padding: 0; }
-.cp-window.cp-embedded { position: static; width: auto; max-width: none; border: 0; box-shadow: none; padding: 8px; gap: 7px; }
+.cp-window.cp-embedded { position: static; width: auto; max-width: none; border: 0; box-shadow: none; padding: 8px; gap: 7px; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+/* When the panel is too short the picker SCROLLS — its fixed rows (field, alpha bar,
+   swatches) keep their size instead of collapsing the transparency bar to nothing. */
+.cp-window.cp-embedded > * { flex-shrink: 0; }
 .cp-window.cp-embedded .cp-head { display: none; }   /* the panel header already titles it */
 /* drag any panel's header to detach/float or to re-dock + reorder (no detach button) */
 .leftdock .section-head, .rightdock .section-head, .dock-window .section-head { cursor: grab; }
@@ -336,8 +351,21 @@ button:disabled {
   position: fixed; z-index: 80; min-width: 190px; min-height: 120px;
   display: flex; flex-direction: column; background: var(--bg);
   border: 1px solid var(--line); box-shadow: 0 8px 30px rgba(0, 0, 0, 0.22);
-  resize: both; overflow: hidden;
+  overflow: hidden;
 }
+/* All-sides resize handles (replaces the single bottom-right `resize:both`). Thin
+   inside-edge strips + slightly bigger corners; sit above content so the very edge
+   always grabs. */
+.dock-rs { position: absolute; z-index: 6; }
+.dock-rs-n { top: 0; left: 0; right: 0; height: 5px; cursor: ns-resize; }
+.dock-rs-s { bottom: 0; left: 0; right: 0; height: 5px; cursor: ns-resize; }
+.dock-rs-e { right: 0; top: 0; bottom: 0; width: 5px; cursor: ew-resize; }
+.dock-rs-w { left: 0; top: 0; bottom: 0; width: 5px; cursor: ew-resize; }
+.dock-rs-ne, .dock-rs-nw, .dock-rs-se, .dock-rs-sw { width: 10px; height: 10px; z-index: 7; }
+.dock-rs-ne { top: 0; right: 0; cursor: nesw-resize; }
+.dock-rs-nw { top: 0; left: 0; cursor: nwse-resize; }
+.dock-rs-se { bottom: 0; right: 0; cursor: nwse-resize; }
+.dock-rs-sw { bottom: 0; left: 0; cursor: nesw-resize; }
 .dock-window > .rail-section { flex: 1 1 auto; min-height: 0; }
 .dock-window > .rail-section > .section-body,
 .dock-window > .rail-section .layers-list { flex: 1 1 auto; }
@@ -347,13 +375,37 @@ button:disabled {
 .dock-window:has(> .rail-section.collapsed) { min-height: 0; resize: none; }
 .dock-window.float-panel { z-index: 1000; }   /* Properties window above the docks */
 /* Properties body fills its section (window or dock), not the 248px float max-height. */
-.dock-window .fp-body, .leftdock .properties .fp-body, .rightdock .properties .fp-body { max-height: none; flex: 1 1 auto; }
+.dock-window .fp-body, .leftdock .properties .fp-body, .rightdock .properties .fp-body,
+.leftdock .color .fp-body, .rightdock .color .fp-body { max-height: none; flex: 1 1 auto; }
 /* Drop indicator shown over a dock zone while dragging a window onto it. */
 .dock-droplines { position: fixed; z-index: 1100; pointer-events: none;
   border: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 2px; }
 /* insertion line between / below panels (vs. the full-zone box for an empty dock) */
 .dock-droplines.line { border: 0; background: var(--accent); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6); }
 .dock-droplines.hidden { display: none; }
+
+/* ---- Locking-bezel groups: snapped floating panels tiled in one container ----
+   The group behaves like a floating mini-dock — drag a member header to move it all,
+   the 8-way handles scale it, and the bezel between members resizes / detaches. */
+.dock-group {
+  position: fixed; z-index: 80; min-width: 220px; min-height: 140px;
+  display: flex; flex-direction: row; background: var(--bg);
+  border: 1px solid var(--line); box-shadow: 0 8px 30px rgba(0, 0, 0, 0.22); overflow: hidden;
+}
+.dock-group.col { flex-direction: column; }
+.dock-group.dragging { opacity: 0.92; cursor: grabbing; }
+.dock-group > .rail-section { min-width: 0; min-height: 0; overflow: hidden; }
+.dock-group > .rail-section > .section-body, .dock-group > .rail-section .layers-list,
+.dock-group .fp-body { flex: 1 1 auto; min-height: 0; max-height: none; }
+.dock-group > .rail-section .panel-x { display: none; }   /* × redocks → splits; use the bezel */
+/* the bezel = draggable seam between two members (double-click to detach) */
+.dock-bezel { flex: 0 0 6px; align-self: stretch; background: var(--line); cursor: col-resize; position: relative; z-index: 5; }
+.dock-group.col > .dock-bezel { cursor: row-resize; }
+.dock-bezel:hover { background: var(--accent); }
+/* snap preview line shown while a dragged panel is about to lock to an edge */
+.dock-snapline { position: fixed; z-index: 1100; pointer-events: none; background: var(--accent); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6); }
+.dock-snapline.hidden { display: none; }
+
 /* the side-panel fold toggle reads as "active" when panels are hidden */
 .bar-btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 
@@ -407,6 +459,22 @@ button:disabled {
    structure is hairlines; one --field-h height; one --r radius. No hard black
    boxes, no blue. See also the shared field/seg/btn rules below.
    ============================================================================ */
+/* Raster panel "Process" section: the pipeline stages docked into Properties for a
+   selected <image>. .hv-raster-hidden hides the source while a live trace previews
+   on top of it (the canvas reads as the vector). */
+.inline-svg .hv-raster-hidden { display: none; }
+.raster-tools { display: flex; flex-direction: column; gap: 12px; margin-top: 18px; }
+.rt-heading {
+  font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 600;
+  color: var(--label); padding-bottom: 5px; border-bottom: 1px solid var(--ink);
+}
+.rt-stage { display: flex; flex-direction: column; gap: 6px; }
+.rt-stage-head { font-size: 11px; font-weight: 600; color: var(--ink); opacity: 0.85; }
+.rt-stage-body { display: flex; flex-direction: column; gap: 6px; }
+.rt-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.rt-actions .primary-button, .rt-actions .ghost-button { font-size: 12px; padding: 6px 10px; flex: 1 1 auto; }
+.rt-stage + .rt-stage { padding-top: 10px; border-top: 1px dashed var(--hair, rgba(0,0,0,0.12)); }
+
 .insp-group { display: flex; flex-direction: column; gap: 6px; }
 /* Sections are siblings inside one wrap div, so they need an explicit gap — without
    this they collide (only the title's margin separated them). Tight rows WITHIN a
@@ -666,6 +734,7 @@ button:disabled {
 .layers-foot:empty { display: none; }
 .rail-section.collapsed .layers-foot { display: none; }
 .rail-section.collapsed .insp-foot { display: none; }   /* hide the align chin when the panel is folded */
+.rail-section.collapsed .library-chin { display: none; }   /* hide the filter/C·R·V chin when the library is folded */
 .rail-section.collapsed .section-head .caret { transform: rotate(-90deg); }
 .rail-section.collapsed .section-body { display: none; }
 /* Dock-aware header: the caret sits on the OUTER (screen) edge and, when collapsed,
@@ -1019,6 +1088,47 @@ button:disabled {
 .badge.badge-busy { background: #2a7adf; }
 .badge.badge-fail { background: #c0382b; }
 
+/* Processor panel — the pipeline as a vertical flow rail (stacked stage cards with
+   flow connectors, drag to reorder, expand for settings). */
+.processor-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px; }
+.proc-rail { display: flex; flex-direction: column; gap: 10px; }
+.proc-target { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
+.proc-target-ic { flex: 0 0 auto; }
+.proc-target-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+.proc-target.batch .proc-target-name { font-style: italic; }
+.proc-target-swap { flex: 0 0 auto; height: 22px; min-width: 26px; font-size: 12px; }
+.proc-target-swap.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.proc-stages { display: flex; flex-direction: column; gap: 14px; }
+.proc-stage { position: relative; border: 1px solid var(--hair); border-radius: var(--r); background: #fff; }
+.proc-stage.off { opacity: 0.55; }
+.proc-stage.dragging { opacity: 0.4; }
+.proc-stage.expanded { border-color: var(--hair-2); }
+/* flow connector: a short vertical tick rising into each card after the first */
+.proc-stage:not(:first-child)::before { content: ""; position: absolute; left: 22px; top: -14px; width: 2px; height: 14px; background: var(--hair-2); }
+.proc-stage-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
+.proc-grip { cursor: grab; color: var(--muted); user-select: none; font-size: 12px; line-height: 1; }
+.proc-stage-title { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+.proc-stage-title .stage-name { font-weight: 600; font-size: 12.5px; color: var(--ink); }
+.proc-stage-title .stage-note { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.proc-stage .stage-caret { color: var(--muted); flex: 0 0 auto; }
+.proc-stage .pipeline-detail-body { border-top: 1px solid var(--hair); padding: 8px 10px; margin: 0; }
+/* Standard chin: pinned below the scrolling stage list, ink top-border (matches
+   .library-chin / .insp-foot). Run is pushed to the right edge. */
+.processor-chin { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--ink); padding: 6px 8px; }
+.processor-chin:empty { display: none; }
+/* compact Run — standard chin-control height, not the tall default primary-button */
+.processor-chin .proc-run { margin-left: auto; padding: 5px 12px; font-size: 12px; }
+.rail-section.collapsed .processor-chin { display: none; }
+/* Contextual dim: nothing to process (no raster selected, not batch) — muted, but the
+   panel stays put. It un-dims + reveals the moment a raster becomes the subject. */
+.rail-section.processor.dimmed .processor-body, .rail-section.processor.dimmed .processor-chin { opacity: 0.45; }
+.rail-section.processor.dimmed .sec-label::after { content: " · idle"; color: var(--muted); font-weight: 400; }
+.proc-foot-hint { font-size: 11px; color: var(--muted); }
+.proc-foot-load { font: inherit; font-size: 11px; padding: 4px 9px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
+.proc-foot-load:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+/* compact Properties "Process" pointer (the pipeline lives in the Processor panel now) */
+.raster-tools-compact { display: flex; flex-direction: column; gap: 8px; }
+
 .jobs-panel {
   display: flex;
   flex-direction: column;
@@ -1030,14 +1140,6 @@ button:disabled {
   padding: 18px;
   text-align: center;
   color: var(--fg-muted, #888);
-}
-
-.jobs-toolbar {
-  display: flex;
-  gap: 8px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 4px;
 }
 
 .job-row {
@@ -1206,85 +1308,50 @@ button:disabled {
 }
 .modal-window.modal-narrow { width: min(460px, 92vw); }
 
-/* ---- Process: first-class view (peer to the Edit canvas) ----
-   Toggled by `.process-active` on `.app`; shares the middle 1fr grid row with
-   `.editor-grid`, and exactly one of them is ever displayed. */
-.process-view { display: none; min-height: 0; flex-direction: column; gap: 10px; }
-.app.editor.process-active .editor-grid { display: none; }
-.app.editor.process-active .process-view { display: flex; }
-.process-view-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--line); background: var(--bg); padding: 6px 10px; }
-.process-view-title { font-size: 13px; color: var(--muted); }
-.process-view-body { flex: 1 1 auto; min-height: 0; display: flex; }
-.process-view-body .process-workspace { flex: 1 1 auto; }
-
-/* ---- Process workspace ---- */
-.process-workspace { display: flex; flex-direction: column; gap: 10px; min-height: 0; height: 100%; }
-/* header = stage strip + controls; refreshProcessHead re-renders it in place so the
-   gallery/jobs panes below keep their scroll + focus on stage toggles. */
-#process-head { display: flex; flex-direction: column; gap: 10px; flex: 0 0 auto; }
-.process-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.process-controls select { padding: 6px 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: inherit; }
-.process-force { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--muted); }
-.process-controls .primary-button { margin-left: auto; }
-.process-opts { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 2px 0; flex: 0 0 auto; }
-.process-opt { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
-.process-opt select { padding: 4px 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: inherit; }
-.process-advanced { border: 1px solid var(--line); flex: 0 0 auto; }
-.process-advanced > summary { cursor: pointer; padding: 7px 10px; font-size: 13px; user-select: none; }
-.process-advanced[open] > summary { border-bottom: 1px solid var(--line); }
-.process-advanced .form { padding: 10px; }
-.process-panes { display: grid; grid-template-columns: 2fr minmax(220px, 1fr); gap: 10px; flex: 1 1 auto; min-height: 0; min-width: 0; }
-.process-gallery, .process-jobs { border: 1px solid var(--line); min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: 8px; }
-.process-pane-head { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; position: sticky; top: -8px; background: var(--bg); padding: 4px 0; display: flex; align-items: center; gap: 8px; }
-.process-filter { margin-left: auto; max-width: 180px; text-transform: none; letter-spacing: 0; }
+/* ---- Pipeline stage cards (Processor dock panel) ---- */
 .gallery-cell.processed .gallery-caption { color: var(--accent); }
-.process-jobs .jobs-toolbar { margin-bottom: 8px; }
 
-/* ---- Pipeline stage strip (replaces the old process dropdown) ---- */
-.pipeline-strip-wrap { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; }
-.pipeline-presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.presets-label { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-right: 2px; }
-.preset-chip, .preset-save { font: inherit; font-size: 12px; padding: 4px 9px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
-.preset-chip:hover, .preset-save:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
-.preset-chip.active { background: var(--ink); color: #fff; border-color: var(--ink); font-weight: 600; }
-.presets-sep { width: 1px; align-self: stretch; background: var(--line); opacity: 0.4; margin: 0 3px; }
-.preset-save { margin-left: auto; font-weight: 600; }
-
-.pipeline-strip { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px; border: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 4%, var(--bg)); }
-.pipeline-stage { display: flex; flex-direction: column; flex: 1 1 200px; min-width: 190px; max-width: 320px; border: 1px solid var(--line); background: var(--bg); cursor: grab; }
-.pipeline-stage.dragging { opacity: 0.5; outline: 2px solid var(--accent); cursor: grabbing; }
-.pipeline-stage.off { opacity: 0.55; }
-.pipeline-stage.off .stage-name { text-decoration: line-through; }
-.pipeline-stage.expanded { outline: 2px solid var(--accent); outline-offset: -1px; }
-.pipeline-stage-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px; }
+/* stage toggle checkbox (name/note/caret are styled by .proc-stage-* above) */
 .stage-toggle { flex: 0 0 auto; width: 15px; height: 15px; cursor: pointer; }
-.pipeline-stage-title { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; border: 0; background: none; padding: 0; cursor: pointer; font: inherit; text-align: left; color: var(--fg); }
-.stage-name { font-weight: 600; font-size: 13px; }
-.stage-note { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.stage-method { flex: 0 0 auto; padding: 3px 5px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: inherit; font-size: 11px; cursor: pointer; }
-.stage-caret { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
-.pipeline-arrow { flex: 0 0 auto; align-self: center; color: var(--muted); font-size: 15px; }
-.pipeline-out { flex: 0 0 auto; align-self: center; font-size: 12px; font-weight: 700; padding: 6px 11px; border: 1px solid var(--line); }
-.pipeline-out.out-svg { background: var(--ink); color: #fff; border-color: var(--ink); }
-.pipeline-out.out-png { background: var(--bg); color: var(--fg); }
-.pipeline-out.out-none { color: var(--muted); border-style: dashed; }
 
-/* expanded stage settings — full-width panel below the strip, rows in columns */
-.pipeline-detail { border: 1px solid var(--line); }
-.pipeline-detail-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); background: color-mix(in srgb, var(--accent) 4%, var(--bg)); }
-.pipeline-detail-close { margin-left: auto; border: 0; background: none; font-size: 17px; line-height: 1; cursor: pointer; color: var(--muted); padding: 0 2px; }
-.pipeline-detail-close:hover { color: var(--fg); }
-.pipeline-detail-body.form { padding: 11px 13px; display: grid; grid-template-columns: repeat(auto-fill, minmax(208px, 1fr)); gap: 11px 16px; align-content: start; }
-/* each field is a tight vertical stack (label → control → tiny hint), so many
-   fit per row — no 180px label gutter, no full-row hints wasting vertical space */
+/* expanded stage settings — dense form grid (label -> control -> tiny hint) */
+.pipeline-detail-body.form { padding: 11px 13px; display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px 14px; align-content: start; }
 .pipeline-detail-body .form-row { display: flex; flex-direction: column; align-items: stretch; gap: 3px; }
 .pipeline-detail-body .form-label { font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: 0.02em; }
 .pipeline-detail-body .form-hint { font-size: 10.5px; line-height: 1.3; color: var(--muted); opacity: 0.8;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-clamp: 2; overflow: hidden; }
 .pipeline-detail-body select, .pipeline-detail-body .form-input { width: 100%; box-sizing: border-box; padding: 5px 7px; }
-.pipeline-detail-body .form-range { grid-template-columns: 1fr 34px; }
+.pipeline-detail-body .form-range { grid-template-columns: 1fr 30px; gap: 9px; }
+.pipeline-detail-body .form-range output { font-size: 11.5px; color: var(--label); }
 .pipeline-detail-body .form-section { grid-column: 1 / -1; margin-top: 2px; }
 .pipeline-detail-body .form-actions { grid-column: 1 / -1; }
+
+/* ---- Library dock panel: the gallery as a first-class panel object ----
+   Lives in the rail (narrow), so the grid packs tighter than the Process view's. */
+/* body flexes + scrolls; the chin below stays pinned (also fixes detached scroll). */
+.library-list { flex: 1 1 auto; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; padding: 8px; }
+.library-list .gallery-grid { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
+.library-list .gallery-caption { padding: 4px 6px; font-size: 11px; }
+.gallery-thumb-proj { font-size: 30px; color: var(--muted); }   /* .hv project tile (no image) */
+.gallery-thumb-loading { background: var(--surface); }            /* SVG thumb being rasterised */
+
+/* Library chin — a standard chin (ink top-border) with filter (~2/3) + C/R/V toggle. */
+.library-chin { flex: 0 0 auto; display: flex; gap: 8px; align-items: center; border-top: 1px solid var(--ink); padding: 7px 8px; }
+.library-chin .library-filter { flex: 1 1 auto; min-width: 0; box-sizing: border-box; }
+.lib-mode-btns, .lib-sort { flex: 0 0 auto; display: flex; }
+.lib-mode, .lib-sort-dir, .lib-sort-key { width: 24px; height: var(--field-h); border: 1px solid var(--hair); border-left-width: 0; background: #fff; color: var(--ink); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+.lib-mode:first-child, .lib-sort > :first-child { border-left-width: 1px; }
+.lib-mode:hover:not(.active), .lib-sort-dir:hover:not(.active), .lib-sort-key:hover { background: var(--surface); }
+.lib-mode.active, .lib-sort-dir.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+/* invisible-scroll-with-hint: a tile bar scrolls when crowded (no visible scrollbar);
+   a soft edge fade appears ONLY while it overflows (toggled by observeOverflow), so a
+   bar that fits is never clipped. Reused by panel-header tile bars + viewport strips. */
+.tile-scroll-x { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; min-width: 0; }
+.tile-scroll-y { overflow-y: auto; overflow-x: hidden; scrollbar-width: none; min-height: 0; }
+.tile-scroll-x::-webkit-scrollbar, .tile-scroll-y::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.tile-scroll-x.is-overflowing { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 8px, #000 calc(100% - 8px), transparent 100%); mask-image: linear-gradient(to right, transparent 0, #000 8px, #000 calc(100% - 8px), transparent 100%); }
+.tile-scroll-y.is-overflowing { -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 8px, #000 calc(100% - 8px), transparent 100%); mask-image: linear-gradient(to bottom, transparent 0, #000 8px, #000 calc(100% - 8px), transparent 100%); }
 
 .primary-button {
   border: 1px solid var(--accent); background: var(--accent); color: #fff;
@@ -1484,6 +1551,20 @@ button:disabled {
   margin-top: 6px;
 }
 
+/* Export modal: a preview of what's being rendered, on a checker so transparency reads. */
+.export-preview {
+  display: flex; align-items: center; justify-content: center;
+  max-height: 220px; padding: 8px; margin-bottom: 8px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background-color: #fff;
+  background-image:
+    linear-gradient(45deg, #e8e8ec 25%, transparent 25%), linear-gradient(-45deg, #e8e8ec 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #e8e8ec 75%), linear-gradient(-45deg, transparent 75%, #e8e8ec 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+.export-preview img { max-width: 100%; max-height: 204px; object-fit: contain; display: block; }
+
 .about-block { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
 .about-name { font-size: 14px; color: var(--fg); font-weight: 600; }
 .about-ver { color: var(--muted); font-weight: 400; font-size: 12px; }
@@ -1502,6 +1583,60 @@ button:disabled {
 .info-val {
   word-break: break-all;
 }
+
+/* ---- Image Info panel: a preview header + the file actions that used to crowd
+   the gallery thumbnail (copy name / path / reveal / open) + the primary Load. ---- */
+.info-modal { gap: 14px; }
+/* Info lives in a (narrower) dock panel now — stack the header + tighten the grid. */
+.rail-section.info .info-head { flex-direction: column; align-items: stretch; }
+.rail-section.info .info-preview { width: 100%; height: 132px; }
+.rail-section.info .info-grid { grid-template-columns: 88px minmax(0, 1fr); }
+.rail-section.info .info-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.info-head { display: flex; gap: 14px; align-items: flex-start; }
+.info-preview {
+  flex: 0 0 auto; width: 112px; height: 112px; border: 1px solid var(--hair);
+  background: var(--surface); display: grid; place-items: center; overflow: hidden;
+}
+.info-preview img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+.info-preview-proj { font-size: 56px; color: var(--muted); }
+/* canvas highlights while a library cell is dragged over it */
+.lib-drop-over { outline: 2px dashed var(--accent); outline-offset: -6px; }
+.info-headmeta { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.info-name { font-weight: 600; font-size: 14px; word-break: break-all; line-height: 1.25; }
+.info-sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.info-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.info-actions .primary-button, .info-actions .ghost-button { font-size: 12px; padding: 5px 10px; }
+/* Delete sits in the detail action row — muted until hover, loud once armed
+   (first click arms, second within the open modal confirms). */
+.info-actions .danger-button { margin-left: auto; color: #b42318; }
+.info-actions .danger-button:hover { background: #b42318; color: #fff; border-color: #b42318; }
+.info-actions .danger-button.danger-armed { background: #b42318; color: #fff; border-color: #b42318; font-weight: 600; }
+
+/* Name + Path are click-to-copy (the explicit Copy buttons are gone). */
+.info-copy { border: 0; background: none; padding: 0; margin: 0; font: inherit; color: inherit; text-align: left; cursor: copy; word-break: break-all; }
+.info-copy:hover { color: var(--accent); }
+.info-name.info-copy { font-size: 14px; font-weight: 600; line-height: 1.25; }
+
+/* Floating in-app prompt (replaces window.prompt for renames / save-as). */
+.hv-float-input { z-index: 1200; min-width: 230px; max-width: 280px; border: 1px solid var(--ink); background: var(--bg); box-shadow: 0 3px 12px rgba(0, 0, 0, 0.3); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.hv-float-label { font-size: 11px; color: var(--muted); letter-spacing: 0.02em; }
+.hv-float-input input { border: 1px solid var(--hair); background: #fff; color: var(--fg); padding: 5px 8px; font: inherit; font-size: 13px; }
+.hv-float-input input:focus { outline: none; border-color: var(--ink); }
+
+/* Floating tag-style rename editor (replaces window.prompt). */
+.hv-rename-pop {
+  z-index: 1200; min-width: 150px; max-width: 220px;
+  border: 1px solid var(--ink); background: var(--bg); color: var(--fg);
+  padding: 4px 8px; font: inherit; font-size: 13px;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.28);
+}
+
+/* Colour recents are a standard chin — identical treatment to the Object panel's
+   align chin (.insp-foot): ink top-border, 7px 10px, flush + full-width. margin-top:
+   auto pins it to the bottom; the negative margins bleed past the embedded picker's
+   8px body padding so the border spans edge-to-edge and the chin sits flush. */
+.cp-chin { margin-top: auto; border-top: 1px solid var(--ink); padding: 7px 10px; }
+.cp-embedded .cp-chin { margin: auto -8px -8px; }
 
 /* Keyboard-shortcuts modal: section headers span the grid; key column auto-fits. */
 .shortcut-grid { grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; }

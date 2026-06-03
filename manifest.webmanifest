@@ -12,7 +12,7 @@
   "background_color": "#ffffff",
   "categories": ["graphics", "productivity"],
   "icons": [
-    { "src": "/assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
-    { "src": "/assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+    { "src": "/assets/hv_logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/assets/hv_logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
   ]
 }
