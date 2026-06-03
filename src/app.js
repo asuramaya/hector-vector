@@ -4853,7 +4853,7 @@ function buildProcessorChin(t) {
     hint.textContent = "Select a raster, or switch to batch";
     chin.appendChild(hint);
   }
-  const run = document.createElement("button"); run.type = "button"; run.className = "primary-button proc-run";
+  const run = document.createElement("button"); run.type = "button"; run.className = "proc-run";
   // A single-raster run always lands on the canvas — an on-canvas raster is processed in
   // place; a library raster is auto-loaded onto the canvas first. Only batch runs the
   // whole library headlessly. ("Load to preview" above is now just an optional pre-load

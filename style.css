@@ -1116,18 +1116,24 @@ button:disabled {
 .proc-stage .pipeline-detail-body { border-top: 1px solid var(--hair); padding: 8px 10px; margin: 0; }
 /* Standard chin: pinned below the scrolling stage list, ink top-border (matches
    .library-chin / .insp-foot). Run is pushed to the right edge. */
-.processor-chin { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--ink); padding: 6px 8px; }
+.processor-chin { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--ink); padding: 7px 8px; }
 .processor-chin:empty { display: none; }
-/* compact Run — standard chin-control height, not the tall default primary-button */
-.processor-chin .proc-run { margin-left: auto; padding: 5px 12px; font-size: 12px; }
+/* Run — one inky chin control (black-on-white, hover punches to black). Standard
+   field height, not the divergent blue primary-button. */
+.processor-chin .proc-run {
+  margin-left: auto; height: var(--field-h); padding: 0 14px; font-size: 12px; font-weight: 600;
+  border: 1px solid var(--ink); background: #fff; color: var(--ink); cursor: pointer; border-radius: var(--r);
+}
+.processor-chin .proc-run:hover:not(:disabled) { background: var(--ink); color: #fff; }
+.processor-chin .proc-run:disabled { opacity: 0.4; cursor: default; }
 .rail-section.collapsed .processor-chin { display: none; }
 /* Contextual dim: nothing to process (no raster selected, not batch) — muted, but the
    panel stays put. It un-dims + reveals the moment a raster becomes the subject. */
 .rail-section.processor.dimmed .processor-body, .rail-section.processor.dimmed .processor-chin { opacity: 0.45; }
 .rail-section.processor.dimmed .sec-label::after { content: " · idle"; color: var(--muted); font-weight: 400; }
 .proc-foot-hint { font-size: 11px; color: var(--muted); }
-.proc-foot-load { font: inherit; font-size: 11px; padding: 4px 9px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
-.proc-foot-load:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.proc-foot-load { font: inherit; font-size: 11px; height: var(--field-h); padding: 0 10px; border: 1px solid var(--ink); background: #fff; color: var(--ink); cursor: pointer; border-radius: var(--r); }
+.proc-foot-load:hover { background: var(--ink); color: #fff; }
 /* compact Properties "Process" pointer (the pipeline lives in the Processor panel now) */
 .raster-tools-compact { display: flex; flex-direction: column; gap: 8px; }
 
@@ -1647,7 +1653,11 @@ button:disabled {
    auto pins it to the bottom; the negative margins bleed past the embedded picker's
    8px body padding so the border spans edge-to-edge and the chin sits flush. */
 .cp-chin { margin-top: auto; border-top: 1px solid var(--ink); padding: 7px 10px; }
-.cp-embedded .cp-chin { margin: auto -8px -8px; }
+/* Embedded (docked Colour panel): the cp-window itself is the scroll container, so the
+   recents chin must STICK to its bottom edge — otherwise it scrolls away when the panel
+   is short. Opaque bg covers content scrolling beneath it; bottom:-8px + the negative
+   margins keep it flush edge-to-edge inside the 8px body padding. */
+.cp-embedded .cp-chin { margin: auto -8px -8px; position: sticky; bottom: -8px; background: var(--bg); z-index: 2; }
 
 /* Keyboard-shortcuts modal: section headers span the grid; key column auto-fits. */
 .shortcut-grid { grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; }
