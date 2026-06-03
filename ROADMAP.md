@@ -166,16 +166,87 @@ For commercial self-hosting **do not ship**: BRIA RMBG-1.4/2.0 (CC BY-NC), CodeF
 
 ---
 
-## Editor ↔ pipeline boundary (deliberate)
+## Target architecture — one app, compute that resolves itself
 
-The processing pipeline (this document's subject) and the vector editor are kept in **separate domains on purpose**:
+> Supersedes the old "deliberate raster/vector boundary." That separation has been
+> erased on purpose: the Process workspace ("Q") is dissolved into contextual editor
+> panels, rasters are first-class canvas objects (`editor.placeImage()` → selectable/
+> movable `<image>` nodes), mixed raster+vector documents work, and SVG export bakes
+> `<image href>` to data-URIs to stay self-contained. The question is no longer "where
+> does the pipeline live" but "where does the **compute** live."
 
-- The **pipeline is raster** — upscale and remove-bg are raster→raster; only vectorize crosses to SVG. Its home is the batch/gallery workspace ("Q", the `Process` view): many PNGs in, vectors/PNGs out. One generalized `run_pipeline` route honours the enabled stages.
-- The **editor is vector-pure** — its canvas is a live SVG document. PNGs are *imports* (pipeline inputs), never canvas citizens. The pipeline's output crosses into the editor as a **vector**, either replacing the document (open) or added as a layer (place → `editor.placeSvgMarkup`).
+The app is two things welded at one **HTTP API seam**: a deployment-agnostic frontend
+(the editor — pure client-side ES modules, no build step) and a compute service (the
+pipeline — Python + native model binaries). Because that seam is already HTTP, the
+frontend doesn't care *where* the backend is. That single fact sets the whole shape.
 
-So "combining" is always vector-on-vector (layers / groups / booleans) — an image is composited only *after* it has been vectorized. This keeps the editor's document model clean and is why there is no pipeline panel *inside* the editor.
+**Shape: a full client app, served static, installable as a PWA.**
 
-**Raster as a first-class canvas object — IN PROGRESS (track un-deferred 2026-05-31).** The boundary above is being dissolved: rasters now *can* coexist on the canvas. `editor.placeImage()` drops a source PNG into the stage as an `<image>` node (selectable/movable/scalable like any object), reachable via the gallery's **Load** action and the Info modal. Mixed raster+vector documents follow; in-place processing/tracing and the categories above (inpainting/cleanup, SR, denoise, face restore) become in-editor operations as the Process workspace ("Q") is progressively dissolved into contextual editor panels. Open edges: SVG export must bake `<image href>` to a data-URI to stay self-contained; raster nodes have no meaningful fill/stroke.
+- **Hosting** — static on Cloudflare (Pages/R2). No *required* origin server. The `sw.js`
+  PWA shell already exists; "install the app" = caching the frontend + model weights
+  (offline-capable).
+- **A full app, not a teaser** — persistence migrates server→browser (IndexedDB / OPFS /
+  File System Access), so document / library / outputs / projects live client-side. This
+  is the keystone that removes the origin. (Precedent: PNG export already rasterises in
+  the browser via canvas.)
+- **The compute "magic connection" = a client-side capability resolver.** Each stage
+  declares a *capability* (vectorize / super-resolve / matte / inpaint); a resolver picks
+  the provider automatically, best-first, across three rungs:
+
+  1. **in-browser** — WASM (vtracer), ONNX / WebGPU (cutout, upscale). Always present,
+     free, offline after install.
+  2. **local power tier** — the existing Python `server.py` (full torch, batch, the tuned
+     clean-engine + simplify refit), auto-discovered when it's running.
+  3. **remote** — a hosted edge endpoint / Cloudflare Workers AI / bring-your-own-key
+     (Replicate, fal, HF Inference).
+
+  Same `apply(input, params)` contract at every rung, so the schema-driven UI never
+  changes — only the provider behind a capability does.
+
+**The Python server demotes** from "the product" to optional rung 2. It keeps everything
+too heavy or too proprietary for a browser; it is no longer required for the core
+experience.
+
+**Why this is cheap to build on what exists** — the seams are already here: the
+schema-driven stage registries (`RASTER_OPS` / `VECTORIZE_ENGINES`, each `{label, caps,
+schema, apply}`), the location-agnostic HTTP boundary, and `sw.js`. The one genuinely new
+piece is a thin **provider seam** in the client that resolves each capability to a
+browser worker vs. a discovered backend vs. a remote. Registry, schema panels, and the
+focused-run flow stay untouched.
+
+**First slice (proves the shape):** (1) the provider seam + WASM vectorize — the signature
+feature running with zero origin compute; (2) persistence → browser-local. Then ONNX
+cutout, WebGPU upscale, and the remote rung plug into the same resolver.
+
+**Honest constraints / open spikes:**
+
+- **Local auto-discovery from the public origin is dead — RESOLVED BY SPIKE (2026-06-03,
+  Chromium 148).** Findings: (a) mixed-content is *not* the wall — an `https://localhost`
+  page reaches `http://localhost` fine (localhost is potentially-trustworthy; the request
+  leaves as `opaque`), needing only CORS headers to *read* cross-port responses. (b) But a
+  **public** `https` origin (the R2 case) reaching `http://localhost` is **blocked
+  outright** — the request never leaves — and full CORS + `Access-Control-Allow-Private-
+  Network: true` headers do **not** fix it. That's Chrome's newer **Local Network Access**
+  permission model: a public site touching localhost needs a user *permission prompt*, not
+  headers. So the R2 PWA can **not** silently discover/use a local backend.
+  → **Design consequence:** rung 2 is not "cloud app finds your localhost." It's "**the
+  local power tier serves the same frontend at `http://localhost`**" (server.py already
+  does) — there, browser + local rungs all work *same-origin*, no CORS/PNA/LNA drama. The
+  resolver simply detects "am I same-origin with a backend?" The R2 origin runs
+  browser-rung + remote-rung only. (A tunnel/relay to an `https` public URL is the only way
+  to bridge a cloud origin to your own box, and that's opt-in, not magic.)
+- **Remote isn't free** — rung 3 is your GPU box (cost), Workers AI (per-call cost,
+  limited catalog), or BYO-key. The browser rung is the free floor; remote is the opt-in
+  ceiling.
+- **Trace postprocessing is Python IP** — the clean engine (palette-quantize +
+  `clean_color_trace`) and `tools/simplify_svg.py` refit need a JS port for full
+  client-side *quality*; WASM vtracer alone is the lower-quality floor.
+
+**Rejected packaging:** Electron (ships a second Chromium to render what the browser
+already renders, and doesn't solve the Python+models packaging that is the actual hard
+part). A downloadable binary (the static-edge PWA supersedes it). If a desktop-window
+feel is ever wanted, pywebview / Tauri-sidecar beat Electron because the backend is
+Python and the UI is already a webview's worth of HTML.
 
 ## Key references
 
