@@ -85,6 +85,57 @@ def check_color_simplify() -> None:
         (ROOT / "tests" / t).unlink(missing_ok=True)
 
 
+def check_clean_trace() -> None:
+    """Clean planar colour trace (the flat-logo path): hard k-means palette + per-colour
+    B&W mask trace drops the background → transparent, keeps the pure ink colours, and
+    preserves holes (letter counters). The fix for vtracer-stacked halos / lost counters."""
+    sys.path.insert(0, str(ROOT))
+    import re
+    import server
+    if not server.VTRACER_BIN.exists():
+        print("skip: clean trace (vtracer not installed)")
+        return
+    from PIL import Image, ImageDraw
+
+    # synthetic 3-colour logo: black ring outline, red ring fill, white counter (a hole)
+    im = Image.new("RGB", (240, 240), (255, 255, 255))
+    d = ImageDraw.Draw(im)
+    d.ellipse([30, 30, 210, 210], fill=(0, 0, 0))           # black outer
+    d.ellipse([48, 48, 192, 192], fill=(255, 0, 0))         # red fill
+    d.ellipse([96, 96, 144, 144], fill=(0, 0, 0))           # black inner
+    d.ellipse([110, 110, 130, 130], fill=(255, 255, 255))   # white counter (hole)
+    src = ROOT / "tests" / "_logo.png"
+    im.save(src)
+    svg = server.clean_color_trace(src, n=3, simplify="medium")
+    fills = sorted(set(re.findall(r'fill="([^"]*)"', svg)))
+    assert fills == ["#000000", "#ff0000"], f"clean trace should be pure red+black (bg dropped), got {fills}"
+    black_d = re.search(r'<path d="([^"]*)" fill="#000000"', svg).group(1)
+    assert black_d.count("Z") >= 2, f"black layer should keep holes/counters, got {black_d.count('Z')} subpaths"
+
+    # engine registry + dispatch: one resolver, explicit wins, legacy derives
+    assert {"clean", "vtracer", "pixel"} <= set(server.VECTORIZE_ENGINES)
+    assert server.resolve_engine({"trace_colormode": "color", "trace_color_style": "clean"}) == "clean"
+    assert server.resolve_engine({"vectorize_method": "pixel"}) == "pixel"
+    assert server.resolve_engine({"trace_colormode": "bw"}) == "vtracer"
+    assert server.resolve_engine({"engine": "pixel", "trace_colormode": "bw"}) == "pixel", "explicit engine must win"
+    info = server.vectorize_engines_info()
+    assert len(info) == 3 and all("schema" in e and "caps" in e for e in info), "engine info must carry schema+caps"
+
+    # raster-op registry mirrors the engine registry: pluggable ops + schema endpoint
+    assert {"upscale", "removebg"} <= set(server.RASTER_OPS)
+    rinfo = server.raster_ops_info()
+    assert len(rinfo) == 2 and all("schema" in o and "available" in o for o in rinfo), "raster-op info must carry schema+available"
+    assert all(callable(server.RASTER_OPS[o]["apply"]) for o in server.RASTER_OPS), "each raster op needs an apply callable"
+    assert "nope" not in server.RASTER_OPS
+    try:
+        server.apply_raster_op({"input_url": "/outputs/does-not-exist.png", "op": "nope"})
+        assert False, "a bad raster-op request must raise ValueError"
+    except ValueError:
+        pass
+    print(f"ok: clean trace — {fills}, counters preserved ({black_d.count('Z')} black subpaths); engine + raster-op registries OK")
+    src.unlink(missing_ok=True)
+
+
 def check_path_simplify() -> None:
     """Post-trace refit collapses over-segmented paths to minimal cubics, preserves
     structure, and is RESOLUTION-STABLE — the same shape at 3x scale simplifies to
@@ -176,6 +227,7 @@ def main() -> int:
     svg = check_pixelvec()
     check_render(svg)
     check_color_simplify()
+    check_clean_trace()
     check_path_simplify()
     check_pipeline_stages()
     check_pipeline_skip()

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import io
 import json
 import mimetypes
@@ -10,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -32,6 +36,11 @@ import simplify_svg  # noqa: E402  (pure numpy; refit traced paths to minimal cu
 # `.webmanifest` is not in the stdlib mime table; Chromium wants a JSON-ish type.
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 OUTPUTS_DIR = APP_DIR / "outputs"
+# Transient in-place raster results (panel upscale/remove-bg) live here. Dot-prefixed
+# so the library scan skips them — applying a stage edits the canvas, it doesn't
+# publish a library copy. Served via /outputs/ so the client (and a later vectorize)
+# can still resolve the URL.
+SCRATCH_DIR = OUTPUTS_DIR / ".scratch"
 INPUTS_DIR = APP_DIR / "inputs"
 ASSETS_DIR = APP_DIR / "assets"
 SRC_DIR = APP_DIR / "src"          # ES-module tree: hv/ library + editor + app shell
@@ -113,11 +122,16 @@ AI_CUTOUT_SCRIPT = TOOLS_DIR / "ai_cutout.py"
 
 
 def rembg_installed() -> bool:
+    # `import rembg` pulls in torch/onnxruntime (~10–17s), so a literal import
+    # probe is far too heavy to run on tool_status() / raster-ops fetches. Locate
+    # the package with find_spec instead — it resolves the module without executing
+    # it, so this is interpreter-startup cheap (~30ms) and always reflects reality.
     if not VENV_PYTHON.exists():
         return False
     try:
         result = subprocess.run(
-            [str(VENV_PYTHON), "-c", "import rembg"],
+            [str(VENV_PYTHON), "-c",
+             "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('rembg') else 1)"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=10,
@@ -425,7 +439,7 @@ def trace_config(payload: dict) -> dict:
     # fewer layers); photo = smooth gradients (smaller step → more layers).
     colormode = "color" if str(payload.get("trace_colormode", "bw")).strip().lower() == "color" else "bw"
     color_style = payload.get("trace_color_style", "poster")
-    if color_style not in {"poster", "photo"}:
+    if color_style not in {"poster", "photo", "clean"}:
         color_style = "poster"
     hierarchical = payload.get("trace_hierarchical", "stacked")
     if hierarchical not in {"stacked", "cutout"}:
@@ -494,6 +508,46 @@ def apply_preprocess(src: Path, dest: Path, *, target_max_dim: int | None) -> Pa
     return dest
 
 
+_preprocess_cache: dict[tuple, Path] = {}
+_preprocess_cache_lock = threading.Lock()
+_PREPROCESS_CACHE_MAX = 8
+
+
+def preprocess_for_trace(src: Path, target_max_dim: int) -> Path:
+    """Downscale `src` to target_max_dim ONCE and reuse it across live-preview
+    traces. The live preview re-traces on every slider drag; without this, each
+    trace re-resized a multi-megapixel source (~0.35s) before vtracer even ran.
+    Cached downscaled files live in SCRATCH_DIR, keyed by (path, mtime, size, dim)
+    so an edited source busts the cache. Returns `src` unchanged when it already
+    fits the cap (apply_preprocess's own fast path). Read-only: the engines trace
+    FROM this file and never mutate it, so sharing it across calls is safe."""
+    try:
+        st = src.stat()
+    except OSError:
+        return src
+    key = (str(src), int(st.st_mtime_ns), int(st.st_size), int(target_max_dim))
+    with _preprocess_cache_lock:
+        hit = _preprocess_cache.get(key)
+        if hit is not None and (hit == src or hit.exists()):
+            return hit
+    # Miss — resize outside the lock (CPU/IO bound), then publish under it.
+    SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(repr(key).encode()).hexdigest()[:16]
+    dest = SCRATCH_DIR / f"pp-{digest}{src.suffix.lower() or '.png'}"
+    out = apply_preprocess(src, dest, target_max_dim=target_max_dim)
+    with _preprocess_cache_lock:
+        _preprocess_cache[key] = out
+        while len(_preprocess_cache) > _PREPROCESS_CACHE_MAX:
+            old_key, old_path = next(iter(_preprocess_cache.items()))
+            del _preprocess_cache[old_key]
+            try:
+                if old_path != src and old_path.parent == SCRATCH_DIR and old_path.exists():
+                    old_path.unlink()
+            except OSError:
+                pass
+    return out
+
+
 def build_mask_with_overrides(src: Path, mask_path: Path, cutout_path: Path | None, mask_cfg: dict) -> None:
     threshold = mask_cfg.get("mask_threshold")
     if threshold is None:
@@ -548,13 +602,36 @@ def resolve_work_item(name: str) -> Path | None:
     return None
 
 
+def resolve_source_url(url: str) -> Path | None:
+    """Resolve a canvas raster's href (`/work-items/<name>` or `/outputs/<rel>`) to
+    a real file on disk. The raster panel runs pipeline stages on the selected
+    image without the client ever needing the absolute path — it just hands back
+    the node's href. Returns None for data: URLs or anything outside the tree."""
+    raw = urllib.parse.unquote((url or "").strip())
+    if raw.startswith("/work-items/"):
+        return resolve_work_item(raw.removeprefix("/work-items/"))
+    if raw.startswith("/outputs/"):
+        p = (OUTPUTS_DIR / Path(raw.removeprefix("/outputs/").lstrip("/"))).resolve()
+        try:
+            p.relative_to(OUTPUTS_DIR.resolve())
+        except ValueError:
+            return None
+        return p if p.is_file() else None
+    return None
+
+
 def work_item_record(path: Path) -> dict:
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
     return {
         "name": path.name,
         "url": f"/work-items/{urllib.parse.quote(path.name)}",
         "path": str(path),
         "origin": "source",
         "removable": True,
+        "modified_at": mtime,
     }
 
 
@@ -589,7 +666,7 @@ def list_outputs(limit: int = 240) -> list[dict]:
             return 0.0
 
     folders = sorted(
-        (folder for folder in OUTPUTS_DIR.glob("*") if folder.is_dir()),
+        (folder for folder in OUTPUTS_DIR.glob("*") if folder.is_dir() and not folder.name.startswith(".")),
         key=_folder_key,
         reverse=True,
     )[:OUTPUT_FOLDER_SCAN_LIMIT]
@@ -608,6 +685,10 @@ def list_outputs(limit: int = 240) -> list[dict]:
             if path.name in seen_names:
                 continue
             seen_names.add(path.name)
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                mtime = 0.0
             items.append(
                 {
                     "name": path.name,
@@ -615,6 +696,7 @@ def list_outputs(limit: int = 240) -> list[dict]:
                     "url": f"/outputs/{urllib.parse.quote(folder.name)}/{urllib.parse.quote(path.name)}",
                     "kind": path.suffix.lower().lstrip("."),
                     "path": str(path),
+                    "modified_at": mtime,
                 }
             )
     with _outputs_cache_lock:
@@ -660,6 +742,14 @@ def select_inputs(payload: dict) -> tuple[list[Path], list[str]]:
     the workspace. Skip-detection now lives in the caller (run_pipeline is
     stage-aware), so the second tuple element (skipped names) is always empty —
     it's kept only so existing `targets, _ = select_inputs(...)` sites don't change."""
+    # A canvas raster hands back its href; resolve it to the backing file. Highest
+    # priority so the raster panel can run a stage on exactly the selected image.
+    url = payload.get("input_url", "").strip()
+    if url:
+        path = resolve_source_url(url)
+        if path is None:
+            raise ValueError(f"Could not resolve image: {url}")
+        return [path], []
     selected = payload.get("inputs") or []
     if selected:
         files = []
@@ -1244,9 +1334,11 @@ def apply_update(payload: dict | None = None) -> dict:
 
 
 def ensure_tools_ready(*required: str) -> None:
-    status = tool_status()
-    missing = set(status["missing_tools"])
-    needed_missing = [name for name in required if name in missing]
+    # HOT PATH: this runs on every live-preview trace. Check ONLY the specific
+    # binaries asked for (a cheap filesystem stat) — never the full tool_status(),
+    # which probes rembg and used to import torch (~10s) on every keystroke.
+    binaries = {"vtracer": VTRACER_BIN, "realesrgan": REALESRGAN_BIN}
+    needed_missing = [name for name in required if name in binaries and not binaries[name].exists()]
     if not needed_missing:
         return
     bootstrap_tools()
@@ -1344,52 +1436,35 @@ def _resolve_output_svg(payload: dict) -> Path:
     return target
 
 
-def render_output(payload: dict) -> dict:
+def save_render(payload: dict) -> dict:
+    """Persist a PNG the BROWSER rendered (the export modal rasterises the SVG on a
+    canvas — full fidelity, no cairosvg/system dependency) next to its source SVG, so
+    the export still lands in the library and can be revealed. Bytes arrive base64."""
     svg = _resolve_output_svg(payload)
-
-    def num(key):
-        v = payload.get(key)
-        if v in (None, "", 0, "0"):
-            return None
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            return None
-
-    scale = num("scale")
-    width = num("width")
-    height = num("height")
-    if scale is None and width is None and height is None:
-        scale = 1.0
-    background = (payload.get("background") or "transparent").strip()
-    if background not in ("transparent", "white", "black"):
-        background = "transparent"
-
-    # render to a provisional name, then rename to encode the size so repeated
-    # exports at different sizes don't clobber each other
-    provisional = svg.with_name(f"{svg.stem}.__render__.png")
+    raw_b64 = (payload.get("png_base64") or "")
+    if raw_b64.startswith("data:"):
+        raw_b64 = raw_b64.split(",", 1)[-1]
     try:
-        peek = svg_render.render_svg(
-            svg, provisional, scale=scale, width=int(width) if width else None,
-            height=int(height) if height else None, background=background,
-        )
-    except (RuntimeError, ValueError) as exc:
-        raise ValueError(str(exc))
-    info_size = peek["size"]
-    final = svg.with_name(f"{svg.stem}@{info_size[0]}x{info_size[1]}.png")
+        raw = base64.b64decode(raw_b64, validate=True)
+    except (ValueError, binascii.Error):
+        raise ValueError("Invalid PNG data.")
+    if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("Rendered data is not a PNG.")
+    if len(raw) > 96_000_000:
+        raise ValueError("Rendered PNG is too large to save (>96 MB).")
+    try:
+        w, h = int(payload.get("width") or 0), int(payload.get("height") or 0)
+    except (TypeError, ValueError):
+        w = h = 0
+    final = svg.with_name(f"{svg.stem}@{w}x{h}.png" if w > 0 and h > 0 else f"{svg.stem}.export.png")
     if final.exists():
         final.unlink()
-    provisional.replace(final)
-    _register_output(final)
+    final.write_bytes(raw)
+    invalidate_outputs_cache()
     return {
-        "message": f"Rendered {svg.stem} at {info_size[0]}×{info_size[1]} ({peek['backend']}).",
-        "output_dir": str(svg.parent),
-        "output": str(final),
-        "folder": svg.parent.name,
-        "name": final.name,
-        "native": peek["native"],
-        "size": info_size,
-        "backend": peek["backend"],
+        "message": f"Saved {final.name}.",
+        "output": str(final), "folder": svg.parent.name, "name": final.name,
+        "size": [w, h],
     }
 
 
@@ -1434,6 +1509,63 @@ def save_svg(payload: dict) -> dict:
         "folder": folder,
         "name": out.name,
     }
+
+
+def save_hv(payload: dict) -> dict:
+    """Save a full editor PROJECT (.hv) — the canvas markup plus the undo/redo
+    history — as JSON in the outputs `canvas/` folder. Powers the library's Canvas
+    tab; opening one restores layers + history."""
+    raw = (payload.get("name") or "").strip()
+    svg_text = payload.get("svg")
+    if not raw:
+        raise ValueError("Missing 'name'.")
+    if not isinstance(svg_text, str) or "<svg" not in svg_text.lower():
+        raise ValueError("Missing or invalid 'svg' markup.")
+    stem = Path(raw).name
+    for ext in (".hv", ".svg"):
+        if stem.lower().endswith(ext):
+            stem = stem[: -len(ext)]
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-.") or "untitled"
+    target_dir = (OUTPUTS_DIR / "canvas").resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    out = (target_dir / f"{stem}.hv").resolve()
+    try:
+        out.relative_to(OUTPUTS_DIR.resolve())
+    except ValueError:
+        raise ValueError("Resolved path is outside the outputs directory.")
+    if out.exists() and not payload.get("overwrite"):
+        n = 2
+        while (target_dir / f"{stem}-{n}.hv").exists():
+            n += 1
+        stem = f"{stem}-{n}"
+        out = (target_dir / f"{stem}.hv").resolve()
+    doc = {
+        "version": 1,
+        "name": out.name,
+        "svg": svg_text,
+        "history": payload.get("history") or [],
+        "redo": payload.get("redo") or [],
+    }
+    blob = json.dumps(doc)
+    if len(blob) > 96_000_000:
+        raise ValueError("Project is too large to save (>96 MB).")
+    out.write_text(blob, encoding="utf-8")
+    invalidate_outputs_cache()
+    return {"name": out.name, "url": f"/outputs/canvas/{urllib.parse.quote(out.name)}", "message": f"Saved project {out.name}"}
+
+
+def list_projects() -> list[dict]:
+    """List saved .hv projects (newest first) for the library's Canvas tab."""
+    folder = OUTPUTS_DIR / "canvas"
+    items: list[dict] = []
+    if folder.is_dir():
+        for p in sorted(folder.glob("*.hv"), key=lambda x: x.stat().st_mtime, reverse=True):
+            items.append({
+                "name": p.name,
+                "url": f"/outputs/canvas/{urllib.parse.quote(p.name)}",
+                "modified_at": p.stat().st_mtime,
+            })
+    return items
 
 
 def save_svg_as(payload: dict) -> dict:
@@ -1537,6 +1669,437 @@ def _pipeline_summary(name: str, st: dict) -> str:
     if st["vectorize"]:
         parts.append("Pixel trace" if st["vectorize_method"] == "pixel" else "Trace")
     return f"{' + '.join(parts) or 'Pipeline'} {name}"
+
+
+def _km_palette(rgb: Image.Image, k: int, iters: int = 6):
+    """k-means on pixel colours, seeded farthest-point from the densest coarse bin.
+    Snaps anti-aliased fringe to the TRUE dominant colours instead of averaging them
+    (median-cut's flaw) — the key to a clean flat-logo trace. Returns (centroids, idx)."""
+    arr = np.asarray(rgb, dtype=np.float32).reshape(-1, 3)
+    step = max(1, len(arr) // 20000)
+    samp = arr[::step]
+    coarse = (samp // 16).astype(int)
+    key = coarse[:, 0] * 1024 + coarse[:, 1] * 32 + coarse[:, 2]
+    seeds = [samp[int(np.argmax(np.bincount(key)))]]
+    for _ in range(k - 1):
+        d = np.min([np.sum((samp - s) ** 2, 1) for s in seeds], 0)
+        seeds.append(samp[int(np.argmax(d))])
+    C = np.array(seeds, dtype=np.float32)
+    for _ in range(iters):
+        lab = np.argmin(((samp[:, None, :] - C[None, :, :]) ** 2).sum(2), 1)
+        for j in range(k):
+            m = lab == j
+            if m.any():
+                C[j] = samp[m].mean(0)
+    full = np.argmin(((arr[:, None, :] - C[None, :, :]) ** 2).sum(2), 1)
+    return C.round().astype(int), full.reshape(np.asarray(rgb).shape[:2])
+
+
+def _bake_translate(d: str, tx: float, ty: float) -> str:
+    """vtracer emits each <path> with its own translate; bake it into the absolute
+    coordinates so paths from different layers share one coordinate space."""
+    k = [0]
+    def repl(m):
+        v = float(m.group()) + (tx if k[0] % 2 == 0 else ty)
+        k[0] += 1
+        return f"{v:.2f}"
+    return re.sub(r"-?\d*\.?\d+", repl, d)
+
+
+def _trace_mask_to_d(mask_bool: np.ndarray, tmp: Path, speckle: int = 4) -> str:
+    """Trace one binary layer (True = ink) with vtracer B&W and return one absolute
+    `d` string (holes preserved → letter counters survive)."""
+    img = Image.fromarray(np.where(mask_bool, 0, 255).astype(np.uint8), "L")
+    src = tmp / "m.png"; out = tmp / "m.svg"; img.save(src)
+    run_subprocess([str(VTRACER_BIN), "--input", str(src), "--output", str(out),
+                    "--preset", "bw", "--mode", "spline", "--filter_speckle", str(speckle)])
+    txt = out.read_text(encoding="utf-8", errors="ignore")
+    ds = []
+    for tag in re.findall(r"<path\b[^>]*>", txt):
+        dm = re.search(r'd="([^"]*)"', tag)
+        if not dm:
+            continue
+        tm = re.search(r"translate\(([-\d.]+)[ ,]([-\d.]+)\)", tag)
+        tx, ty = (float(tm.group(1)), float(tm.group(2))) if tm else (0.0, 0.0)
+        ds.append(_bake_translate(dm.group(1), tx, ty) if (tx or ty) else dm.group(1))
+    return " ".join(ds)
+
+
+def _snap_logo_color(c) -> tuple:
+    """Nudge a near-pure centroid to the clean colour a logo wants (#ff0000, not #cc1010)."""
+    r, g, b = int(c[0]), int(c[1]), int(c[2])
+    if r > 180 and g > 180 and b > 180:
+        return (255, 255, 255)
+    if r < 60 and g < 60 and b < 60:
+        return (0, 0, 0)
+    if r > 120 and g < 90 and b < 90:
+        return (min(255, int(r * 1.25)), 0, 0)
+    return (r, g, b)
+
+
+def clean_color_trace(src: Path, n: int, simplify: str, *, max_dim: int | None = None,
+                      drop_bg: bool = True, speckle: int = 4, do_snap: bool = True) -> str:
+    """Region/planar colour trace for FLAT logos — the fix for vtracer-stacked halos.
+    Hard-quantise to N true colours (k-means), trace EACH colour as its own B&W mask
+    (non-overlapping, holes preserved), drop the background → transparent, and assemble
+    bottom(lightest)→top(darkest). No inter-colour halos, counters intact, clean palette."""
+    ensure_tools_ready("vtracer")
+    rgba = Image.open(src).convert("RGBA")
+    bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+    bg.alpha_composite(rgba)
+    rgb = bg.convert("RGB")
+    if max_dim:
+        rgb.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+    colors_arr, idx = _km_palette(rgb, max(2, n))
+    colors = [tuple(int(x) for x in c) for c in colors_arr]
+    H, W = idx.shape
+    border = np.concatenate([idx[0, :], idx[-1, :], idx[:, 0], idx[:, -1]])
+    bg_idx = int(np.bincount(border, minlength=len(colors)).argmax())
+    luma = lambda c: 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+    order = [i for i in range(len(colors)) if not (drop_bg and i == bg_idx)]
+    order.sort(key=lambda i: -luma(colors[i]))      # lightest first (bottom) → darkest on top
+    params = SIMPLIFY_LEVELS.get(simplify)
+    layers = []
+    with tempfile.TemporaryDirectory(prefix="hv-clean-") as td:
+        tmp = Path(td)
+        for i in order:
+            mask = idx == i
+            if int(mask.sum()) < 4:
+                continue
+            d = _trace_mask_to_d(mask, tmp, speckle)
+            if params and d:
+                try:
+                    d, _ = simplify_svg.simplify_d(d, params[0], params[1])
+                except Exception:  # noqa: BLE001
+                    pass
+            if d:
+                layers.append((_snap_logo_color(colors[i]) if do_snap else colors[i], d))
+    body = "".join(f'<path d="{d}" fill="#{c[0]:02x}{c[1]:02x}{c[2]:02x}"/>' for c, d in layers)
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
+            f'width="{W}" height="{H}">{body}</svg>')
+
+
+# ---------------------------------------------------------------- raster ops (registry)
+# In-place raster→raster transforms for the panel (upscale / remove-bg), each run
+# SYNCHRONOUSLY into the scratch dir and returned as a resolvable URL (the canvas swaps
+# to it; no job, no library copy — the dump/choppy fix). Pluggable like VECTORIZE_ENGINES
+# and described by the same param-schema shape, so the client renders + live-wires both
+# stages from one source of truth (/api/raster-ops). `apply(src, dest_dir, stem, stamp,
+# payload, log) → output Path`.
+
+def _op_upscale(src, dest_dir, stem, stamp, payload, log):
+    for old in dest_dir.glob(f"{stem}.up.*.png"):
+        old.unlink(missing_ok=True)
+    dest = dest_dir / f"{stem}.up.{stamp}.png"
+    scale = int(payload.get("scale", "4"))
+    if source_has_alpha(src):                       # ESRGAN drops alpha → nearest-neighbour keeps it
+        deterministic_upscale(src, dest, scale)
+    else:
+        ensure_tools_ready("realesrgan")
+        run_subprocess([str(REALESRGAN_BIN), "-i", str(src), "-o", str(dest),
+                        "-n", payload.get("model", "realesrgan-x4plus"), "-s", str(scale)],
+                       cwd=REALESRGAN_DIR)
+    return dest
+
+
+def _op_removebg(src, dest_dir, stem, stamp, payload, log):
+    out = dest_dir / f"{stem}.cut.{stamp}.png"
+    for old in dest_dir.glob(f"{stem}.cut.*.png"):
+        old.unlink(missing_ok=True)
+    method = (payload.get("removebg_method") or "classical").strip()
+    if method == "green":
+        build_chromakey_cutout(src, out)
+    elif method == "ai":
+        if not rembg_installed():
+            raise ValueError("AI cutout requested but rembg is not installed (Settings → install, or use Classical).")
+        build_ai_cutout(src, out, (payload.get("cutout_model") or "u2net").strip(),
+                        bool(payload.get("alpha_matting")), log)
+    else:
+        build_mask_with_overrides(src, dest_dir / f"{stem}.mask.{stamp}.png", out, mask_config(payload))
+        (dest_dir / f"{stem}.mask.{stamp}.png").unlink(missing_ok=True)
+    validate_cutout_png(out)
+    return out
+
+
+RASTER_OPS = {
+    "upscale": {
+        "label": "Upscale", "caps": {"needs": ["realesrgan"]},
+        "schema": [
+            {"key": "model", "type": "select", "default": "realesrgan-x4plus", "label": "Model",
+             "options": [["realesrgan-x4plus", "ESRGAN x4+ (photo)"], ["realesrnet-x4plus", "ESRNet x4+ (cleaner)"], ["realesr-animevideov3", "Anime / line-art"]]},
+            {"key": "scale", "type": "select", "default": "4", "label": "Scale",
+             "options": [["2", "2×"], ["3", "3×"], ["4", "4×"]]},
+        ],
+        "apply": _op_upscale,
+    },
+    "removebg": {
+        "label": "Remove background", "caps": {"needs": []},   # classical always works → no hard requirement
+        "schema": [
+            {"key": "removebg_method", "type": "select", "default": "classical", "label": "Method",
+             "options": [["classical", "Classical — fast"], ["ai", "AI (rembg)"], ["green", "Greenscreen"]]},
+            {"key": "cutout_model", "type": "select", "default": "u2net", "label": "AI model", "when": {"removebg_method": "ai"},
+             "options": [["u2net", "u2net — general (175MB)"], ["u2netp", "u2netp — fast/light (5MB)"], ["u2net_human_seg", "u2net — humans"],
+                         ["isnet-general-use", "ISNet — sharper general"], ["isnet-anime", "ISNet anime"],
+                         ["birefnet-general", "BiRefNet general — OSS SOTA"], ["birefnet-general-lite", "BiRefNet lite"],
+                         ["birefnet-portrait", "BiRefNet portrait"], ["silueta", "silueta — quantized U²-Net"]]},
+            {"key": "alpha_matting", "type": "checkbox", "default": False, "label": "Alpha matting", "when": {"removebg_method": "ai"},
+             "hint": "Refines edges (hair). Slower."},
+        ],
+        "apply": _op_removebg,
+    },
+}
+
+
+def raster_ops_info() -> list[dict]:
+    """Serializable raster-op registry for the client (drops the apply callable).
+    `available` reflects whether the op's required tools are present (rembg for the AI
+    cutout *method* is checked at run time, since Classical needs nothing)."""
+    out = []
+    for oid, o in RASTER_OPS.items():
+        needs = o["caps"].get("needs", [])
+        available = ("realesrgan" not in needs or REALESRGAN_BIN.exists())
+        out.append({"id": oid, "label": o["label"], "caps": o["caps"],
+                    "schema": o["schema"], "available": available,
+                    "rembg_installed": rembg_installed()})
+    return out
+
+
+def apply_raster_op(payload: dict) -> dict:
+    """Run a registered raster op into the scratch dir and return a resolvable URL.
+    Transient (mirrors trace-preview): no job, no poll, no library copy."""
+    src = resolve_source_url(payload.get("input_url", ""))
+    if src is None:
+        raise ValueError("Could not resolve the source image.")
+    op = (payload.get("op") or "").strip()
+    if op not in RASTER_OPS:
+        raise ValueError(f"Unknown raster op: {op!r}")
+    SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", src.stem).strip("-.") or "img"
+    stamp = int(time.time() * 1000) % 1000000
+    out = RASTER_OPS[op]["apply"](src, SCRATCH_DIR, stem, stamp, payload, lambda *_a, **_k: None)
+    rel = out.relative_to(OUTPUTS_DIR).as_posix()
+    return {"url": "/outputs/" + "/".join(urllib.parse.quote(p) for p in rel.split("/")), "name": out.name}
+
+
+# ---------------------------------------------------------------- vectorize engines
+# Pluggable engine layer (migration toward the abstract-architecture spec). Each engine
+# is self-contained: trace(src, payload, cfgs, tmp, log) → SVG text. ONE dispatch path
+# (`vectorize_svg`) feeds BOTH the live preview and the commit/pipeline, so they can't
+# drift. New engines (potrace, a neural quality tier) drop in here with a param_schema.
+
+def _engine_clean(src, payload, trace, mask_cfg, pv, tmp, log):
+    return clean_color_trace(src, n=int(float(trace["color_precision"])),
+                             simplify=trace["simplify"], speckle=int(float(trace["filter_speckle"])))
+
+
+def _engine_vtracer(src, payload, trace, mask_cfg, pv, tmp, log):
+    ensure_tools_ready("vtracer")
+    dest = tmp / "o.svg"
+    if trace["colormode"] == "color":
+        flat = tmp / "flat.png"
+        prepare_color_input(src, flat, trace)
+        trace_color_to_svg(flat, dest, trace, log)
+    else:
+        mask = tmp / "mask.png"
+        build_mask_with_overrides(src, mask, None, mask_cfg)
+        trace_mask_to_svg(mask, dest, trace, log)
+    simplify_trace_file(dest, trace["simplify"], log)
+    return dest.read_text(encoding="utf-8", errors="ignore")
+
+
+def _engine_pixel(src, payload, trace, mask_cfg, pv, tmp, log):
+    dest = tmp / "o.svg"
+    pixelvec.vectorize_pixel_art(src, dest, mode=pv["mode"], sample=pv["sample"],
+                                 gridx=pv["gridx"], gridy=pv["gridy"],
+                                 quantize=pv["quantize"], key_corner=pv["key_corner"])
+    return dest.read_text(encoding="utf-8", errors="ignore")
+
+
+VECTORIZE_ENGINES = {
+    "clean": {
+        "label": "Clean — flat logo (planar, no halos)", "group": "trace",
+        "caps": {"colormodes": ["color"], "holes": True, "planar": True, "speed": "live", "needs": ["vtracer"]},
+        # Schema = the COMPLETE set of params this engine actually consumes (see
+        # _engine_clean / clean_color_trace). The client renders the panel purely from
+        # this — so a control is shown iff the engine reads it. No phantom knobs.
+        "schema": [
+            {"key": "color_precision", "type": "range", "min": 1, "max": 8, "step": 1, "default": 3,
+             "label": "Colours", "hint": "Palette size — fewer = flatter, cleaner logo."},
+            {"key": "trace_simplify", "type": "select", "default": "medium", "label": "Simplify",
+             "options": [["off", "Off — raw"], ["light", "Light"], ["medium", "Medium — recommended"], ["strong", "Strong — fewest nodes"]]},
+            {"key": "filter_speckle", "type": "range", "min": 0, "max": 32, "step": 1, "default": 6,
+             "label": "Filter speckle", "advanced": True, "hint": "Drop blobs smaller than N px."},
+        ],
+        "trace": _engine_clean,
+    },
+    "vtracer": {
+        "label": "VTracer — colour / B&W", "group": "trace",
+        "caps": {"colormodes": ["bw", "color"], "holes": False, "planar": False, "speed": "live", "needs": ["vtracer"]},
+        "schema": [
+            {"key": "trace_colormode", "type": "select", "default": "bw", "label": "Output",
+             "options": [["bw", "Black & white — silhouette"], ["color", "Colour — full palette"]]},
+            {"key": "trace_color_style", "type": "select", "default": "poster", "label": "Style", "when": {"trace_colormode": "color"},
+             "options": [["poster", "Poster — flat palette"], ["photo", "Photo — gradients"]]},
+            {"key": "color_precision", "type": "range", "min": 1, "max": 8, "step": 1, "default": 6, "label": "Colours", "when": {"trace_colormode": "color"}},
+            {"key": "trace_hierarchical", "type": "select", "default": "stacked", "label": "Layers", "when": {"trace_colormode": "color"},
+             "options": [["stacked", "Stacked — layered fills"], ["cutout", "Cutout — non-overlapping"]]},
+            {"key": "mask_threshold", "type": "number", "default": None, "label": "Black threshold", "when": {"trace_colormode": "bw"},
+             "placeholder": "auto (otsu)", "hint": "Gray cutoff; higher = more foreground."},
+            {"key": "trace_simplify", "type": "select", "default": "medium", "label": "Simplify",
+             "options": [["off", "Off — raw vtracer"], ["light", "Light"], ["medium", "Medium — recommended"], ["strong", "Strong — fewest nodes"]]},
+            {"key": "trace_mode", "type": "select", "default": "spline", "label": "Curves",
+             "options": [["spline", "Spline (curves)"], ["polygon", "Polygon"], ["pixel", "Pixel (no smoothing)"]]},
+            {"key": "target_max_dim", "type": "number", "default": None, "label": "Target max dim",
+             "placeholder": "auto (no resize)", "hint": "Resize the longest side before tracing."},
+            {"key": "segment_length", "type": "range", "min": 3.5, "max": 10, "step": 0.5, "default": 4.5, "label": "Smooth (segment length)", "advanced": True},
+            {"key": "filter_speckle", "type": "range", "min": 0, "max": 16, "step": 1, "default": 6, "label": "Filter speckle", "advanced": True},
+            {"key": "corner_threshold", "type": "range", "min": 30, "max": 180, "step": 5, "default": 85, "label": "Corner threshold", "advanced": True},
+            {"key": "splice_threshold", "type": "range", "min": 0, "max": 180, "step": 5, "default": 45, "label": "Splice threshold", "advanced": True},
+            {"key": "path_precision", "type": "range", "min": 0, "max": 10, "step": 1, "default": 2, "label": "Path precision", "advanced": True},
+        ],
+        "trace": _engine_vtracer,
+    },
+    "pixel": {
+        "label": "Pixel-art — recover grid", "group": "pixel",
+        "caps": {"colormodes": ["color"], "holes": True, "planar": True, "speed": "live", "needs": []},
+        "schema": [
+            {"key": "pv_grid", "type": "number", "default": None, "label": "Native size (cells)",
+             "placeholder": "auto-detect", "hint": "Blank = auto-detect the pixel grid."},
+            {"key": "pv_sample", "type": "select", "default": "mode", "label": "Cell colour",
+             "options": [["mode", "Mode — most common"], ["median", "Median — robust"], ["center", "Center pixel"]]},
+            {"key": "pv_quantize", "type": "number", "default": None, "label": "Quantize colours",
+             "placeholder": "keep all", "hint": "Snap to an N-colour palette."},
+            {"key": "pv_key_corner", "type": "checkbox", "default": False, "label": "Key out corner",
+             "hint": "Make the dominant corner colour transparent."},
+            {"key": "pv_mode", "type": "select", "default": "merged", "label": "Shape mode",
+             "options": [["merged", "Merged rects — compact"], ["path", "Per-colour paths"], ["pixels", "One rect per pixel"]]},
+        ],
+        "trace": _engine_pixel,
+    },
+}
+
+
+def resolve_engine(payload: dict) -> str:
+    """Explicit `engine` wins; otherwise derive from the legacy method/style params so
+    existing callers keep working unchanged."""
+    e = (payload.get("engine") or "").strip()
+    if e in VECTORIZE_ENGINES:
+        return e
+    if (payload.get("vectorize_method") or "trace").strip() == "pixel":
+        return "pixel"
+    if str(payload.get("trace_colormode", "")).lower() == "color" and payload.get("trace_color_style") == "clean":
+        return "clean"
+    return "vtracer"
+
+
+def vectorize_svg(src: Path, payload: dict, *, max_dim: int | None = None, log=None) -> str:
+    """The single vectorize entry point: resolve the engine, (optionally) downscale the
+    source, and return SVG text. Used by the live preview AND the commit/pipeline."""
+    eng = resolve_engine(payload)
+    trace = trace_config(payload)
+    mask_cfg = mask_config(payload)
+    pv = pixelvec_config(payload)
+    log = log or (lambda *a, **k: None)
+    with tempfile.TemporaryDirectory(prefix="hv-vec-") as td:
+        tmp = Path(td)
+        cur = src
+        if max_dim:
+            # Cached downscale: live preview re-traces on every drag, so resizing
+            # the full-res source each time was pure waste (see preprocess_for_trace).
+            cur = preprocess_for_trace(src, max_dim)
+        return VECTORIZE_ENGINES[eng]["trace"](cur, payload, trace, mask_cfg, pv, tmp, log)
+
+
+def vectorize_engines_info() -> list[dict]:
+    """Serializable registry for the client (drops the trace callable). `available`
+    reflects whether the engine's required tools are present."""
+    out = []
+    for eid, e in VECTORIZE_ENGINES.items():
+        needs = e["caps"].get("needs", [])
+        available = ("vtracer" not in needs) or VTRACER_BIN.exists()
+        out.append({"id": eid, "label": e["label"], "group": e["group"],
+                    "caps": e["caps"], "schema": e["schema"], "available": available})
+    return out
+
+
+def suggest_trace_settings(payload: dict) -> dict:
+    """T1 "Auto": recommend vectorize settings from cheap image statistics — no
+    model, milliseconds, pure numpy/PIL. Mirrors what a human does eyeballing the
+    image: silhouette vs colour, flat poster art vs photographic gradients, and how
+    many colours to keep. The client fills the panel from this; the user can still
+    override. (A VLM recommender or a neural vectorizer would be the heavier T2/T3.)"""
+    src = resolve_source_url(payload.get("input_url", ""))
+    if src is None:
+        raise ValueError("Could not resolve the source image.")
+    im = Image.open(src).convert("RGBA")
+    bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
+    bg.alpha_composite(im)
+    rgb = bg.convert("RGB")
+    rgb.thumbnail((200, 200), Image.Resampling.LANCZOS)   # downscale for fast stats
+    arr = np.asarray(rgb, dtype=np.float32)
+    px_chroma = arr.max(2) - arr.min(2)                       # per-pixel saturation
+    chroma = float(px_chroma.mean())                          # mean colourfulness 0–255
+    # A MINORITY saturated colour (e.g. a red logo on B/W) barely moves the mean, so
+    # also measure the SHARE of vivid pixels — that's what says "this needs colour".
+    colorful_frac = float((px_chroma > 60).mean())
+    # palette: median-cut to 32, how many colours actually hold real estate
+    q = rgb.quantize(colors=32, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+    frac = np.bincount(np.asarray(q).ravel(), minlength=32).astype(np.float32)
+    frac = frac / max(1.0, frac.sum())
+    significant = int((frac > 0.02).sum())                    # colours with >2% of pixels
+    top6 = float(np.sort(frac)[::-1][:6].sum())               # coverage of the 6 biggest
+    luma = 0.299 * arr[..., 0] + 0.587 * arr[..., 1] + 0.114 * arr[..., 2]
+    gy, gx = np.gradient(luma)
+    edge_frac = float((np.hypot(gx, gy) > 24).mean())         # share of hard-edge pixels
+    near_binary = image_is_near_binary(src)
+    has_alpha = source_has_alpha(src)
+
+    if colorful_frac < 0.03:
+        # No real colour: a 2-tone logo → B&W silhouette; a grayscale photo → photo
+        # mode (it traces the gray levels; a silhouette would flatten the tones).
+        if near_binary:
+            out = {"engine": "vtracer", "trace_colormode": "bw", "trace_simplify": "medium"}
+            reason = "Near-2-tone grayscale → B&W silhouette trace."
+        else:
+            simplify = "medium" if edge_frac > 0.2 else "light"
+            out = {"engine": "vtracer", "trace_colormode": "color", "trace_color_style": "photo",
+                   "color_precision": 6, "trace_simplify": simplify}
+            reason = f"Grayscale, multi-tone → Colour · Photo · 6 levels · simplify {simplify}."
+    else:
+        # Real colour present. Few dominant colours → flat poster art; many → photo.
+        # (Lean on the dominant-colour COUNT, not top-N coverage — AA fringe spreads a
+        #  flat logo's 3 colours across many near-duplicate palette bins.)
+        if significant <= 6:
+            k = max(2, min(8, significant))
+            out = {"engine": "clean", "trace_colormode": "color", "trace_color_style": "clean",
+                   "color_precision": k, "trace_simplify": "medium"}
+            reason = (f"Flat colour logo — {significant} dominant colours "
+                      f"→ Clean engine (planar, no halos) · {k} colours · simplify medium.")
+        else:
+            simplify = "medium" if edge_frac > 0.2 else "light"
+            out = {"engine": "vtracer", "trace_colormode": "color", "trace_color_style": "photo",
+                   "color_precision": 6, "trace_simplify": simplify}
+            reason = f"Photographic / gradient-rich ({significant} colours) → Colour · Photo · 6 colours · simplify {simplify}."
+    out["vectorize_method"] = "trace"
+    out["reason"] = reason
+    out["stats"] = {"chroma": round(chroma, 1), "colorful_frac": round(colorful_frac, 3),
+                    "significant_colors": significant, "top6_coverage": round(top6, 3),
+                    "edge_frac": round(edge_frac, 3), "near_binary": near_binary, "has_alpha": has_alpha}
+    return out
+
+
+def trace_preview(payload: dict) -> dict:
+    """SYNCHRONOUS, resolution-capped vectorize for the raster panel's LIVE preview.
+    Resolves the selected canvas raster (`input_url`) and runs it through the single
+    `vectorize_svg` dispatch (same engine the commit/pipeline uses → no drift),
+    returning SVG text directly. No job, no saved output. The cap keeps each trace
+    fast enough to drive a debounced live preview as the user drags sliders."""
+    src = resolve_source_url(payload.get("input_url", ""))
+    if src is None:
+        raise ValueError("Could not resolve the source image for preview.")
+    cap = max(64, min(2048, int(payload.get("preview_max_dim") or 1000)))
+    svg_text = vectorize_svg(src, payload, max_dim=cap)
+    return {"svg": svg_text, "nodes": len(re.findall(r"[MLCZ]", svg_text)), "capped": cap}
 
 
 def run_pipeline(payload: dict) -> dict:
@@ -1645,34 +2208,14 @@ def run_pipeline(payload: dict) -> dict:
                 current = cutout_dest
 
             # --- 3) Vectorize (or early-stop at the PNG) ---
+            # ONE dispatch (vectorize_svg) shared with the live preview — the engine
+            # resolves from the payload (clean / vtracer-colour / vtracer-bw / pixel).
             if vec:
+                tick("Pixel trace" if vec_method == "pixel" else "Trace SVG")
+                vector_dest.write_text(vectorize_svg(current, payload, log=log), encoding="utf-8")
                 if vec_method == "pixel":
-                    tick("Pixel trace")
-                    pixelvec.vectorize_pixel_art(
-                        current, vector_dest,
-                        mode=pv_cfg["mode"], sample=pv_cfg["sample"],
-                        gridx=pv_cfg["gridx"], gridy=pv_cfg["gridy"],
-                        quantize=pv_cfg["quantize"], key_corner=pv_cfg["key_corner"],
-                    )
                     validate_pixelvec_svg(vector_dest)
-                elif trace["colormode"] == "color":
-                    tick(f"Trace SVG ({trace['color_style']})")
-                    flat_dest = out_dir / f"{src.stem}.flat.png"
-                    prepare_color_input(current, flat_dest, trace)
-                    _register_output(flat_dest)
-                    trace_color_to_svg(flat_dest, vector_dest, trace, log)
-                    simplify_trace_file(vector_dest, trace["simplify"], log)
-                    validate_svg_file(vector_dest)
                 else:
-                    tick("Trace SVG")
-                    # B&W trace needs a silhouette mask. Remove-BG already made one;
-                    # otherwise build it from the current image here.
-                    if not rb:
-                        build_mask_with_overrides(current, mask_dest, None, mask_cfg)
-                        validate_mask_png(mask_dest)
-                        _register_output(mask_dest)
-                    trace_mask_to_svg(mask_dest, vector_dest, trace, log)
-                    simplify_trace_file(vector_dest, trace["simplify"], log)
                     validate_svg_file(vector_dest)
                 _register_output(vector_dest)
 
@@ -1687,7 +2230,10 @@ def run_pipeline(payload: dict) -> dict:
     msg = f"Started {len(jobs_started)} pipeline job(s)."
     if skipped:
         msg += f" Skipped {len(skipped)} already processed."
-    return {"message": msg, "output_dir": str(out_dir), "started": len(jobs_started), "skipped": skipped}
+    # Job ids let a single-target caller (the raster panel) await its job and then
+    # swap the produced output onto the canvas.
+    return {"message": msg, "output_dir": str(out_dir), "started": len(jobs_started),
+            "skipped": skipped, "jobs": [j["id"] for j in jobs_started]}
 
 
 def run_selftest(payload: dict) -> dict:
@@ -1921,6 +2467,115 @@ def remove_work_item(payload: dict) -> dict:
     return {"message": f"Removed {path.name}."}
 
 
+def _safe_stem(raw: str) -> str:
+    """Reduce a caller-supplied name to a single safe filename stem (no ext)."""
+    stem = Path(raw).name
+    stem = re.sub(r"\.[A-Za-z0-9]{1,8}$", "", stem)  # drop a trailing extension
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-.")
+    return stem
+
+
+def rename_work_item(payload: dict) -> dict:
+    """Rename a source image in place, preserving its extension. Powers the
+    raster detail view's rename action."""
+    name = (payload.get("name") or "").strip()
+    new_raw = (payload.get("new_name") or "").strip()
+    if not name:
+        raise ValueError("Missing image name.")
+    if not new_raw:
+        raise ValueError("Missing new name.")
+    path = resolve_work_item(name)
+    if path is None:
+        raise ValueError(f"Image not found: {name}")
+    stem = _safe_stem(new_raw)
+    if not stem:
+        raise ValueError("New name is empty after sanitising.")
+    target = path.with_name(stem + path.suffix)
+    if target == path:
+        return {"name": path.name, "url": f"/work-items/{urllib.parse.quote(path.name)}", "message": "Name unchanged."}
+    if target.exists():
+        raise ValueError(f"A file named {target.name} already exists.")
+    try:
+        path.rename(target)
+    except OSError as exc:
+        raise ValueError(f"Cannot rename {path.name}: {exc}")
+    return {
+        "name": target.name,
+        "url": f"/work-items/{urllib.parse.quote(target.name)}",
+        "message": f"Renamed to {target.name}.",
+    }
+
+
+def _resolve_output(rel_or_url: str) -> Path:
+    """Resolve an outputs-relative path (or a /outputs/… URL) to a real file
+    that lives inside OUTPUTS_DIR. Raises ValueError on traversal or miss."""
+    raw = urllib.parse.unquote((rel_or_url or "").strip())
+    raw = raw.removeprefix("/outputs/").lstrip("/")
+    if not raw:
+        raise ValueError("Missing output path.")
+    path = (OUTPUTS_DIR / Path(raw)).resolve()
+    try:
+        path.relative_to(OUTPUTS_DIR.resolve())
+    except ValueError:
+        raise ValueError("Path is outside the outputs directory.")
+    if not path.is_file():
+        raise ValueError(f"File not found: {path.name}")
+    return path
+
+
+def rename_output(payload: dict) -> dict:
+    """Rename a file under outputs/ in place, preserving its extension. Powers
+    the vector and project (.hv) detail views' rename action. For .hv projects
+    the JSON's internal `name` field is rewritten too so re-opening is clean."""
+    rel = payload.get("url") or payload.get("path") or payload.get("name") or ""
+    new_raw = (payload.get("new_name") or "").strip()
+    if not new_raw:
+        raise ValueError("Missing new name.")
+    path = _resolve_output(rel)
+    stem = _safe_stem(new_raw)
+    if not stem:
+        raise ValueError("New name is empty after sanitising.")
+    target = path.with_name(stem + path.suffix)
+    if target == path:
+        relname = path.relative_to(OUTPUTS_DIR.resolve()).as_posix()
+        return {"name": path.name, "url": f"/outputs/{urllib.parse.quote(relname)}", "message": "Name unchanged."}
+    if target.exists():
+        raise ValueError(f"A file named {target.name} already exists.")
+    # Keep a .hv document's embedded name in sync with its filename.
+    if path.suffix.lower() == ".hv":
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            doc["name"] = target.name
+            path.write_text(json.dumps(doc), encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        path.rename(target)
+    except OSError as exc:
+        raise ValueError(f"Cannot rename {path.name}: {exc}")
+    invalidate_outputs_cache()
+    relname = target.relative_to(OUTPUTS_DIR.resolve()).as_posix()
+    return {
+        "name": target.name,
+        "url": f"/outputs/{urllib.parse.quote(relname)}",
+        "message": f"Renamed to {target.name}.",
+    }
+
+
+def remove_output(payload: dict) -> dict:
+    """Delete a file under outputs/ (vector .svg/.png or project .hv). Powers the
+    vector and project detail views' delete action."""
+    rel = payload.get("url") or payload.get("path") or payload.get("name") or ""
+    path = _resolve_output(rel)
+    name = path.name
+    try:
+        path.unlink()
+    except OSError as exc:
+        raise ValueError(f"Cannot remove {name}: {exc}")
+    invalidate_outputs_cache()
+    return {"message": f"Removed {name}."}
+
+
 _EXIF_TAG_NAMES = {v: k for k, v in ExifTags.TAGS.items()}
 _EXIF_ALLOWED = {
     "Make", "Model", "Orientation", "DateTime", "DateTimeOriginal",
@@ -1993,70 +2648,6 @@ def work_item_info(name: str) -> dict:
         "orientation": orientation,
         "exif": exif,
     }
-
-
-_TRANSFORM_OPS = {
-    "rotate90", "rotate180", "rotate270",
-    "flip-h", "flip-v",
-    "auto-orient", "strip-metadata",
-}
-
-
-def transform_work_item(payload: dict) -> dict:
-    name = (payload.get("name") or "").strip()
-    op = (payload.get("op") or "").strip()
-    path = resolve_work_item(name)
-    if path is None:
-        raise ValueError(f"Image not found: {name}")
-    if op not in _TRANSFORM_OPS:
-        raise ValueError(f"Unsupported transform: {op}")
-    fmt_lower = path.suffix.lower()
-    with Image.open(path) as im:
-        im.load()
-        preserve_icc = im.info.get("icc_profile")
-        if op == "rotate90":
-            new_im = im.transpose(Image.Transpose.ROTATE_270)  # CW 90
-        elif op == "rotate180":
-            new_im = im.transpose(Image.Transpose.ROTATE_180)
-        elif op == "rotate270":
-            new_im = im.transpose(Image.Transpose.ROTATE_90)  # CCW 90
-        elif op == "flip-h":
-            new_im = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-        elif op == "flip-v":
-            new_im = im.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
-        elif op == "auto-orient":
-            try:
-                orient = (im.getexif() or {}).get(0x0112, 1)
-            except Exception:  # noqa: BLE001
-                orient = 1
-            if orient in (0, 1):
-                return {"message": f"No EXIF orientation on {path.name}.", **work_item_info(path.name)}
-            new_im = ImageOps.exif_transpose(im)
-        else:  # strip-metadata
-            new_im = Image.new(im.mode, im.size)
-            new_im.paste(im)
-            preserve_icc = None
-        save_kwargs = {}
-        if fmt_lower in {".jpg", ".jpeg"}:
-            save_kwargs.update({"quality": 95, "subsampling": 0, "progressive": True})
-        if op != "strip-metadata" and preserve_icc:
-            save_kwargs["icc_profile"] = preserve_icc
-        new_im.save(path, **save_kwargs)
-    return {"message": f"Applied {op} to {path.name}.", **work_item_info(path.name)}
-
-
-def clean_derivative_inputs() -> dict:
-    removed = 0
-    base = source_dir()
-    if base.is_dir():
-        for path in list(base.iterdir()):
-            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS and is_derivative_name(path.name):
-                try:
-                    path.unlink()
-                    removed += 1
-                except OSError:
-                    pass
-    return {"message": f"Removed {removed} derivative file(s)."}
 
 
 def get_source_info() -> dict:
@@ -2164,10 +2755,25 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/outputs":
             self.send_json(list_outputs())
             return
+        if parsed.path == "/api/projects":
+            self.send_json(list_projects())
+            return
+        if parsed.path == "/api/vectorize/engines":
+            self.send_json(vectorize_engines_info())
+            return
+        if parsed.path == "/api/raster-ops":
+            self.send_json(raster_ops_info())
+            return
         if parsed.path.startswith("/work-items/"):
             path = resolve_work_item(parsed.path.removeprefix("/work-items/"))
             if path is None:
                 self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+                return
+            # ?w=N → a resized thumbnail (the gallery serves these so it isn't
+            # downloading the full-res originals just to shrink them with CSS).
+            w = urllib.parse.parse_qs(parsed.query).get("w", [None])[0]
+            if w and w.isdigit():
+                self.serve_thumbnail(path, int(w))
                 return
             self.serve_file(path)
             return
@@ -2235,16 +2841,20 @@ class Handler(SimpleHTTPRequestHandler):
                 result = apply_update(payload)
             elif parsed.path == "/api/work-items/remove":
                 result = remove_work_item(payload)
-            elif parsed.path == "/api/work-items/clean-derivatives":
-                result = clean_derivative_inputs()
-            elif parsed.path == "/api/work-items/transform":
-                result = transform_work_item(payload)
-            elif parsed.path == "/api/render":
-                result = render_output(payload)
+            elif parsed.path == "/api/work-items/rename":
+                result = rename_work_item(payload)
+            elif parsed.path == "/api/outputs/rename":
+                result = rename_output(payload)
+            elif parsed.path == "/api/outputs/remove":
+                result = remove_output(payload)
+            elif parsed.path == "/api/save-render":
+                result = save_render(payload)
             elif parsed.path == "/api/save-svg":
                 result = save_svg(payload)
             elif parsed.path == "/api/save-svg-as":
                 result = save_svg_as(payload)
+            elif parsed.path == "/api/save-hv":
+                result = save_hv(payload)
             elif parsed.path == "/api/reveal":
                 result = reveal_path(payload)
             elif parsed.path == "/api/source":
@@ -2257,6 +2867,12 @@ class Handler(SimpleHTTPRequestHandler):
                 result = retry_job(payload)
             elif parsed.path == "/api/run/pipeline":
                 result = run_pipeline(payload)
+            elif parsed.path == "/api/trace-preview":
+                result = trace_preview(payload)
+            elif parsed.path == "/api/trace-suggest":
+                result = suggest_trace_settings(payload)
+            elif parsed.path == "/api/raster-op":
+                result = apply_raster_op(payload)
             elif parsed.path == "/api/run/selftest":
                 result = run_selftest(payload)
             elif parsed.path == "/api/run/supir":
@@ -2269,6 +2885,30 @@ class Handler(SimpleHTTPRequestHandler):
             return
         self.send_json(result)
 
+    def serve_thumbnail(self, path: Path, w: int) -> None:
+        w = max(16, min(1024, w))
+        try:
+            with Image.open(path) as im:
+                im = ImageOps.exif_transpose(im)
+                im.thumbnail((w, w), Image.Resampling.LANCZOS)
+                buf = io.BytesIO()
+                if im.mode in ("RGBA", "LA", "P"):   # keep transparency → PNG
+                    im.convert("RGBA").save(buf, "PNG", optimize=True)
+                    ctype = "image/png"
+                else:
+                    im.convert("RGB").save(buf, "JPEG", quality=82)
+                    ctype = "image/jpeg"
+            data = buf.getvalue()
+        except Exception:  # noqa: BLE001 — a bad/odd image just falls back to the original
+            self.serve_file(path)
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "public, max-age=300")
+        self.end_headers()
+        self.wfile.write(data)
+
     def serve_file(self, path: Path) -> None:
         if not path.exists():
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
@@ -2279,6 +2919,12 @@ class Handler(SimpleHTTPRequestHandler):
         if content_type.startswith("text/") or content_type in {"application/javascript", "image/svg+xml"}:
             content_type = f"{content_type}; charset=utf-8"
         self.send_header("Content-Type", content_type)
+        # No build step → the app is the source files. Code/markup must never be cached
+        # by the browser, or edits silently don't take after a reload (the recurring
+        # "it doesn't work after I changed it" trap). Images/binaries stay cacheable.
+        base = content_type.split(";", 1)[0]
+        if base in {"text/html", "text/css", "application/javascript", "text/javascript"} or path.suffix.lower() in {".js", ".mjs", ".css", ".html"}:
+            self.send_header("Cache-Control", "no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(path.read_bytes())
 
