@@ -1381,7 +1381,13 @@ function mountStageFromText(text, name) {
   host.appendChild(svg);
   editor.pinned = true;
   if (outputLabelEl) outputLabelEl.textContent = `Canvas — ${name}`;
-  requestAnimationFrame(() => { measureFit(vp); editor.sync(); });
+  // Adopt the new document SYNCHRONOUSLY — editor.sync()/adopt() only read the DOM + rebuild
+  // state (no layout needed), so editor.stage must point at the just-mounted svg the instant
+  // mountStageFromText returns. Deferring it to the rAF left a window where editor.stage still
+  // referenced the OLD document (e.g. code/tests reading editor.stage right after a mount saw a
+  // stale stage — a lingering raster from the previous doc). Only measureFit needs layout → rAF.
+  editor.sync();
+  requestAnimationFrame(() => measureFit(vp));
 }
 
 // Mount a fresh white artboard with no save target (Save → Save-As).
