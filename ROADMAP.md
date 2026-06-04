@@ -166,134 +166,73 @@ For commercial self-hosting **do not ship**: BRIA RMBG-1.4/2.0 (CC BY-NC), CodeF
 
 ---
 
-## Target architecture — one app, compute that resolves itself
+## Architecture — download-and-local
 
 > Supersedes the old "deliberate raster/vector boundary." That separation has been
 > erased on purpose: the Process workspace ("Q") is dissolved into contextual editor
 > panels, rasters are first-class canvas objects (`editor.placeImage()` → selectable/
 > movable `<image>` nodes), mixed raster+vector documents work, and SVG export bakes
-> `<image href>` to data-URIs to stay self-contained. The question is no longer "where
-> does the pipeline live" but "where does the **compute** live."
+> `<image href>` to data-URIs to stay self-contained.
 
-The app is two things welded at one **HTTP API seam**: a deployment-agnostic frontend
-(the editor — pure client-side ES modules, no build step) and a compute service (the
-pipeline — Python + native model binaries). Because that seam is already HTTP, the
-frontend doesn't care *where* the backend is. That single fact sets the whole shape.
+hector-vector is a **download-and-local app**: clone it, run it on your own machine. Two
+pieces welded at one **localhost HTTP seam** — a frontend (the editor: pure client-side ES
+modules, no build step) and a compute service (`server.py`: Python + numpy/PIL/torch/
+spandrel + native model binaries, incl. the bundled vtracer). The browser is the UI; the
+Python server is where all compute lives and is the **canonical implementation of every
+stage**. The seam is always same-origin `127.0.0.1`, so there's no CORS / auth / transport
+complexity — the frontend just talks to localhost.
 
-**Shape: a full client app, served static, installable as a PWA.**
+**This is deliberate, and it's the cheap way to stay one surface.** Every algorithm is
+implemented exactly once, in Python. The single-dispatch property holds — `vectorize_svg`
+feeds both live-preview and commit, so they can't drift — and there is nothing to keep in
+parity because there is no second implementation. Mature libraries (numpy, PIL, torch,
+spandrel, native vtracer) are used as-is: no reimplementation, no cross-runtime determinism
+problems.
 
-- **Hosting** — static on Cloudflare (Pages/R2). No *required* origin server. The `sw.js`
-  PWA shell already exists; "install the app" = caching the frontend + model weights
-  (offline-capable).
-- **A full app, not a teaser** — persistence migrates server→browser (IndexedDB / OPFS /
-  File System Access), so document / library / outputs / projects live client-side. This
-  is the keystone that removes the origin. (Precedent: PNG export already rasterises in
-  the browser via canvas.)
-- **The compute "magic connection" = a client-side capability resolver.** Each stage
-  declares a *capability* (vectorize / super-resolve / matte / inpaint); a resolver picks
-  the provider automatically, best-first, across three rungs:
+**Distribution.** Today: clone-and-run (Python env + `server.py`, open the editor in a
+browser). If a desktop-window feel is ever wanted: **pywebview** or a **Tauri sidecar**
+wrapping the same Python backend — *not* Electron (which ships a second Chromium to render
+what the browser already renders, and still doesn't package Python+models, the actual hard
+part). A packaged build would bundle the Python runtime + weights; that bundling is the real
+distribution work, not the UI shell.
 
-  1. **in-browser** — WASM (vtracer), ONNX / WebGPU (cutout, upscale). Always present,
-     free, offline after install.
-  2. **local power tier** — the existing Python `server.py` (full torch, batch, the tuned
-     clean-engine + simplify refit), auto-discovered when it's running.
-  3. **remote** — a hosted edge endpoint / Cloudflare Workers AI / bring-your-own-key
-     (Replicate, fal, HF Inference).
+**What staying local keeps simple:** schema authority stays server-side (`/api/raster-ops`,
+`/api/vectorize/engines` drive the UI from one source of truth); the no-build ethos survives
+(no WASM/ONNX/Web-Worker plumbing client-side); the job queue, batch "Run library", and the
+self-update check all stay meaningful for a local install; model licensing is a *run/bundle*
+constraint (the avoid-list above), not a ship-weights-to-every-visitor *redistribution* one.
+The browser stays main-thread and thin.
 
-  Same `apply(input, params)` contract at every rung, so the schema-driven UI never
-  changes — only the provider behind a capability does.
+### Why not the edge (considered and rejected, 2026-06-04)
 
-**The Python server demotes** from "the product" to optional rung 2. It keeps everything
-too heavy or too proprietary for a browser; it is no longer required for the core
-experience.
+A static-edge PWA — serve the frontend from Cloudflare R2/Pages, run compute client-side via
+WASM/ONNX, demote Python to an optional auto-discovered tier — was explored in depth and
+dropped:
 
-**Why this is cheap to build on what exists** — the seams are already here: the
-schema-driven stage registries (`RASTER_OPS` / `VECTORIZE_ENGINES`, each `{label, caps,
-schema, apply}`), the location-agnostic HTTP boundary, and `sw.js`. The one genuinely new
-piece is a thin **provider seam** in the client that resolves each capability to a
-browser worker vs. a discovered backend vs. a remote. Registry, schema panels, and the
-focused-run flow stay untouched.
+- **The "seamless connection to your hardware" dies at the browser's security model.**
+  Spike-confirmed (Chromium 148): a **public `https` origin cannot reach `http://localhost`**
+  — Chrome's Local Network Access blocks it outright, and CORS + `Access-Control-Allow-
+  Private-Network: true` headers do **not** fix it (it needs a user permission prompt, not
+  headers). So a cloud-hosted app can't silently use your local GPU box; the marquee feature
+  would need a tunnel or an "open the app from your own machine" mode-switch — i.e. not
+  seamless. ("Basically serverless" also isn't clean: a Worker would still have to broker
+  remote-inference API keys, since secrets can't ship to the browser.)
+- **Reaching even the browser-only floor is a full compute-stack rewrite** into a weaker
+  substrate: vtracer→WASM, the clean engine + `_km_palette` k-means→JS, ESRGAN/rembg→
+  onnxruntime-web, persistence→IndexedDB/OPFS, the schema registries→client. An enormous
+  front-loaded bill whose payoff is a *distribution* change, not a single new capability.
+- **The two-surface maintenance burden is *caused by* the edge.** "Rungs are interchangeable"
+  needs either two byte-identical implementations — a per-algorithm parity treadmill, and
+  byte-parity between numpy and a JS port isn't even portably achievable (`pow`/`hypot` aren't
+  IEEE-correctly-rounded, so V8 and numpy diverge in the last ULP; on tiny/dense paths that
+  ULP flips a discrete curve-fit split into a *different node count*, not just sub-pixel
+  jitter) — or one implementation every rung runs. Staying local already gives the
+  one-implementation outcome, for free.
 
-**First slice (proves the shape):** (1) the provider seam + WASM vectorize — the signature
-feature running with zero origin compute; (2) persistence → browser-local. Then ONNX
-cutout, WebGPU upscale, and the remote rung plug into the same resolver.
-
-**Honest constraints / open spikes:**
-
-- **Local auto-discovery from the public origin is dead — RESOLVED BY SPIKE (2026-06-03,
-  Chromium 148).** Findings: (a) mixed-content is *not* the wall — an `https://localhost`
-  page reaches `http://localhost` fine (localhost is potentially-trustworthy; the request
-  leaves as `opaque`), needing only CORS headers to *read* cross-port responses. (b) But a
-  **public** `https` origin (the R2 case) reaching `http://localhost` is **blocked
-  outright** — the request never leaves — and full CORS + `Access-Control-Allow-Private-
-  Network: true` headers do **not** fix it. That's Chrome's newer **Local Network Access**
-  permission model: a public site touching localhost needs a user *permission prompt*, not
-  headers. So the R2 PWA can **not** silently discover/use a local backend.
-  → **Design consequence:** rung 2 is not "cloud app finds your localhost." It's "**the
-  local power tier serves the same frontend at `http://localhost`**" (server.py already
-  does) — there, browser + local rungs all work *same-origin*, no CORS/PNA/LNA drama. The
-  resolver simply detects "am I same-origin with a backend?" The R2 origin runs
-  browser-rung + remote-rung only. (A tunnel/relay to an `https` public URL is the only way
-  to bridge a cloud origin to your own box, and that's opt-in, not magic.)
-- **Remote isn't free** — rung 3 is your GPU box (cost), Workers AI (per-call cost,
-  limited catalog), or BYO-key. The browser rung is the free floor; remote is the opt-in
-  ceiling.
-- **Trace postprocessing is Python IP** — the clean engine (palette-quantize +
-  `clean_color_trace`) and `tools/simplify_svg.py` refit need a JS port for full
-  client-side *quality*; WASM vtracer alone is the lower-quality floor.
-
-**Rejected packaging:** Electron (ships a second Chromium to render what the browser
-already renders, and doesn't solve the Python+models packaging that is the actual hard
-part). A downloadable binary (the static-edge PWA supersedes it). If a desktop-window
-feel is ever wanted, pywebview / Tauri-sidecar beat Electron because the backend is
-Python and the UI is already a webview's worth of HTML.
-
-## Open risks (of the target architecture)
-
-Gaps to resolve *before* the resolver hardens, roughly ranked by how hard they bite.
-The three starred ones gate the design and should be decided first.
-
-**★ Parity / drift — the deepest one.** Today there is *one dispatch* (`vectorize_svg`
-feeds both live-preview and commit, so they can't drift). The moment a capability has both
-a browser provider and a server provider, there are **two implementations of the same
-stage** (browser-vtracer vs server-vtracer; ORT-cutout vs rembg) producing *different*
-output — a doc traced on R2 then re-traced on the local tier won't match. The provider seam
-hides *where* compute runs, not *that results diverge*. **Decision needed:** must rungs
-match, or is "good-enough floor in browser, quality on the tier" acceptable? This answer
-shapes everything below.
-
-**★ Schema authority moves client-side.** The UI is driven by the server's
-`/api/raster-ops` + `/api/vectorize/engines`. No server → no schema source, and the schema
-is now *provider-specific* (the browser model list is a subset of the server's). The
-registry must become a bundled/shared artifact the resolver merges per available provider.
-
-**★ Worker plumbing is non-negotiable.** The app is main-thread today; any WASM/WebGPU
-inference will freeze the UI unless moved to Web Workers (OffscreenCanvas, worker-hosted
-ORT). Plus **tiling** for big-image upscale (or OOM the tab) and a **cold-start** UX (model
-fetch + WASM compile + warmup is seconds).
-
-**Data layer sharp edges.** Browser storage **quota + eviction = silent data loss** (needs
-`navigator.storage.persist()` + a quota UX); **file in/out is fragmented** (File System
-Access is Chrome-only; others fall back to download/upload); **no server = no cross-device
-library** (a UX regression vs today's shared library); multi-tab races on shared IndexedDB.
-
-**Model layer optimism.** Licensing **flips from *run* to *redistribute*** in-browser —
-shipping weights to every visitor is distribution, so the avoid-list bites harder on the
-public tier. **ONNX conversion isn't free** — onnxruntime-web has narrower op coverage than
-spandrel, so each model needs convert+validate and some won't run; the browser menu is a
-subset.
-
-**Orphaned server subsystems.** `/api/update/check` self-update is meaningless on a static
-R2 deploy (push assets; `sw.js` versions) — retire it. The **job queue** (run_pipeline
-poll/cancel, batch "Run library") has no browser equivalent — long in-browser tasks need a
-worker-based progress/cancel model; batch goes sequential.
-
-**Project frictions.** The **no-build ethos** ("vanilla ES modules, no build step") likely
-yields to an asset/build step or import-maps once WASM/ORT/workers/weights arrive. **Testing**
-— the 363-check E2E drives the localhost Python server; browser-rung needs a new harness, and
-WebGPU in headless CI is flaky (lean on ORT-WASM-CPU for determinism). The **Python trace IP**
-(`trace-suggest` heuristics, clean/pixel engines, `simplify_svg` refit) needs JS ports for the
-browser rung, and the WASM vtracer build needs its own flag-parity check.
+Net: the edge is a *distribution* ambition that costs a full rewrite and fights the browser
+to deliver its one differentiated feature. Not worth it — hector-vector stays local. (The
+`sw.js` shell, browser-side PNG export, and the location-agnostic HTTP boundary remain fine
+as-is; nothing here requires undoing them, it just isn't a path to a serverless product.)
 
 ## Key references
 
