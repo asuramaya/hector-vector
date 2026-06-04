@@ -33,6 +33,7 @@ sys.path.insert(0, str(TOOLS_DIR))
 import pixelvec  # noqa: E402  (pure numpy/PIL, no venv needed)
 import svg_render  # noqa: E402  (pure Pillow for axis-aligned SVGs; cairosvg optional)
 import simplify_svg  # noqa: E402  (pure numpy; refit traced paths to minimal cubics)
+import analyze  # noqa: E402  (pure numpy/PIL; the classical auto-routing brain — analyze→plan)
 # `.webmanifest` is not in the stdlib mime table; Chromium wants a JSON-ish type.
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 OUTPUTS_DIR = APP_DIR / "outputs"
@@ -2183,6 +2184,132 @@ def vectorize_engines_info() -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------- capabilities (taxonomy)
+# A DESCRIPTIVE layer over the apply/trace registries (RASTER_OPS / VECTORIZE_ENGINES):
+# what OUTCOMES (capabilities × intents) exist and which model achieves each. The auto
+# router (tools/analyze.plan) emits (capability, intent, model) decisions; this resolves
+# them to a real plugin — install needs + the `invoke` params that select it on the EXISTING
+# execution path (RASTER_OPS[op].apply for kind "raster"; vectorize_svg with engine= for
+# "svg"). Adding a model is a line here, not a new panel or new plumbing. P3 capabilities
+# are declared (so the router's ids resolve) with models that aren't installed yet →
+# available:false until their task lands. See [[auto-routing-classical-not-vlm]].
+
+CAPABILITIES = {
+    "cutout": {
+        "label": "Cutout / remove background", "kind": "raster", "op": "removebg",
+        "intents": ["general", "product", "portrait", "fast", "greenscreen"],
+        "models": [
+            {"id": "classical", "label": "Classical (edge/threshold)", "intents": ["fast"], "needs": [],
+             "invoke": {"removebg_method": "classical"}},
+            {"id": "green", "label": "Greenscreen key", "intents": ["greenscreen"], "needs": [],
+             "invoke": {"removebg_method": "green"}},
+            # Ordered best-first per intent: the intent resolver picks the first available
+            # model serving the chosen outcome, so SOTA (BiRefNet) wins "general" over u2net.
+            {"id": "birefnet-general", "label": "BiRefNet general (OSS SOTA)", "intents": ["general", "product"],
+             "needs": ["rembg"], "size_mb": 220, "invoke": {"removebg_method": "ai", "cutout_model": "birefnet-general"}},
+            {"id": "birefnet-portrait", "label": "BiRefNet portrait", "intents": ["portrait"], "needs": ["rembg"],
+             "size_mb": 220, "invoke": {"removebg_method": "ai", "cutout_model": "birefnet-portrait"}},
+            {"id": "u2net", "label": "U²-Net general (lighter)", "intents": ["general"], "needs": ["rembg"], "size_mb": 175,
+             "invoke": {"removebg_method": "ai", "cutout_model": "u2net"}},
+        ],
+    },
+    "upscale": {
+        "label": "Upscale", "kind": "raster", "op": "upscale",
+        "intents": ["photo", "clean", "anime"],
+        "models": [
+            {"id": "realesrgan-x4plus", "label": "Real-ESRGAN ×4 (photo)", "intents": ["photo"], "needs": ["realesrgan"],
+             "invoke": {"model": "realesrgan-x4plus"}},
+            {"id": "realesrnet-x4plus", "label": "Real-ESRNet ×4 (cleaner)", "intents": ["clean"], "needs": ["realesrgan"],
+             "invoke": {"model": "realesrnet-x4plus"}},
+            {"id": "realesr-animevideov3", "label": "Anime / line-art ×4", "intents": ["anime"], "needs": ["realesrgan"],
+             "invoke": {"model": "realesr-animevideov3"}},
+        ],
+    },
+    "vectorize": {
+        "label": "Vectorize", "kind": "svg", "op": None,
+        "intents": ["logo-flat", "colour-photo", "bw-silhouette", "pixel-art"],
+        "models": [
+            {"id": "clean", "label": "Clean — flat logo (planar)", "intents": ["logo-flat"], "needs": ["vtracer"],
+             "invoke": {"engine": "clean"}},
+            {"id": "vtracer", "label": "VTracer — colour / B&W", "intents": ["colour-photo", "bw-silhouette"],
+             "needs": ["vtracer"], "invoke": {"engine": "vtracer"}},
+            {"id": "pixel", "label": "Pixel-art — recover grid", "intents": ["pixel-art"], "needs": [],
+             "invoke": {"engine": "pixel"}},
+        ],
+    },
+    # ---- P3 capabilities: declared so router ids resolve; models land with their tasks ----
+    "dejpeg": {"label": "Remove JPEG artifacts", "kind": "raster", "op": None, "intents": ["default"],
+               "models": [{"id": "fbcnn", "label": "FBCNN", "intents": ["default"], "needs": ["fbcnn"], "size_mb": 280, "invoke": {}}]},
+    "denoise": {"label": "Denoise", "kind": "raster", "op": None, "intents": ["blind"],
+                "models": [{"id": "scunet", "label": "SCUNet", "intents": ["blind"], "needs": ["scunet"], "size_mb": 70, "invoke": {}}]},
+    "deblur": {"label": "Deblur", "kind": "raster", "op": None, "intents": ["default"],
+               "models": [{"id": "nafnet", "label": "NAFNet", "intents": ["default"], "needs": ["nafnet"], "size_mb": 260, "invoke": {}}]},
+    "cleanup": {"label": "Cleanup / object removal", "kind": "raster", "op": None, "intents": ["object-removal"],
+                "models": [{"id": "lama", "label": "LaMa (IOPaint)", "intents": ["object-removal"], "needs": ["iopaint"], "size_mb": 200, "invoke": {}}]},
+    "face": {"label": "Face restore", "kind": "raster", "op": None, "intents": ["restore"],
+             "models": [{"id": "gfpgan", "label": "GFPGAN v1.4", "intents": ["restore"], "needs": ["gfpgan"], "size_mb": 340, "invoke": {}}]},
+}
+
+
+def _need_available(need: str) -> bool:
+    """Whether an install dependency is present. P3 tools (fbcnn/scunet/nafnet/iopaint/
+    gfpgan) have no integration yet → False until their task lands."""
+    if need == "realesrgan":
+        return REALESRGAN_BIN.exists()
+    if need == "vtracer":
+        return VTRACER_BIN.exists()
+    if need == "rembg":
+        return rembg_installed()
+    return False
+
+
+def _model_available(model: dict) -> bool:
+    return all(_need_available(n) for n in model.get("needs", []))
+
+
+def resolve_capability_step(cap_id: str, model_id: str | None) -> dict | None:
+    """Resolve a router decision (capability, model) to its plugin: availability, the
+    install needs, and the `invoke` params that drive the existing execution path."""
+    c = CAPABILITIES.get(cap_id)
+    if not c:
+        return None
+    for m in c["models"]:
+        if m["id"] == model_id:
+            return {"label": m.get("label", model_id), "available": _model_available(m),
+                    "needs": m.get("needs", []), "invoke": m.get("invoke", {}),
+                    "size_mb": m.get("size_mb")}
+    return None
+
+
+def resolve_intent(cap_id: str, intent: str) -> dict | None:
+    """Given a capability + a chosen intent (the outcome the user picked, or the router's),
+    pick the best AVAILABLE model serving it — preferring installed, else the first model
+    that serves the intent so the UI can offer install. Models are ordered best-first, so
+    'general' cutout resolves to BiRefNet over u2net. Drives the intent picker / overrides."""
+    c = CAPABILITIES.get(cap_id)
+    if not c:
+        return None
+    serving = [m for m in c["models"] if intent in m.get("intents", [])]
+    if not serving:
+        return None
+    chosen = next((m for m in serving if _model_available(m)), serving[0])
+    return {"model": chosen["id"], "label": chosen.get("label"), "available": _model_available(chosen),
+            "needs": chosen.get("needs", []), "invoke": chosen.get("invoke", {}), "size_mb": chosen.get("size_mb")}
+
+
+def capabilities_info() -> list[dict]:
+    """Serializable capability/model registry for the client (the intent-first UI source
+    of truth). Each model carries `available` (install state) + `size_mb` for the
+    install-on-demand UX (#51)."""
+    out = []
+    for cid, c in CAPABILITIES.items():
+        models = [{**m, "available": _model_available(m)} for m in c["models"]]
+        out.append({"id": cid, "label": c["label"], "kind": c["kind"], "op": c.get("op"),
+                    "intents": c["intents"], "models": models,
+                    "implemented": any(m["available"] for m in models)})
+    return out
+
+
 def suggest_trace_settings(payload: dict) -> dict:
     """T1 "Auto": recommend vectorize settings from cheap image statistics — no
     model, milliseconds, pure numpy/PIL. Mirrors what a human does eyeballing the
@@ -2247,6 +2374,31 @@ def suggest_trace_settings(payload: dict) -> dict:
                     "significant_colors": significant, "top6_coverage": round(top6, 3),
                     "edge_frac": round(edge_frac, 3), "near_binary": near_binary, "has_alpha": has_alpha}
     return out
+
+
+def plan_image(payload: dict) -> dict:
+    """The auto-routing brain for a selected raster: classical analysis → an
+    affordance-only processing plan + offered (intent) steps. No model, no LLM,
+    deterministic (see tools/analyze.py and [[auto-routing-classical-not-vlm]]).
+    The client drives the Auto-pipeline surface from this; the user can override.
+    Model ids in the plan are intent — availability/fallback is layered by the caller."""
+    src = resolve_source_url(payload.get("input_url", ""))
+    if src is None:
+        raise ValueError("Could not resolve the source image to analyze.")
+    a = analyze.analyze(src)
+    pl = analyze.plan(a)
+    # Resolve each router decision against the capability registry → availability +
+    # the invoke params the executor will use. Lets the UI show "needs install" / route
+    # to an installed fallback instead of proposing a model that isn't there.
+    for step in pl.get("auto", []) + pl.get("offered", []):
+        info = resolve_capability_step(step.get("capability"), step.get("model"))
+        if info:
+            step["available"] = info["available"]
+            step["needs"] = info["needs"]
+            step["invoke"] = info["invoke"]
+            if info.get("size_mb"):
+                step["size_mb"] = info["size_mb"]
+    return {"analysis": a, "plan": pl}
 
 
 def trace_preview(payload: dict) -> dict:
@@ -2940,6 +3092,9 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/raster-ops":
             self.send_json(raster_ops_info())
             return
+        if parsed.path == "/api/capabilities":
+            self.send_json(capabilities_info())
+            return
         if parsed.path == "/api/limits":
             # Save guards the client mirrors (so the bake-vs-link decision uses the real cap).
             self.send_json({"max_svg_bytes": MAX_SVG_SAVE_BYTES})
@@ -3051,6 +3206,8 @@ class Handler(SimpleHTTPRequestHandler):
                 result = trace_preview(payload)
             elif parsed.path == "/api/trace-suggest":
                 result = suggest_trace_settings(payload)
+            elif parsed.path == "/api/plan":
+                result = plan_image(payload)
             elif parsed.path == "/api/raster-op":
                 result = apply_raster_op(payload)
             elif parsed.path == "/api/run/selftest":
