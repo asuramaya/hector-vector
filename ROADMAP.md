@@ -248,6 +248,53 @@ part). A downloadable binary (the static-edge PWA supersedes it). If a desktop-w
 feel is ever wanted, pywebview / Tauri-sidecar beat Electron because the backend is
 Python and the UI is already a webview's worth of HTML.
 
+## Open risks (of the target architecture)
+
+Gaps to resolve *before* the resolver hardens, roughly ranked by how hard they bite.
+The three starred ones gate the design and should be decided first.
+
+**★ Parity / drift — the deepest one.** Today there is *one dispatch* (`vectorize_svg`
+feeds both live-preview and commit, so they can't drift). The moment a capability has both
+a browser provider and a server provider, there are **two implementations of the same
+stage** (browser-vtracer vs server-vtracer; ORT-cutout vs rembg) producing *different*
+output — a doc traced on R2 then re-traced on the local tier won't match. The provider seam
+hides *where* compute runs, not *that results diverge*. **Decision needed:** must rungs
+match, or is "good-enough floor in browser, quality on the tier" acceptable? This answer
+shapes everything below.
+
+**★ Schema authority moves client-side.** The UI is driven by the server's
+`/api/raster-ops` + `/api/vectorize/engines`. No server → no schema source, and the schema
+is now *provider-specific* (the browser model list is a subset of the server's). The
+registry must become a bundled/shared artifact the resolver merges per available provider.
+
+**★ Worker plumbing is non-negotiable.** The app is main-thread today; any WASM/WebGPU
+inference will freeze the UI unless moved to Web Workers (OffscreenCanvas, worker-hosted
+ORT). Plus **tiling** for big-image upscale (or OOM the tab) and a **cold-start** UX (model
+fetch + WASM compile + warmup is seconds).
+
+**Data layer sharp edges.** Browser storage **quota + eviction = silent data loss** (needs
+`navigator.storage.persist()` + a quota UX); **file in/out is fragmented** (File System
+Access is Chrome-only; others fall back to download/upload); **no server = no cross-device
+library** (a UX regression vs today's shared library); multi-tab races on shared IndexedDB.
+
+**Model layer optimism.** Licensing **flips from *run* to *redistribute*** in-browser —
+shipping weights to every visitor is distribution, so the avoid-list bites harder on the
+public tier. **ONNX conversion isn't free** — onnxruntime-web has narrower op coverage than
+spandrel, so each model needs convert+validate and some won't run; the browser menu is a
+subset.
+
+**Orphaned server subsystems.** `/api/update/check` self-update is meaningless on a static
+R2 deploy (push assets; `sw.js` versions) — retire it. The **job queue** (run_pipeline
+poll/cancel, batch "Run library") has no browser equivalent — long in-browser tasks need a
+worker-based progress/cancel model; batch goes sequential.
+
+**Project frictions.** The **no-build ethos** ("vanilla ES modules, no build step") likely
+yields to an asset/build step or import-maps once WASM/ORT/workers/weights arrive. **Testing**
+— the 363-check E2E drives the localhost Python server; browser-rung needs a new harness, and
+WebGPU in headless CI is flaky (lean on ORT-WASM-CPU for determinism). The **Python trace IP**
+(`trace-suggest` heuristics, clean/pixel engines, `simplify_svg` refit) needs JS ports for the
+browser rung, and the WASM vtracer build needs its own flag-parity check.
+
 ## Key references
 
 BiRefNet — github.com/ZhengPeng7/BiRefNet · BEN2 — github.com/PramaLLC/BEN2 · BRIA RMBG-2.0 — huggingface.co/briaai/RMBG-2.0 · rembg — github.com/danielgatis/rembg · InSPyReNet — github.com/plemeri/InSPyReNet · Real-ESRGAN — github.com/xinntao/Real-ESRGAN · DAT — github.com/zhengchen1999/DAT · HAT — github.com/XPixelGroup/HAT · SwinIR — github.com/JingyunLiang/SwinIR · SPAN — github.com/hongyuanyu/SPAN · Real-CUGAN — github.com/bilibili/ailab · AuraSR — github.com/fal-ai/aura-sr · DiffBIR — github.com/XPixelGroup/DiffBIR · SUPIR — github.com/Fanghua-Yu/SUPIR · StableSR — github.com/IceClear/StableSR · Phhofm models — github.com/Phhofm/models · Upscayl — github.com/upscayl/upscayl · spandrel — github.com/chaiNNer-org/spandrel · OpenModelDB — openmodeldb.info · vtracer — github.com/visioncortex/vtracer · potrace — potrace.sourceforge.net · DeepSVG — github.com/alexandre01/deepsvg · GFPGAN — github.com/TencentARC/GFPGAN · CodeFormer — github.com/sczhou/CodeFormer · IOPaint — github.com/Sanster/IOPaint · LaMa — github.com/advimman/lama · MI-GAN — github.com/Picsart-AI-Research/MI-GAN · FBCNN — github.com/jiaxi-jiang/FBCNN · SCUNet — github.com/cszn/SCUNet · NAFNet — github.com/megvii-research/NAFNet · Restormer — github.com/swz30/Restormer · Deep_White_Balance — github.com/mahmoudnafifi/Deep_White_Balance · kmeans-colors — github.com/okaneco/kmeans-colors · img.ly background-removal-js — github.com/imgly/background-removal-js
