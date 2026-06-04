@@ -4814,6 +4814,217 @@ function procInsertBefore(list, y) {
 // Rebuild the Processor panel + re-kick whichever live preview is active (the structural
 // callback for the schema-driven stage controls hosted in the cards).
 function procRerender() { renderProcessorPanel(); if (rasterLive) scheduleRasterLive(false); if (rasterOp) scheduleRasterOpLive(false); }
+
+// ---------- Auto-pipeline surface (#50): classical analysis → suggested compose ----------
+// POST /api/plan for the focused raster (the deterministic, offline brain — tools/analyze.py,
+// see [[auto-routing-classical-not-vlm]]) and render "here's what I'd do + why" with a one-click
+// Apply that composes the stage strip to match, plus the offered (intent) steps as one-tap adds.
+// The capabilities the strip can act on today map onto the three real stages; P3 caps
+// (dejpeg/denoise/deblur/cleanup/face) surface as read-only "needs install" rows.
+const CAP_TO_STAGE = { upscale: "upscale", cutout: "removebg", vectorize: "vectorize" };
+const CAP_LABEL = {
+  upscale: "Upscale", cutout: "Remove BG", vectorize: "Vectorize", dejpeg: "De-JPEG",
+  denoise: "Denoise", deblur: "Deblur", cleanup: "Cleanup", face: "Face restore",
+};
+let procPlan = null;          // last /api/plan response: { analysis, plan:{auto,offered,notes,summary} }
+let procPlanSrcUrl = null;    // the source url procPlan was computed for (cache key)
+let procPlanBusy = false;
+
+// The image the plan acts on: the canvas raster's href, else the library selection's file url.
+function procPlanSourceUrl(t) {
+  if (t.batch) return null;
+  if (t.node) return rasterHref(t.node);
+  if (t.name) { const wi = workItems.find((i) => i.name === t.name); return wi ? wi.url : null; }
+  return null;
+}
+// Only library/output files are analyzable by /api/plan (resolve_source_url accepts exactly
+// these on disk). Skip everything else — data: URIs (import first), /assets/ UI fixtures, http(s)
+// — so we never fire a request that's guaranteed to fail, and the banner stays quiet for them.
+function procPlannable(url) {
+  return !!url && (url.startsWith("/work-items/") || url.startsWith("/outputs/"));
+}
+let procPlanTimer = null;
+let procPlanAbort = null;   // AbortController for the in-flight fetch (cancel-on-supersede)
+// DEBOUNCED entry point (called from the rail builder). /api/plan runs a real image analysis
+// server-side, so firing it on every selection would hammer the local server as the user clicks
+// around — and a heavy analyze() on a big raster can starve other in-flight requests. So we wait
+// for the selection to SETTLE, re-resolve the target at fire time, and fetch at most once per
+// settled source. Never blocks the render; the banner fills in via refreshAutoBanner when ready.
+function scheduleProcPlan() {
+  if (procPlanTimer) clearTimeout(procPlanTimer);
+  procPlanTimer = setTimeout(() => { procPlanTimer = null; ensureProcPlan(processTarget()); }, 350);
+}
+// Fetch (or reuse) the plan for the current target, then refresh the banner. A superseded
+// request is ABORTED — so a stale fetch can't resolve late and perturb an unrelated interaction
+// (the source of E2E flakiness when this was fire-and-forget). We claim `procPlanSrcUrl` BEFORE
+// awaiting AND keep it set on a real failure (procPlan=null) — so an unresolvable source (a
+// non-library href that 400s) is cached as "analyzed, no plan" rather than refetched. Skips
+// data: URLs (those must be imported to the library first).
+async function ensureProcPlan(t) {
+  const url = procPlanSourceUrl(t);
+  if (!procPlannable(url)) {                             // data:/assets/non-library → nothing to fetch
+    if (procPlanAbort) { procPlanAbort.abort(); procPlanAbort = null; }
+    procPlanBusy = false; procPlan = null; procPlanSrcUrl = null; refreshAutoBanner(); return;
+  }
+  if (url === procPlanSrcUrl) return;                    // already analyzed/fetching this source
+  if (procPlanAbort) procPlanAbort.abort();              // supersede any in-flight fetch
+  const ac = new AbortController(); procPlanAbort = ac;
+  procPlanBusy = true; procPlanSrcUrl = url;             // claim now → a failure won't re-loop
+  let aborted = false;
+  try {
+    const res = await fetch("/api/plan", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input_url: url }), signal: ac.signal });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Request failed: ${res.status}`);
+    procPlan = data;
+  } catch (e) {
+    if (e && e.name === "AbortError") aborted = true;    // superseded → leave state to the new request
+    else procPlan = null;                                // real failure: cache it (no refetch)
+  } finally {
+    if (!aborted) {
+      if (procPlanAbort === ac) procPlanAbort = null;
+      procPlanBusy = false;
+      // Surgically swap JUST the banner — never a full renderProcessorPanel() here (that would
+      // re-run the stage cards' renderStageSettings and its live-preview side effects mid-flight).
+      // refreshAutoBanner self-guards on the target still matching this source.
+      try { refreshAutoBanner(); } catch {}
+    }
+  }
+}
+// Replace ONLY the .proc-auto banner inside the live rail (no stage-card rebuild, no live
+// preview kick), guarded so a late plan for a source the user navigated away from is ignored.
+function refreshAutoBanner() {
+  const host = document.querySelector("#processor-body"); if (!host) return;
+  const rail = host.querySelector(".proc-rail"); if (!rail) return;
+  const t = processTarget();
+  if (procPlanSourceUrl(t) !== procPlanSrcUrl) return;   // target changed; this banner isn't ours
+  const old = rail.querySelector(".proc-auto");
+  const next = buildAutoBanner(t);
+  if (old && next) old.replaceWith(next);
+  else if (old) old.remove();
+  else if (next) { const tgt = rail.querySelector(".proc-target"); tgt ? tgt.after(next) : rail.prepend(next); }
+}
+// A compact human read of the analyzer's signals, for the banner header.
+function describeAnalysis(a) {
+  if (!a) return "";
+  const cls = { flat_graphic: "Flat graphic", line_art: "Line art", photo: "Photo", photo_gray: "Grayscale photo" }[a.content_class] || a.content_class;
+  const bits = [cls, `${a.width}×${a.height}`];
+  if (a.has_alpha) bits.push("has alpha");
+  if (a.low_res) bits.push("low-res");
+  return bits.join(" · ");
+}
+// One plan step row: capability + why + an availability badge, or (for an offered, mappable
+// step) a one-tap "Add" that enables just that stage.
+function buildPlanStepRow(s, offered) {
+  const row = document.createElement("div"); row.className = "proc-plan-step";
+  const cap = document.createElement("span"); cap.className = "proc-plan-cap"; cap.textContent = CAP_LABEL[s.capability] || s.capability;
+  const why = document.createElement("span"); why.className = "proc-plan-why"; why.textContent = s.why || "";
+  row.appendChild(cap); row.appendChild(why);
+  const stage = CAP_TO_STAGE[s.capability];
+  if (s.available === false) {
+    const b = document.createElement("span"); b.className = "proc-plan-badge needs";
+    b.textContent = (s.needs && s.needs.length) ? "needs install" : "unavailable";
+    if (s.needs && s.needs.length) b.title = `Requires: ${s.needs.join(", ")}`;
+    row.appendChild(b);
+  } else if (offered && stage) {
+    const add = document.createElement("button"); add.type = "button"; add.className = "proc-plan-add";
+    add.textContent = "Add"; add.title = `Enable ${CAP_LABEL[s.capability] || s.capability}`;
+    add.addEventListener("click", () => addPlanStep(s));
+    row.appendChild(add);
+  }
+  return row;
+}
+// Apply one step's model/params onto the live settings (NOT the on/off toggle — callers own
+// that). `invoke` is the server-authoritative executor mapping (engine / model / removebg_method
+// / cutout_model); `params` are the analyzer's tuned values (colour_precision, scale, simplify).
+// Engine goes through setEngine so vectorize_method + colormode/style stay coherent.
+function applyStepConfig(s) {
+  const inv = s.invoke || {};
+  if (inv.engine) setEngine(inv.engine);
+  for (const [k, v] of Object.entries(inv)) if (k !== "engine") settings[k] = v;
+  if (s.params) for (const [k, v] of Object.entries(s.params)) settings[k] = v;
+}
+// Compose the stage strip to EXACTLY the auto plan: mapped+available stages on, the rest off,
+// engine + params applied. Steps whose models aren't installed are skipped (and noted).
+function applyAutoPlan(plan) {
+  const auto = (plan && plan.auto) || [];
+  const want = new Set();
+  for (const s of auto) {
+    const sid = CAP_TO_STAGE[s.capability];
+    if (!sid || s.available === false) continue;
+    want.add(sid);
+    applyStepConfig(s);
+  }
+  if (!want.size) { setStatus("Those steps need models that aren’t installed yet.", 3200); return; }
+  for (const st of PIPELINE_STAGES) settings[st.key] = want.has(st.id);
+  persistSettings();
+  procRerender();
+  setStatus("Applied the suggested pipeline.", 2200);
+}
+// Add a single (offered) step to the current strip without disturbing the other stages.
+function addPlanStep(s) {
+  const sid = CAP_TO_STAGE[s.capability];
+  if (!sid) return;
+  applyStepConfig(s);
+  settings[STAGE_BY_ID[sid].key] = true;
+  persistSettings();
+  procRerender();
+}
+// The banner: the analyzer's read + the auto chain (with Apply) + the offered intents.
+// Null for batch / no-source (nothing to analyze). Shows a loading/import hint until ready.
+function buildAutoBanner(t) {
+  const url = procPlanSourceUrl(t);
+  if (t.batch || !url) return null;
+  const wrap = document.createElement("div"); wrap.className = "proc-auto";
+  if (url.startsWith("data:")) {
+    wrap.classList.add("muted");
+    wrap.textContent = "Import this image to the library to auto-analyze it.";
+    return wrap;
+  }
+  if (!procPlannable(url)) return null;   // an asset/non-library source the planner can't read
+  // Not analyzed yet (or a different source is loading) → loading hint.
+  if (procPlanSrcUrl !== url || procPlanBusy) {
+    wrap.classList.add("muted");
+    wrap.textContent = "Reading the image…";
+    return wrap;
+  }
+  // Analyzed THIS source but it couldn't be planned (unresolvable href) → no banner.
+  if (!procPlan) return null;
+  const { analysis, plan } = procPlan;
+  const head = document.createElement("div"); head.className = "proc-auto-head";
+  const badge = document.createElement("span"); badge.className = "proc-auto-badge"; badge.textContent = "Auto";
+  const sum = document.createElement("span"); sum.className = "proc-auto-sum"; sum.textContent = describeAnalysis(analysis);
+  head.appendChild(badge); head.appendChild(sum);
+  wrap.appendChild(head);
+
+  const auto = (plan && plan.auto) || [];
+  if (auto.length) {
+    const steps = document.createElement("div"); steps.className = "proc-auto-steps";
+    for (const s of auto) steps.appendChild(buildPlanStepRow(s, false));
+    wrap.appendChild(steps);
+    const apply = document.createElement("button"); apply.type = "button"; apply.className = "proc-auto-apply";
+    const mappable = auto.some((s) => CAP_TO_STAGE[s.capability] && s.available !== false);
+    apply.textContent = "Apply"; apply.disabled = !mappable;
+    apply.title = mappable ? "Set the stage strip to match this plan" : "These steps need models that aren’t installed yet";
+    apply.addEventListener("click", () => applyAutoPlan(plan));
+    wrap.appendChild(apply);
+  } else {
+    const none = document.createElement("div"); none.className = "proc-auto-none";
+    none.textContent = "Nothing needs fixing — compose a pipeline below.";
+    wrap.appendChild(none);
+  }
+
+  const offered = (plan && plan.offered) || [];
+  if (offered.length) {
+    const off = document.createElement("div"); off.className = "proc-auto-offered";
+    const lbl = document.createElement("div"); lbl.className = "proc-auto-offered-lbl"; lbl.textContent = "Also possible";
+    off.appendChild(lbl);
+    for (const s of offered) off.appendChild(buildPlanStepRow(s, true));
+    wrap.appendChild(off);
+  }
+  return wrap;
+}
+
 function buildProcStageCard(id, target) {
   const def = STAGE_BY_ID[id];
   const on = stageOn(id), open = !!stageExpanded[id];
@@ -4863,6 +5074,13 @@ function buildProcessorRail() {
   swap.title = t.batch ? "Switch to the selected raster" : "Switch to the whole library (batch)";
   swap.addEventListener("click", (e) => { e.stopPropagation(); processBatch = !processBatch; renderProcessorPanel(); syncDockContext(); });
   tgt.appendChild(ic); tgt.appendChild(nm); tgt.appendChild(swap); rail.appendChild(tgt);
+
+  // Auto-pipeline surface: analyze the focused raster and suggest a compose. The fetch is
+  // DEBOUNCED (settle the selection first; /api/plan does real server-side analysis) and the
+  // banner refreshes surgically when the plan lands; here we just reflect current state.
+  scheduleProcPlan();
+  const banner = buildAutoBanner(t);
+  if (banner) rail.appendChild(banner);
 
   // Stage cards in saved order, vertical flow, drag to reorder.
   const list = document.createElement("div"); list.className = "proc-stages";
