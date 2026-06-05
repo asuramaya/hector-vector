@@ -142,6 +142,29 @@ SUPIR_WRAPPER = TOOLS_DIR / "supir" / "run_supir.sh"
 VENV_DIR = APP_DIR / ".venv"
 VENV_PYTHON = VENV_DIR / "bin" / "python3"
 AI_CUTOUT_SCRIPT = TOOLS_DIR / "ai_cutout.py"
+UPSCALE_SPANDREL_SCRIPT = TOOLS_DIR / "upscale_spandrel.py"
+# SR checkpoints (.pth) downloaded on demand; kept in a user cache, not the repo tree.
+SR_MODELS_DIR = Path.home() / ".cache" / "hector-vector" / "sr"
+
+
+def _venv_has(module: str) -> bool:
+    """Cheap presence probe for a venv package via find_spec (no heavy import)."""
+    if not VENV_PYTHON.exists():
+        return False
+    try:
+        result = subprocess.run(
+            [str(VENV_PYTHON), "-c",
+             f"import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('{module}') else 1)"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def spandrel_installed() -> bool:
+    """spandrel + torch present in the venv (the universal SR loader, #54)."""
+    return _venv_has("spandrel")
 
 
 def rembg_installed() -> bool:
@@ -333,6 +356,7 @@ def tool_status() -> dict:
         "vtracer_installed": VTRACER_BIN.exists(),
         "supir_hook_installed": SUPIR_WRAPPER.exists(),
         "rembg_installed": rembg_ok,
+        "spandrel_installed": spandrel_installed(),
         "svg_render_builtin": True,
         "svg_render_cairosvg": svg_render.cairosvg_available(),
         "venv_dir": str(VENV_DIR),
@@ -1366,6 +1390,35 @@ def install_rembg() -> dict:
     )
 
 
+def install_spandrel() -> dict:
+    ensure_dirs()
+    if spandrel_installed():
+        return {"message": "spandrel already installed."}
+    if has_running_job("install-spandrel"):
+        return {"message": "spandrel install already running."}
+    pip = VENV_DIR / "bin" / "pip"
+    # torch + torchvision MUST come from the CPU index as a matched pair, else torchvision's
+    # compiled ops (e.g. nms) fail to register against a mismatched torch. Then spandrel.
+    cmd = [
+        "bash", "-lc",
+        (
+            f"set -euo pipefail; "
+            f"if [ ! -x {shlex_quote(str(VENV_PYTHON))} ]; then "
+            f"  python3 -m venv {shlex_quote(str(VENV_DIR))}; "
+            f"fi; "
+            f"{shlex_quote(str(pip))} install --upgrade pip wheel >/dev/null; "
+            f"{shlex_quote(str(pip))} install --upgrade torch torchvision "
+            f"  --index-url https://download.pytorch.org/whl/cpu; "
+            f"{shlex_quote(str(pip))} install --upgrade spandrel pillow numpy"
+        ),
+    ]
+    return launch_job(
+        "install-spandrel", cmd,
+        summary="Install spandrel + torch (universal SR loader, ~300MB)",
+        immediate=True,
+    )
+
+
 def bootstrap_tools() -> dict:
     ensure_dirs()
     started = []
@@ -1507,6 +1560,45 @@ def build_ai_cutout(src: Path, dest: Path, model: str, alpha_matting: bool, log)
     cmd = [str(VENV_PYTHON), str(AI_CUTOUT_SCRIPT), str(src), str(dest), "--model", model]
     if alpha_matting:
         cmd.append("--alpha-matting")
+    log_subprocess_lines(log, run_subprocess(cmd))
+
+
+# Spandrel-loadable SR checkpoints (the universal-loader model zoo, #54/#55). Keyed by a
+# stable id used in the upscale `model` setting; the id is what routes a request to the
+# spandrel path instead of the ncnn binary. Weights download on first use into SR_MODELS_DIR.
+SR_MODELS = {
+    "realesrgan-x4-spandrel": {
+        "label": "Real-ESRGAN ×4 (spandrel)", "scale": 4, "size_mb": 64,
+        "file": "RealESRGAN_x4plus.pth",
+        "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"},
+}
+
+
+def ensure_sr_model(model_id: str, log=None) -> Path:
+    """Resolve an SR model id to a local checkpoint path, downloading on first use."""
+    spec = SR_MODELS.get(model_id)
+    if spec is None:
+        raise ValueError(f"Unknown SR model: {model_id}")
+    SR_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    path = SR_MODELS_DIR / spec["file"]
+    if not path.exists():
+        if not command_exists("curl"):
+            raise ValueError("curl is required to download SR model weights.")
+        if log:
+            log(f"Downloading {spec['label']} (~{spec['size_mb']}MB)…")
+        run_subprocess(["curl", "-sL", "-o", str(path), spec["url"]])
+        if not path.exists() or path.stat().st_size < 1024:
+            path.unlink(missing_ok=True)
+            raise ValueError(f"SR model download failed: {model_id}")
+    return path
+
+
+def build_upscale_spandrel(src: Path, dest: Path, model_id: str, tile: int, log) -> None:
+    if not spandrel_installed():
+        raise ValueError("spandrel is not installed in the project venv. Click 'Install spandrel' in Settings.")
+    path = ensure_sr_model(model_id, log)
+    cmd = [str(VENV_PYTHON), str(UPSCALE_SPANDREL_SCRIPT), str(src), str(dest),
+           "--model", str(path), "--tile", str(tile)]
     log_subprocess_lines(log, run_subprocess(cmd))
 
 
@@ -1933,12 +2025,15 @@ def _op_upscale(src, dest_dir, stem, stamp, payload, log):
         old.unlink(missing_ok=True)
     dest = dest_dir / f"{stem}.up.{stamp}.png"
     scale = int(payload.get("scale", "4"))
+    model = payload.get("model", "realesrgan-x4plus")
     if source_has_alpha(src):                       # ESRGAN drops alpha → Lanczos resize keeps it
         deterministic_upscale(src, dest, scale)
+    elif model in SR_MODELS:                         # spandrel path (scale is the model's own)
+        build_upscale_spandrel(src, dest, model, int(payload.get("tile", 256)), log)
     else:
         ensure_tools_ready("realesrgan")
         run_subprocess([str(REALESRGAN_BIN), "-i", str(src), "-o", str(dest),
-                        "-n", payload.get("model", "realesrgan-x4plus"), "-s", str(scale)],
+                        "-n", model, "-s", str(scale)],
                        cwd=REALESRGAN_DIR)
     return dest
 
@@ -1967,7 +2062,7 @@ RASTER_OPS = {
         "label": "Upscale", "caps": {"needs": ["realesrgan"]},
         "schema": [
             {"key": "model", "type": "select", "default": "realesrgan-x4plus", "label": "Model",
-             "options": [["realesrgan-x4plus", "ESRGAN x4+ (photo)"], ["realesrnet-x4plus", "ESRNet x4+ (cleaner)"], ["realesr-animevideov3", "Anime / line-art"]]},
+             "options": [["realesrgan-x4plus", "ESRGAN x4+ (photo)"], ["realesrnet-x4plus", "ESRNet x4+ (cleaner)"], ["realesr-animevideov3", "Anime / line-art"], ["realesrgan-x4-spandrel", "Real-ESRGAN x4 (spandrel/torch)"]]},
             {"key": "scale", "type": "select", "default": "4", "label": "Scale",
              "options": [["2", "2×"], ["3", "3×"], ["4", "4×"]]},
         ],
@@ -2234,6 +2329,11 @@ CAPABILITIES = {
              "invoke": {"model": "realesrnet-x4plus"}},
             {"id": "realesr-animevideov3", "label": "Anime / line-art ×4", "intents": ["anime"], "needs": ["realesrgan"],
              "invoke": {"model": "realesr-animevideov3"}},
+            # Universal-loader path (#54): spandrel/torch runs any SR checkpoint. Listed after
+            # the Vulkan ncnn model so "photo" still resolves to the lighter installed binary;
+            # this is the alternative + the foundation the #55 tiers (DAT-2/SPAN/…) build on.
+            {"id": "realesrgan-x4-spandrel", "label": "Real-ESRGAN ×4 (spandrel/torch)", "intents": ["photo"],
+             "needs": ["spandrel"], "size_mb": 64, "invoke": {"model": "realesrgan-x4-spandrel"}},
         ],
     },
     "vectorize": {
@@ -2271,6 +2371,8 @@ def _need_available(need: str) -> bool:
         return VTRACER_BIN.exists()
     if need == "rembg":
         return rembg_installed()
+    if need == "spandrel":
+        return spandrel_installed()
     return False
 
 
@@ -2504,6 +2606,9 @@ def run_pipeline(payload: dict) -> dict:
                 if source_has_alpha(src):
                     log(f"Alpha-aware source detected for {src.name}; using deterministic upscale.")
                     deterministic_upscale(src, upscale_dest, scale)
+                elif model in SR_MODELS:
+                    log(f"Upscale via spandrel ({model}).")
+                    build_upscale_spandrel(src, upscale_dest, model, 256, log)
                 else:
                     ensure_tools_ready("realesrgan")
                     lines = run_subprocess(
@@ -3179,6 +3284,8 @@ class Handler(SimpleHTTPRequestHandler):
                 result = install_vtracer()
             elif parsed.path == "/api/install/rembg":
                 result = install_rembg()
+            elif parsed.path == "/api/install/spandrel":
+                result = install_spandrel()
             elif parsed.path == "/api/bootstrap":
                 result = bootstrap_tools()
             elif parsed.path == "/api/update/check":

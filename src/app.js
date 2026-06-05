@@ -1720,6 +1720,7 @@ function openAppSettings(opts = {}) {
     rembg:      { kind: "install-rembg",      name: "rembg",       endpoint: "/api/install/rembg",      size: "~500MB",      ok: () => true },
     realesrgan: { kind: "install-realesrgan", name: "Real-ESRGAN", endpoint: "/api/install/realesrgan", size: "~25MB",       ok: (w) => w && w.curl_available && w.unzip_available, need: "Needs curl + unzip." },
     vtracer:    { kind: "install-vtracer",    name: "VTracer",     endpoint: "/api/install/vtracer",    size: "cargo build", ok: (w) => w && w.cargo_available, need: "Needs cargo (Rust toolchain)." },
+    spandrel:   { kind: "install-spandrel",   name: "spandrel + torch", endpoint: "/api/install/spandrel", size: "~300MB", ok: () => true },
   };
   const pkgInstalled = (need) => !!(workspace && pkgInstallers[need] && workspace[`${need}_installed`]);
   const installPkg = async (need, btn, reset) => {

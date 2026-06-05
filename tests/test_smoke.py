@@ -419,6 +419,16 @@ def check_analyzer_router() -> None:
         f"hair → BiRefNet-massive + alpha_matting matte-refine (#53), got {hair}"
     assert server.resolve_intent("cutout", "general")["model"] == "birefnet-general", "SOTA wins 'general' (best-first)"
     assert server.resolve_intent("upscale", "anime")["model"] == "realesr-animevideov3"
+    assert server.resolve_intent("upscale", "photo")["model"] == "realesrgan-x4plus", \
+        "photo stays on the lighter installed ncnn binary even with the spandrel alt present (#54)"
+    # spandrel universal SR loader (#54): every spandrel-backed upscale model must have a
+    # downloadable SR_MODELS entry, or the dispatch in _op_upscale can't run it.
+    sr_ids = set(server.SR_MODELS)
+    for m in server.CAPABILITIES["upscale"]["models"]:
+        if "spandrel" in m.get("needs", []):
+            assert m["invoke"].get("model") in sr_ids, \
+                f"spandrel upscale model {m['id']} has no SR_MODELS entry"
+    assert "realesrgan-x4-spandrel" in sr_ids and "url" in server.SR_MODELS["realesrgan-x4-spandrel"]
     assert server.resolve_intent("vectorize", "pixel-art")["model"] == "pixel"
     assert server.resolve_intent("cutout", "no-such-intent") is None
     # resolve_capability_step → the invoke params that drive the EXISTING execution path
