@@ -2082,6 +2082,19 @@ async function ensureRasterOpSchemas() {
 }
 function rasterOpById(id) { return (rasterOpSchemas || []).find((o) => o.id === id) || null; }
 
+// ---- capability registry (intent-first source of truth: /api/capabilities) -------------
+// The descriptive taxonomy (capability × intent × model) the server exposes. Drives the
+// stage cards' Outcome picker: pick what you WANT, the router picks the model. Adding a
+// model is a server registry line — it shows up here automatically, no new panel (#49).
+let capsInfo = null;
+async function ensureCapsInfo() {
+  if (capsInfo) return capsInfo;
+  try { const r = await api("/api/capabilities"); if (Array.isArray(r)) capsInfo = r; }
+  catch { /* leave null so the next render retries — don't poison the cache */ }
+  return capsInfo || [];
+}
+function capById(id) { return (capsInfo || []).find((c) => c.id === id) || null; }
+
 // ---- live raster ops (upscale / remove-bg): debounced transform → swap the canvas
 // image href to the result (keep / revert). Same shape as live vectorize, but the
 // preview is a transient href swap (raster→raster), not a vector overlay. ALWAYS
@@ -2274,8 +2287,113 @@ function toolSetupNote(message, ctaLabel = "Set up in Settings") {
   b.addEventListener("click", () => openToolsSettings());
   wrap.appendChild(note); wrap.appendChild(b); return wrap;
 }
-// A raster-op stage (upscale / remove-bg): schema controls + a live preview that swaps
-// the canvas image to the result (Keep / Revert). Mirrors the Vectorize stage.
+// ---- intent-first stage controls (#49) -------------------------------------------------
+// Each stage card leads with an OUTCOME picker (what you want); the router resolves the best
+// available model, shown as an Auto badge. The raw model/engine selector + params demote into
+// a collapsed Advanced. Stage id → capability id; the three real stages map onto the registry.
+const STAGE_TO_CAP = { upscale: "upscale", removebg: "cutout", vectorize: "vectorize" };
+const INTENT_LABEL = {
+  // cutout
+  general: "General subject", product: "Product / e-commerce", portrait: "Portrait / hair",
+  fast: "Fast (no AI)", greenscreen: "Green screen",
+  // upscale
+  photo: "Photo", clean: "Clean / illustration", anime: "Anime / line-art",
+  // vectorize
+  "logo-flat": "Flat logo", "colour-photo": "Colour / photo", "bw-silhouette": "B&W silhouette", "pixel-art": "Pixel-art",
+};
+// A few outcomes share one model but differ by a setting the registry's `invoke` doesn't carry
+// (the analyzer's plan() sets these contextually). Encode that thin sugar here so picking the
+// outcome is correct AND so the current outcome can be inferred back from settings.
+const INTENT_PARAMS = {
+  "bw-silhouette": { trace_colormode: "bw" },
+  "colour-photo": { trace_colormode: "color", trace_color_style: "photo" },
+};
+// Best available model serving an intent (models are ordered best-first server-side, so this
+// mirrors resolve_intent: prefer installed, else the first that serves it so we can offer install).
+function resolveIntentClient(cap, intent) {
+  const serving = (cap.models || []).filter((m) => (m.intents || []).includes(intent));
+  if (!serving.length) return null;
+  return serving.find((m) => m.available) || serving[0];
+}
+// Does the model's `invoke` (+ any INTENT_PARAMS) match the live settings? `engine` resolves
+// through currentEngineId (it isn't stored as settings.engine directly for legacy configs).
+function intentMatchesSettings(cap, intent) {
+  const m = resolveIntentClient(cap, intent);
+  if (!m) return false;
+  const inv = m.invoke || {};
+  const invOk = Object.entries(inv).every(([k, v]) =>
+    k === "engine" ? currentEngineId() === v : String(settings[k] ?? "") === String(v));
+  if (!invOk) return false;
+  const extra = INTENT_PARAMS[intent];
+  return !extra || Object.entries(extra).every(([k, v]) => String(settings[k] ?? "") === String(v));
+}
+// The outcome currently in effect, inferred from settings so it stays coherent with Advanced
+// overrides. An explicit pick wins while it still matches (disambiguates shared-model intents
+// like product vs general); else first matching intent; else null (a custom config).
+function currentIntentFor(cap) {
+  const pick = settings["intent_" + cap.id];
+  if (pick && (cap.intents || []).includes(pick) && intentMatchesSettings(cap, pick)) return pick;
+  for (const it of cap.intents || []) if (intentMatchesSettings(cap, it)) return it;
+  return null;
+}
+// Apply an outcome: drop the resolved model's invoke (+ sugar) onto settings (engine via
+// setEngine so the legacy fields stay coherent), and remember the pick.
+function applyIntent(cap, intent) {
+  const m = resolveIntentClient(cap, intent);
+  if (!m) return;
+  const inv = m.invoke || {};
+  if (inv.engine) setEngine(inv.engine);
+  for (const [k, v] of Object.entries(inv)) if (k !== "engine") settings[k] = v;
+  const extra = INTENT_PARAMS[intent];
+  if (extra) for (const [k, v] of Object.entries(extra)) settings[k] = v;
+  settings["intent_" + cap.id] = intent;
+  persistSettings();
+}
+// The Outcome picker + Auto badge that leads every stage card. Routes a not-installed pick to
+// Settings. Returns false if caps aren't loaded yet (caller bails to a Loading state).
+function buildIntentPicker(body, capId, rerender) {
+  const cap = capById(capId);
+  if (!cap) { ensureCapsInfo().then(rerender); return false; }
+  const cur = currentIntentFor(cap);
+  const opts = (cap.intents || []).map((it) => [it, INTENT_LABEL[it] || it]);
+  if (!cur) opts.unshift(["__custom__", "Custom"]);
+  const sel = makeSelectRaw(cur || "__custom__", opts, (val) => {
+    if (val === "__custom__") return;
+    applyIntent(cap, val); rerender();
+  });
+  body.appendChild(fieldRow("Outcome", sel, "What you want — the model is picked for you."));
+  const resolved = cur ? resolveIntentClient(cap, cur) : null;
+  const badge = document.createElement("div"); badge.className = "intent-auto";
+  if (resolved) {
+    const tag = document.createElement("span"); tag.className = "intent-auto-tag"; tag.textContent = "Auto";
+    const name = document.createElement("span"); name.className = "intent-auto-model"; name.textContent = resolved.label || resolved.id;
+    badge.appendChild(tag); badge.appendChild(name);
+    if (resolved.available === false) {
+      const need = document.createElement("button"); need.type = "button"; need.className = "intent-auto-need";
+      need.textContent = resolved.size_mb ? `needs install · ${resolved.size_mb}MB ⚙` : "needs install ⚙";
+      need.title = "Install in Settings";
+      need.addEventListener("click", () => openToolsSettings());
+      badge.appendChild(need);
+    }
+  } else {
+    badge.classList.add("muted"); badge.textContent = "Custom — set the model + params in Advanced.";
+  }
+  body.appendChild(badge);
+  return true;
+}
+// A collapsed "Advanced" section under the Outcome picker (model override + the schema). The
+// open state persists per capability; the header click rerenders the host panel.
+function advancedSection(body, capId, rerender, fill) {
+  const open = !!settings["adv_" + capId];
+  const head = document.createElement("button"); head.type = "button"; head.className = "stage-adv-toggle";
+  head.textContent = (open ? "▾ " : "▸ ") + "Advanced";
+  head.addEventListener("click", () => { settings["adv_" + capId] = !open; persistSettings(); rerender(); });
+  body.appendChild(head);
+  if (open) { const det = document.createElement("div"); det.className = "stage-adv form"; fill(det); body.appendChild(det); }
+}
+
+// A raster-op stage (upscale / remove-bg): Outcome picker → Auto model, Advanced (model +
+// params), then a live preview that swaps the canvas image to the result (Keep / Revert).
 function renderRasterOpStage(body, opId, node, rerender = rasterReRender) {
   if (!rasterOpSchemas) {
     const h = document.createElement("div"); h.className = "form-hint"; h.textContent = "Loading…";
@@ -2284,13 +2402,19 @@ function renderRasterOpStage(body, opId, node, rerender = rasterReRender) {
   const op = rasterOpById(opId); if (!op) return;
   const live = rasterOp && rasterOpName === opId;
   const liveKick = () => { if (rasterOp && rasterOpName === opId) scheduleRasterOpLive(false); };
-  const whenKeys = new Set();
-  for (const p of op.schema) if (p.when) Object.keys(p.when).forEach((kk) => whenKeys.add(kk));
-  for (const p of op.schema) { if (!schemaWhenOk(p)) continue; body.appendChild(schemaControl(p, whenKeys, liveKick, rerender)); }
-  // AI cutout needs rembg — point at the one install hub (Settings), don't install inline.
-  if (opId === "removebg" && settings.removebg_method === "ai" && !op.rembg_installed) {
-    body.appendChild(toolSetupNote("AI cutout needs rembg (~500MB).", "Install rembg in Settings"));
-  }
+  // Outcome-first: pick what you want, the model is resolved + applied. The raw method/model
+  // selector and tuning params live in Advanced (they read/write the same settings keys, so
+  // the picker and the override stay in sync).
+  if (STAGE_TO_CAP[opId]) buildIntentPicker(body, STAGE_TO_CAP[opId], rerender);
+  advancedSection(body, STAGE_TO_CAP[opId] || opId, rerender, (det) => {
+    const whenKeys = new Set();
+    for (const p of op.schema) if (p.when) Object.keys(p.when).forEach((kk) => whenKeys.add(kk));
+    for (const p of op.schema) { if (!schemaWhenOk(p)) continue; det.appendChild(schemaControl(p, whenKeys, liveKick, rerender)); }
+    // AI cutout needs rembg — point at the one install hub (Settings), don't install inline.
+    if (opId === "removebg" && settings.removebg_method === "ai" && !op.rembg_installed) {
+      det.appendChild(toolSetupNote("AI cutout needs rembg (~500MB).", "Install rembg in Settings"));
+    }
+  });
   if (live) {
     const row = document.createElement("div"); row.className = "rt-actions";
     const keep = document.createElement("button"); keep.type = "button"; keep.className = "primary-button"; keep.textContent = "Keep result";
@@ -2319,43 +2443,49 @@ function renderVectorizeStage(body, node, rerender = rasterReRender) {
   const structural = rerender;                                            // rebuild panel + retrace
   const engId = currentEngineId();
   const eng = engineSchemas.find((e) => e.id === engId) || engineSchemas[0];
-  const engSel = makeSelectRaw(engId,
-    engineSchemas.map((e) => [e.id, e.available === false ? `${e.label} (unavailable)` : e.label]),
-    (val) => { const t = engineSchemas.find((e) => e.id === val); if (t && t.available === false) return; setEngine(val); structural(); });
-  body.appendChild(fieldRow("Engine", engSel, eng && eng.caps && eng.caps.planar ? "Planar — keeps holes/counters, no halos." : undefined));
+  const engUnavailable = !!(eng && eng.available === false);
 
-  // Selected engine's tool is missing → route to Settings (and stop: its params/preview are
-  // moot until it's installed). The selector above still lets you switch to an available engine.
-  if (eng && eng.available === false) {
-    const tool = (eng.caps && eng.caps.needs && eng.caps.needs.includes("vtracer")) ? "VTracer" : "the required tool";
-    body.appendChild(toolSetupNote(`The “${eng.label}” engine needs ${tool}.`, `Install ${tool} in Settings`));
-    return;
-  }
+  // Outcome-first: pick what you want; the engine is resolved + applied. The engine override,
+  // auto-detect, and the trace params live in Advanced (same settings keys → stays in sync).
+  buildIntentPicker(body, "vectorize", rerender);
+  advancedSection(body, "vectorize", rerender, (det) => {
+    const engSel = makeSelectRaw(engId,
+      engineSchemas.map((e) => [e.id, e.available === false ? `${e.label} (unavailable)` : e.label]),
+      (val) => { const t = engineSchemas.find((e) => e.id === val); if (t && t.available === false) return; setEngine(val); structural(); });
+    det.appendChild(fieldRow("Engine", engSel, eng && eng.caps && eng.caps.planar ? "Planar — keeps holes/counters, no halos." : undefined));
+    // Selected engine's tool is missing → route to Settings (its params/preview are moot until
+    // installed). The selector above still lets you switch to an available engine.
+    if (engUnavailable) {
+      const tool = (eng.caps && eng.caps.needs && eng.caps.needs.includes("vtracer")) ? "VTracer" : "the required tool";
+      det.appendChild(toolSetupNote(`The “${eng.label}” engine needs ${tool}.`, `Install ${tool} in Settings`));
+      return;
+    }
+    const autoRow = document.createElement("div"); autoRow.className = "rt-actions";
+    const auto = document.createElement("button");
+    auto.type = "button"; auto.className = "ghost-button"; auto.textContent = "✨ Auto-detect settings";
+    auto.title = node ? "Inspect the image and pick sensible vectorize settings" : "Select a raster to auto-detect";
+    auto.disabled = rasterStageBusy || !node;
+    auto.addEventListener("click", () => autoSuggestTrace(node));
+    autoRow.appendChild(auto); det.appendChild(autoRow);
 
-  const autoRow = document.createElement("div"); autoRow.className = "rt-actions";
-  const auto = document.createElement("button");
-  auto.type = "button"; auto.className = "ghost-button"; auto.textContent = "✨ Auto-detect settings";
-  auto.title = node ? "Inspect the image and pick sensible vectorize settings" : "Select a raster to auto-detect";
-  auto.disabled = rasterStageBusy || !node;
-  auto.addEventListener("click", () => autoSuggestTrace(node));
-  autoRow.appendChild(auto); body.appendChild(autoRow);
-
-  const schema = (eng && eng.schema) || [];
-  const whenKeys = new Set();
-  for (const p of schema) if (p.when) Object.keys(p.when).forEach((kk) => whenKeys.add(kk));
-  const advanced = [];
-  for (const p of schema) {
-    if (!schemaWhenOk(p)) continue;
-    if (p.advanced) { advanced.push(p); continue; }
-    body.appendChild(schemaControl(p, whenKeys, liveKick, structural));
-  }
-  if (advanced.length) {
-    const advToggle = document.createElement("input");
-    advToggle.type = "checkbox"; advToggle.checked = !!settings.trace_advanced;
-    advToggle.addEventListener("change", () => { settings.trace_advanced = advToggle.checked; persistSettings(); structural(); });
-    body.appendChild(fieldRow("Advanced", advToggle));
-    if (settings.trace_advanced) for (const p of advanced) if (schemaWhenOk(p)) body.appendChild(schemaControl(p, whenKeys, liveKick, structural));
-  }
+    const schema = (eng && eng.schema) || [];
+    const whenKeys = new Set();
+    for (const p of schema) if (p.when) Object.keys(p.when).forEach((kk) => whenKeys.add(kk));
+    const advanced = [];
+    for (const p of schema) {
+      if (!schemaWhenOk(p)) continue;
+      if (p.advanced) { advanced.push(p); continue; }
+      det.appendChild(schemaControl(p, whenKeys, liveKick, structural));
+    }
+    if (advanced.length) {
+      const advToggle = document.createElement("input");
+      advToggle.type = "checkbox"; advToggle.checked = !!settings.trace_advanced;
+      advToggle.addEventListener("change", () => { settings.trace_advanced = advToggle.checked; persistSettings(); structural(); });
+      det.appendChild(fieldRow("More", advToggle));
+      if (settings.trace_advanced) for (const p of advanced) if (schemaWhenOk(p)) det.appendChild(schemaControl(p, whenKeys, liveKick, structural));
+    }
+  });
+  if (engUnavailable) return;   // no live preview on an engine that isn't installed
   if (rasterLive) {
     const row = document.createElement("div"); row.className = "rt-actions";
     const keep = document.createElement("button"); keep.type = "button"; keep.className = "primary-button"; keep.textContent = "Keep vector";

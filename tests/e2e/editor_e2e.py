@@ -1847,14 +1847,20 @@ def main():
             runNotInBody: !document.querySelector('#processor-body .proc-run') })""")
         check("Run sits in the pinned Processor chin, not the scrolling body",
               chin["runInChin"] and chin["runNotInBody"], str(chin))
-        # Vectorize card (expanded by default): Engine selector + Auto-detect + live preview + schema controls.
-        vec = page.evaluate("""() => { const body=document.querySelector('#processor-body .proc-stage[data-stage="vectorize"] .pipeline-detail-body');
-            return body ? { hasEngine:[...body.querySelectorAll('.form-label')].some(s=>/Engine/i.test(s.textContent)),
+        # Vectorize card (expanded by default): intent-first — Outcome picker + Auto badge always
+        # visible, live preview below; the Engine selector + Auto-detect + schema controls demote
+        # into a collapsed Advanced (#49). Expand Advanced to assert they're all still there.
+        vec = page.evaluate("""() => { settings.adv_vectorize=true; renderProcessorPanel();
+            const body=document.querySelector('#processor-body .proc-stage[data-stage="vectorize"] .pipeline-detail-body');
+            const r = body ? { outcome:[...body.querySelectorAll('.form-label')].some(s=>/Outcome/i.test(s.textContent)),
+                            autoBadge:!!body.querySelector('.intent-auto'),
+                            hasEngine:[...body.querySelectorAll('.form-label')].some(s=>/Engine/i.test(s.textContent)),
                             auto:/Auto-detect/.test(body.textContent),
                             live:[...body.querySelectorAll('button')].some(b=>/Live preview/i.test(b.textContent)),
-                            ctrls: body.querySelectorAll('select,input').length } : {nobody:true}; }""")
-        check("Vectorize card: Engine selector + Auto-detect + live preview + schema controls",
-              vec.get("hasEngine") and vec.get("auto") and vec.get("live") and vec.get("ctrls", 0) > 2, str(vec))
+                            ctrls: body.querySelectorAll('select,input').length } : {nobody:true};
+            delete settings.adv_vectorize; renderProcessorPanel(); return r; }""")
+        check("Vectorize card: Outcome picker + Auto badge + live preview, with Engine/Auto-detect/schema in Advanced (#49)",
+              vec.get("outcome") and vec.get("autoBadge") and vec.get("hasEngine") and vec.get("auto") and vec.get("live") and vec.get("ctrls", 0) > 2, str(vec))
         # Contextual: the Processor is un-dimmed when a raster is the subject, dimmed when idle
         # (no canvas raster + library not on rasters). It stays put — only the emphasis changes.
         ctx = page.evaluate("""() => {
@@ -1896,10 +1902,10 @@ def main():
         # phantom-knob bug (panel showed controls the active engine ignored). The card is
         # rendered purely from /api/vectorize/engines → only the selected engine's params show.
         eng = page.evaluate("""() => {
-            const body = (e) => { settings.engine=e; renderProcessorPanel();
+            const body = (e) => { settings.engine=e; settings.adv_vectorize=true; renderProcessorPanel();   // params live in Advanced now (#49)
                 return (document.querySelector('#processor-body .proc-stage[data-stage="vectorize"] .pipeline-detail-body')||{}).textContent||''; };
             const clean=body('clean'), pixel=body('pixel'), vtr=body('vtracer');
-            delete settings.engine; renderProcessorPanel();
+            delete settings.engine; delete settings.adv_vectorize; renderProcessorPanel();
             return { cleanScoped: /Colours/.test(clean) && /Simplify/.test(clean) && !/Output/.test(clean) && !/Curves/.test(clean),
                      pixelScoped: /Shape mode/.test(pixel) && /Cell colour/.test(pixel) && !/Output/.test(pixel),
                      vtrScoped: /Output/.test(vtr) && /Curves/.test(vtr) }; }""")
@@ -1907,37 +1913,39 @@ def main():
               eng["cleanScoped"] and eng["pixelScoped"] and eng["vtrScoped"], str(eng))
         wired = page.evaluate("""() => {
             const id=[...editor.selection][0];
-            settings.engine='vtracer'; renderProcessorPanel();   // vtracer schema has a number + several selects
+            settings.engine='vtracer'; settings.adv_vectorize=true; renderProcessorPanel();   // vtracer schema (in Advanced) has a number + several selects
             app.armRasterLive(id);
             const body=document.querySelector('#processor-body .proc-stage[data-stage="vectorize"] .pipeline-detail-body');
             const num=body.querySelector('input[type=number]');
-            const sel=[...body.querySelectorAll('select')].pop();   // a schema value select, not the Engine selector
+            const sel=[...body.querySelectorAll('select')].pop();   // a schema value select, not the Engine/Outcome selector
             const before=app.rasterLiveKicks;
             if (num) { num.value='1234'; num.dispatchEvent(new Event('input',{bubbles:true})); }
             const afterNum=app.rasterLiveKicks;
             if (sel) sel.dispatchEvent(new Event('change',{bubbles:true}));
             const afterSel=app.rasterLiveKicks;
-            app.disarmRasterLive(); delete settings.engine; renderProcessorPanel();
+            app.disarmRasterLive(); delete settings.engine; delete settings.adv_vectorize; renderProcessorPanel();
             return { hadNum:!!num, hadSel:!!sel, before, afterNum, afterSel }; }""")
         check("every Vectorize value control re-triggers the live trace (number + select)",
               wired["hadNum"] and wired["hadSel"] and wired["afterNum"] > wired["before"] and wired["afterSel"] > wired["afterNum"], str(wired))
 
         # ---- Upscale / Remove-bg cards: schema-driven + live-wired (raster ops) ----
         rop = page.evaluate("""() => {
-            // expand the upscale + removebg cards
+            // expand the upscale + removebg cards, and open their Advanced (model/params live there now, #49)
             for (const sid of ['upscale','removebg']) { const c=[...document.querySelectorAll('#processor-body .proc-stage')].find(x=>x.dataset.stage===sid); if(c && !c.classList.contains('expanded')) c.querySelector('.proc-stage-title').click(); }
+            settings.adv_upscale=true; settings.adv_cutout=true;
             const txt=(sid)=>(document.querySelector(`#processor-body .proc-stage[data-stage="${sid}"] .pipeline-detail-body`)||{}).textContent||'';
-            const up=txt('upscale');
+            renderProcessorPanel(); const up=txt('upscale');
             settings.removebg_method='classical'; renderProcessorPanel(); const classical=txt('removebg');
             settings.removebg_method='ai';        renderProcessorPanel(); const ai=txt('removebg');
             settings.removebg_method='classical'; renderProcessorPanel();
             return { upScoped: /Model/.test(up) && /Scale/.test(up),
                      classicalNoAi: !/AI model/.test(classical),
                      aiShowsModel: /AI model/.test(ai) }; }""")
-        check("upscale + remove-bg cards are schema-driven (Model/Scale; AI model only when AI)",
+        check("upscale + remove-bg cards are schema-driven (Model/Scale; AI model only when AI; in Advanced #49)",
               rop["upScoped"] and rop["classicalNoAi"] and rop["aiShowsModel"], str(rop))
         wop = page.evaluate("""() => {
             const id=[...editor.selection][0];
+            settings.adv_upscale=true; settings.adv_cutout=true;   // model/params live in Advanced now (#49)
             const findSel=(sid,v)=>{ const body=document.querySelector(`#processor-body .proc-stage[data-stage="${sid}"] .pipeline-detail-body`); return body && [...body.querySelectorAll('select')].find(s=>[...s.options].some(o=>o.value===v)); };
             app.armRasterOp(id,'upscale'); renderProcessorPanel();   // Scale = plain value control → live re-run
             const scale=findSel('upscale','2'); const a=app.rasterOpKicks; if(scale) scale.dispatchEvent(new Event('change',{bubbles:true})); const b=app.rasterOpKicks;
