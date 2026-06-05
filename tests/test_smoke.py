@@ -385,6 +385,29 @@ def check_analyzer_router() -> None:
         assert a5["low_res"], a5
         assert "upscale" in [s["capability"] for s in pl5["auto"]], "a low-res photo must auto upscale"
 
+        # (5b) a pixel-clean UI render (flat fills + crisp edges, no sensor noise) is a
+        #      SCREENSHOT, not a photo — many colours would otherwise mislabel it 'photo' and
+        #      drag it into the photographic restoration chain (denoise/deblur/dejpeg) (#47).
+        ss = np.full((900, 900, 3), 238, np.uint8)
+        ss[:60, :] = (91, 52, 217); ss[60:, :210] = (250, 250, 252)        # top bar + sidebar
+        cards = [(235, 245, 255), (255, 240, 235), (240, 255, 242), (252, 240, 255)]
+        hdr = [(52, 120, 246), (220, 90, 40), (40, 167, 90), (150, 60, 200)]
+        for i in range(4):
+            x = 250 + i * 160; ss[90:300, x:x + 140] = cards[i]; ss[100:140, x + 10:x + 90] = hdr[i]
+        for i in range(24):
+            h = 40 + (i * 7 % 200); ss[520 - h:520, 250 + i * 26:268 + i * 26] = (60 + i * 5 % 150, 120, 200)
+        for y in range(330, 500, 24):
+            ss[y:y + 9, 250:760] = (70, 74, 80)                            # text-like bars
+        shot = d / "screenshot.png"; Image.fromarray(ss, "RGB").save(shot)
+        a6 = analyze.analyze(shot); pl6 = analyze.plan(a6)
+        assert a6["content_class"] == "screenshot", \
+            f"a clean UI render must read as screenshot, not {a6['content_class']}"
+        autos6 = [s["capability"] for s in pl6["auto"]]
+        assert not ({"dejpeg", "denoise", "deblur"} & set(autos6)), \
+            f"a screenshot must skip photographic restoration, got {autos6}"
+        # and the PNG's straight-edge lattice must NOT fake a JPEG-ringing dejpeg trigger
+        assert "dejpeg" not in autos6, "a lossless screenshot is not a blocky JPEG"
+
     # (6) router: an outcome resolves to the right model. Install-AGNOSTIC — when nothing is
     #     installed it still picks the first model serving the intent (so the UI can offer install),
     #     and models are ordered best-first so SOTA wins a shared intent.

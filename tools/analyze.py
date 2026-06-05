@@ -133,6 +133,13 @@ def analyze(path: Path) -> dict:
         content = "flat_graphic"
     else:
         content = "photo"
+    # Reclassify pixel-clean UI renders that would otherwise read as a photograph: a
+    # screenshot is a digital graphic (flat fills + crisp edges, no sensor noise), so it
+    # must skip the photo-only restoration chain (denoise/deblur/dejpeg). Post-pass over
+    # the photo outcomes only — flat_graphic / line_art are already correctly graphic.
+    if content in ("photo", "photo_gray") and noise < T_SS_NOISE \
+            and top6 > T_SS_FLAT and edge_frac > T_SS_EDGE:
+        content = "screenshot"
 
     return {
         "width": w, "height": h, "max_dim": max_dim, "megapixels": round(mp, 2),
@@ -154,6 +161,12 @@ def analyze(path: Path) -> dict:
 T_BLOCKY = 1.18
 T_NOISE = 3.2
 T_BLUR_SOFT = 0.015      # below = soft/blurry (offer deblur, don't auto-apply)
+# Screenshot / UI-render signature: a many-colour image that is nonetheless SYNTHETIC —
+# pixel-clean (no sensor grain), large flat fills, crisp high-contrast edges. Multi-gated
+# so real photos (which carry noise OR spread colour OR lack hard edges) don't trip it.
+T_SS_NOISE = 1.0         # below = lossless-clean; cameras rarely fall under this even denoised
+T_SS_FLAT = 0.45         # top-6 palette coverage above this = big solid UI panels/background
+T_SS_EDGE = 0.06         # crisp text/UI edges (photos read lower once gradients dominate)
 
 
 def plan(a: dict) -> dict:
@@ -176,8 +189,10 @@ def plan(a: dict) -> dict:
                "params": {"trace_colormode": "bw", "trace_simplify": "medium"}, "weight": "cheap",
                "why": "Near-2-tone → B&W silhouette trace."}
 
-    # 1. de-JPEG — only when the 8px grid is actually ringing
-    if deg["jpeg_blockiness"] > T_BLOCKY:
+    # 1. de-JPEG — PHOTO ONLY, and only when the 8px grid is actually ringing. Flat/UI/
+    #    screenshot content is full of straight edges on the 8px lattice that fool the DCT
+    #    metric (a lossless PNG screenshot is not a ringing JPEG) → restrict to photographs.
+    if is_photo and deg["jpeg_blockiness"] > T_BLOCKY:
         steps.append({"capability": "dejpeg", "intent": "default", "model": "fbcnn", "weight": "heavy",
                       "why": f"JPEG 8px blocking detected (ratio {deg['jpeg_blockiness']})."})
 
@@ -213,6 +228,9 @@ def plan(a: dict) -> dict:
         offered.append({"capability": "deblur", "intent": "default", "model": "nafnet",
                         "why": f"Looks soft (blur ratio {deg['blur_ratio']}) — deblur if intended."})
         notes.append("soft/low-detail")
+
+    if content == "screenshot":
+        notes.append("screenshot / UI render — pixel-clean, no photographic restoration applied")
 
     summary = " → ".join(s["capability"] for s in steps) or "(no automatic processing)"
     return {"auto": steps, "offered": offered, "notes": notes, "summary": summary}
