@@ -1613,6 +1613,10 @@ SR_MODELS = {
         "label": "Real-CUGAN ×2 (anime)", "scale": 2, "size_mb": 5,
         "file": "realcugan-up2x-no-denoise.pth",
         "url": "https://huggingface.co/spaces/luoxia/Real-CUGAN/resolve/main/weights_v3/up2x-latest-no-denoise.pth"},
+    "aurasr-v2": {                                       # AuraSR v2 (GigaGAN UnetUpsampler), GAN ×4
+        "label": "AuraSR v2 ×4 (GAN)", "scale": 4, "size_mb": 2470,
+        "file": "AuraSR-v2.safetensors",
+        "url": "https://huggingface.co/fal/AuraSR-v2/resolve/main/model.safetensors"},
     # #58 degradation fixers — spandrel restoration archs (scale 1), run through the SAME
     # executor as SR (it reads scale from the checkpoint). No new deps (spandrel from #54).
     "scunet-denoise": {                                  # SCUNet, denoise
@@ -2263,7 +2267,8 @@ RASTER_OPS = {
             {"key": "model", "type": "select", "default": "realesrgan-x4plus", "label": "Model",
              "options": [["realesrgan-x4plus", "ESRGAN x4+ (photo)"], ["realesrnet-x4plus", "ESRNet x4+ (cleaner)"], ["realesr-animevideov3", "Anime / line-art"],
                          ["realesrgan-x4-spandrel", "Real-ESRGAN x4 (spandrel/torch)"], ["dat2-realweb-x4", "DAT-2 — detail (spandrel)"],
-                         ["span-nomos-x4", "SPAN — fast (spandrel)"], ["realcugan-up2x", "Real-CUGAN ×2 — anime (spandrel)"]]},
+                         ["span-nomos-x4", "SPAN — fast (spandrel)"], ["realcugan-up2x", "Real-CUGAN ×2 — anime (spandrel)"],
+                         ["aurasr-v2", "AuraSR v2 ×4 — GAN (spandrel, 2.4GB)"]]},
             {"key": "scale", "type": "select", "default": "4", "label": "Scale",
              "options": [["2", "2×"], ["3", "3×"], ["4", "4×"]]},
         ],
@@ -2522,7 +2527,7 @@ CAPABILITIES = {
     },
     "upscale": {
         "label": "Upscale", "kind": "raster", "op": "upscale",
-        "intents": ["photo", "clean", "anime", "detail", "lite"],
+        "intents": ["photo", "clean", "anime", "detail", "lite", "gan"],
         "models": [
             {"id": "realesrgan-x4plus", "label": "Real-ESRGAN ×4 (photo)", "intents": ["photo"], "needs": ["realesrgan"],
              "invoke": {"model": "realesrgan-x4plus"}},
@@ -2541,6 +2546,8 @@ CAPABILITIES = {
              "needs": ["spandrel"], "size_mb": 5, "invoke": {"model": "span-nomos-x4"}},
             {"id": "realcugan-up2x", "label": "Real-CUGAN — anime (×2)", "intents": ["anime"],
              "needs": ["spandrel"], "size_mb": 5, "invoke": {"model": "realcugan-up2x"}},
+            {"id": "aurasr-v2", "label": "AuraSR v2 — GAN / creative (×4)", "intents": ["gan"],
+             "needs": ["spandrel"], "size_mb": 2470, "invoke": {"model": "aurasr-v2"}},
         ],
     },
     "vectorize": {

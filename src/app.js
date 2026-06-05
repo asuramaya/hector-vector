@@ -2339,7 +2339,7 @@ const INTENT_LABEL = {
   "high-res": "High-resolution detail", hair: "Hair / fine detail", fast: "Fast (no AI)", greenscreen: "Green screen",
   // upscale
   photo: "Photo", clean: "Clean / illustration", anime: "Anime / line-art",
-  detail: "Max detail", lite: "Fast / lightweight",
+  detail: "Max detail", lite: "Fast / lightweight", gan: "GAN / creative",
   // vectorize
   "logo-flat": "Flat logo", "colour-photo": "Colour / photo", "bw-silhouette": "B&W silhouette", "pixel-art": "Pixel-art",
 };

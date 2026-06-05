@@ -424,6 +424,7 @@ def check_analyzer_router() -> None:
     # #55 spandrel tiers behind dedicated intents
     assert server.resolve_intent("upscale", "detail")["model"] == "dat2-realweb-x4", "detail → DAT-2"
     assert server.resolve_intent("upscale", "lite")["model"] == "span-nomos-x4", "lite → SPAN"
+    assert server.resolve_intent("upscale", "gan")["model"] == "aurasr-v2", "gan → AuraSR v2"
     assert server.resolve_intent("upscale", "anime")["model"] == "realesr-animevideov3", \
         "anime stays on the installed ncnn model; Real-CUGAN is the spandrel alternative (#55)"
     # spandrel universal SR loader (#54): every spandrel-backed upscale model must have a
