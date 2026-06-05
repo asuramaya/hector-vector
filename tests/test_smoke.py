@@ -445,6 +445,12 @@ def check_analyzer_router() -> None:
     for m in server.CAPABILITIES["cutout"]["models"]:
         cm = m["invoke"].get("cutout_model")
         assert cm is None or cm in server.AI_CUTOUT_MODELS, f"cutout model {cm} isn't executable"
+    # BEN2 (#60): BYO-ONNX cutout. Registered, executable, and its weight spec points at the
+    # rembg ben_custom slot + the hosted Apache-2.0 ONNX (build_ai_cutout maps id→ben_custom).
+    assert "ben2" in server.AI_CUTOUT_MODELS
+    assert server.BEN2_MODEL["session"] == "ben_custom" and "BEN2" in server.BEN2_MODEL["url"]
+    ben2 = next(m for m in server.CAPABILITIES["cutout"]["models"] if m["id"] == "ben2")
+    assert set(ben2["intents"]) == {"hair", "high-res"} and ben2["invoke"]["cutout_model"] == "ben2"
     ids = {c["id"] for c in server.capabilities_info()}
     assert {"cutout", "upscale", "vectorize"} <= ids, ids
     # cleanup (#56) + face restore (#57): in-stack ONNX, real capabilities (not iopaint/gfpgan stubs)

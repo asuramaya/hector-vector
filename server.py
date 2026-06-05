@@ -1578,7 +1578,33 @@ AI_CUTOUT_MODELS = {
     "birefnet-general", "birefnet-general-lite",
     "birefnet-portrait", "birefnet-hrsod", "birefnet-massive",
     "silueta", "sam",
+    "ben2",  # BYO-ONNX (#60): rembg ben_custom + a hosted BEN2 weight (see BEN2_MODEL)
 }
+
+# BEN2 proper (#60): Confidence-Guided Matting, best-in-class hair/4K. rembg packages a
+# `ben_custom` session but ships no weight — it takes an explicit model_path that rembg
+# forces to live under the u2net home dir. The official ONNX is curl-able + Apache-2.0.
+U2NET_DIR = Path(os.environ.get("U2NET_HOME", str(Path.home() / ".u2net")))
+BEN2_MODEL = {
+    "session": "ben_custom", "file": "ben2_base.onnx", "size_mb": 213,
+    "url": "https://huggingface.co/PramaLLC/BEN2/resolve/main/BEN2_Base.onnx",
+}
+
+
+def ensure_ben2_model(log=None) -> Path:
+    """Resolve the BEN2 ONNX weight (under the u2net home dir), downloading on first use."""
+    U2NET_DIR.mkdir(parents=True, exist_ok=True)
+    path = U2NET_DIR / BEN2_MODEL["file"]
+    if not path.exists():
+        if not command_exists("curl"):
+            raise ValueError("curl is required to download the BEN2 model.")
+        if log:
+            log(f"Downloading BEN2 cutout model (~{BEN2_MODEL['size_mb']}MB)…")
+        run_subprocess(["curl", "-sL", "-o", str(path), BEN2_MODEL["url"]])
+        if not path.exists() or path.stat().st_size < 1024:
+            path.unlink(missing_ok=True)
+            raise ValueError("BEN2 model download failed.")
+    return path
 
 
 def build_ai_cutout(src: Path, dest: Path, model: str, alpha_matting: bool, log) -> None:
@@ -1586,7 +1612,13 @@ def build_ai_cutout(src: Path, dest: Path, model: str, alpha_matting: bool, log)
         raise ValueError("rembg is not installed in the project venv. Click 'Install rembg' in Settings.")
     if model not in AI_CUTOUT_MODELS:
         raise ValueError(f"Unknown AI cutout model: {model}")
-    cmd = [str(VENV_PYTHON), str(AI_CUTOUT_SCRIPT), str(src), str(dest), "--model", model]
+    cmd = [str(VENV_PYTHON), str(AI_CUTOUT_SCRIPT), str(src), str(dest)]
+    if model == "ben2":
+        # BYO-ONNX slot: hand rembg the ben_custom session + the local weight path.
+        path = ensure_ben2_model(log)
+        cmd += ["--model", BEN2_MODEL["session"], "--model-path", str(path)]
+    else:
+        cmd += ["--model", model]
     if alpha_matting:
         cmd.append("--alpha-matting")
     log_subprocess_lines(log, run_subprocess(cmd))
@@ -2284,7 +2316,8 @@ RASTER_OPS = {
                          ["isnet-general-use", "ISNet — sharper general"], ["isnet-anime", "ISNet anime"],
                          ["birefnet-general", "BiRefNet general — OSS SOTA (928MB)"], ["birefnet-general-lite", "BiRefNet lite (214MB)"],
                          ["birefnet-portrait", "BiRefNet portrait (928MB)"], ["birefnet-hrsod", "BiRefNet HR — high-res detail (928MB)"],
-                         ["birefnet-massive", "BiRefNet massive — hair / fine detail (928MB)"], ["silueta", "silueta — quantized U²-Net"]]},
+                         ["birefnet-massive", "BiRefNet massive — hair / fine detail (928MB)"],
+                         ["ben2", "BEN2 — CGM hair / 4K matting (213MB)"], ["silueta", "silueta — quantized U²-Net"]]},
             {"key": "alpha_matting", "type": "checkbox", "default": False, "label": "Alpha matting", "when": {"removebg_method": "ai"},
              "hint": "Refines edges (hair). Slower."},
         ],
@@ -2519,6 +2552,12 @@ CAPABILITIES = {
             # structures) + alpha_matting edge refinement, switched on by the intent in one pick.
             {"id": "birefnet-massive", "label": "BiRefNet massive (DIS5K fine detail)", "intents": ["hair"], "needs": ["rembg"],
              "size_mb": 928, "invoke": {"removebg_method": "ai", "cutout_model": "birefnet-massive", "alpha_matting": True}},
+            # BEN2 (#60): Confidence-Guided Matting, SOTA hair/4K. Same rembg runtime (ben_custom
+            # BYO-ONNX), 213MB Apache-2.0 weight auto-fetched on first use. Listed after the
+            # BiRefNet defaults so existing hair/high-res resolution is unchanged — BEN2 is the
+            # explicit "best matting" alternative, not a silent default swap.
+            {"id": "ben2", "label": "BEN2 (CGM hair / 4K matting)", "intents": ["hair", "high-res"], "needs": ["rembg"],
+             "size_mb": 213, "invoke": {"removebg_method": "ai", "cutout_model": "ben2", "alpha_matting": True}},
             {"id": "birefnet-general-lite", "label": "BiRefNet lite (swin-tiny)", "intents": ["general"], "needs": ["rembg"],
              "size_mb": 214, "invoke": {"removebg_method": "ai", "cutout_model": "birefnet-general-lite"}},
             {"id": "u2net", "label": "U²-Net general (lighter)", "intents": ["general"], "needs": ["rembg"], "size_mb": 176,

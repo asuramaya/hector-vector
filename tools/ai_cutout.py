@@ -15,6 +15,9 @@ Models supported (downloaded on first use into ~/.u2net; sizes verified via HEAD
   birefnet-portrait     — 928MB, portrait-tuned
   birefnet-hrsod        — 928MB, high-resolution salient-object detail
   silueta               — quantized U²-Net (~40MB)
+
+BYO-ONNX sessions (rembg's *_custom slots) need a local weight via --model-path:
+  ben_custom            — BEN2 (Confidence-Guided Matting; hair/4K), --model-path <onnx>
 """
 from __future__ import annotations
 
@@ -28,6 +31,12 @@ def main() -> int:
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--model", default="u2net")
+    parser.add_argument(
+        "--model-path",
+        default=None,
+        help="Local ONNX weight for a BYO-ONNX session (e.g. ben_custom). "
+             "rembg requires it to live under the u2net home dir (~/.u2net).",
+    )
     parser.add_argument(
         "--alpha-matting",
         action="store_true",
@@ -46,7 +55,11 @@ def main() -> int:
         print(f"error: rembg not installed in this interpreter ({exc})", file=sys.stderr)
         return 3
 
-    session = new_session(model_name=args.model)
+    session_kwargs = {}
+    if args.model_path:
+        # BYO-ONNX slots (ben_custom/u2net_custom/dis_custom) take an explicit weight path.
+        session_kwargs["model_path"] = args.model_path
+    session = new_session(model_name=args.model, **session_kwargs)
 
     print("[2/3] read input", flush=True)
     data = args.input.read_bytes()
