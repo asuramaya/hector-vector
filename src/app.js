@@ -5236,6 +5236,70 @@ function buildProcStageCard(id, target) {
   }
   return card;
 }
+// Object-removal (LaMa) cleanup: a self-contained brush-mask overlay over the on-canvas
+// raster. The user paints the region to erase; Apply rasterises the strokes to a mask at the
+// image's NATIVE resolution, POSTs {image, mask} to /api/cleanup, and swaps the result href in
+// place (one undo step, mirroring placeJobResultOnNode). It's a modal overlay rather than an
+// editor tool because painting is a different interaction model than the vector tools.
+function startCleanup(node) {
+  node = node || (processTarget().node);
+  if (!node || !editor.isRaster(node)) { setStatus("Select a raster on the canvas to clean up.", 2800); return; }
+  const rect = node.getBoundingClientRect();
+  if (rect.width < 4 || rect.height < 4) { setStatus("Zoom so the image is visible, then try Remove object.", 3200); return; }
+
+  const ov = document.createElement("div"); ov.className = "cleanup-overlay";
+  const dpr = window.devicePixelRatio || 1;
+  const cv = document.createElement("canvas"); cv.className = "cleanup-canvas";
+  cv.width = Math.round(rect.width * dpr); cv.height = Math.round(rect.height * dpr);
+  cv.style.left = rect.left + "px"; cv.style.top = rect.top + "px";
+  cv.style.width = rect.width + "px"; cv.style.height = rect.height + "px";
+  const ctx = cv.getContext("2d"); ctx.scale(dpr, dpr);
+  ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "rgba(255,40,40,0.5)";
+  let brush = Math.max(8, Math.round(Math.min(rect.width, rect.height) / 14));
+  let painting = false, last = null, painted = false;
+  const at = (e) => ({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+  const dot = (p) => { ctx.lineWidth = brush; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + 0.01, p.y); ctx.stroke(); };
+  cv.addEventListener("pointerdown", (e) => { painting = true; painted = true; last = at(e); dot(last); cv.setPointerCapture(e.pointerId); });
+  cv.addEventListener("pointermove", (e) => { if (!painting) return; const p = at(e); ctx.lineWidth = brush; ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke(); last = p; });
+  const stopPaint = () => { painting = false; };
+  cv.addEventListener("pointerup", stopPaint); cv.addEventListener("pointercancel", stopPaint);
+  ov.appendChild(cv);
+
+  const bar = document.createElement("div"); bar.className = "cleanup-bar";
+  const hint = document.createElement("span"); hint.className = "cleanup-hint"; hint.textContent = "Paint over what to erase";
+  const sz = document.createElement("input"); sz.type = "range"; sz.min = "4"; sz.max = "120"; sz.value = String(brush);
+  sz.title = "Brush size"; sz.addEventListener("input", () => { brush = +sz.value; });
+  const teardown = () => { ov.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e) => { if (e.key === "Escape") { teardown(); setStatus("Cleanup cancelled.", 1500); } };
+  document.addEventListener("keydown", onKey);
+  const cancel = ghostBtn("Cancel", () => { teardown(); setStatus("Cleanup cancelled.", 1500); });
+  const apply = ghostBtn("Remove", async () => {
+    if (!painted) { setStatus("Paint over the area to remove first.", 2500); return; }
+    const nat = mediaNaturalSize(node);
+    const mc = document.createElement("canvas"); mc.width = nat.w; mc.height = nat.h;
+    const mx = mc.getContext("2d");
+    mx.drawImage(cv, 0, 0, nat.w, nat.h);                 // scale the painted strokes to native res
+    const id = mx.getImageData(0, 0, nat.w, nat.h), d = id.data;
+    for (let i = 0; i < d.length; i += 4) { const on = d[i + 3] > 10; d[i] = d[i + 1] = d[i + 2] = on ? 255 : 0; d[i + 3] = 255; }
+    mx.putImageData(id, 0, 0);
+    const maskUrl = mc.toDataURL("image/png");
+    teardown();
+    setStatus("Removing… first run downloads the LaMa model (~208MB).", 0);
+    try {
+      const res = await api("/api/cleanup", "POST", { input_url: rasterHref(node), mask_url: maskUrl });
+      if (!node.isConnected || !editor.isRaster(node)) { setStatus("The canvas changed; cleanup result discarded.", 4000); return; }
+      node.setAttribute("href", res.url);
+      editor.push("Remove object");
+      editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
+      setStatus("Removed the painted region.", 2800);
+    } catch (e) { setStatus(`Cleanup failed: ${e.message}`, 4500); }
+  });
+  bar.appendChild(hint); bar.appendChild(sz); bar.appendChild(cancel); bar.appendChild(apply);
+  ov.appendChild(bar);
+  document.body.appendChild(ov);
+  setStatus("Cleanup: paint over the object, then Remove (Esc to cancel).", 0);
+}
+
 function buildProcessorRail() {
   const rail = document.createElement("div"); rail.className = "proc-rail";
   const t = processTarget();
@@ -5258,6 +5322,16 @@ function buildProcessorRail() {
   scheduleProcPlan();
   const banner = buildAutoBanner(t);
   if (banner) rail.appendChild(banner);
+
+  // Object removal is interactive (paint a mask), so it's a button here, not a pipeline stage.
+  if (t.node && editor.isRaster(t.node)) {
+    const clean = document.createElement("button");
+    clean.type = "button"; clean.className = "proc-cleanup-btn";
+    clean.textContent = "🩹 Remove object…";
+    clean.title = "Paint over something to erase it (LaMa cleanup)";
+    clean.addEventListener("click", () => startCleanup(t.node));
+    rail.appendChild(clean);
+  }
 
   // Stage cards in saved order, vertical flow, drag to reorder.
   const list = document.createElement("div"); list.className = "proc-stages";
@@ -6038,6 +6112,7 @@ window.app = {
   setSaveByteCap(n) { _saveByteCap = n; },   // test seam: force/clear the save cap without a giant raster
   get workItems() { return workItems; },     // exposed for the E2E (library auto-load-on-run test)
   openToolsSettings,                          // deep-link to Settings → AI models & tools (install hub)
+  startCleanup,                               // object-removal mask overlay (#56)
   get engineSchemas() { return engineSchemas; },
   get rasterOpSchemas() { return rasterOpSchemas; },
   get rasterLiveKicks() { return rasterLiveKicks; },

@@ -1756,6 +1756,23 @@ def main():
         page.evaluate("closeModal();")
         check("openToolsSettings deep-links to the centralized install hub (no scattered inline installers)", deep)
 
+        # ---- Cleanup / object removal (LaMa) — overlay hook + /api/cleanup endpoint (#56) ----
+        check("the cleanup mask-overlay launcher is exposed", page.evaluate("() => typeof window.app.startCleanup === 'function'"))
+        # Drive the backend the way the overlay does: a tiny image + a white mask square → /api/cleanup.
+        clean = page.evaluate("""async () => {
+          const img = document.createElement('canvas'); img.width=img.height=96;
+          const ig = img.getContext('2d'); ig.fillStyle='#3c9650'; ig.fillRect(0,0,96,96); ig.fillStyle='#d22828'; ig.fillRect(36,36,24,24);
+          const msk = document.createElement('canvas'); msk.width=msk.height=96;
+          const mg = msk.getContext('2d'); mg.fillStyle='#000'; mg.fillRect(0,0,96,96); mg.fillStyle='#fff'; mg.fillRect(32,32,32,32);
+          try {
+            const r = await fetch('/api/cleanup', {method:'POST', headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({input_url: img.toDataURL('image/png'), mask_url: msk.toDataURL('image/png')})});
+            if (!r.ok) return {ok:false, status:r.status};
+            const j = await r.json(); return {ok: typeof j.url==='string' && j.url.includes('/outputs/'), url:j.url};
+          } catch(e) { return {ok:false, err:String(e)}; }
+        }""")
+        check("POST /api/cleanup runs LaMa and returns a scratch result URL (#56)", clean.get("ok"), str(clean))
+
         # serialize cleanliness
         mount_ctl(page)
         s = page.evaluate("editor.serialize()")

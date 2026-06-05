@@ -143,8 +143,13 @@ VENV_DIR = APP_DIR / ".venv"
 VENV_PYTHON = VENV_DIR / "bin" / "python3"
 AI_CUTOUT_SCRIPT = TOOLS_DIR / "ai_cutout.py"
 UPSCALE_SPANDREL_SCRIPT = TOOLS_DIR / "upscale_spandrel.py"
+LAMA_SCRIPT = TOOLS_DIR / "inpaint_lama.py"
 # SR checkpoints (.pth) downloaded on demand; kept in a user cache, not the repo tree.
 SR_MODELS_DIR = Path.home() / ".cache" / "hector-vector" / "sr"
+INPAINT_DIR = Path.home() / ".cache" / "hector-vector" / "inpaint"
+LAMA_MODEL = {
+    "file": "lama_fp32.onnx", "size_mb": 208,
+    "url": "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx"}
 
 
 def _venv_has(module: str) -> bool:
@@ -1615,6 +1620,48 @@ def build_upscale_spandrel(src: Path, dest: Path, model_id: str, tile: int, log)
     log_subprocess_lines(log, run_subprocess(cmd))
 
 
+def ensure_inpaint_model(log=None) -> Path:
+    """Resolve the big-LaMa ONNX, downloading on first use."""
+    INPAINT_DIR.mkdir(parents=True, exist_ok=True)
+    path = INPAINT_DIR / LAMA_MODEL["file"]
+    if not path.exists():
+        if not command_exists("curl"):
+            raise ValueError("curl is required to download the LaMa model.")
+        if log:
+            log(f"Downloading LaMa cleanup model (~{LAMA_MODEL['size_mb']}MB)…")
+        run_subprocess(["curl", "-sL", "-o", str(path), LAMA_MODEL["url"]])
+        if not path.exists() or path.stat().st_size < 1024:
+            path.unlink(missing_ok=True)
+            raise ValueError("LaMa model download failed.")
+    return path
+
+
+def build_lama_cleanup(src: Path, mask: Path, dest: Path, log) -> None:
+    if not _venv_has("onnxruntime"):
+        raise ValueError("onnxruntime is not installed in the project venv (install rembg or onnxruntime in Settings).")
+    path = ensure_inpaint_model(log)
+    cmd = [str(VENV_PYTHON), str(LAMA_SCRIPT), str(src), str(mask), str(dest), "--model", str(path)]
+    log_subprocess_lines(log, run_subprocess(cmd))
+
+
+def cleanup_inpaint(payload: dict) -> dict:
+    """Object removal: resolve the source image + the painted mask (both may be data: URLs),
+    run LaMa, return a scratch URL. Transient — mirrors apply_raster_op (no job/library copy)."""
+    src = resolve_source_url(payload.get("input_url", ""))
+    if src is None:
+        raise ValueError("Could not resolve the source image.")
+    mask = resolve_source_url(payload.get("mask_url", ""))
+    if mask is None:
+        raise ValueError("Could not resolve the cleanup mask.")
+    SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", src.stem).strip("-.") or "img"
+    stamp = int(time.time() * 1000) % 1000000
+    out = SCRATCH_DIR / f"{stem}.clean.{stamp}.png"
+    build_lama_cleanup(src, mask, out, lambda *_a, **_k: None)
+    rel = out.relative_to(OUTPUTS_DIR).as_posix()
+    return {"url": "/outputs/" + "/".join(urllib.parse.quote(p) for p in rel.split("/")), "name": out.name}
+
+
 def pixelvec_config(payload: dict) -> dict:
     def clamp_int(value: object, low: int, high: int, default: int) -> int:
         try:
@@ -2376,8 +2423,10 @@ CAPABILITIES = {
                 "models": [{"id": "scunet", "label": "SCUNet", "intents": ["blind"], "needs": ["scunet"], "size_mb": 70, "invoke": {}}]},
     "deblur": {"label": "Deblur", "kind": "raster", "op": None, "intents": ["default"],
                "models": [{"id": "nafnet", "label": "NAFNet", "intents": ["default"], "needs": ["nafnet"], "size_mb": 260, "invoke": {}}]},
+    # Interactive (mask-based) op, not a pipeline stage: invoked via /api/cleanup from the
+    # mask-paint tool, so `op` stays None. Runs big-LaMa on onnxruntime (already in-stack).
     "cleanup": {"label": "Cleanup / object removal", "kind": "raster", "op": None, "intents": ["object-removal"],
-                "models": [{"id": "lama", "label": "LaMa (IOPaint)", "intents": ["object-removal"], "needs": ["iopaint"], "size_mb": 200, "invoke": {}}]},
+                "models": [{"id": "lama", "label": "LaMa big (ONNX)", "intents": ["object-removal"], "needs": ["onnxruntime"], "size_mb": 208, "invoke": {}}]},
     "face": {"label": "Face restore", "kind": "raster", "op": None, "intents": ["restore"],
              "models": [{"id": "gfpgan", "label": "GFPGAN v1.4", "intents": ["restore"], "needs": ["gfpgan"], "size_mb": 340, "invoke": {}}]},
 }
@@ -2394,6 +2443,8 @@ def _need_available(need: str) -> bool:
         return rembg_installed()
     if need == "spandrel":
         return spandrel_installed()
+    if need == "onnxruntime":
+        return _venv_has("onnxruntime")
     return False
 
 
@@ -3307,6 +3358,8 @@ class Handler(SimpleHTTPRequestHandler):
                 result = install_rembg()
             elif parsed.path == "/api/install/spandrel":
                 result = install_spandrel()
+            elif parsed.path == "/api/cleanup":
+                result = cleanup_inpaint(payload)
             elif parsed.path == "/api/bootstrap":
                 result = bootstrap_tools()
             elif parsed.path == "/api/update/check":

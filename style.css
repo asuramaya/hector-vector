@@ -1188,6 +1188,17 @@ button:disabled {
 .cap-model-state.is-soon { color: var(--muted); font-style: italic; text-transform: none; font-weight: 500; letter-spacing: 0; }
 .cap-group-action { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 
+/* Object-removal (LaMa) cleanup overlay + launcher (#56) */
+.proc-cleanup-btn { display: block; width: 100%; margin: 6px 0 2px; padding: 7px 10px; font: inherit; font-size: 12px; font-weight: 600;
+  text-align: left; color: var(--ink); background: #fff; border: 1px solid var(--hair); border-radius: var(--r); cursor: pointer; }
+.proc-cleanup-btn:hover { background: var(--surface); border-color: var(--hair-2); }
+.cleanup-overlay { position: fixed; inset: 0; z-index: 9000; background: rgba(0,0,0,0.18); }
+.cleanup-canvas { position: fixed; cursor: crosshair; touch-action: none; outline: 1px dashed var(--ink); outline-offset: 0; }
+.cleanup-bar { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; background: #fff; border: 1px solid var(--hair); border-radius: var(--r); box-shadow: 0 4px 20px rgba(0,0,0,0.25); }
+.cleanup-hint { font-size: 12px; color: var(--muted); }
+.cleanup-bar input[type="range"] { width: 120px; }
+
 /* compact Properties "Process" pointer (the pipeline lives in the Processor panel now) */
 .raster-tools-compact { display: flex; flex-direction: column; gap: 8px; }
 
