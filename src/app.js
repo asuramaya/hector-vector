@@ -5126,6 +5126,12 @@ function buildPlanStepRow(s, offered) {
     add.textContent = "Add"; add.title = `Enable ${CAP_LABEL[s.capability] || s.capability}`;
     add.addEventListener("click", () => addPlanStep(s));
     row.appendChild(add);
+  } else if (offered && s.capability === "face") {
+    // Face restore is a one-shot op (not a pipeline stage) → run it directly on the target.
+    const run = document.createElement("button"); run.type = "button"; run.className = "proc-plan-add";
+    run.textContent = "Restore"; run.title = "Restore detected faces (GFPGAN)";
+    run.addEventListener("click", () => restoreFaces(processTarget().node));
+    row.appendChild(run);
   }
   return row;
 }

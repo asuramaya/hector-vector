@@ -464,6 +464,13 @@ def check_analyzer_router() -> None:
     # annotates them (available + invoke), so the auto-pipeline can compose them as stages.
     info = server.resolve_capability_step("denoise", "scunet-denoise")
     assert info and info["available"] and info["invoke"] == {}, info
+    # face-OFFER gating (#47): detect_face_count is robust (returns an int; 0 on a faceless synthetic)
+    import numpy as _np
+    from PIL import Image as _Image
+    with tempfile.TemporaryDirectory() as _td:
+        _p = Path(_td) / "flat.png"
+        _Image.fromarray(_np.full((64, 64, 3), 120, _np.uint8)).save(_p)
+        assert isinstance(server.detect_face_count(_p), int)
     print("ok: analyzer signals + plan (is-vs-want auto/offered) + intent→model router (#48)")
 
 

@@ -145,6 +145,7 @@ AI_CUTOUT_SCRIPT = TOOLS_DIR / "ai_cutout.py"
 UPSCALE_SPANDREL_SCRIPT = TOOLS_DIR / "upscale_spandrel.py"
 LAMA_SCRIPT = TOOLS_DIR / "inpaint_lama.py"
 FACE_RESTORE_SCRIPT = TOOLS_DIR / "face_restore.py"
+DETECT_FACES_SCRIPT = TOOLS_DIR / "detect_faces.py"
 # Downloaded-on-demand model weights; kept in a user cache, not the repo tree.
 SR_MODELS_DIR = Path.home() / ".cache" / "hector-vector" / "sr"
 INPAINT_DIR = Path.home() / ".cache" / "hector-vector" / "inpaint"
@@ -1731,6 +1732,35 @@ def build_face_restore(src: Path, dest: Path, log) -> None:
     log_subprocess_lines(log, run_subprocess(cmd))
 
 
+_FACE_COUNT_CACHE: dict[tuple, int] = {}
+
+
+def detect_face_count(path: Path) -> int:
+    """Face count for analyzer gating (0 if opencv/model absent). Subprocess'd to the venv
+    (cv2 isn't in the server interpreter) + cached by (path, mtime) so repeat plans are free."""
+    if not _venv_has("cv2"):
+        return 0
+    yunet = FACE_DIR / YUNET_MODEL["file"]
+    if not yunet.exists():
+        return 0
+    try:
+        key = (str(path), path.stat().st_mtime_ns)
+    except OSError:
+        return 0
+    if key in _FACE_COUNT_CACHE:
+        return _FACE_COUNT_CACHE[key]
+    n = 0
+    try:
+        out = subprocess.run([str(VENV_PYTHON), str(DETECT_FACES_SCRIPT), str(path), str(yunet)],
+                             capture_output=True, text=True, timeout=30)
+        m = re.search(r"faces=(\d+)", out.stdout or "")
+        n = int(m.group(1)) if m else 0
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        n = 0
+    _FACE_COUNT_CACHE[key] = n
+    return n
+
+
 def face_restore_op(payload: dict) -> dict:
     """One-shot face restoration (GFPGAN). Detects + restores faces internally — no mask.
     Transient like apply_raster_op/cleanup: scratch output, no job/library copy."""
@@ -2701,6 +2731,19 @@ def plan_image(payload: dict) -> dict:
             step["invoke"] = info["invoke"]
             if info.get("size_mb"):
                 step["size_mb"] = info["size_mb"]
+    # Face-restore is OFFERED (never auto) only when a face is actually present — the gate
+    # the pixels can decide. Photographic content only (a flat graphic won't have a face).
+    if a["content_class"] in ("photo", "photo_gray", "screenshot"):
+        faces = detect_face_count(src)
+        if faces > 0:
+            step = {"capability": "face", "intent": "restore", "model": "gfpgan",
+                    "why": f"{faces} face{'s' if faces != 1 else ''} detected — restore if low-quality."}
+            info = resolve_capability_step("face", "gfpgan")
+            if info:
+                step["available"] = info["available"]
+                step["needs"] = info["needs"]
+                step["invoke"] = info["invoke"]
+            pl["offered"].append(step)
     return {"analysis": a, "plan": pl}
 
 
