@@ -453,6 +453,12 @@ def check_analyzer_router() -> None:
     face = next(c for c in server.capabilities_info() if c["id"] == "face")
     assert face["models"][0]["needs"] == ["onnxruntime", "opencv"], face
     assert "GFPGANv1.4" in server.GFPGAN_MODEL["url"] and server.YUNET_MODEL["file"] == "yunet.onnx"
+    # degradation fixers (#58): real, spandrel-backed (no new dep), each invoke→SR_MODELS id
+    for cid, mid in (("denoise", "scunet-denoise"), ("dejpeg", "fbcnn-dejpeg"), ("deblur", "nafnet-deblur")):
+        cap = next(c for c in server.capabilities_info() if c["id"] == cid)
+        m = cap["models"][0]
+        assert m["needs"] == ["spandrel"] and m["invoke"]["model"] == mid, cap
+        assert mid in server.SR_MODELS and "url" in server.SR_MODELS[mid], mid
     print("ok: analyzer signals + plan (is-vs-want auto/offered) + intent→model router (#48)")
 
 

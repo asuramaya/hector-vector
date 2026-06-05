@@ -5317,6 +5317,21 @@ async function restoreFaces(node) {
   } catch (e) { setStatus(`Face restore failed: ${e.message}`, 4500); }
 }
 
+// One-shot degradation fix (#58): denoise / de-JPEG / deblur via a spandrel restoration model.
+async function applyRestore(model, label, node) {
+  node = node || (processTarget().node);
+  if (!node || !editor.isRaster(node)) { setStatus("Select a raster on the canvas first.", 2800); return; }
+  setStatus(`${label}… first run downloads the model.`, 0);
+  try {
+    const res = await api("/api/restore", "POST", { input_url: rasterHref(node), model });
+    if (!node.isConnected || !editor.isRaster(node)) { setStatus("The canvas changed; result discarded.", 4000); return; }
+    node.setAttribute("href", res.url);
+    editor.push(label);
+    editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
+    setStatus(`${label} done.`, 2800);
+  } catch (e) { setStatus(`${label} failed: ${e.message}`, 4500); }
+}
+
 function buildProcessorRail() {
   const rail = document.createElement("div"); rail.className = "proc-rail";
   const t = processTarget();
@@ -5355,6 +5370,16 @@ function buildProcessorRail() {
     face.title = "GFPGAN face restoration — detects faces automatically (no change if none found)";
     face.addEventListener("click", () => restoreFaces(t.node));
     rail.appendChild(face);
+
+    // Degradation fixers (#58): compact row — denoise / de-JPEG / deblur (spandrel restoration).
+    const fixes = document.createElement("div"); fixes.className = "proc-fix-row";
+    [["scunet-denoise", "Denoise"], ["fbcnn-dejpeg", "De-JPEG"], ["nafnet-deblur", "Deblur"]].forEach(([m, l]) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "proc-fix-btn";
+      b.textContent = l; b.title = `${l} — spandrel restoration`;
+      b.addEventListener("click", () => applyRestore(m, l, t.node));
+      fixes.appendChild(b);
+    });
+    rail.appendChild(fixes);
   }
 
   // Stage cards in saved order, vertical flow, drag to reorder.
@@ -6138,6 +6163,7 @@ window.app = {
   openToolsSettings,                          // deep-link to Settings → AI models & tools (install hub)
   startCleanup,                               // object-removal mask overlay (#56)
   restoreFaces,                               // one-shot GFPGAN face restoration (#57)
+  applyRestore,                               // one-shot degradation fix: denoise/dejpeg/deblur (#58)
   get engineSchemas() { return engineSchemas; },
   get rasterOpSchemas() { return rasterOpSchemas; },
   get rasterLiveKicks() { return rasterLiveKicks; },

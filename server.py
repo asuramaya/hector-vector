@@ -1610,6 +1610,20 @@ SR_MODELS = {
         "label": "Real-CUGAN ×2 (anime)", "scale": 2, "size_mb": 5,
         "file": "realcugan-up2x-no-denoise.pth",
         "url": "https://huggingface.co/spaces/luoxia/Real-CUGAN/resolve/main/weights_v3/up2x-latest-no-denoise.pth"},
+    # #58 degradation fixers — spandrel restoration archs (scale 1), run through the SAME
+    # executor as SR (it reads scale from the checkpoint). No new deps (spandrel from #54).
+    "scunet-denoise": {                                  # SCUNet, denoise
+        "label": "SCUNet denoise", "scale": 1, "size_mb": 69,
+        "file": "scunet_color_real_psnr.pth",
+        "url": "https://huggingface.co/deepinv/scunet/resolve/main/scunet_color_real_psnr.pth"},
+    "fbcnn-dejpeg": {                                     # FBCNN, JPEG-artifact removal
+        "label": "FBCNN de-JPEG", "scale": 1, "size_mb": 275,
+        "file": "fbcnn_color.pth",
+        "url": "https://github.com/jiaxi-jiang/FBCNN/releases/download/v1.0/fbcnn_color.pth"},
+    "nafnet-deblur": {                                    # NAFNet, deblur
+        "label": "NAFNet deblur", "scale": 1, "size_mb": 260,
+        "file": "NAFNet-GoPro-width64.pth",
+        "url": "https://huggingface.co/nyanko7/nafnet-models/resolve/main/NAFNet-GoPro-width64.pth"},
 }
 
 
@@ -1722,6 +1736,25 @@ def face_restore_op(payload: dict) -> dict:
     stamp = int(time.time() * 1000) % 1000000
     out = SCRATCH_DIR / f"{stem}.face.{stamp}.png"
     build_face_restore(src, out, lambda *_a, **_k: None)
+    rel = out.relative_to(OUTPUTS_DIR).as_posix()
+    return {"url": "/outputs/" + "/".join(urllib.parse.quote(p) for p in rel.split("/")), "name": out.name}
+
+
+def restore_op(payload: dict) -> dict:
+    """Degradation fix (#58): run a spandrel restoration model (denoise/dejpeg/deblur) on the
+    image. Reuses build_upscale_spandrel — the executor is model-agnostic (scale from the
+    checkpoint, =1 for restoration). Transient scratch output, like apply_raster_op."""
+    src = resolve_source_url(payload.get("input_url", ""))
+    if src is None:
+        raise ValueError("Could not resolve the source image.")
+    model = (payload.get("model") or "").strip()
+    if model not in SR_MODELS:
+        raise ValueError(f"Unknown restore model: {model!r}")
+    SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", src.stem).strip("-.") or "img"
+    stamp = int(time.time() * 1000) % 1000000
+    out = SCRATCH_DIR / f"{stem}.restore.{stamp}.png"
+    build_upscale_spandrel(src, out, model, 256, lambda *_a, **_k: None)
     rel = out.relative_to(OUTPUTS_DIR).as_posix()
     return {"url": "/outputs/" + "/".join(urllib.parse.quote(p) for p in rel.split("/")), "name": out.name}
 
@@ -2481,12 +2514,14 @@ CAPABILITIES = {
         ],
     },
     # ---- P3 capabilities: declared so router ids resolve; models land with their tasks ----
+    # #58 degradation fixers — real, one-shot ops via /api/restore (model = the SR_MODELS id).
+    # spandrel restoration archs (no new dep); the analyzer plans these, the user applies them.
     "dejpeg": {"label": "Remove JPEG artifacts", "kind": "raster", "op": None, "intents": ["default"],
-               "models": [{"id": "fbcnn", "label": "FBCNN", "intents": ["default"], "needs": ["fbcnn"], "size_mb": 280, "invoke": {}}]},
+               "models": [{"id": "fbcnn-dejpeg", "label": "FBCNN", "intents": ["default"], "needs": ["spandrel"], "size_mb": 275, "invoke": {"model": "fbcnn-dejpeg"}}]},
     "denoise": {"label": "Denoise", "kind": "raster", "op": None, "intents": ["blind"],
-                "models": [{"id": "scunet", "label": "SCUNet", "intents": ["blind"], "needs": ["scunet"], "size_mb": 70, "invoke": {}}]},
+                "models": [{"id": "scunet-denoise", "label": "SCUNet", "intents": ["blind"], "needs": ["spandrel"], "size_mb": 69, "invoke": {"model": "scunet-denoise"}}]},
     "deblur": {"label": "Deblur", "kind": "raster", "op": None, "intents": ["default"],
-               "models": [{"id": "nafnet", "label": "NAFNet", "intents": ["default"], "needs": ["nafnet"], "size_mb": 260, "invoke": {}}]},
+               "models": [{"id": "nafnet-deblur", "label": "NAFNet", "intents": ["default"], "needs": ["spandrel"], "size_mb": 260, "invoke": {"model": "nafnet-deblur"}}]},
     # Interactive (mask-based) op, not a pipeline stage: invoked via /api/cleanup from the
     # mask-paint tool, so `op` stays None. Runs big-LaMa on onnxruntime (already in-stack).
     "cleanup": {"label": "Cleanup / object removal", "kind": "raster", "op": None, "intents": ["object-removal"],
@@ -3431,6 +3466,8 @@ class Handler(SimpleHTTPRequestHandler):
                 result = cleanup_inpaint(payload)
             elif parsed.path == "/api/face-restore":
                 result = face_restore_op(payload)
+            elif parsed.path == "/api/restore":
+                result = restore_op(payload)
             elif parsed.path == "/api/install/opencv":
                 result = install_opencv()
             elif parsed.path == "/api/bootstrap":

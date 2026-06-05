@@ -1199,6 +1199,12 @@ button:disabled {
 .cleanup-hint { font-size: 12px; color: var(--muted); }
 .cleanup-bar input[type="range"] { width: 120px; }
 
+/* Degradation-fix row (#58): compact denoise / de-JPEG / deblur buttons */
+.proc-fix-row { display: flex; gap: 6px; margin: 2px 0 4px; }
+.proc-fix-btn { flex: 1 1 0; padding: 6px 4px; font: inherit; font-size: 11px; font-weight: 600; color: var(--ink);
+  background: #fff; border: 1px solid var(--hair); border-radius: var(--r); cursor: pointer; }
+.proc-fix-btn:hover { background: var(--surface); border-color: var(--hair-2); }
+
 /* compact Properties "Process" pointer (the pipeline lives in the Processor panel now) */
 .raster-tools-compact { display: flex; flex-direction: column; gap: 8px; }
 

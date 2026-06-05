@@ -1783,6 +1783,24 @@ def main():
         }""")
         check("face-restore capability is registered + available (onnxruntime+opencv) (#57)", faceavail)
 
+        # ---- Degradation fixers (SCUNet/FBCNN/NAFNet via spandrel) — hook + endpoint (#58) ----
+        check("the degradation-fix launcher is exposed", page.evaluate("() => typeof window.app.applyRestore === 'function'"))
+        fixavail = page.evaluate("""async () => {
+          const caps = await (await fetch('/api/capabilities')).json();
+          return ['denoise','dejpeg','deblur'].every(id => { const c = caps.find(x=>x.id===id);
+            return c && c.models.some(m => m.available && m.needs.includes('spandrel')); });
+        }""")
+        check("denoise/dejpeg/deblur capabilities registered + available via spandrel (#58)", fixavail)
+        denoise = page.evaluate("""async () => {
+          const c = document.createElement('canvas'); c.width=c.height=64; const g=c.getContext('2d');
+          const d=g.createImageData(64,64); for(let i=0;i<d.data.length;i+=4){const v=90+((Math.imul(i,2654435761)>>>24)%40-20);d.data[i]=v;d.data[i+1]=v+30;d.data[i+2]=v+60;d.data[i+3]=255;} g.putImageData(d,0,0);
+          try { const r = await fetch('/api/restore',{method:'POST',headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({input_url:c.toDataURL('image/png'), model:'scunet-denoise'})});
+            if(!r.ok) return {ok:false,status:r.status}; const j=await r.json(); return {ok: typeof j.url==='string' && j.url.includes('/outputs/')};
+          } catch(e){ return {ok:false, err:String(e)}; }
+        }""")
+        check("POST /api/restore runs a spandrel denoise and returns a result URL (#58)", denoise.get("ok"), str(denoise))
+
         # serialize cleanliness
         mount_ctl(page)
         s = page.evaluate("editor.serialize()")
