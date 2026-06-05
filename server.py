@@ -1571,6 +1571,19 @@ SR_MODELS = {
         "label": "Real-ESRGAN ×4 (spandrel)", "scale": 4, "size_mb": 64,
         "file": "RealESRGAN_x4plus.pth",
         "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"},
+    # #55 tiers behind intents. Arch + scale confirmed by a spandrel load+run on each.
+    "dat2-realweb-x4": {                                 # DAT-2, detail / real-photo restore
+        "label": "DAT-2 RealWebPhoto ×4 (detail)", "scale": 4, "size_mb": 134,
+        "file": "4xRealWebPhoto_v4_dat2.safetensors",
+        "url": "https://huggingface.co/Phips/4xRealWebPhoto_v4_dat2/resolve/main/4xRealWebPhoto_v4_dat2.safetensors"},
+    "span-nomos-x4": {                                   # SPAN, fast / lightweight
+        "label": "SPAN NomosUni ×4 (fast)", "scale": 4, "size_mb": 5,
+        "file": "4xNomosUni_span_multijpg.safetensors",
+        "url": "https://huggingface.co/Phips/4xNomosUni_span_multijpg/resolve/main/4xNomosUni_span_multijpg.safetensors"},
+    "realcugan-up2x": {                                  # Real-CUGAN (UpCunet2x), anime ×2
+        "label": "Real-CUGAN ×2 (anime)", "scale": 2, "size_mb": 5,
+        "file": "realcugan-up2x-no-denoise.pth",
+        "url": "https://huggingface.co/spaces/luoxia/Real-CUGAN/resolve/main/weights_v3/up2x-latest-no-denoise.pth"},
 }
 
 
@@ -2062,7 +2075,9 @@ RASTER_OPS = {
         "label": "Upscale", "caps": {"needs": ["realesrgan"]},
         "schema": [
             {"key": "model", "type": "select", "default": "realesrgan-x4plus", "label": "Model",
-             "options": [["realesrgan-x4plus", "ESRGAN x4+ (photo)"], ["realesrnet-x4plus", "ESRNet x4+ (cleaner)"], ["realesr-animevideov3", "Anime / line-art"], ["realesrgan-x4-spandrel", "Real-ESRGAN x4 (spandrel/torch)"]]},
+             "options": [["realesrgan-x4plus", "ESRGAN x4+ (photo)"], ["realesrnet-x4plus", "ESRNet x4+ (cleaner)"], ["realesr-animevideov3", "Anime / line-art"],
+                         ["realesrgan-x4-spandrel", "Real-ESRGAN x4 (spandrel/torch)"], ["dat2-realweb-x4", "DAT-2 — detail (spandrel)"],
+                         ["span-nomos-x4", "SPAN — fast (spandrel)"], ["realcugan-up2x", "Real-CUGAN ×2 — anime (spandrel)"]]},
             {"key": "scale", "type": "select", "default": "4", "label": "Scale",
              "options": [["2", "2×"], ["3", "3×"], ["4", "4×"]]},
         ],
@@ -2321,7 +2336,7 @@ CAPABILITIES = {
     },
     "upscale": {
         "label": "Upscale", "kind": "raster", "op": "upscale",
-        "intents": ["photo", "clean", "anime"],
+        "intents": ["photo", "clean", "anime", "detail", "lite"],
         "models": [
             {"id": "realesrgan-x4plus", "label": "Real-ESRGAN ×4 (photo)", "intents": ["photo"], "needs": ["realesrgan"],
              "invoke": {"model": "realesrgan-x4plus"}},
@@ -2330,10 +2345,16 @@ CAPABILITIES = {
             {"id": "realesr-animevideov3", "label": "Anime / line-art ×4", "intents": ["anime"], "needs": ["realesrgan"],
              "invoke": {"model": "realesr-animevideov3"}},
             # Universal-loader path (#54): spandrel/torch runs any SR checkpoint. Listed after
-            # the Vulkan ncnn model so "photo" still resolves to the lighter installed binary;
-            # this is the alternative + the foundation the #55 tiers (DAT-2/SPAN/…) build on.
+            # the Vulkan ncnn model so "photo" still resolves to the lighter installed binary.
             {"id": "realesrgan-x4-spandrel", "label": "Real-ESRGAN ×4 (spandrel/torch)", "intents": ["photo"],
              "needs": ["spandrel"], "size_mb": 64, "invoke": {"model": "realesrgan-x4-spandrel"}},
+            # #55 spandrel tiers behind dedicated intents (arch/scale confirmed by load+run).
+            {"id": "dat2-realweb-x4", "label": "DAT-2 — detail / real photo (×4)", "intents": ["detail"],
+             "needs": ["spandrel"], "size_mb": 134, "invoke": {"model": "dat2-realweb-x4"}},
+            {"id": "span-nomos-x4", "label": "SPAN — fast / lightweight (×4)", "intents": ["lite"],
+             "needs": ["spandrel"], "size_mb": 5, "invoke": {"model": "span-nomos-x4"}},
+            {"id": "realcugan-up2x", "label": "Real-CUGAN — anime (×2)", "intents": ["anime"],
+             "needs": ["spandrel"], "size_mb": 5, "invoke": {"model": "realcugan-up2x"}},
         ],
     },
     "vectorize": {
