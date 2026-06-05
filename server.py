@@ -895,6 +895,8 @@ def pipeline_expected_output(st: dict, stem: str) -> str | None:
         return f"{stem}.cutout.png"
     if st.get("upscale"):
         return f"{stem}.png"
+    if any(st.get(sid) for sid in ("dejpeg", "denoise", "deblur")):
+        return f"{stem}.png"   # restoration-only run → the fixed PNG
     return None
 
 
@@ -1625,6 +1627,10 @@ SR_MODELS = {
         "file": "NAFNet-GoPro-width64.pth",
         "url": "https://huggingface.co/nyanko7/nafnet-models/resolve/main/NAFNet-GoPro-width64.pth"},
 }
+# Restoration PIPELINE stages → their fixed SR_MODELS id. The stage flag (stage_<id>) flips it
+# on; the model is implied by the stage (no settings key, so no collision with upscale's model).
+# Order here is the flow order — degradation fixes run BEFORE upscale (clean, then enlarge).
+RESTORE_STAGE_MODELS = {"dejpeg": "fbcnn-dejpeg", "denoise": "scunet-denoise", "deblur": "nafnet-deblur"}
 
 
 def ensure_sr_model(model_id: str, log=None) -> Path:
@@ -2028,11 +2034,14 @@ def _pipeline_stages(payload: dict) -> dict:
     pipeline (back-compat for `/api/run/pipeline` callers that predate the strip).
     Methods fall back to the legacy single-purpose settings so an old payload
     still routes the way it used to."""
-    stage_keys = ("stage_upscale", "stage_removebg", "stage_vectorize")
+    stage_keys = ("stage_upscale", "stage_removebg", "stage_vectorize",
+                  "stage_dejpeg", "stage_denoise", "stage_deblur")
     explicit = any(k in payload for k in stage_keys)
     up = _stage_on(payload.get("stage_upscale")) if explicit else True
     rb = _stage_on(payload.get("stage_removebg")) if explicit else True
     vec = _stage_on(payload.get("stage_vectorize")) if explicit else True
+    # Restoration stages default OFF (legacy all-three payloads had no concept of them).
+    fixes = {sid: _stage_on(payload.get(f"stage_{sid}")) for sid in RESTORE_STAGE_MODELS}
 
     rb_method = (payload.get("removebg_method") or "").strip().lower()
     if rb_method not in ("classical", "ai", "green"):
@@ -2041,11 +2050,14 @@ def _pipeline_stages(payload: dict) -> dict:
     if vec_method not in ("trace", "pixel"):
         vec_method = "pixel" if (payload.get("trace_mode") == "pixel") else "trace"
     return {"upscale": up, "removebg": rb, "vectorize": vec,
-            "removebg_method": rb_method, "vectorize_method": vec_method}
+            "removebg_method": rb_method, "vectorize_method": vec_method, **fixes}
 
 
 def _pipeline_summary(name: str, st: dict) -> str:
     parts = []
+    for sid, label in (("dejpeg", "De-JPEG"), ("denoise", "Denoise"), ("deblur", "Deblur")):
+        if st.get(sid):
+            parts.append(label)
     if st["upscale"]:
         parts.append("Upscale")
     if st["removebg"]:
@@ -2516,12 +2528,14 @@ CAPABILITIES = {
     # ---- P3 capabilities: declared so router ids resolve; models land with their tasks ----
     # #58 degradation fixers — real, one-shot ops via /api/restore (model = the SR_MODELS id).
     # spandrel restoration archs (no new dep); the analyzer plans these, the user applies them.
+    # invoke is EMPTY on purpose: the stage's model is fixed per-capability (RESTORE_STAGE_MODELS),
+    # so the auto-plan just flips the stage on — it must NOT set settings.model (that's upscale's).
     "dejpeg": {"label": "Remove JPEG artifacts", "kind": "raster", "op": None, "intents": ["default"],
-               "models": [{"id": "fbcnn-dejpeg", "label": "FBCNN", "intents": ["default"], "needs": ["spandrel"], "size_mb": 275, "invoke": {"model": "fbcnn-dejpeg"}}]},
+               "models": [{"id": "fbcnn-dejpeg", "label": "FBCNN", "intents": ["default"], "needs": ["spandrel"], "size_mb": 275, "invoke": {}}]},
     "denoise": {"label": "Denoise", "kind": "raster", "op": None, "intents": ["blind"],
-                "models": [{"id": "scunet-denoise", "label": "SCUNet", "intents": ["blind"], "needs": ["spandrel"], "size_mb": 69, "invoke": {"model": "scunet-denoise"}}]},
+                "models": [{"id": "scunet-denoise", "label": "SCUNet", "intents": ["blind"], "needs": ["spandrel"], "size_mb": 69, "invoke": {}}]},
     "deblur": {"label": "Deblur", "kind": "raster", "op": None, "intents": ["default"],
-               "models": [{"id": "nafnet-deblur", "label": "NAFNet", "intents": ["default"], "needs": ["spandrel"], "size_mb": 260, "invoke": {"model": "nafnet-deblur"}}]},
+               "models": [{"id": "nafnet-deblur", "label": "NAFNet", "intents": ["default"], "needs": ["spandrel"], "size_mb": 260, "invoke": {}}]},
     # Interactive (mask-based) op, not a pipeline stage: invoked via /api/cleanup from the
     # mask-paint tool, so `op` stays None. Runs big-LaMa on onnxruntime (already in-stack).
     "cleanup": {"label": "Cleanup / object removal", "kind": "raster", "op": None, "intents": ["object-removal"],
@@ -2712,7 +2726,8 @@ def run_pipeline(payload: dict) -> dict:
     st = _pipeline_stages(payload)
     up, rb, vec = st["upscale"], st["removebg"], st["vectorize"]
     rb_method, vec_method = st["removebg_method"], st["vectorize_method"]
-    if not (up or rb or vec):
+    active_fixes = [sid for sid in RESTORE_STAGE_MODELS if st.get(sid)]   # dejpeg/denoise/deblur, in flow order
+    if not (up or rb or vec or active_fixes):
         return {"message": "Enable at least one pipeline stage.", "started": 0, "skipped": []}
 
     model = payload.get("model", "realesrgan-x4plus")
@@ -2728,6 +2743,8 @@ def run_pipeline(payload: dict) -> dict:
         ensure_tools_ready("vtracer")
     if rb and rb_method == "ai" and not rembg_installed():
         raise ValueError("AI cutout requested but rembg is not installed. Install it from Settings, or use the classical method.")
+    if (active_fixes or (up and model in SR_MODELS)) and not spandrel_installed():
+        raise ValueError("This pipeline needs spandrel (denoise/de-JPEG/deblur or a spandrel upscale model). Install it from Settings.")
 
     # Skip-detection is stage-aware: skip a discovered image only when THIS
     # stage-set's terminal output already exists (see is_pipeline_processed).
@@ -2760,7 +2777,7 @@ def run_pipeline(payload: dict) -> dict:
         _prune_focused_pipeline_dirs()   # bound old hidden focused-run dirs BEFORE we mint a new one
     out_dir = output_dir("pipeline", hidden=focused)
     friendly = _safe_stem(payload.get("input_name")) if focused else None
-    total = sum((up, rb, vec)) + 1   # +1 for the closing "Done" tick
+    total = len(active_fixes) + sum((up, rb, vec)) + 1   # +1 for the closing "Done" tick
     jobs_started = []
     for src in targets:
         stem = friendly or src.stem
@@ -2775,6 +2792,19 @@ def run_pipeline(payload: dict) -> dict:
                 step["n"] += 1
                 _report_progress(step["n"], total, label)
             current = src   # the image flowing between stages
+
+            # --- 0) Degradation fixes (restoration prelude): dejpeg → denoise → deblur, BEFORE
+            #        upscale (clean then enlarge). Each is a spandrel scale-1 model; chain them.
+            #        When restoration is the ONLY work, the last fix writes the terminal PNG.
+            restore_terminal = not (up or rb or vec)
+            for i, sid in enumerate(active_fixes):
+                tick({"dejpeg": "De-JPEG", "denoise": "Denoise", "deblur": "Deblur"}[sid])
+                last = i == len(active_fixes) - 1
+                dest = upscale_dest if (restore_terminal and last) else (out_dir / f"{stem}.fix-{sid}.png")
+                log(f"{sid} via spandrel ({RESTORE_STAGE_MODELS[sid]}).")
+                build_upscale_spandrel(current, dest, RESTORE_STAGE_MODELS[sid], 256, log)
+                _register_output(dest)
+                current = dest
 
             # --- 1) Upscale ---
             if up:

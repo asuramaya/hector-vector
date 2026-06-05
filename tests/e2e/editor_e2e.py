@@ -1879,8 +1879,9 @@ def main():
         stages = page.evaluate("""() => { renderProcessorPanel();
             return { names:[...document.querySelectorAll('#processor-body .proc-stage .stage-name')].map(s=>s.textContent),
                      target:(document.querySelector('#processor-body .proc-target-name')||{}).textContent }; }""")
-        check("Processor hosts Upscale / Remove BG / Vectorize for the selected raster",
-              stages["names"] == ["Upscale", "Remove BG", "Vectorize"] and stages["target"] != "Whole library (batch)", str(stages))
+        check("Processor hosts the pipeline stages (restoration + Upscale/Remove BG/Vectorize) for the selected raster",
+              set(stages["names"]) == {"De-JPEG", "Denoise", "Deblur", "Upscale", "Remove BG", "Vectorize"}
+              and stages["target"] != "Whole library (batch)", str(stages))
         # batch is EXPLICIT: the focused raster is the default; the ▦ swap toggles to
         # whole-library batch (and back). Was: silently defaulted to batch with no raster.
         batch = page.evaluate("""() => {
@@ -2666,11 +2667,11 @@ def main():
             const up = document.querySelector('#processor-body .proc-stage[data-stage="upscale"] .stage-toggle');
             const wasOn = up.checked; up.click(); const toggled = up.checked !== wasOn; up.click();
             return { inDock: !!document.querySelector('#rightdock .rail-section.processor'),
-                     stages, hasStages: stages.length === 3, toggled,
+                     stages, hasStages: stages.length === 6, toggled,
                      canFloat: (window.__docks.float('processor'), window.__docks.loc('processor') === 'float') };
         }""")
         page.evaluate("window.__docks.dock('processor','right')"); page.wait_for_timeout(40)
-        check("Processor is a dockable flow-rail panel with the 3 pipeline stages",
+        check("Processor is a dockable flow-rail panel with the pipeline stages",
               proc["inDock"] and proc["hasStages"] and proc["toggled"] and proc["canFloat"], str(proc))
         # Properties is the same kind of object — float it, then dock it back
         page.evaluate("window.__docks.float('properties')"); page.wait_for_timeout(60)

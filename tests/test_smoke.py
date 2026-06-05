@@ -453,12 +453,17 @@ def check_analyzer_router() -> None:
     face = next(c for c in server.capabilities_info() if c["id"] == "face")
     assert face["models"][0]["needs"] == ["onnxruntime", "opencv"], face
     assert "GFPGANv1.4" in server.GFPGAN_MODEL["url"] and server.YUNET_MODEL["file"] == "yunet.onnx"
-    # degradation fixers (#58): real, spandrel-backed (no new dep), each invoke→SR_MODELS id
+    # degradation fixers (#58): real, spandrel-backed (no new dep). invoke is EMPTY — the stage's
+    # model is fixed via RESTORE_STAGE_MODELS (so the auto-plan can't clobber upscale's settings.model).
     for cid, mid in (("denoise", "scunet-denoise"), ("dejpeg", "fbcnn-dejpeg"), ("deblur", "nafnet-deblur")):
         cap = next(c for c in server.capabilities_info() if c["id"] == cid)
         m = cap["models"][0]
-        assert m["needs"] == ["spandrel"] and m["invoke"]["model"] == mid, cap
-        assert mid in server.SR_MODELS and "url" in server.SR_MODELS[mid], mid
+        assert m["needs"] == ["spandrel"] and m["invoke"] == {}, cap
+        assert server.RESTORE_STAGE_MODELS[cid] == mid and mid in server.SR_MODELS, cid
+    # auto-apply (#47 follow-up): the analyzer plans these with registry ids → resolve_capability_step
+    # annotates them (available + invoke), so the auto-pipeline can compose them as stages.
+    info = server.resolve_capability_step("denoise", "scunet-denoise")
+    assert info and info["available"] and info["invoke"] == {}, info
     print("ok: analyzer signals + plan (is-vs-want auto/offered) + intent→model router (#48)")
 
 

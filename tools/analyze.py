@@ -193,13 +193,13 @@ def plan(a: dict) -> dict:
     #    screenshot content is full of straight edges on the 8px lattice that fool the DCT
     #    metric (a lossless PNG screenshot is not a ringing JPEG) → restrict to photographs.
     if is_photo and deg["jpeg_blockiness"] > T_BLOCKY:
-        steps.append({"capability": "dejpeg", "intent": "default", "model": "fbcnn", "weight": "heavy",
+        steps.append({"capability": "dejpeg", "intent": "default", "model": "fbcnn-dejpeg", "weight": "heavy",
                       "why": f"JPEG 8px blocking detected (ratio {deg['jpeg_blockiness']})."})
 
     # 2. denoise — PHOTO ONLY. Flat/line art reads 'noisy' to Immerkaer because of AA fringe;
     #    the right fix there is palette quantisation (the trace engine), not a denoiser.
     if is_photo and deg["noise_sigma"] > T_NOISE:
-        steps.append({"capability": "denoise", "intent": "blind", "model": "scunet", "weight": "heavy",
+        steps.append({"capability": "denoise", "intent": "blind", "model": "scunet-denoise", "weight": "heavy",
                       "why": f"Noise estimate σ≈{deg['noise_sigma']} above clean floor."})
 
     # 3. upscale — low-res IS a true affordance, but a pre-vectorize upscale is wasted:
@@ -225,7 +225,7 @@ def plan(a: dict) -> dict:
                         "why": "Remove background (intent-dependent — offered)."})
     # deblur is PHOTO ONLY — blur_ratio is unstable on flat art (low Laplacian + low contrast).
     if is_photo and deg["blur_ratio"] < T_BLUR_SOFT:
-        offered.append({"capability": "deblur", "intent": "default", "model": "nafnet",
+        offered.append({"capability": "deblur", "intent": "default", "model": "nafnet-deblur",
                         "why": f"Looks soft (blur ratio {deg['blur_ratio']}) — deblur if intended."})
         notes.append("soft/low-detail")
 

@@ -35,7 +35,7 @@ const SETTINGS_DEFAULTS = {
   stage_vectorize: true,
   removebg_method: "classical", // classical | ai (rembg) | green (chromakey) — folds in Greenscreen
   vectorize_method: "trace",    // trace (vtracer) | pixel (pixelvec) — folds in Pixel Art → SVG
-  pipeline_order: "upscale,removebg,vectorize",   // visual block order (persisted); flow stays canonical
+  pipeline_order: "dejpeg,denoise,deblur,upscale,removebg,vectorize",   // visual block order (persisted); flow stays canonical
   trace_simplify: "medium",    // post-trace refit to minimal cubics: off/light/medium/strong
   trace_colormode: "bw",       // bw = mask trace (1-color); color = full-color trace of the image
   trace_color_style: "poster", // poster = flat limited palette · photo = smooth gradients
@@ -2542,9 +2542,21 @@ function renderVectorizeStage(body, node, rerender = rasterReRender) {
   }
 }
 // Render one stage's settings (dispatch by id). Used by the Processor panel cards.
+const RESTORE_STAGE_INFO = {
+  dejpeg: { model: "FBCNN", why: "Auto-suggested when the analyzer detects JPEG blocking." },
+  denoise: { model: "SCUNet", why: "Auto-suggested when the analyzer detects sensor noise." },
+  deblur: { model: "NAFNet", why: "Offered when the image looks soft / out of focus." },
+};
 function renderStageSettings(body, id, node, rerender = rasterReRender) {
-  if (id === "vectorize") renderVectorizeStage(body, node, rerender);
-  else renderRasterOpStage(body, id, node, rerender);
+  if (id === "vectorize") { renderVectorizeStage(body, node, rerender); return; }
+  const info = RESTORE_STAGE_INFO[id];
+  if (info) {   // restoration stages: fixed model, no params — just explain what they do
+    const p = document.createElement("p"); p.className = "stage-restore-note";
+    p.textContent = `Restoration via ${info.model} (spandrel). ${info.why} Runs before upscale.`;
+    body.appendChild(p);
+    return;
+  }
+  renderRasterOpStage(body, id, node, rerender);
 }
 
 // The raster Properties panel no longer crams the pipeline — it points at the Processor
@@ -4688,6 +4700,9 @@ function buildJobsPanel() {
 // initialize — so the Processor panel must no-op on that first call and fill once ready.
 var pipelineConstsReady = false;
 const PIPELINE_STAGES = [
+  { id: "dejpeg",    key: "stage_dejpeg",    label: "De-JPEG",   note: "Remove JPEG artifacts (FBCNN)" },
+  { id: "denoise",   key: "stage_denoise",   label: "Denoise",   note: "Reduce noise (SCUNet)" },
+  { id: "deblur",    key: "stage_deblur",    label: "Deblur",    note: "Sharpen soft focus (NAFNet)" },
   { id: "upscale",   key: "stage_upscale",   label: "Upscale",   note: "Enlarge with Real-ESRGAN" },
   { id: "removebg",  key: "stage_removebg",  label: "Remove BG", note: "Isolate the subject" },
   { id: "vectorize", key: "stage_vectorize", label: "Vectorize", note: "Raster → SVG" },
@@ -4695,7 +4710,7 @@ const PIPELINE_STAGES = [
 const STAGE_BY_ID = Object.fromEntries(PIPELINE_STAGES.map((s) => [s.id, s]));
 const CANON_ORDER = PIPELINE_STAGES.map((s) => s.id);
 // Per-stage body expand/collapse state (survives re-render; Vectorize open first).
-const stageExpanded = { upscale: false, removebg: false, vectorize: true };
+const stageExpanded = { dejpeg: false, denoise: false, deblur: false, upscale: false, removebg: false, vectorize: true };
 
 // Visual block order from settings.pipeline_order, sanitized to the known stages.
 function stageOrder() {
@@ -4740,6 +4755,7 @@ function pipelineExpectedOutput(sourceStem) {
   if (stageOn("vectorize")) return `${sourceStem}.svg`;
   if (stageOn("removebg")) return `${sourceStem}.cutout.png`;
   if (stageOn("upscale")) return `${sourceStem}.png`;
+  if (stageOn("dejpeg") || stageOn("denoise") || stageOn("deblur")) return `${sourceStem}.png`;
   return null;
 }
 
@@ -4999,7 +5015,8 @@ function procRerender() { renderProcessorPanel(); if (rasterLive) scheduleRaster
 // Apply that composes the stage strip to match, plus the offered (intent) steps as one-tap adds.
 // The capabilities the strip can act on today map onto the three real stages; P3 caps
 // (dejpeg/denoise/deblur/cleanup/face) surface as read-only "needs install" rows.
-const CAP_TO_STAGE = { upscale: "upscale", cutout: "removebg", vectorize: "vectorize" };
+const CAP_TO_STAGE = { upscale: "upscale", cutout: "removebg", vectorize: "vectorize",
+  dejpeg: "dejpeg", denoise: "denoise", deblur: "deblur" };
 const CAP_LABEL = {
   upscale: "Upscale", cutout: "Remove BG", vectorize: "Vectorize", dejpeg: "De-JPEG",
   denoise: "Denoise", deblur: "Deblur", cleanup: "Cleanup", face: "Face restore",
