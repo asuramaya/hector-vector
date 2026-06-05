@@ -1705,50 +1705,89 @@ function openAppSettings(opts = {}) {
   }
   root.appendChild(installWrap);
 
-  // One place to see and install the optional heavy deps. Status + endpoints already
-  // exist server-side (tool_status / /api/install/*); installs run as background jobs.
-  const toolsTitle = sectionTitle("AI models & tools");
-  root.appendChild(toolsTitle);
-  const aiTools = [
-    { key: "rembg_installed",     kind: "install-rembg",     name: "rembg (AI cutout)",      endpoint: "/api/install/rembg",     size: "~500MB",     note: "High-quality background removal.", ok: () => true },
-    { key: "realesrgan_installed", kind: "install-realesrgan", name: "Real-ESRGAN (upscale)", endpoint: "/api/install/realesrgan", size: "~25MB",      note: "4× photo / anime upscaling.", ok: (w) => w && w.curl_available && w.unzip_available, need: "Needs curl + unzip." },
-    { key: "vtracer_installed",   kind: "install-vtracer",   name: "VTracer (tracing)",      endpoint: "/api/install/vtracer",   size: "cargo build", note: "Raster → vector tracing engine.", ok: (w) => w && w.cargo_available, need: "Needs cargo (Rust toolchain)." },
-  ];
+  // The model inventory renders itself from the capability registry (GET /api/capabilities,
+  // cached in capsInfo) so new models show up here without touching this panel — it scales
+  // with the model count by construction. Per-model WEIGHTS download lazily on first use, so
+  // the installable unit is the RUNTIME (rembg/realesrgan/vtracer), surfaced once per
+  // capability whose models need it. Runtimes with no install path yet (the P3 dejpeg/denoise/
+  // deblur/cleanup/face stack) read "coming soon" until their integration task lands.
+  root.appendChild(sectionTitle("AI models & tools"));
   const reopenTools = () => { if (appSettingsOpen) openAppSettings({ focus: "tools" }); };
-  const installTool = async (t, btn, reset) => {
+
+  // need-token → its package installer. A model whose `needs` aren't all in here has no
+  // install path yet (declared in the registry, integration still pending).
+  const pkgInstallers = {
+    rembg:      { kind: "install-rembg",      name: "rembg",       endpoint: "/api/install/rembg",      size: "~500MB",      ok: () => true },
+    realesrgan: { kind: "install-realesrgan", name: "Real-ESRGAN", endpoint: "/api/install/realesrgan", size: "~25MB",       ok: (w) => w && w.curl_available && w.unzip_available, need: "Needs curl + unzip." },
+    vtracer:    { kind: "install-vtracer",    name: "VTracer",     endpoint: "/api/install/vtracer",    size: "cargo build", ok: (w) => w && w.cargo_available, need: "Needs cargo (Rust toolchain)." },
+  };
+  const pkgInstalled = (need) => !!(workspace && pkgInstallers[need] && workspace[`${need}_installed`]);
+  const installPkg = async (need, btn, reset) => {
+    const spec = pkgInstallers[need]; if (!spec) return;
     btn.disabled = true; btn.textContent = "Starting…";
-    try { const data = await api(t.endpoint, "POST", {}); setStatus(data.message || "Install started.", 3000); await loadJobs(); reopenTools(); }
+    try { const data = await api(spec.endpoint, "POST", {}); setStatus(data.message || "Install started.", 3000); await loadJobs(); reopenTools(); }
     catch (e) { setStatus(e.message, 3000); btn.disabled = false; btn.textContent = reset; }
   };
-  for (const t of aiTools) {
-    const row = document.createElement("div"); row.className = "form-row";
-    const label = document.createElement("span"); label.className = "form-label"; label.textContent = t.name;
-    row.appendChild(label);
-    const box = document.createElement("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "6px";
-    if (workspace && workspace[t.key]) {
-      const s = document.createElement("span"); s.className = "form-hint"; s.textContent = "Installed ✓"; box.appendChild(s);
-    } else if (installJobActive(t.kind)) {
-      const b = ghostBtn("Installing…", () => {}); b.disabled = true; box.appendChild(b);
-      const s = document.createElement("span"); s.className = "form-hint"; s.textContent = "Running in the background — watch Jobs."; box.appendChild(s);
-    } else if (!t.ok(workspace)) {
-      const b = ghostBtn("Install unavailable", () => {}); b.disabled = true; box.appendChild(b);
-      const s = document.createElement("span"); s.className = "form-hint"; s.textContent = t.need; box.appendChild(s);
-    } else {
-      const reset = `Install (${t.size})`;
-      const btn = ghostBtn(reset, () => installTool(t, btn, reset));
-      box.appendChild(btn);
-      const s = document.createElement("span"); s.className = "form-hint"; s.textContent = `${t.note} Runs in background — watch Jobs.`; box.appendChild(s);
+
+  if (!capsInfo) {
+    const loading = document.createElement("div"); loading.className = "form-hint"; loading.textContent = "Loading model inventory…";
+    root.appendChild(loading);
+    ensureCapsInfo().then(reopenTools);   // re-render once the registry lands (cached after)
+  } else {
+    for (const cap of capsInfo) {
+      const group = document.createElement("div"); group.className = "cap-group";
+      const head = document.createElement("div"); head.className = "cap-group-head";
+      const title = document.createElement("span"); title.className = "cap-group-title"; title.textContent = cap.label;
+      const count = document.createElement("span"); count.className = "cap-group-count";
+      count.textContent = `${cap.models.length} model${cap.models.length === 1 ? "" : "s"}`;
+      head.appendChild(title); head.appendChild(count); group.appendChild(head);
+
+      for (const m of cap.models) {
+        const row = document.createElement("div"); row.className = "cap-model";
+        const name = document.createElement("span"); name.className = "cap-model-name"; name.textContent = m.label;
+        const meta = document.createElement("span"); meta.className = "cap-model-meta";
+        meta.textContent = `${m.size_mb ? m.size_mb + "MB" : "no download"} · ${(m.intents || []).join(", ")}`;
+        const state = document.createElement("span"); state.className = "cap-model-state";
+        if (m.available) { state.textContent = "ready ✓"; state.classList.add("is-ready"); }
+        else {
+          const installable = (m.needs || []).find((n) => pkgInstallers[n] && !pkgInstalled(n));
+          if (installable) { state.textContent = `needs ${pkgInstallers[installable].name}`; state.classList.add("is-need"); }
+          else { state.textContent = "coming soon"; state.classList.add("is-soon"); }
+        }
+        row.appendChild(name); row.appendChild(meta); row.appendChild(state);
+        group.appendChild(row);
+      }
+
+      // One install button per runtime this capability needs that isn't present yet.
+      const needs = [...new Set(cap.models.flatMap((m) => m.needs || []))].filter((n) => pkgInstallers[n] && !pkgInstalled(n));
+      for (const need of needs) {
+        const spec = pkgInstallers[need];
+        const act = document.createElement("div"); act.className = "cap-group-action";
+        if (installJobActive(spec.kind)) {
+          const b = ghostBtn("Installing…", () => {}); b.disabled = true; act.appendChild(b);
+          const s = document.createElement("span"); s.className = "form-hint"; s.textContent = "Running in the background — watch Jobs."; act.appendChild(s);
+        } else if (!spec.ok(workspace)) {
+          const b = ghostBtn(`${spec.name} unavailable`, () => {}); b.disabled = true; act.appendChild(b);
+          const s = document.createElement("span"); s.className = "form-hint"; s.textContent = spec.need; act.appendChild(s);
+        } else {
+          const reset = `Install ${spec.name} (${spec.size})`;
+          const btn = ghostBtn(reset, () => installPkg(need, btn, reset));
+          act.appendChild(btn);
+        }
+        group.appendChild(act);
+      }
+      root.appendChild(group);
     }
-    row.appendChild(box);
-    root.appendChild(row);
   }
+
   const refreshWrap = document.createElement("div"); refreshWrap.className = "form-actions";
-  const missing = aiTools.filter((t) => !(workspace && workspace[t.key]) && t.ok(workspace) && !installJobActive(t.kind));
-  if (missing.length >= 2) {
-    const reset = `Install all missing (${missing.length})`;
+  const missingNeeds = !capsInfo ? [] : [...new Set(capsInfo.flatMap((c) => c.models.flatMap((m) => m.needs || [])))]
+    .filter((n) => pkgInstallers[n] && !pkgInstalled(n) && pkgInstallers[n].ok(workspace) && !installJobActive(pkgInstallers[n].kind));
+  if (missingNeeds.length >= 2) {
+    const reset = `Install all missing (${missingNeeds.length})`;
     const allBtn = ghostBtn(reset, async () => {
       allBtn.disabled = true; allBtn.textContent = "Starting…";
-      try { for (const m of missing) await api(m.endpoint, "POST", {}); setStatus(`Started ${missing.length} installs — watch Jobs.`, 3500); await loadJobs(); reopenTools(); }
+      try { for (const n of missingNeeds) await api(pkgInstallers[n].endpoint, "POST", {}); setStatus(`Started ${missingNeeds.length} installs — watch Jobs.`, 3500); await loadJobs(); reopenTools(); }
       catch (e) { setStatus(e.message, 3000); allBtn.disabled = false; allBtn.textContent = reset; }
     });
     refreshWrap.appendChild(allBtn);

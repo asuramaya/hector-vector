@@ -1728,16 +1728,24 @@ def main():
               and kinds["noneOut"] == "" and kinds["pixel"] == "pixelvec", str(kinds))
         page.evaluate("() => { Object.assign(settings,{trace_simplify:'medium', trace_colormode:'bw'}); }")
 
-        # ---- Settings: centralized AI models & tools panel (status + install) ----
+        # ---- Settings: registry-driven AI models & tools inventory (#51) ----
+        # The panel renders itself from GET /api/capabilities, so it scales with the model
+        # count: capability groups, per-model size/intents, and an availability chip each.
         file_menu_click(page, "Settings"); page.wait_for_timeout(100)
+        page.wait_for_function("""() => /AI models & tools/.test((document.querySelector('#modal-body')||{}).textContent||'')
+            && document.querySelectorAll('#modal-body .cap-group').length >= 3""", timeout=4000)
         ai = page.evaluate("""() => {
-          const txt = document.querySelector('#modal-body').textContent;
-          const labels = [...document.querySelectorAll('#modal-body .form-label')].map(s=>s.textContent);
-          return { section: /AI models & tools/.test(txt), rembg: labels.includes('rembg (AI cutout)'),
-                   vtracer: labels.includes('VTracer (tracing)'), esrgan: labels.includes('Real-ESRGAN (upscale)') };
+          const titles = [...document.querySelectorAll('#modal-body .cap-group-title')].map(s=>s.textContent);
+          const models = [...document.querySelectorAll('#modal-body .cap-model-name')].map(s=>s.textContent);
+          const states = [...document.querySelectorAll('#modal-body .cap-model-state')].map(s=>s.textContent);
+          return { groups: titles.length, cutout: titles.some(t=>/Cutout/.test(t)),
+                   upscale: titles.includes('Upscale'), vectorize: titles.includes('Vectorize'),
+                   models: models.length, birefnet: models.some(m=>/BiRefNet/.test(m)),
+                   stated: states.length >= models.length && states.length > 0 };
         }""")
-        check("Settings lists an AI models & tools panel with each dep",
-              ai["section"] and ai["rembg"] and ai["vtracer"] and ai["esrgan"], str(ai))
+        check("Settings AI panel renders a registry-driven capability/model inventory (#51)",
+              ai["groups"] >= 3 and ai["cutout"] and ai["upscale"] and ai["vectorize"]
+              and ai["models"] >= 6 and ai["birefnet"] and ai["stated"], str(ai))
         page.evaluate("closeModal();")
         # Install is consolidated: a stage needing a missing tool routes here rather than
         # installing inline. openToolsSettings() deep-links straight to the install hub.
