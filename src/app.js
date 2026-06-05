@@ -1721,6 +1721,7 @@ function openAppSettings(opts = {}) {
     realesrgan: { kind: "install-realesrgan", name: "Real-ESRGAN", endpoint: "/api/install/realesrgan", size: "~25MB",       ok: (w) => w && w.curl_available && w.unzip_available, need: "Needs curl + unzip." },
     vtracer:    { kind: "install-vtracer",    name: "VTracer",     endpoint: "/api/install/vtracer",    size: "cargo build", ok: (w) => w && w.cargo_available, need: "Needs cargo (Rust toolchain)." },
     spandrel:   { kind: "install-spandrel",   name: "spandrel + torch", endpoint: "/api/install/spandrel", size: "~300MB", ok: () => true },
+    opencv:     { kind: "install-opencv",     name: "opencv (face detect)", endpoint: "/api/install/opencv", size: "~60MB", ok: () => true },
   };
   const pkgInstalled = (need) => !!(workspace && pkgInstallers[need] && workspace[`${need}_installed`]);
   const installPkg = async (need, btn, reset) => {
@@ -5300,6 +5301,22 @@ function startCleanup(node) {
   setStatus("Cleanup: paint over the object, then Remove (Esc to cancel).", 0);
 }
 
+// One-shot face restoration (GFPGAN): detects faces server-side, no mask. Swaps the result
+// href in one undo step, mirroring placeJobResultOnNode / the cleanup apply.
+async function restoreFaces(node) {
+  node = node || (processTarget().node);
+  if (!node || !editor.isRaster(node)) { setStatus("Select a raster on the canvas to restore.", 2800); return; }
+  setStatus("Restoring faces… first run downloads GFPGAN (~341MB).", 0);
+  try {
+    const res = await api("/api/face-restore", "POST", { input_url: rasterHref(node) });
+    if (!node.isConnected || !editor.isRaster(node)) { setStatus("The canvas changed; result discarded.", 4000); return; }
+    node.setAttribute("href", res.url);
+    editor.push("Restore faces");
+    editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
+    setStatus("Restored faces (no change if none were found).", 3000);
+  } catch (e) { setStatus(`Face restore failed: ${e.message}`, 4500); }
+}
+
 function buildProcessorRail() {
   const rail = document.createElement("div"); rail.className = "proc-rail";
   const t = processTarget();
@@ -5331,6 +5348,13 @@ function buildProcessorRail() {
     clean.title = "Paint over something to erase it (LaMa cleanup)";
     clean.addEventListener("click", () => startCleanup(t.node));
     rail.appendChild(clean);
+
+    const face = document.createElement("button");
+    face.type = "button"; face.className = "proc-cleanup-btn";
+    face.textContent = "✨ Restore faces";
+    face.title = "GFPGAN face restoration — detects faces automatically (no change if none found)";
+    face.addEventListener("click", () => restoreFaces(t.node));
+    rail.appendChild(face);
   }
 
   // Stage cards in saved order, vertical flow, drag to reorder.
@@ -6113,6 +6137,7 @@ window.app = {
   get workItems() { return workItems; },     // exposed for the E2E (library auto-load-on-run test)
   openToolsSettings,                          // deep-link to Settings → AI models & tools (install hub)
   startCleanup,                               // object-removal mask overlay (#56)
+  restoreFaces,                               // one-shot GFPGAN face restoration (#57)
   get engineSchemas() { return engineSchemas; },
   get rasterOpSchemas() { return rasterOpSchemas; },
   get rasterLiveKicks() { return rasterLiveKicks; },

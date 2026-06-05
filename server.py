@@ -144,12 +144,20 @@ VENV_PYTHON = VENV_DIR / "bin" / "python3"
 AI_CUTOUT_SCRIPT = TOOLS_DIR / "ai_cutout.py"
 UPSCALE_SPANDREL_SCRIPT = TOOLS_DIR / "upscale_spandrel.py"
 LAMA_SCRIPT = TOOLS_DIR / "inpaint_lama.py"
-# SR checkpoints (.pth) downloaded on demand; kept in a user cache, not the repo tree.
+FACE_RESTORE_SCRIPT = TOOLS_DIR / "face_restore.py"
+# Downloaded-on-demand model weights; kept in a user cache, not the repo tree.
 SR_MODELS_DIR = Path.home() / ".cache" / "hector-vector" / "sr"
 INPAINT_DIR = Path.home() / ".cache" / "hector-vector" / "inpaint"
+FACE_DIR = Path.home() / ".cache" / "hector-vector" / "face"
 LAMA_MODEL = {
     "file": "lama_fp32.onnx", "size_mb": 208,
     "url": "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx"}
+GFPGAN_MODEL = {
+    "file": "GFPGANv1.4.onnx", "size_mb": 340,
+    "url": "https://huggingface.co/Neus/GFPGANv1.4/resolve/main/GFPGANv1.4.onnx"}
+YUNET_MODEL = {
+    "file": "yunet.onnx", "size_mb": 1,
+    "url": "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"}
 
 
 def _venv_has(module: str) -> bool:
@@ -1424,6 +1432,19 @@ def install_spandrel() -> dict:
     )
 
 
+def install_opencv() -> dict:
+    ensure_dirs()
+    if _venv_has("cv2"):
+        return {"message": "opencv already installed."}
+    if has_running_job("install-opencv"):
+        return {"message": "opencv install already running."}
+    pip = VENV_DIR / "bin" / "pip"
+    # headless build (no GUI libs); numpy-2 compatible, no downgrades. Powers face detect/align.
+    cmd = ["bash", "-lc",
+           f"set -euo pipefail; {shlex_quote(str(pip))} install --upgrade opencv-python-headless"]
+    return launch_job("install-opencv", cmd, summary="Install opencv (face detect/align, ~60MB)", immediate=True)
+
+
 def bootstrap_tools() -> dict:
     ensure_dirs()
     started = []
@@ -1658,6 +1679,49 @@ def cleanup_inpaint(payload: dict) -> dict:
     stamp = int(time.time() * 1000) % 1000000
     out = SCRATCH_DIR / f"{stem}.clean.{stamp}.png"
     build_lama_cleanup(src, mask, out, lambda *_a, **_k: None)
+    rel = out.relative_to(OUTPUTS_DIR).as_posix()
+    return {"url": "/outputs/" + "/".join(urllib.parse.quote(p) for p in rel.split("/")), "name": out.name}
+
+
+def ensure_face_models(log=None) -> tuple[Path, Path]:
+    """Resolve the GFPGAN + YuNet weights, downloading on first use."""
+    FACE_DIR.mkdir(parents=True, exist_ok=True)
+    if not command_exists("curl"):
+        raise ValueError("curl is required to download the face-restore models.")
+    out = []
+    for spec in (GFPGAN_MODEL, YUNET_MODEL):
+        path = FACE_DIR / spec["file"]
+        if not path.exists():
+            if log:
+                log(f"Downloading {spec['file']} (~{spec['size_mb']}MB)…")
+            run_subprocess(["curl", "-sL", "-o", str(path), spec["url"]])
+            if not path.exists() or path.stat().st_size < 1024:
+                path.unlink(missing_ok=True)
+                raise ValueError(f"Face model download failed: {spec['file']}")
+        out.append(path)
+    return out[0], out[1]
+
+
+def build_face_restore(src: Path, dest: Path, log) -> None:
+    if not _venv_has("onnxruntime") or not _venv_has("cv2"):
+        raise ValueError("Face restore needs onnxruntime + opencv in the project venv (install in Settings).")
+    gfpgan, yunet = ensure_face_models(log)
+    cmd = [str(VENV_PYTHON), str(FACE_RESTORE_SCRIPT), str(src), str(dest),
+           "--gfpgan", str(gfpgan), "--detector", str(yunet)]
+    log_subprocess_lines(log, run_subprocess(cmd))
+
+
+def face_restore_op(payload: dict) -> dict:
+    """One-shot face restoration (GFPGAN). Detects + restores faces internally — no mask.
+    Transient like apply_raster_op/cleanup: scratch output, no job/library copy."""
+    src = resolve_source_url(payload.get("input_url", ""))
+    if src is None:
+        raise ValueError("Could not resolve the source image.")
+    SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", src.stem).strip("-.") or "img"
+    stamp = int(time.time() * 1000) % 1000000
+    out = SCRATCH_DIR / f"{stem}.face.{stamp}.png"
+    build_face_restore(src, out, lambda *_a, **_k: None)
     rel = out.relative_to(OUTPUTS_DIR).as_posix()
     return {"url": "/outputs/" + "/".join(urllib.parse.quote(p) for p in rel.split("/")), "name": out.name}
 
@@ -2427,8 +2491,11 @@ CAPABILITIES = {
     # mask-paint tool, so `op` stays None. Runs big-LaMa on onnxruntime (already in-stack).
     "cleanup": {"label": "Cleanup / object removal", "kind": "raster", "op": None, "intents": ["object-removal"],
                 "models": [{"id": "lama", "label": "LaMa big (ONNX)", "intents": ["object-removal"], "needs": ["onnxruntime"], "size_mb": 208, "invoke": {}}]},
+    # One-shot op (detects faces internally, no mask): invoked via /api/face-restore from the
+    # Processor "Restore faces" button, so `op` stays None. GFPGAN v1.4 runs as ONNX (the pip
+    # package is dead on modern torchvision) with an opencv YuNet detect→align→paste-back wrap.
     "face": {"label": "Face restore", "kind": "raster", "op": None, "intents": ["restore"],
-             "models": [{"id": "gfpgan", "label": "GFPGAN v1.4", "intents": ["restore"], "needs": ["gfpgan"], "size_mb": 340, "invoke": {}}]},
+             "models": [{"id": "gfpgan", "label": "GFPGAN v1.4 (ONNX)", "intents": ["restore"], "needs": ["onnxruntime", "opencv"], "size_mb": 341, "invoke": {}}]},
 }
 
 
@@ -2445,6 +2512,8 @@ def _need_available(need: str) -> bool:
         return spandrel_installed()
     if need == "onnxruntime":
         return _venv_has("onnxruntime")
+    if need == "opencv":
+        return _venv_has("cv2")
     return False
 
 
@@ -3360,6 +3429,10 @@ class Handler(SimpleHTTPRequestHandler):
                 result = install_spandrel()
             elif parsed.path == "/api/cleanup":
                 result = cleanup_inpaint(payload)
+            elif parsed.path == "/api/face-restore":
+                result = face_restore_op(payload)
+            elif parsed.path == "/api/install/opencv":
+                result = install_opencv()
             elif parsed.path == "/api/bootstrap":
                 result = bootstrap_tools()
             elif parsed.path == "/api/update/check":

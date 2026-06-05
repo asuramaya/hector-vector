@@ -446,6 +446,13 @@ def check_analyzer_router() -> None:
         assert cm is None or cm in server.AI_CUTOUT_MODELS, f"cutout model {cm} isn't executable"
     ids = {c["id"] for c in server.capabilities_info()}
     assert {"cutout", "upscale", "vectorize"} <= ids, ids
+    # cleanup (#56) + face restore (#57): in-stack ONNX, real capabilities (not iopaint/gfpgan stubs)
+    cleanup = next(c for c in server.capabilities_info() if c["id"] == "cleanup")
+    assert cleanup["models"][0]["needs"] == ["onnxruntime"], cleanup
+    assert "LaMa-ONNX" in server.LAMA_MODEL["url"]
+    face = next(c for c in server.capabilities_info() if c["id"] == "face")
+    assert face["models"][0]["needs"] == ["onnxruntime", "opencv"], face
+    assert "GFPGANv1.4" in server.GFPGAN_MODEL["url"] and server.YUNET_MODEL["file"] == "yunet.onnx"
     print("ok: analyzer signals + plan (is-vs-want auto/offered) + intent→model router (#48)")
 
 

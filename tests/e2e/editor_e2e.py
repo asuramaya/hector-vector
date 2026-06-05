@@ -1773,6 +1773,16 @@ def main():
         }""")
         check("POST /api/cleanup runs LaMa and returns a scratch result URL (#56)", clean.get("ok"), str(clean))
 
+        # ---- Face restore (GFPGAN ONNX) — overlay hook + capability availability (#57) ----
+        # (The actual restore needs a real face image, verified server-side; here we check wiring.)
+        check("the face-restore launcher is exposed", page.evaluate("() => typeof window.app.restoreFaces === 'function'"))
+        faceavail = page.evaluate("""async () => {
+          const caps = await (await fetch('/api/capabilities')).json();
+          const f = caps.find(c => c.id === 'face');
+          return !!f && f.models.some(m => m.available && m.needs.includes('onnxruntime') && m.needs.includes('opencv'));
+        }""")
+        check("face-restore capability is registered + available (onnxruntime+opencv) (#57)", faceavail)
+
         # serialize cleanliness
         mount_ctl(page)
         s = page.evaluate("editor.serialize()")
