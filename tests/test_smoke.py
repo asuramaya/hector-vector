@@ -414,6 +414,9 @@ def check_analyzer_router() -> None:
     assert server.resolve_intent("cutout", "fast")["model"] == "classical"
     assert server.resolve_intent("cutout", "portrait")["model"] == "birefnet-portrait"
     assert server.resolve_intent("cutout", "high-res")["model"] == "birefnet-hrsod", "HR detail → BiRefNet-HRSOD (#52)"
+    hair = server.resolve_intent("cutout", "hair")
+    assert hair["model"] == "birefnet-massive" and hair["invoke"].get("alpha_matting") is True, \
+        f"hair → BiRefNet-massive + alpha_matting matte-refine (#53), got {hair}"
     assert server.resolve_intent("cutout", "general")["model"] == "birefnet-general", "SOTA wins 'general' (best-first)"
     assert server.resolve_intent("upscale", "anime")["model"] == "realesr-animevideov3"
     assert server.resolve_intent("vectorize", "pixel-art")["model"] == "pixel"

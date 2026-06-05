@@ -1983,7 +1983,7 @@ RASTER_OPS = {
                          ["isnet-general-use", "ISNet — sharper general"], ["isnet-anime", "ISNet anime"],
                          ["birefnet-general", "BiRefNet general — OSS SOTA (928MB)"], ["birefnet-general-lite", "BiRefNet lite (214MB)"],
                          ["birefnet-portrait", "BiRefNet portrait (928MB)"], ["birefnet-hrsod", "BiRefNet HR — high-res detail (928MB)"],
-                         ["silueta", "silueta — quantized U²-Net"]]},
+                         ["birefnet-massive", "BiRefNet massive — hair / fine detail (928MB)"], ["silueta", "silueta — quantized U²-Net"]]},
             {"key": "alpha_matting", "type": "checkbox", "default": False, "label": "Alpha matting", "when": {"removebg_method": "ai"},
              "hint": "Refines edges (hair). Slower."},
         ],
@@ -2198,7 +2198,7 @@ def vectorize_engines_info() -> list[dict]:
 CAPABILITIES = {
     "cutout": {
         "label": "Cutout / remove background", "kind": "raster", "op": "removebg",
-        "intents": ["general", "product", "portrait", "high-res", "fast", "greenscreen"],
+        "intents": ["general", "product", "portrait", "high-res", "hair", "fast", "greenscreen"],
         "models": [
             {"id": "classical", "label": "Classical (edge/threshold)", "intents": ["fast"], "needs": [],
              "invoke": {"removebg_method": "classical"}},
@@ -2214,6 +2214,10 @@ CAPABILITIES = {
              "size_mb": 928, "invoke": {"removebg_method": "ai", "cutout_model": "birefnet-hrsod"}},
             {"id": "birefnet-portrait", "label": "BiRefNet portrait", "intents": ["portrait"], "needs": ["rembg"],
              "size_mb": 928, "invoke": {"removebg_method": "ai", "cutout_model": "birefnet-portrait"}},
+            # Hair/fine-detail outcome: DIS5K-trained "massive" checkpoint (dichotomous seg of fine
+            # structures) + alpha_matting edge refinement, switched on by the intent in one pick.
+            {"id": "birefnet-massive", "label": "BiRefNet massive (DIS5K fine detail)", "intents": ["hair"], "needs": ["rembg"],
+             "size_mb": 928, "invoke": {"removebg_method": "ai", "cutout_model": "birefnet-massive", "alpha_matting": True}},
             {"id": "birefnet-general-lite", "label": "BiRefNet lite (swin-tiny)", "intents": ["general"], "needs": ["rembg"],
              "size_mb": 214, "invoke": {"removebg_method": "ai", "cutout_model": "birefnet-general-lite"}},
             {"id": "u2net", "label": "U²-Net general (lighter)", "intents": ["general"], "needs": ["rembg"], "size_mb": 176,

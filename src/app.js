@@ -2334,7 +2334,7 @@ const STAGE_TO_CAP = { upscale: "upscale", removebg: "cutout", vectorize: "vecto
 const INTENT_LABEL = {
   // cutout
   general: "General subject", product: "Product / e-commerce", portrait: "Portrait / hair",
-  "high-res": "High-resolution detail", fast: "Fast (no AI)", greenscreen: "Green screen",
+  "high-res": "High-resolution detail", hair: "Hair / fine detail", fast: "Fast (no AI)", greenscreen: "Green screen",
   // upscale
   photo: "Photo", clean: "Clean / illustration", anime: "Anime / line-art",
   // vectorize
