@@ -413,6 +413,7 @@ def check_analyzer_router() -> None:
     #     and models are ordered best-first so SOTA wins a shared intent.
     assert server.resolve_intent("cutout", "fast")["model"] == "classical"
     assert server.resolve_intent("cutout", "portrait")["model"] == "birefnet-portrait"
+    assert server.resolve_intent("cutout", "high-res")["model"] == "birefnet-hrsod", "HR detail → BiRefNet-HRSOD (#52)"
     assert server.resolve_intent("cutout", "general")["model"] == "birefnet-general", "SOTA wins 'general' (best-first)"
     assert server.resolve_intent("upscale", "anime")["model"] == "realesr-animevideov3"
     assert server.resolve_intent("vectorize", "pixel-art")["model"] == "pixel"

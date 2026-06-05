@@ -5,14 +5,15 @@ Invoked from server.py as:
     <venv-python> tools/ai_cutout.py <input> <output> [--model MODEL] [--alpha-matting]
 
 Stdout: one '[k/total] step-name' line per phase so the host can stream progress.
-Models supported (downloaded on first use into ~/.u2net):
-  u2net                 — default, 175MB, general subjects
+Models supported (downloaded on first use into ~/.u2net; sizes verified via HEAD):
+  u2net                 — default, 176MB, general subjects
   u2netp                — 5MB, faster/lighter
   u2net_human_seg       — humans only
   isnet-general-use     — ~170MB, sharper than u2net for general
-  birefnet-general      — ~440MB, current OSS SOTA quality
-  birefnet-general-lite — smaller BiRefNet
-  birefnet-portrait     — portrait-tuned
+  birefnet-general      — 928MB, current OSS SOTA quality
+  birefnet-general-lite — 214MB swin-tiny BiRefNet (much lighter)
+  birefnet-portrait     — 928MB, portrait-tuned
+  birefnet-hrsod        — 928MB, high-resolution salient-object detail
   silueta               — quantized U²-Net (~40MB)
 """
 from __future__ import annotations

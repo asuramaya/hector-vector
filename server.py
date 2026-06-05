@@ -1494,7 +1494,7 @@ AI_CUTOUT_MODELS = {
     "u2net", "u2netp", "u2net_human_seg",
     "isnet-general-use", "isnet-anime",
     "birefnet-general", "birefnet-general-lite",
-    "birefnet-portrait", "birefnet-massive",
+    "birefnet-portrait", "birefnet-hrsod", "birefnet-massive",
     "silueta", "sam",
 }
 
@@ -1979,10 +1979,11 @@ RASTER_OPS = {
             {"key": "removebg_method", "type": "select", "default": "classical", "label": "Method",
              "options": [["classical", "Classical — fast"], ["ai", "AI (rembg)"], ["green", "Greenscreen"]]},
             {"key": "cutout_model", "type": "select", "default": "u2net", "label": "AI model", "when": {"removebg_method": "ai"},
-             "options": [["u2net", "u2net — general (175MB)"], ["u2netp", "u2netp — fast/light (5MB)"], ["u2net_human_seg", "u2net — humans"],
+             "options": [["u2net", "u2net — general (176MB)"], ["u2netp", "u2netp — fast/light (5MB)"], ["u2net_human_seg", "u2net — humans"],
                          ["isnet-general-use", "ISNet — sharper general"], ["isnet-anime", "ISNet anime"],
-                         ["birefnet-general", "BiRefNet general — OSS SOTA"], ["birefnet-general-lite", "BiRefNet lite"],
-                         ["birefnet-portrait", "BiRefNet portrait"], ["silueta", "silueta — quantized U²-Net"]]},
+                         ["birefnet-general", "BiRefNet general — OSS SOTA (928MB)"], ["birefnet-general-lite", "BiRefNet lite (214MB)"],
+                         ["birefnet-portrait", "BiRefNet portrait (928MB)"], ["birefnet-hrsod", "BiRefNet HR — high-res detail (928MB)"],
+                         ["silueta", "silueta — quantized U²-Net"]]},
             {"key": "alpha_matting", "type": "checkbox", "default": False, "label": "Alpha matting", "when": {"removebg_method": "ai"},
              "hint": "Refines edges (hair). Slower."},
         ],
@@ -2197,7 +2198,7 @@ def vectorize_engines_info() -> list[dict]:
 CAPABILITIES = {
     "cutout": {
         "label": "Cutout / remove background", "kind": "raster", "op": "removebg",
-        "intents": ["general", "product", "portrait", "fast", "greenscreen"],
+        "intents": ["general", "product", "portrait", "high-res", "fast", "greenscreen"],
         "models": [
             {"id": "classical", "label": "Classical (edge/threshold)", "intents": ["fast"], "needs": [],
              "invoke": {"removebg_method": "classical"}},
@@ -2205,11 +2206,17 @@ CAPABILITIES = {
              "invoke": {"removebg_method": "green"}},
             # Ordered best-first per intent: the intent resolver picks the first available
             # model serving the chosen outcome, so SOTA (BiRefNet) wins "general" over u2net.
+            # Sizes are the actual ONNX weights pooch fetches on first use (verified via HEAD):
+            # the full BiRefNet checkpoints are 928MB each; the swin-tiny lite is 214MB.
             {"id": "birefnet-general", "label": "BiRefNet general (OSS SOTA)", "intents": ["general", "product"],
-             "needs": ["rembg"], "size_mb": 220, "invoke": {"removebg_method": "ai", "cutout_model": "birefnet-general"}},
+             "needs": ["rembg"], "size_mb": 928, "invoke": {"removebg_method": "ai", "cutout_model": "birefnet-general"}},
+            {"id": "birefnet-hrsod", "label": "BiRefNet HR (high-res detail)", "intents": ["high-res"], "needs": ["rembg"],
+             "size_mb": 928, "invoke": {"removebg_method": "ai", "cutout_model": "birefnet-hrsod"}},
             {"id": "birefnet-portrait", "label": "BiRefNet portrait", "intents": ["portrait"], "needs": ["rembg"],
-             "size_mb": 220, "invoke": {"removebg_method": "ai", "cutout_model": "birefnet-portrait"}},
-            {"id": "u2net", "label": "U²-Net general (lighter)", "intents": ["general"], "needs": ["rembg"], "size_mb": 175,
+             "size_mb": 928, "invoke": {"removebg_method": "ai", "cutout_model": "birefnet-portrait"}},
+            {"id": "birefnet-general-lite", "label": "BiRefNet lite (swin-tiny)", "intents": ["general"], "needs": ["rembg"],
+             "size_mb": 214, "invoke": {"removebg_method": "ai", "cutout_model": "birefnet-general-lite"}},
+            {"id": "u2net", "label": "U²-Net general (lighter)", "intents": ["general"], "needs": ["rembg"], "size_mb": 176,
              "invoke": {"removebg_method": "ai", "cutout_model": "u2net"}},
         ],
     },
