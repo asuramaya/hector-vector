@@ -318,6 +318,95 @@ def check_dense_subpath_bounded() -> None:
     print(f"ok: dense {n}-pt smooth subpath bounded → {segs} segments in {dt:.2f}s (#42)")
 
 
+def check_analyzer_router() -> None:
+    """The classical auto-router brain (tools/analyze.py + the capability registry): analyze()
+    extracts the right signals and plan() makes the is-vs-want call — AUTO only what the image
+    NEEDS (vectorize a graphic, de-JPEG a blocky one, upscale a low-res photo), cutout/photo-vec
+    OFFERED (wants the pixels can't decide). And resolve_intent/resolve_capability_step map an
+    outcome → the right model. Pure numpy/PIL — the regression guard for the routing brain (#48)."""
+    sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "tools"))
+    import tempfile
+    import numpy as np
+    import analyze
+    import server
+    from PIL import Image, ImageDraw
+
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+
+        # (1) flat graphic — a few solid saturated blocks, crisp, opaque, 800px (not low-res):
+        #     the in-app affordance is a CLEAN flat-logo vectorize (auto); cutout is OFFERED.
+        flat = Image.new("RGB", (800, 800), (255, 255, 255))
+        fd = ImageDraw.Draw(flat)
+        fd.rectangle([60, 60, 380, 740], fill=(220, 30, 30))
+        fd.rectangle([420, 60, 740, 740], fill=(30, 60, 220))
+        fp = d / "flat.png"; flat.save(fp)
+        a = analyze.analyze(fp); pl = analyze.plan(a)
+        assert a["content_class"] == "flat_graphic", f"few solid colours → flat_graphic, got {a['content_class']}"
+        assert not a["has_alpha"] and not a["low_res"], a
+        assert [s["capability"] for s in pl["auto"]] == ["vectorize"], f"flat graphic auto = vectorize only, got {pl['auto']}"
+        assert pl["auto"][0]["model"] == "clean" and pl["auto"][0]["intent"] == "logo-flat", pl["auto"][0]
+        assert "cutout" in [s["capability"] for s in pl["offered"]], "an opaque image should OFFER cutout"
+
+        # (2) alpha present → cutout is NOT offered (the subject is already isolated)
+        rgba = flat.convert("RGBA")
+        amask = Image.new("L", rgba.size, 255); ImageDraw.Draw(amask).rectangle([0, 0, 40, 799], fill=0)
+        rgba.putalpha(amask)
+        ap = d / "flat_alpha.png"; rgba.save(ap)
+        a2 = analyze.analyze(ap); pl2 = analyze.plan(a2)
+        assert a2["has_alpha"], "a transparent margin must read as alpha"
+        assert "cutout" not in [s["capability"] for s in pl2["offered"]], "an alpha image must not offer cutout"
+
+        # a genuinely smooth gradient = a clean 'photo' (many colours, no degradation)
+        g = np.zeros((800, 800, 3), np.uint8)
+        xs = np.linspace(0, 255, 800).astype(np.uint8)
+        g[:, :, 0] = xs[None, :]; g[:, :, 1] = xs[::-1][None, :]; g[:, :, 2] = 128
+        photo = Image.fromarray(g, "RGB")
+
+        # (3) clean photo → NO auto processing; OFFERS photo-vectorize + cutout (never auto)
+        pp = d / "photo.png"; photo.save(pp)
+        a3 = analyze.analyze(pp); pl3 = analyze.plan(a3)
+        assert a3["content_class"] == "photo", f"a smooth gradient → photo, got {a3['content_class']}"
+        assert not pl3["auto"], f"a clean photo needs no auto processing, got {[s['capability'] for s in pl3['auto']]}"
+        o3 = [s["capability"] for s in pl3["offered"]]
+        assert "vectorize" in o3 and "cutout" in o3, o3
+
+        # (4) JPEG blocking → AUTO de-JPEG (the 8px grid survives because it's measured on a
+        #     NATIVE centre crop, not a downscale)
+        jp = d / "blocky.jpg"; photo.save(jp, "JPEG", quality=5)
+        a4 = analyze.analyze(jp); pl4 = analyze.plan(a4)
+        assert a4["degradation"]["jpeg_blockiness"] > analyze.T_BLOCKY, \
+            f"a q5 JPEG should ring above {analyze.T_BLOCKY}, got {a4['degradation']['jpeg_blockiness']}"
+        assert "dejpeg" in [s["capability"] for s in pl4["auto"]], "a blocky JPEG must auto de-JPEG"
+
+        # (5) low-res photo, no vectorize terminal → AUTO upscale (a true affordance)
+        sp = d / "small.png"; photo.resize((220, 220), Image.Resampling.LANCZOS).save(sp)
+        a5 = analyze.analyze(sp); pl5 = analyze.plan(a5)
+        assert a5["low_res"], a5
+        assert "upscale" in [s["capability"] for s in pl5["auto"]], "a low-res photo must auto upscale"
+
+    # (6) router: an outcome resolves to the right model. Install-AGNOSTIC — when nothing is
+    #     installed it still picks the first model serving the intent (so the UI can offer install),
+    #     and models are ordered best-first so SOTA wins a shared intent.
+    assert server.resolve_intent("cutout", "fast")["model"] == "classical"
+    assert server.resolve_intent("cutout", "portrait")["model"] == "birefnet-portrait"
+    assert server.resolve_intent("cutout", "general")["model"] == "birefnet-general", "SOTA wins 'general' (best-first)"
+    assert server.resolve_intent("upscale", "anime")["model"] == "realesr-animevideov3"
+    assert server.resolve_intent("vectorize", "pixel-art")["model"] == "pixel"
+    assert server.resolve_intent("cutout", "no-such-intent") is None
+    # resolve_capability_step → the invoke params that drive the EXISTING execution path
+    assert server.resolve_capability_step("vectorize", "clean")["invoke"] == {"engine": "clean"}
+    assert server.resolve_capability_step("cutout", "birefnet-portrait")["invoke"] == \
+        {"removebg_method": "ai", "cutout_model": "birefnet-portrait"}
+    # every router-resolvable cutout model is a model the executor actually accepts (no dead picks)
+    for m in server.CAPABILITIES["cutout"]["models"]:
+        cm = m["invoke"].get("cutout_model")
+        assert cm is None or cm in server.AI_CUTOUT_MODELS, f"cutout model {cm} isn't executable"
+    ids = {c["id"] for c in server.capabilities_info()}
+    assert {"cutout", "upscale", "vectorize"} <= ids, ids
+    print("ok: analyzer signals + plan (is-vs-want auto/offered) + intent→model router (#48)")
+
+
 def main() -> int:
     check_parses()
     svg = check_pixelvec()
@@ -331,6 +420,7 @@ def main() -> int:
     check_validation_guards()
     check_trace_downscale()
     check_dense_subpath_bounded()
+    check_analyzer_router()
     for tmp in ["_out.svg", "_out.png"]:
         (ROOT / "tests" / tmp).unlink(missing_ok=True)
     print("\nALL SMOKE TESTS PASSED")
