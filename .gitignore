@@ -27,8 +27,9 @@ tools/**/__pycache__/
 *.bin
 ~/.u2net/
 
-# --- OS / editor ---
+# --- OS / editor / agent scaffolding ---
 .DS_Store
 *.swp
 .idea/
 .vscode/
+.claude/
