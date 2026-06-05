@@ -1206,6 +1206,18 @@ button:disabled {
 .proc-fix-btn:hover { background: var(--surface); border-color: var(--hair-2); }
 .stage-restore-note { margin: 2px 0; font-size: 11.5px; color: var(--muted); line-height: 1.4; }
 
+/* "All tools" disclosure (two-tier Processor): suggestions lead; the full inventory tucks here. */
+.proc-tools { display: flex; flex-direction: column; gap: 12px; }
+.proc-tools-head { display: flex; align-items: center; gap: 7px; width: 100%; padding: 7px 0 6px; font: inherit; font-size: 11.5px;
+  font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; background: none; border: 0;
+  border-top: 1px solid var(--hair); cursor: pointer; text-align: left; }
+.proc-tools-head:hover { color: var(--ink); }
+.proc-tools-caret { flex: 0 0 auto; width: 10px; font-size: 10px; }
+.proc-tools-lbl { flex: 0 0 auto; }
+.proc-tools-armed { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right;
+  font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--ink); }
+.proc-tools-body { display: flex; flex-direction: column; gap: 12px; }
+
 /* compact Properties "Process" pointer (the pipeline lives in the Processor panel now) */
 .raster-tools-compact { display: flex; flex-direction: column; gap: 8px; }
 

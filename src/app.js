@@ -4992,6 +4992,8 @@ function renderJobsPanel() {
 // generalized pipeline as the (legacy) Process view. Lifts the pipeline out of the
 // cramped raster Properties panel into its own composable dock (the user-requested home).
 let procDragId = null;
+let procToolsOpen = false;    // "All tools" disclosure — collapsed by default so the panel leads
+                              // with the analyzer's suggestions, not the full tool inventory.
 // The single selected raster <image> the panel targets (live preview + single-run), or null.
 function currentRasterTarget() {
   if (!editor.stage) return null;
@@ -5040,12 +5042,22 @@ function procPlannable(url) {
 }
 let procPlanTimer = null;
 let procPlanAbort = null;   // AbortController for the in-flight fetch (cancel-on-supersede)
+let procPlanWanted;         // the source url the debounce is currently aiming at (storm guard)
 // DEBOUNCED entry point (called from the rail builder). /api/plan runs a real image analysis
 // server-side, so firing it on every selection would hammer the local server as the user clicks
 // around — and a heavy analyze() on a big raster can starve other in-flight requests. So we wait
 // for the selection to SETTLE, re-resolve the target at fire time, and fetch at most once per
 // settled source. Never blocks the render; the banner fills in via refreshAutoBanner when ready.
+//
+// STORM GUARD: buildProcessorRail() calls this on EVERY render, and the panel can re-render
+// faster than the debounce window (panel drag, live-preview ticks). Naively clearing+resetting
+// the timer each time means it never elapses → the fetch never fires → the banner is wedged
+// on "Reading the image…" forever (the exact stuck-read bug). So we only (re)arm the timer when
+// the target source actually CHANGES; a render storm on the same source is a no-op.
 function scheduleProcPlan() {
+  const url = procPlanSourceUrl(processTarget());
+  if (url === procPlanWanted) return;   // same source already scheduled/loaded — don't restart the debounce
+  procPlanWanted = url;
   if (procPlanTimer) clearTimeout(procPlanTimer);
   procPlanTimer = setTimeout(() => { procPlanTimer = null; ensureProcPlan(processTarget()); }, 350);
 }
@@ -5378,50 +5390,79 @@ function buildProcessorRail() {
   const banner = buildAutoBanner(t);
   if (banner) rail.appendChild(banner);
 
-  // Object removal is interactive (paint a mask), so it's a button here, not a pipeline stage.
-  if (t.node && editor.isRaster(t.node)) {
-    const clean = document.createElement("button");
-    clean.type = "button"; clean.className = "proc-cleanup-btn";
-    clean.textContent = "🩹 Remove object…";
-    clean.title = "Paint over something to erase it (LaMa cleanup)";
-    clean.addEventListener("click", () => startCleanup(t.node));
-    rail.appendChild(clean);
-
-    const face = document.createElement("button");
-    face.type = "button"; face.className = "proc-cleanup-btn";
-    face.textContent = "✨ Restore faces";
-    face.title = "GFPGAN face restoration — detects faces automatically (no change if none found)";
-    face.addEventListener("click", () => restoreFaces(t.node));
-    rail.appendChild(face);
-
-    // Degradation fixers (#58): compact row — denoise / de-JPEG / deblur (spandrel restoration).
-    const fixes = document.createElement("div"); fixes.className = "proc-fix-row";
-    [["scunet-denoise", "Denoise"], ["fbcnn-dejpeg", "De-JPEG"], ["nafnet-deblur", "Deblur"]].forEach(([m, l]) => {
-      const b = document.createElement("button"); b.type = "button"; b.className = "proc-fix-btn";
-      b.textContent = l; b.title = `${l} — spandrel restoration`;
-      b.addEventListener("click", () => applyRestore(m, l, t.node));
-      fixes.appendChild(b);
-    });
-    rail.appendChild(fixes);
+  // "All tools" — the full inventory (interactive one-shot fixers + the manual stage strip),
+  // collapsed by default so the panel leads with the analyzer's suggestions above, not a wall
+  // of every tool. Power users expand to hand-compose. The header surfaces what's armed, so a
+  // collapsed strip never hides a queued pipeline. Building the body only when open also skips
+  // the stage cards' live-preview side effects while collapsed.
+  const tools = document.createElement("div");
+  tools.className = "proc-tools" + (procToolsOpen ? " open" : "");
+  const th = document.createElement("button");
+  th.type = "button"; th.className = "proc-tools-head";
+  th.setAttribute("aria-expanded", procToolsOpen ? "true" : "false");
+  const caret = document.createElement("span"); caret.className = "proc-tools-caret"; caret.textContent = procToolsOpen ? "▾" : "▸";
+  const tlbl = document.createElement("span"); tlbl.className = "proc-tools-lbl"; tlbl.textContent = "All tools";
+  th.appendChild(caret); th.appendChild(tlbl);
+  if (!procToolsOpen) {
+    const armed = stageOrder().filter(stageOn).map((id) => (STAGE_BY_ID[id] && STAGE_BY_ID[id].label) || id);
+    if (armed.length) {
+      const sum = document.createElement("span"); sum.className = "proc-tools-armed"; sum.textContent = armed.join(" · ");
+      th.appendChild(sum);
+    }
   }
+  th.addEventListener("click", () => { procToolsOpen = !procToolsOpen; renderProcessorPanel(); });
+  tools.appendChild(th);
 
-  // Stage cards in saved order, vertical flow, drag to reorder.
-  const list = document.createElement("div"); list.className = "proc-stages";
-  list.addEventListener("dragover", (e) => {
-    if (!procDragId) return; e.preventDefault(); e.dataTransfer.dropEffect = "move";
-    const el = list.querySelector(`.proc-stage[data-stage="${procDragId}"]`); if (!el) return;
-    const ref = procInsertBefore(list, e.clientY); if (ref !== el) list.insertBefore(el, ref);
-  });
-  list.addEventListener("drop", (e) => {
-    e.preventDefault();
-    const order = [...list.querySelectorAll(".proc-stage")].map((c) => c.dataset.stage);
-    if (order.length === CANON_ORDER.length) { settings.pipeline_order = order.join(","); persistSettings(); }
-    renderProcessorPanel();
-  });
-  // Live preview needs the raster ON the canvas; pass the node (null in batch / library-only).
-  const previewNode = t.batch ? null : (t.node || null);
-  stageOrder().forEach((id) => list.appendChild(buildProcStageCard(id, previewNode)));
-  rail.appendChild(list);
+  if (procToolsOpen) {
+    const body = document.createElement("div"); body.className = "proc-tools-body";
+    // Object removal is interactive (paint a mask) + face/degradation one-shots — buttons here,
+    // not pipeline stages. Only meaningful with a raster on the canvas.
+    if (t.node && editor.isRaster(t.node)) {
+      const clean = document.createElement("button");
+      clean.type = "button"; clean.className = "proc-cleanup-btn";
+      clean.textContent = "🩹 Remove object…";
+      clean.title = "Paint over something to erase it (LaMa cleanup)";
+      clean.addEventListener("click", () => startCleanup(t.node));
+      body.appendChild(clean);
+
+      const face = document.createElement("button");
+      face.type = "button"; face.className = "proc-cleanup-btn";
+      face.textContent = "✨ Restore faces";
+      face.title = "GFPGAN face restoration — detects faces automatically (no change if none found)";
+      face.addEventListener("click", () => restoreFaces(t.node));
+      body.appendChild(face);
+
+      // Degradation fixers (#58): compact row — denoise / de-JPEG / deblur (spandrel restoration).
+      const fixes = document.createElement("div"); fixes.className = "proc-fix-row";
+      [["scunet-denoise", "Denoise"], ["fbcnn-dejpeg", "De-JPEG"], ["nafnet-deblur", "Deblur"]].forEach(([m, l]) => {
+        const b = document.createElement("button"); b.type = "button"; b.className = "proc-fix-btn";
+        b.textContent = l; b.title = `${l} — spandrel restoration`;
+        b.addEventListener("click", () => applyRestore(m, l, t.node));
+        fixes.appendChild(b);
+      });
+      body.appendChild(fixes);
+    }
+
+    // Stage cards in saved order, vertical flow, drag to reorder.
+    const list = document.createElement("div"); list.className = "proc-stages";
+    list.addEventListener("dragover", (e) => {
+      if (!procDragId) return; e.preventDefault(); e.dataTransfer.dropEffect = "move";
+      const el = list.querySelector(`.proc-stage[data-stage="${procDragId}"]`); if (!el) return;
+      const ref = procInsertBefore(list, e.clientY); if (ref !== el) list.insertBefore(el, ref);
+    });
+    list.addEventListener("drop", (e) => {
+      e.preventDefault();
+      const order = [...list.querySelectorAll(".proc-stage")].map((c) => c.dataset.stage);
+      if (order.length === CANON_ORDER.length) { settings.pipeline_order = order.join(","); persistSettings(); }
+      renderProcessorPanel();
+    });
+    // Live preview needs the raster ON the canvas; pass the node (null in batch / library-only).
+    const previewNode = t.batch ? null : (t.node || null);
+    stageOrder().forEach((id) => list.appendChild(buildProcStageCard(id, previewNode)));
+    body.appendChild(list);
+    tools.appendChild(body);
+  }
+  rail.appendChild(tools);
   return rail;
 }
 // The pinned chin (standard ink-top-bordered footer): the Run action, plus a compact
@@ -6187,6 +6228,9 @@ window.app = {
   startCleanup,                               // object-removal mask overlay (#56)
   restoreFaces,                               // one-shot GFPGAN face restoration (#57)
   applyRestore,                               // one-shot degradation fix: denoise/dejpeg/deblur (#58)
+  // "All tools" disclosure state (two-tier Processor) — exposed so the E2E can expand the
+  // collapsed stage strip before asserting on stage cards.
+  get procToolsOpen() { return procToolsOpen; }, set procToolsOpen(v) { procToolsOpen = !!v; },
   get engineSchemas() { return engineSchemas; },
   get rasterOpSchemas() { return rasterOpSchemas; },
   get rasterLiveKicks() { return rasterLiveKicks; },

@@ -1875,8 +1875,10 @@ def main():
             return { isImage: node.tagName.toLowerCase()==='image', noPointer: editor.rasterTools(node) === null }; }""")
         check("raster Properties has no Process pointer (Processor is contextual)",
               decram["isImage"] and decram["noPointer"], str(decram))
-        # The Processor panel hosts the 3 stages, targeting the selected raster.
-        stages = page.evaluate("""() => { renderProcessorPanel();
+        # The Processor panel hosts the 6 stages, targeting the selected raster. Stages live under
+        # the "All tools" disclosure now (two-tier panel) — expand it first (state persists across
+        # re-renders, so later stage-card tests inherit it).
+        stages = page.evaluate("""() => { app.procToolsOpen = true; renderProcessorPanel();
             return { names:[...document.querySelectorAll('#processor-body .proc-stage .stage-name')].map(s=>s.textContent),
                      target:(document.querySelector('#processor-body .proc-target-name')||{}).textContent }; }""")
         check("Processor hosts the pipeline stages (restoration + Upscale/Remove BG/Vectorize) for the selected raster",
