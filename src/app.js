@@ -1267,8 +1267,19 @@ async function loadRasterToCanvas(item) {
       im.onerror = () => rej(new Error(`Couldn't load ${item.name}`));
       im.src = item.url;
     });
+    // Don't dead-end on "create a canvas first." With no canvas — or only an
+    // untouched blank artboard (e.g. the default one from startup) — mint a canvas
+    // sized to the image, so loading just works and the image isn't crammed into
+    // the default 512 box. An existing canvas WITH content is left alone (place in).
+    if (canvasIsEmpty() && dim.w > 0 && dim.h > 0) mountBlankCanvas(Math.round(dim.w), Math.round(dim.h));
     editor.placeImage(item.url, item.name, dim.w, dim.h);
   } catch (e) { setStatus(e.message, 3000); }
+}
+// True when there's no stage, or the stage holds only the artboard/overlay chrome
+// (no placed content) — i.e. a fresh editor that should accept a load by minting
+// a canvas rather than refusing or cramming into the default blank.
+function canvasIsEmpty() {
+  return !editor.stage || editor.stage.querySelectorAll("[data-hv-id]").length === 0;
 }
 
 function renderGalleryGrid(items, onPick) {
@@ -1476,6 +1487,7 @@ async function placeFromUrl(url, name) {
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!editor.stage) mountBlankCanvas();   // auto-create rather than refuse on a stage-less editor
     editor.placeSvgMarkup(await res.text(), name);
   } catch (e) { setStatus(`Place failed: ${e.message}`, 3000); }
 }

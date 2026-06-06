@@ -2397,10 +2397,14 @@ def main():
                                     label: document.querySelector('#processor-chin .proc-run').textContent };
             document.querySelector('#processor-chin .proc-run').click(); }""")
         page.wait_for_function("() => !!editor.stage.querySelector('g[data-hv-id] path') && !editor.stage.querySelector('image[data-hv-id]')", timeout=60000)
-        al = page.evaluate("() => ({ before: window.__autoBefore, vgroup: !!editor.stage.querySelector('g[data-hv-id] path'), imgs: editor.stage.querySelectorAll('image[data-hv-id]').length })")
+        al = page.evaluate("() => ({ before: window.__autoBefore, vgroup: !!editor.stage.querySelector('g[data-hv-id] path'), imgs: editor.stage.querySelectorAll('image[data-hv-id]').length, vb: editor.stage.getAttribute('viewBox') })")
         page.evaluate("() => { app.selectedName=null; delete settings.stage_vectorize; delete settings.engine; renderProcessorPanel(); }")
         check("library-selected raster auto-loads onto the canvas on Run, then vectorises in place (#34)",
               al["before"]["imgs"] == 0 and al["before"]["label"] == "Run → canvas" and al["vgroup"] and al["imgs"] == 0, str(al))
+        # Loading onto an empty/blank canvas auto-sizes the canvas to the image (96x96
+        # probe), instead of forcing it into the prior 120x120 blank or refusing.
+        check("loading onto an empty canvas auto-sizes it to the image (no forced/crammed canvas)",
+              al["vb"] == "0 0 96 96", str(al))
 
         # (d) #42: a MULTI-STAGE focused run (upscale + vectorize chained) goes through the job
         #     path (not the vectorize-only fast path), traces the upscaled intermediate at the
