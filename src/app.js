@@ -8,6 +8,23 @@ import * as hv from "./hv/index.js";
 import { shapeToAbsPath } from "./hv/index.js";
 import { editor, ghostBtn } from "./editor.js";
 
+// One-shot panel-layout self-heal. A corrupted persisted dock layout (a panel
+// floated/grouped/stranded in a state that swallows clicks) survives reload AND a
+// code revert — it lives in localStorage, not in the code — so the only cure is to
+// clear it. Gated on a marker so this fires exactly ONCE per bump: it never wipes a
+// layout the user later arranges on purpose. Bump LAYOUT_HEAL_MARK to force another
+// clean reset for everyone after a layout regression. Images/projects live on the
+// server and are untouched; only panel POSITIONS reset to the default dock.
+const LAYOUT_HEAL_MARK = "2026-06-05";
+try {
+  if (localStorage.getItem("hector-vector:layout-heal") !== LAYOUT_HEAL_MARK) {
+    ["hector-vector:docks", "hector-vector:dock-groups", "hector-vector:layout",
+     "hector-vector:layout-active", "hector-vector:sides-folded", "hector-vector:dock-w"]
+      .forEach((k) => localStorage.removeItem(k));
+    localStorage.setItem("hector-vector:layout-heal", LAYOUT_HEAL_MARK);
+  }
+} catch {}
+
 const fileInputEl = document.querySelector("#file-input");
 const outputPreviewEl = document.querySelector("#output-preview");
 const statusTextEl = document.querySelector("#status-text");
