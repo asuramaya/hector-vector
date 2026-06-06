@@ -5742,10 +5742,10 @@ function wireDetailActions(act, cfg) {
 
   let armed = false;
   const doDelete = (btn) => {
-    if (!armed) {            // first click arms; second within the modal confirms
+    if (!armed) {            // first click arms (turns red); second confirms
       armed = true;
       btn.classList.add("danger-armed");
-      btn.textContent = "Confirm delete?";
+      btn.textContent = "‼";
       btn.title = "Click again to delete permanently";
       return;
     }
@@ -5755,10 +5755,10 @@ function wireDetailActions(act, cfg) {
       .catch((e) => { btn.disabled = false; setStatus(e.message, 3500); });
   };
 
-  act("Rename", `Rename this ${kind}`, doRename);
-  act("Download", "Download a copy", () => downloadUrl(url, item.name));
+  act("✎", `Rename this ${kind}`, doRename);
+  act("⇩", "Download a copy", () => downloadUrl(url, item.name));
   const del = document.createElement("button");
-  del.type = "button"; del.className = "ghost-button danger-button"; del.textContent = "Delete";
+  del.type = "button"; del.className = "tool-button danger-button"; del.textContent = "✕";
   del.title = `Delete this ${kind} permanently`;
   del.addEventListener("click", () => doDelete(del));
   // The modal's action rows are built by `act`, but Delete needs its own ref for
@@ -5822,11 +5822,11 @@ async function openVectorInfoModal(item) {
   const sub = document.createElement("div"); sub.className = "info-sub"; sub.textContent = `Vector · ${dims} · ${size}`;
   meta.appendChild(nm); meta.appendChild(sub);
   const actions = document.createElement("div"); actions.className = "info-actions";
-  const act = (label, title, fn, primary) => { const b = document.createElement("button"); b.type = "button"; b.className = primary ? "primary-button" : "ghost-button"; b.textContent = label; b.title = title; b.addEventListener("click", fn); actions.appendChild(b); };
-  act("⤓ Load into canvas", "Place this vector into the editor viewport", () => { placeFromUrl(item.url, item.name).catch((e) => setStatus(e.message, 3000)); }, true);
+  const act = (label, title, fn, primary) => { const b = document.createElement("button"); b.type = "button"; b.className = "tool-button" + (primary ? " info-primary" : ""); b.textContent = label; b.title = title; b.addEventListener("click", fn); actions.appendChild(b); };
+  act("⤓", "Load into canvas — place this vector in the editor viewport", () => { placeFromUrl(item.url, item.name).catch((e) => setStatus(e.message, 3000)); }, true);
   const abs = item.path || "";
-  if (abs) act("Reveal", "Reveal in the file manager", () => revealInFileManager(abs));
-  act("Open ↗", "Open the vector in a new tab", () => window.open(item.url, "_blank", "noopener"));
+  if (abs) act("⊞", "Reveal in the file manager", () => revealInFileManager(abs));
+  act("↗", "Open the vector in a new tab", () => window.open(item.url, "_blank", "noopener"));
   const vectorCfg = {
     kind: "vector", item, url: item.url, nameBtn: nm,
     reopen: (it) => openVectorInfoModal(it),
@@ -5875,8 +5875,8 @@ function openProjectInfo(item) {
   sub.textContent = item.modified_at ? `Project · ${new Date(item.modified_at * 1000).toLocaleString()}` : "Project (.hv)";
   meta.appendChild(nm); meta.appendChild(sub);
   const actions = document.createElement("div"); actions.className = "info-actions";
-  const act = (label, title, fn, primary) => { const b = document.createElement("button"); b.type = "button"; b.className = primary ? "primary-button" : "ghost-button"; b.textContent = label; b.title = title; b.addEventListener("click", fn); actions.appendChild(b); };
-  act("⤓ Open project", "Open this project (restores layers + history)", () => { openProject(item); }, true);
+  const act = (label, title, fn, primary) => { const b = document.createElement("button"); b.type = "button"; b.className = "tool-button" + (primary ? " info-primary" : ""); b.textContent = label; b.title = title; b.addEventListener("click", fn); actions.appendChild(b); };
+  act("⤓", "Open project — restores layers + history", () => { openProject(item); }, true);
   const projCfg = {
     kind: "project", item, url: item.url, nameBtn: nm,
     reopen: (it) => openProjectInfo(it),
@@ -5920,14 +5920,14 @@ function renderInfoModal(info) {
   actions.className = "info-actions";
   const act = (label, title, fn, primary) => {
     const b = document.createElement("button");
-    b.type = "button"; b.className = primary ? "primary-button" : "ghost-button";
+    b.type = "button"; b.className = "tool-button" + (primary ? " info-primary" : "");
     b.textContent = label; b.title = title;
     b.addEventListener("click", fn);
     actions.appendChild(b);
   };
-  act("⤓ Load into canvas", "Place this image into the editor viewport", () => { loadRasterToCanvas({ name: info.name, url }); }, true);
-  if (absPath) act("Reveal", "Reveal in the file manager", () => revealInFileManager(absPath));
-  act("Open ↗", "Open the full image in a new tab", () => window.open(url, "_blank", "noopener"));
+  act("⤓", "Load into canvas — place this image in the editor viewport", () => { loadRasterToCanvas({ name: info.name, url }); }, true);
+  if (absPath) act("⊞", "Reveal in the file manager", () => revealInFileManager(absPath));
+  act("↗", "Open the full image in a new tab", () => window.open(url, "_blank", "noopener"));
   const rasterCfg = {
     kind: "raster", item: { name: info.name, url, path: absPath }, url, nameBtn: nm,
     reopen: (it) => openInfoModal(it.name),

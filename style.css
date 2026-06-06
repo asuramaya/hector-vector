@@ -1680,7 +1680,7 @@ button:disabled {
 .rail-section.info .info-head { flex-direction: column; align-items: stretch; }
 .rail-section.info .info-preview { width: 100%; height: 132px; }
 .rail-section.info .info-grid { grid-template-columns: 88px minmax(0, 1fr); }
-.rail-section.info .info-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.rail-section.info .info-actions { gap: 5px; }
 .info-head { display: flex; gap: 14px; align-items: flex-start; }
 .info-preview {
   flex: 0 0 auto; width: 112px; height: 112px; border: 1px solid var(--hair);
@@ -1693,22 +1693,22 @@ button:disabled {
 .info-headmeta { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .info-name { font-weight: 600; font-size: 14px; word-break: break-all; line-height: 1.25; }
 .info-sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.info-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
-.info-actions .primary-button, .info-actions .ghost-button { font-size: 12px; padding: 5px 10px; }
-/* The dock-panel primary CTAs (Info "Load into canvas", raster Keep/Revert) used the
-   divergent blue primary-button. In the inky palette the emphasised action is a SOLID
-   ink fill (black-on-white peers stay outlined); hover inverts for feedback. */
-.info-actions .primary-button, .rt-actions .primary-button {
-  border-color: var(--ink); background: var(--ink); color: #fff; font-weight: 600;
-}
-.info-actions .primary-button:hover, .rt-actions .primary-button:hover {
-  filter: none; background: #fff; color: var(--ink);
-}
-/* Delete sits in the detail action row — muted until hover, loud once armed
-   (first click arms, second within the open modal confirms). */
+/* A standard icon chin: one uniform row of bordered tool-buttons (same family as
+   the arrange / viewport toolbars), wrapping cleanly on a narrow panel instead of
+   the old ragged mix of wide text buttons. Each action is icon-only with a title. */
+.info-actions { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 4px; }
+/* The emphasised action (Load into canvas / Open project) reads as a SOLID ink
+   fill — same 30px footprint as its peers, just filled; hover inverts. */
+.info-actions .info-primary { border-color: var(--ink); background: var(--ink); color: #fff; }
+.info-actions .info-primary:hover:not(:disabled) { background: #fff; color: var(--ink); border-color: var(--ink); }
+/* The raster/vector live-preview Keep/Revert row keeps its filled primary CTA. */
+.rt-actions .primary-button { border-color: var(--ink); background: var(--ink); color: #fff; font-weight: 600; }
+.rt-actions .primary-button:hover { filter: none; background: #fff; color: var(--ink); }
+/* Delete is pushed to the trailing edge — muted until hover, loud once armed
+   (first click arms → ‼, second within the open panel confirms). */
 .info-actions .danger-button { margin-left: auto; color: #b42318; }
-.info-actions .danger-button:hover { background: #b42318; color: #fff; border-color: #b42318; }
-.info-actions .danger-button.danger-armed { background: #b42318; color: #fff; border-color: #b42318; font-weight: 600; }
+.info-actions .danger-button:hover:not(:disabled) { background: #b42318; color: #fff; border-color: #b42318; }
+.info-actions .danger-button.danger-armed { background: #b42318; color: #fff; border-color: #b42318; font-weight: 700; }
 
 /* Name + Path are click-to-copy (the explicit Copy buttons are gone). */
 .info-copy { border: 0; background: none; padding: 0; margin: 0; font: inherit; color: inherit; text-align: left; cursor: copy; word-break: break-all; }

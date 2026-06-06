@@ -1832,23 +1832,26 @@ def main():
         # 404 (leaves dashes) but the action row is built regardless.
         page.evaluate("""() => openVectorInfoModal({name:'probe.svg', url:'/outputs/__none__/probe.svg', path:''})""")
         page.wait_for_function("() => !!document.querySelector('.rail-section.info .info-actions button')", timeout=2000)
+        # The action row is a uniform icon chin (tool-buttons): ✎ Rename · ⇩ Download · ✕ Delete.
         det = page.evaluate("""() => {
-          const labels = [...document.querySelectorAll('.rail-section.info .info-actions button')].map(b=>b.textContent.trim());
-          return { rename: labels.includes('Rename'), download: labels.includes('Download'),
-                   del: labels.includes('Delete'), danger: !!document.querySelector('.rail-section.info .info-actions .danger-button'),
+          const btns = [...document.querySelectorAll('.rail-section.info .info-actions button')];
+          const labels = btns.map(b=>b.textContent.trim());
+          return { rename: labels.includes('✎'), download: labels.includes('⇩'),
+                   del: labels.includes('✕'), danger: !!document.querySelector('.rail-section.info .info-actions .danger-button'),
+                   chin: btns.length>0 && btns.every(b=>b.classList.contains('tool-button')),
                    panel: !!document.querySelector('.rail-section.info'), notModal: !document.querySelector('#modal-body .info-actions') };
         }""")
-        check("Info is a dock panel with Rename / Download / Delete (not a modal)",
-              det["rename"] and det["download"] and det["del"] and det["danger"] and det["panel"] and det["notModal"], str(det))
-        # Delete is a two-click guard: first click arms ("Confirm delete?"), no request yet.
-        page.evaluate("""() => [...document.querySelectorAll('.rail-section.info .info-actions button')].find(b=>b.textContent.trim()==='Delete').click()""")
+        check("Info is a dock panel with a uniform tool-button chin (✎ Rename / ⇩ Download / ✕ Delete)",
+              det["rename"] and det["download"] and det["del"] and det["danger"] and det["chin"] and det["panel"] and det["notModal"], str(det))
+        # Delete is a two-click guard: first click arms (turns red, glyph → ‼), no request yet.
+        page.evaluate("""() => [...document.querySelectorAll('.rail-section.info .info-actions button')].find(b=>b.textContent.trim()==='✕').click()""")
         page.wait_for_timeout(40)
         armed = page.evaluate("""() => { const b=document.querySelector('.rail-section.info .info-actions .danger-button');
           return { armed: b.classList.contains('danger-armed'), text: b.textContent.trim() }; }""")
         check("Delete arms on first click (no immediate destroy)",
-              armed["armed"] and armed["text"] == "Confirm delete?", str(armed))
+              armed["armed"] and armed["text"] == "‼", str(armed))
         # Rename opens the in-app floating input (no window.prompt).
-        page.evaluate("""() => [...document.querySelectorAll('.rail-section.info .info-actions button')].find(b=>b.textContent.trim()==='Rename').click()""")
+        page.evaluate("""() => [...document.querySelectorAll('.rail-section.info .info-actions button')].find(b=>b.textContent.trim()==='✎').click()""")
         page.wait_for_timeout(40)
         check("Rename opens the floating input (no window.prompt)",
               page.evaluate("() => !!document.querySelector('.hv-float-input')"))
