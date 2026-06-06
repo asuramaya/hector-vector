@@ -60,6 +60,7 @@ The canvas is a live SVG document — everything you see is real DOM you can ins
 - **Snapshot undo/redo** over the whole document, with a **History** panel.
 - **Projects** — save/open `.hv` documents (preserves layers + history); "resume last document" on startup is opt-in.
 - **Transparency** — checkerboard backdrop; transparent artboards are first-class.
+- **Load just works** — dropping/loading an image into an empty editor auto-creates a canvas **sized to the image** (no "create a canvas first" step, no cramming into a default box).
 
 ### Drawing tools
 
@@ -114,9 +115,14 @@ Drop a raster onto the canvas (it becomes a selectable, movable `<image>` node) 
 
 | Stage | What it does | Backends |
 |---|---|---|
-| **Upscale** | GPU super-resolution | Real-ESRGAN (NCNN/Vulkan), 2×/3×/4×, photo & anime models |
-| **Remove BG** | background removal / keying | classical (numpy), AI (`rembg`: U²-Net, ISNet, **BiRefNet**, silueta, portrait/anime), greenscreen chroma-key |
+| **De-JPEG / Denoise / Deblur** | restoration pre-pass for low-quality inputs | `spandrel`: FBCNN (de-block) · SCUNet (denoise) · NAFNet (deblur) |
+| **Upscale** | super-resolution | Real-ESRGAN (NCNN/Vulkan, 2×/3×/4×, photo & anime) · `spandrel` tiers DAT-2 (quality) / SPAN (fast·CPU) / Real-CUGAN (anime) · AuraSR v2 (GAN) |
+| **Remove BG** | background removal / keying | classical (numpy) · AI (`rembg`: U²-Net, ISNet, **BiRefNet** + HR, **BEN2** hair/4K matting, silueta, portrait/anime) · greenscreen chroma-key |
 | **Vectorize** | raster → SVG | clean colour trace · VTracer · pixel-exact (see below) |
+
+Two more fixers are **one-shot, interactive** (not strip stages): **Remove object** — paint a mask, erased via big-LaMa (`onnxruntime`); and **Restore faces** — GFPGAN (auto-detects faces, no-op if none).
+
+**Auto pipeline.** A classical, offline analyzer (`tools/analyze.py`) reads the image — content class, alpha, resolution, JPEG blocking, faces — and the **Auto** banner proposes a pipeline with *why* for each step, one-click **Apply**. You pick the *outcome* (e.g. "hair" cutout, "anime" upscale) and a router picks the model; the model registry (`/api/capabilities`) drives the picker, so adding a model server-side surfaces it in the UI with no panel changes.
 
 Runs target the selected raster or the whole Library (explicit batch toggle), execute in a **background job queue** with live progress and per-job logs (the **Jobs** panel), and **never mutate your live canvas** — you choose when to load the result back in. Live preview is available while you tune a single raster.
 
@@ -153,6 +159,7 @@ Heavily *bilinear*-resampled art is genuinely ambiguous; set **Native size (cell
 
 - **Local job queue** — background workers with cancel/retry/clear and live status; nothing leaves your machine.
 - **Standalone window** — `?app=1` (or `./install.sh --app`) runs it as an app window with a draggable titlebar; native window manager controls.
+- **Tied lifecycle** — the window's keep-alive pings the server; close the window and the server GCs its scratch and **spins itself down** (no orphaned process). `launch.sh` also detects and replaces a *stale* server still bound to the port, so a fresh client never runs against an out-of-date API.
 - **Self-updating** — in-app update check + apply (`git pull` + dep re-sync) gated on a clean tree.
 - **Settings** — install/repair external tools, source folder, startup behaviour, rulers/guides.
 
@@ -170,7 +177,8 @@ Heavily *bilinear*-resampled art is genuinely ambiguous; set **Native size (cell
 
 - **Python 3.10+** with `pip`. The base runtime (`Pillow`, `numpy`, `scipy`) is installed by `./install.sh` (or `pip install -r requirements.txt`).
 - For **Upscale / Trace**: `curl` + `unzip` (Real-ESRGAN download) and `cargo` (builds VTracer). Installed on first launch or via the Settings buttons.
-- For **AI Cutout**: nothing up front — click *Install rembg* in Settings to pull `rembg[cpu]` into a project-local `./.venv` (~500 MB, one-time).
+- For **AI Cutout**: nothing up front — click *Install rembg* in Settings to pull `rembg[cpu]` into a project-local `./.venv` (~500 MB, one-time). BiRefNet / BEN2 weights download on first use.
+- For **spandrel upscalers/restorers, face restore, object removal**: a one-time `torch`/`spandrel`/`onnxruntime` install into `./.venv` (from Settings); per-model weights fetch on first use. CPU works; a GPU is faster.
 - For **Export PNG of curved (VTracer) SVGs**: optional `cairosvg` (`pip install cairosvg`, needs system libcairo). Pixel-art SVG export needs nothing extra — it's pure Pillow.
 - A Vulkan-capable GPU helps Real-ESRGAN but isn't mandatory.
 
@@ -182,7 +190,9 @@ Heavily *bilinear*-resampled art is genuinely ambiguous; set **Native size (cell
 |------|-------------------|---------|
 | Real-ESRGAN NCNN Vulkan | downloaded from the project's GitHub releases into `./tools` | BSD-3-Clause |
 | VTracer | `cargo install vtracer --root ./tools/cargo` | MIT |
-| rembg (+ ONNX models) | `pip install 'rembg[cpu]' onnxruntime` into `./.venv`; model weights download to `~/.u2net` on first use | MIT (models: Apache-2.0 / MIT) |
+| rembg (+ ONNX models) | `pip install 'rembg[cpu]' onnxruntime` into `./.venv`; model weights download to `~/.u2net` on first use (incl. BiRefNet, BEN2) | MIT (models: Apache-2.0 / MIT) |
+| spandrel upscalers / restorers | `pip install spandrel torch` into `./.venv`; weights fetched per model on first use (DAT-2 / SPAN / Real-CUGAN / AuraSR; SCUNet / FBCNN / NAFNet) | MIT (weights vary, all permissive) |
+| GFPGAN / big-LaMa (ONNX) | ONNX weights downloaded on first use of Restore faces / Remove object | Apache-2.0 |
 | cairosvg *(optional)* | `pip install cairosvg` | LGPL-3.0 |
 
 ## Roadmap & status
@@ -197,9 +207,13 @@ The deep research behind pipeline picks — every category, the OSS SOTA, and th
 - [x] **Boolean ops** (union / subtract / intersect) + invert-space on a marching-squares engine that refits to minimal cubics.
 - [x] **Layers** (visibility / lock / rename / reorder / group / merge), align, arrange, transform.
 - [x] **Dockable workspace** — float / dock / locking-bezel groups / shelf / contextual auto-shelve.
-- [x] **Rasters as canvas objects** — `editor.placeImage()`; the **Processor** pipeline as a contextual in-canvas panel.
-- [x] **Pipeline** — Upscale (Real-ESRGAN), Remove BG (rembg / classical / chroma-key), Vectorize (clean / VTracer / pixel), as a composable stage strip with a background job queue.
-- [x] **Pixel Art → SVG**, **client-side PNG export**, **`.hv` projects**, **Library**, in-app **self-update**, **app-window** mode.
+- [x] **Rasters as canvas objects** — `editor.placeImage()`; the **Processor** pipeline as a contextual in-canvas panel; loading auto-creates a canvas sized to the image.
+- [x] **Pipeline** — De-JPEG/Denoise/Deblur, Upscale, Remove BG, Vectorize as a composable stage strip with a background job queue.
+- [x] **Upscalers** — Real-ESRGAN + `spandrel` tiers (DAT-2 / SPAN / Real-CUGAN) + AuraSR v2.
+- [x] **Better cutout** — BiRefNet (+ HR) and **BEN2** (hair / 4K matting) via `rembg`, opt-in alongside U²-Net / ISNet / chroma-key.
+- [x] **Restoration** — denoise / de-JPEG / deblur pre-pass (SCUNet / FBCNN / NAFNet via `spandrel`); **GFPGAN** face restore; **LaMa** object removal (mask-paint).
+- [x] **Auto pipeline** — classical analyzer → suggested compose with *why* + one-click Apply; outcome→model router driven by a capability registry.
+- [x] **Pixel Art → SVG**, **client-side PNG export**, **`.hv` projects**, **Library**, in-app **self-update**, **app-window** mode with tied server lifecycle.
 
 ### In progress / open edges
 
@@ -211,10 +225,6 @@ The deep research behind pipeline picks — every category, the OSS SOTA, and th
 
 - [ ] **Text tool** (the main parity gap).
 - [ ] **Distribute** spacing + **multi-object transform handles** (group rotate/scale) + **multiple artboards**.
-- [ ] **Better cutout** — BiRefNet / BEN2 as opt-in high-quality background removal (hair/edges).
-- [ ] **More upscalers via `spandrel`** — DAT-2 (quality), SPAN (fast/CPU), Real-CUGAN (anime); model swap as config.
-- [ ] **Inpainting / object removal** — LaMa via IOPaint.
-- [ ] **Face restoration** (GFPGAN) and a **denoise / de-JPEG pre-pass** (SCUNet / FBCNN) for low-quality inputs.
 - [ ] **Vectorize "quality" tier** — VTracer is the only viable OSS colour vectorizer; closed engines (Vectorizer.ai) are meaningfully better on photos. Optional paid-API fallback is on the table.
 
 ### Known limitations
@@ -231,9 +241,9 @@ No build step anywhere — the frontend is hand-written ES modules served as-is.
   - **`src/hv/`** — a pure, side-effect-free library: geometry & path math (`path`, `transform`, `shapes`, `shapegen`), colour (`color`), raster sampling (`raster`), and the marching-squares boolean/contour engine with its shared curve-fit core (`contour`, `fitcurve`).
   - **`src/editor.js`** — the live-SVG editing core: selection, the tools, snapshot undo, layers, and the boolean operations.
   - **`src/app.js`** — the app shell: the dockable-panels system (`window.__docks`), the Library, the Processor pipeline UI, Info, and client-side PNG export.
-- **`server.py`** — a single-file backend on Python's stdlib `http.server`, with a threaded job queue and a JSON API (`/api/run/pipeline`, `/api/vectorize/engines`, `/api/raster-ops`, `/api/work-items`, `/api/install/*`, …). It's organized around two pluggable registries: **vectorize engines** (`clean` / `vtracer` / `pixel`) behind one resolver, and **raster ops** (`upscale` / `removebg`). No web framework.
+- **`server.py`** — a single-file backend on Python's stdlib `http.server`, with a threaded job queue and a JSON API (`/api/run/pipeline`, `/api/vectorize/engines`, `/api/raster-ops`, `/api/capabilities`, `/api/plan`, `/api/work-items`, `/api/install/*`, `/api/heartbeat`, …). It's organized around pluggable registries: **vectorize engines** (`clean` / `vtracer` / `pixel`), **raster ops** (`upscale` / `removebg` / restoration), and a **capability registry** (outcome→model routing) — adding a model is a registry entry that surfaces in the UI automatically. A heartbeat watchdog spins the server down when the UI closes. No web framework.
 - **`engine.py`, `mask_trace_prep.py`** — classical mask/cutout image ops.
-- **`tools/`** — our worker scripts (`pixelvec.py`, `svg_render.py`, `ai_cutout.py`, `simplify_svg.py`); external binaries land here at runtime.
+- **`tools/`** — worker scripts: `pixelvec.py`, `svg_render.py`, `simplify_svg.py` (vector), `ai_cutout.py` (rembg), `upscale_spandrel.py`, `face_restore.py` + `detect_faces.py` (GFPGAN), `inpaint_lama.py` (object removal), and `analyze.py` (the offline analyzer behind the Auto plan). External binaries/weights land here / in `./.venv` / `~/.u2net` at runtime.
 - Vector documents save as **`.hv` projects** under `outputs/canvas/`; pipeline outputs under `outputs/<process>-<timestamp>/`. Your source images live in `inputs/` (or any folder you point the Library at).
 
 Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md). The editor has a real-browser E2E suite (`tests/e2e/editor_e2e.py`) and a backend smoke suite (`tests/test_smoke.py`); the README screenshots are regenerated with `tests/e2e/screenshots.py`.
@@ -244,9 +254,10 @@ Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md). The editor h
 |----------|---------|---------|
 | `PORT` | `2002` | Server port (`PORT=8080 ./run.sh`). |
 | `HECTOR_CONCURRENCY` | `1` | Parallel jobs. Raise carefully — GPU/RAM bound. |
+| `HV_IDLE_SHUTDOWN` | `90` | Seconds of UI silence (window closed) before the server self-spins-down. `0` disables — for a long-lived/headless server or CI. |
 
 ## Credits & license
 
-Built on excellent open-source work: [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN), [VTracer](https://github.com/visioncortex/vtracer), [rembg](https://github.com/danielgatis/rembg) & the U²-Net / [BiRefNet](https://github.com/ZhengPeng7/BiRefNet) model families, [Pillow](https://python-pillow.org/), and [NumPy](https://numpy.org/). See [`ROADMAP.md`](ROADMAP.md) for the broader landscape and what's planned next.
+Built on excellent open-source work: [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN), [VTracer](https://github.com/visioncortex/vtracer), [rembg](https://github.com/danielgatis/rembg) & the U²-Net / [BiRefNet](https://github.com/ZhengPeng7/BiRefNet) / [BEN2](https://huggingface.co/PramaLLC/BEN2) cutout families, [spandrel](https://github.com/chaiNNer-org/spandrel) (DAT-2 / SPAN / Real-CUGAN / AuraSR upscalers and SCUNet / FBCNN / NAFNet restorers), [GFPGAN](https://github.com/TencentARC/GFPGAN) face restore, [LaMa](https://github.com/advimman/lama) inpainting, [Pillow](https://python-pillow.org/), and [NumPy](https://numpy.org/). See [`ROADMAP.md`](ROADMAP.md) for the broader landscape and what's planned next.
 
 [MIT](LICENSE) © 2026 asuramaya. Bundled-at-runtime tools keep their own licenses (see the table above).
