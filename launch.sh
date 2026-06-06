@@ -20,15 +20,33 @@ sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)
 PY
 }
 
-# Bring the server up if nothing is answering on the port.
-if ! port_open; then
-  echo "launch.sh: starting server on :$PORT" >&2
+# A CURRENT server answers /api/heartbeat with 200. A server that doesn't is
+# stale (older code still bound to the port) — reusing it would serve fresh
+# client JS against a mismatched API, which is the stale-server class of bug
+# (e.g. /api/capabilities 404-storming the UI into an unclickable state).
+server_current() {
+  python3 - "$PORT" <<'PY' 2>/dev/null
+import sys, urllib.request
+try:
+    with urllib.request.urlopen(f"http://127.0.0.1:{int(sys.argv[1])}/api/heartbeat", timeout=0.6) as r:
+        sys.exit(0 if r.status == 200 else 1)
+except Exception:
+    sys.exit(1)
+PY
+}
+
+# Bring the server up if nothing is answering on the port — OR replace a stale
+# one. run.sh kills+replaces an existing server.py on the port idempotently, so
+# starting again is safe; we then wait for the NEW server to report current.
+if ! port_open || ! server_current; then
+  if port_open; then echo "launch.sh: replacing a stale server on :$PORT" >&2
+  else echo "launch.sh: starting server on :$PORT" >&2; fi
   PORT="$PORT" nohup ./run.sh >/tmp/hector-vector-server.log 2>&1 &
   for _ in $(seq 1 150); do
-    port_open && break
+    server_current && break
     sleep 0.2
   done
-  port_open || { echo "launch.sh: server did not come up on :$PORT (see /tmp/hector-vector-server.log)" >&2; exit 1; }
+  server_current || { echo "launch.sh: server did not come up on :$PORT (see /tmp/hector-vector-server.log)" >&2; exit 1; }
 fi
 
 # Pick a Chromium-family browser.

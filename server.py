@@ -212,6 +212,63 @@ TERMINAL_JOB_STATES = {"done", "failed", "cancelled"}
 _workers_started = threading.Event()
 
 
+# ---- UI liveness / auto-spindown -------------------------------------------
+# The server is the program's compute half; the browser window is its face. When
+# the window closes, nothing should be left running — a lingering old server gets
+# reused by the next launch and then mismatches freshly-served client code, which
+# is the whole "stale server → 404 storm → dead UI" class of bug. So the client
+# pings /api/heartbeat on a timer, every request refreshes the same clock, and a
+# watchdog shuts the process down once the UI has been silent past the grace
+# window AND no job is in flight. Set HV_IDLE_SHUTDOWN=0 to disable (CI/headless,
+# or a deliberately long-lived server).
+IDLE_SHUTDOWN_SEC = float(os.environ.get("HV_IDLE_SHUTDOWN", "90"))
+_last_beat = time.monotonic()
+_beat_lock = threading.Lock()
+_client_seen = False
+
+
+def _touch_heartbeat() -> None:
+    """Mark the UI as alive right now. Called on every request + the explicit ping."""
+    global _last_beat, _client_seen
+    with _beat_lock:
+        _last_beat = time.monotonic()
+        _client_seen = True
+
+
+def _has_active_jobs() -> bool:
+    with jobs_lock:
+        return any(j.get("status") not in TERMINAL_JOB_STATES for j in jobs.values())
+
+
+def _idle_watchdog(server) -> None:
+    """Exit when the UI is gone: silent past the grace window AND nothing running.
+    Only arms after a client has connected at least once, so a server started a
+    beat ahead of its browser (launch.sh) never quits during boot."""
+    if IDLE_SHUTDOWN_SEC <= 0:
+        return  # disabled
+    while True:
+        time.sleep(5)
+        with _beat_lock:
+            seen, idle = _client_seen, time.monotonic() - _last_beat
+        if not seen or idle < IDLE_SHUTDOWN_SEC or _has_active_jobs():
+            continue
+        print(f"hector-vector: UI gone for {idle:.0f}s — spinning the server down.", flush=True)
+        _gc_outputs()                 # tidy scratch on the way out
+        server.shutdown()             # unblocks serve_forever() in main → clean exit
+        return
+
+
+def _gc_outputs() -> None:
+    """Housekeeping sweep: bound the recovery-scratch dirs so they don't accumulate
+    across sessions. Conservative by construction — the underlying pruners never
+    touch a PNG-backed dir (it may back a live canvas href) or recent deliverables."""
+    try:
+        _prune_focused_pipeline_dirs()
+        _prune_scratch_inline()
+    except Exception:
+        pass  # hygiene must never crash boot/shutdown
+
+
 def _cancel_requested(job_id: str) -> bool:
     return bool(job_internals.get(job_id, {}).get("cancel_requested"))
 
@@ -3462,9 +3519,15 @@ def shlex_quote(value: str) -> str:
 class Handler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
+        _touch_heartbeat()   # any request from the UI counts as "still alive"
         if parsed.path == "/favicon.ico":
             self.send_response(HTTPStatus.NO_CONTENT)
             self.end_headers()
+            return
+        if parsed.path == "/api/heartbeat":
+            # The UI's keep-alive ping (also lets launch.sh tell a current server
+            # from a stale one that predates this endpoint). Cheap + no-store.
+            self.send_json({"ok": True})
             return
         if parsed.path == "/api/status":
             self.send_json(tool_status())
@@ -3561,6 +3624,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
+        _touch_heartbeat()   # any request from the UI counts as "still alive"
         try:
             if parsed.path == "/api/upload":
                 result = save_uploaded_files(self)
@@ -3702,11 +3766,19 @@ def main() -> None:
     ensure_dirs()
     seed_inputs()
     bootstrap_tools()
+    _gc_outputs()   # sweep stale recovery-scratch left by prior sessions on the way up
     port = int(os.environ.get("PORT", "2002"))
     ThreadingHTTPServer.allow_reuse_address = True
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    threading.Thread(target=_idle_watchdog, args=(server,), daemon=True).start()
     print(f"hector-vector UI: http://127.0.0.1:{port}")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        _gc_outputs()   # and again on the way down
+        server.server_close()
 
 
 if __name__ == "__main__":

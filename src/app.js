@@ -2145,10 +2145,18 @@ function rasterOpById(id) { return (rasterOpSchemas || []).find((o) => o.id === 
 // stage cards' Outcome picker: pick what you WANT, the router picks the model. Adding a
 // model is a server registry line — it shows up here automatically, no new panel (#49).
 let capsInfo = null;
+let capsBusy = false;    // a fetch is in flight — don't pile on parallel requests
+let capsTried = false;   // we've completed at least one fetch attempt (success OR failure)
 async function ensureCapsInfo() {
   if (capsInfo) return capsInfo;
+  if (capsBusy) return [];                 // already loading — let that one settle
+  capsBusy = true;
   try { const r = await api("/api/capabilities"); if (Array.isArray(r)) capsInfo = r; }
-  catch { /* leave null so the next render retries — don't poison the cache */ }
+  catch { /* a genuine failure (e.g. a stale server that predates this endpoint → 404).
+             We mark it tried below so callers STOP re-requesting on every render — that
+             retry-forever loop is what spun the panel into a click-eating rebuild storm.
+             A reload (or restarting the server) retries cleanly. */ }
+  finally { capsBusy = false; capsTried = true; }
   return capsInfo || [];
 }
 function capById(id) { return (capsInfo || []).find((c) => c.id === id) || null; }
@@ -2412,7 +2420,20 @@ function applyIntent(cap, intent) {
 // Settings. Returns false if caps aren't loaded yet (caller bails to a Loading state).
 function buildIntentPicker(body, capId, rerender) {
   const cap = capById(capId);
-  if (!cap) { ensureCapsInfo().then(rerender); return false; }
+  if (!cap) {
+    // Not loaded yet → kick a ONE-SHOT load and re-render when it lands. Once we've
+    // tried and the cap still isn't there (a server too old to expose /api/capabilities,
+    // say), do NOT reschedule — rescheduling on every render is exactly what spun the
+    // panel into an infinite rebuild loop that swallowed every click. Show a static hint
+    // instead so the stage is still usable via Advanced.
+    if (!capsTried && !capsBusy) { ensureCapsInfo().then(rerender); }
+    else if (capsTried) {
+      const h = document.createElement("div"); h.className = "form-hint";
+      h.textContent = "Model registry unavailable — restart the server if this persists. Set the model in Advanced.";
+      body.appendChild(h);
+    }
+    return false;
+  }
   const cur = currentIntentFor(cap);
   const opts = (cap.intents || []).map((it) => [it, INTENT_LABEL[it] || it]);
   if (!cur) opts.unshift(["__custom__", "Custom"]);
@@ -3771,6 +3792,14 @@ function buildRasterTools(node) {
       splitGroup: (gid, i) => splitGroup(gid, i),
     };
   }
+
+  // ---- Keep-alive: let the server self-spin-down when this window closes ----
+  // The server is the program's compute half; while a window is open it should
+  // stay up, and once the window closes it should GC + exit (no lingering stale
+  // server for the next launch to reuse). We ping on a timer; closing the window
+  // stops the pings and the server's watchdog takes it down after a grace window.
+  // Any normal request also counts as a beat, so this is just the idle backstop.
+  setInterval(() => { fetch("/api/heartbeat", { cache: "no-store" }).catch(() => {}); }, 15000);
 
   // ---- PWA install (surfaced as a File-menu item; one-click path to WCO) ----
   if ("serviceWorker" in navigator) {
