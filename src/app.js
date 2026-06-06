@@ -1250,7 +1250,7 @@ function galleryActionRow({ name, absPath, url, onInfo }) {
   if (name) mk("⧉", `Copy filename: ${name}`, () => copyToClipboard(name));
   if (absPath) {
     mk("⌖", `Copy path: ${absPath}`, () => copyToClipboard(absPath));
-    mk("⊞", "Reveal in file manager", () => revealInFileManager(absPath));
+    mk("⌂", "Reveal in file manager", () => revealInFileManager(absPath));
   }
   if (url) mk("↗", "Open in a new tab", () => window.open(url, "_blank", "noopener"));
   return actions;
@@ -5823,9 +5823,9 @@ async function openVectorInfoModal(item) {
   meta.appendChild(nm); meta.appendChild(sub);
   const actions = document.createElement("div"); actions.className = "info-actions";
   const act = (label, title, fn, primary) => { const b = document.createElement("button"); b.type = "button"; b.className = "tool-button" + (primary ? " info-primary" : ""); b.textContent = label; b.title = title; b.addEventListener("click", fn); actions.appendChild(b); };
-  act("⤓", "Load into canvas — place this vector in the editor viewport", () => { placeFromUrl(item.url, item.name).catch((e) => setStatus(e.message, 3000)); }, true);
+  act("⊡", "Load into canvas — place this vector in the editor viewport", () => { placeFromUrl(item.url, item.name).catch((e) => setStatus(e.message, 3000)); }, true);
   const abs = item.path || "";
-  if (abs) act("⊞", "Reveal in the file manager", () => revealInFileManager(abs));
+  if (abs) act("⌂", "Reveal in the file manager", () => revealInFileManager(abs));
   act("↗", "Open the vector in a new tab", () => window.open(item.url, "_blank", "noopener"));
   const vectorCfg = {
     kind: "vector", item, url: item.url, nameBtn: nm,
@@ -5876,7 +5876,7 @@ function openProjectInfo(item) {
   meta.appendChild(nm); meta.appendChild(sub);
   const actions = document.createElement("div"); actions.className = "info-actions";
   const act = (label, title, fn, primary) => { const b = document.createElement("button"); b.type = "button"; b.className = "tool-button" + (primary ? " info-primary" : ""); b.textContent = label; b.title = title; b.addEventListener("click", fn); actions.appendChild(b); };
-  act("⤓", "Open project — restores layers + history", () => { openProject(item); }, true);
+  act("⊡", "Open project — restores layers + history", () => { openProject(item); }, true);
   const projCfg = {
     kind: "project", item, url: item.url, nameBtn: nm,
     reopen: (it) => openProjectInfo(it),
@@ -5925,8 +5925,8 @@ function renderInfoModal(info) {
     b.addEventListener("click", fn);
     actions.appendChild(b);
   };
-  act("⤓", "Load into canvas — place this image in the editor viewport", () => { loadRasterToCanvas({ name: info.name, url }); }, true);
-  if (absPath) act("⊞", "Reveal in the file manager", () => revealInFileManager(absPath));
+  act("⊡", "Load into canvas — place this image in the editor viewport", () => { loadRasterToCanvas({ name: info.name, url }); }, true);
+  if (absPath) act("⌂", "Reveal in the file manager", () => revealInFileManager(absPath));
   act("↗", "Open the full image in a new tab", () => window.open(url, "_blank", "noopener"));
   const rasterCfg = {
     kind: "raster", item: { name: info.name, url, path: absPath }, url, nameBtn: nm,
