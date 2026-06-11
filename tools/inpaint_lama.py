@@ -44,8 +44,16 @@ def main() -> int:
     sess = ort.InferenceSession(str(args.model), providers=["CPUExecutionProvider"])
     # Map inputs by channel count: the 1-channel input is the mask, the 3-channel is the image.
     in_meta = sess.get_inputs()
-    img_name = next(i.name for i in in_meta if i.shape[1] == 3)
-    mask_name = next(i.name for i in in_meta if i.shape[1] == 1)
+    try:
+        img_name = next(i.name for i in in_meta if i.shape[1] == 3)
+        mask_name = next(i.name for i in in_meta if i.shape[1] == 1)
+    except StopIteration:
+        # Some exports declare symbolic channel dims (shape[1] is a string) — fall back to
+        # input ORDER (image first, mask second) rather than crashing with a bare StopIteration.
+        if len(in_meta) < 2:
+            print("error: model does not expose image+mask inputs", file=sys.stderr)
+            return 3
+        img_name, mask_name = in_meta[0].name, in_meta[1].name
 
     print("[2/4] read input + mask", flush=True)
     img = Image.open(args.input).convert("RGB")
