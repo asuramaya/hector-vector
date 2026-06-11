@@ -61,6 +61,10 @@ const editor = {
   adopt(svgEl) {
     if (this._penHoverBound) { window.removeEventListener("pointermove", this._penHoverBound); this._penHoverBound = null; }
     if (this._curvHoverBound) { window.removeEventListener("pointermove", this._curvHoverBound); this._curvHoverBound = null; }
+    // Cancel any coalescing edit (e.g. the colour panel's debounced commit) BEFORE
+    // clearing history — otherwise the next push() in the new document would commit the
+    // OLD document's markup as history[0], and undo would replace the doc with the old one.
+    this.cancelCoalesce();
     this._pen = null;
     this._curv = null;
     this.selection = new Set();
@@ -212,7 +216,14 @@ const editor = {
     let budget = 64 * 1024 * 1024;         // ~64 MB of snapshots (chars ≈ 2 bytes)
     for (let i = this.history.length - 1; i >= 0; i--) {
       budget -= (this.history[i].svg.length || 0) * 2;
-      if (budget < 0) { this.history.splice(0, i + 1); return; }
+      if (budget < 0) {
+        // Drop everything older than i — but ALWAYS keep at least the newest entry, so
+        // a single snapshot larger than the whole budget doesn't wipe the entry we just
+        // pushed (which silently left undo broken on huge traced docs).
+        const cut = Math.min(i + 1, this.history.length - 1);
+        if (cut > 0) this.history.splice(0, cut);
+        return;
+      }
     }
     if (this.history.length > 100) this.history.splice(0, this.history.length - 100);
   },
@@ -981,6 +992,19 @@ const editor = {
     }
     const f = (x, y) => ({ x: m.a * x + m.c * y + m.e, y: m.b * x + m.d * y + m.f });
     transformShapeGeometry(el, el.tagName.toLowerCase(), f, m);
+    // Baking a scaled transform into geometry would otherwise THIN/THICKEN the stroke
+    // (the transform used to scale the stroke too) — so the "render-identical" bake
+    // wasn't, and there was no undo step to recover from it. Compensate stroke-width by
+    // the matrix's mean (geometric) scale so the rendered width is unchanged, unless the
+    // stroke is explicitly non-scaling.
+    const sf = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1;
+    if (Math.abs(sf - 1) > 1e-6 && (el.getAttribute("vector-effect") || "") !== "non-scaling-stroke") {
+      const stroke = el.getAttribute("stroke");
+      if (stroke && stroke !== "none") {
+        const sw = parseFloat(el.getAttribute("stroke-width"));
+        el.setAttribute("stroke-width", nfmt((Number.isFinite(sw) ? sw : 1) * sf));
+      }
+    }
     el.removeAttribute("transform");
     if (isLiveShape(el)) freezeShape(el);   // baking geometry desyncs params → make it a plain path
   },
@@ -1444,7 +1468,13 @@ const editor = {
       const move = (ev) => {
         const p = ptU(ev); let deg = (Math.atan2(p.y - cy, p.x - cx) - a0) * 180 / Math.PI;
         if (ev.shiftKey) deg = Math.round(deg / 15) * 15;
-        if (!pushed && Math.abs(deg) > 0.4) { this.push("Rotate"); pushed = true; this._showGhostBox(); }
+        // Snapshot the CLEAN pre-rotate state before touching the document, and apply
+        // nothing below the threshold — otherwise a sub-0.4° jiggle left an un-undoable
+        // rotate() on the nodes, and the snapshot captured an already-rotated doc (undo drift).
+        if (!pushed) {
+          if (Math.abs(deg) <= 0.4) return;
+          this.push("Rotate"); pushed = true; this._showGhostBox();
+        }
         const rot = `rotate(${nfmt(deg)} ${nfmt(cx)} ${nfmt(cy)})`;
         nodes.forEach((n, i) => n.setAttribute("transform", origs[i] ? `${rot} ${origs[i]}` : rot));
         if (xf.g) xf.g.setAttribute("transform", rot);   // rotate box + handles to match
@@ -1521,7 +1551,13 @@ const editor = {
         const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
         const ax = ev.altKey ? cx : spec.ax, ay = ev.altKey ? cy : spec.ay;   // Alt → scale from centre
         const f = this._scaleFactors(spec, p, ev.shiftKey, ax, ay); last = { ...f, ax, ay };
-        if (!pushed && (Math.abs(f.sx - 1) > 1e-4 || Math.abs(f.sy - 1) > 1e-4)) { this.push("Scale"); pushed = true; this._showGhostBox(); }
+        // Snapshot before mutating, and don't apply below the threshold — otherwise a
+        // sub-1e-4 jiggle baked a near-identity matrix() into the snapshot, degrading
+        // _isTranslateOnly (node-editability) after an undo.
+        if (!pushed) {
+          if (Math.abs(f.sx - 1) <= 1e-4 && Math.abs(f.sy - 1) <= 1e-4) return;
+          this.push("Scale"); pushed = true; this._showGhostBox();
+        }
         apply(f.sx, f.sy, ax, ay);
         this._updateXformVisual(spec, f.sx, f.sy, ax, ay);
         this._showSizeReadout((xf.bb.x1 - xf.bb.x0) * Math.abs(f.sx), (xf.bb.y1 - xf.bb.y0) * Math.abs(f.sy), ev.clientX, ev.clientY);
@@ -1861,11 +1897,24 @@ const editor = {
   _artworkNodes() { return [...this.stage.children].filter((c) => c.hasAttribute && c.hasAttribute("data-hv-id")); },
   // Clone the current selection into the stage at an optional offset; returns the
   // new ids. Does NOT push history or change selection (callers decide).
+  // Group descendants carry their own data-hv-id; cloneNode copies them verbatim, so a
+  // cloned/pasted subtree would have DUPLICATE ids — nodeById() (first-match) then resolves
+  // to the original's child, so selecting/editing the copy's child hits the original.
+  // Assign a fresh id to every descendant. Stroke-aligned nodes are left to
+  // _reanchorStrokeAlign (it re-ids AND rebuilds their clip refs), so skip them here.
+  _reidSubtree(root) {
+    if (!root || !root.querySelectorAll) return;   // querySelectorAll returns descendants only (not root)
+    root.querySelectorAll("[data-hv-id]").forEach((n) => {
+      if (n.hasAttribute("data-hv-stroke-align")) return;
+      n.setAttribute("data-hv-id", "n" + (++this.idSeq));
+    });
+  },
   _cloneSelection(offsetX = 0, offsetY = 0) {
     const ov = this._overlayEl(); const ids = [];
     for (const n of this.selectedNodes()) {
       const c = n.cloneNode(true);
       const id = "n" + (++this.idSeq); c.setAttribute("data-hv-id", id);
+      this._reidSubtree(c);           // fresh ids for group descendants (no duplicate-id collisions)
       if (offsetX || offsetY) { const t = currentTranslate(c); setTranslate(c, t.x + offsetX, t.y + offsetY); }
       this.stage.insertBefore(c, ov);
       this._reanchorStrokeAlign(c);   // rebuild any stroke-align clip against the clone's new id
@@ -1902,6 +1951,7 @@ const editor = {
     const ov = this._overlayEl(); const ids = [];
     for (const el of els) {
       const id = "n" + (++this.idSeq); el.setAttribute("data-hv-id", id);
+      this._reidSubtree(el);           // fresh ids for group descendants (no duplicate-id collisions)
       const t = currentTranslate(el); setTranslate(el, t.x + 12, t.y + 12);
       this.stage.insertBefore(el, ov);
       this._reanchorStrokeAlign(el);   // rebuild any stroke-align clip against the paste's new id
@@ -2334,6 +2384,10 @@ const editor = {
     if (!this.stage) return;
     const nodes = this._fillableSelection();
     if (nodes.length < 2) { setStatus("Select 2 or more filled shapes for a boolean op.", 2800); return; }
+    // Order by z (document position), NOT selection/click order: subtract removes the
+    // FRONT shapes from the BACK one (nodes[0] = backmost), and union/intersect take the
+    // frontmost's style — so the result is stable however the user built the selection.
+    nodes.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1);
     let d, msg, src;
     if (op === "union") { d = this._unionPath(nodes); msg = `United ${nodes.length} shapes.`; src = nodes[nodes.length - 1]; }
     else if (op === "intersect") { d = this._intersectPath(nodes); msg = `Intersection of ${nodes.length} shapes.`; src = nodes[nodes.length - 1]; }
