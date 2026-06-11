@@ -220,14 +220,18 @@ export function pathNodes(svg, accept) {
 // Flatten a <path> to an editable pen-anchor list ({x,y,in,out} with absolute
 // handle coords, mirroring pathNodes' in/out extraction) plus whether it's closed.
 // Lossless round-trip through penPathD for M/L/C paths — `editable` is false when
-// the path carries arcs/quadratics (rebuilding would drop them), so callers can
-// refuse structural edits (delete/convert) on those.
+// the path carries arcs/quadratics (rebuilding would drop them) OR has more than one
+// subpath (penPathD re-emits a single M…Z, which would fuse the subpaths into one loop
+// — corrupting boolean results / traced art), so callers can refuse structural edits
+// (delete/convert) on those. Plain anchor drags via pathNodes() preserve subpaths and
+// stay unaffected. Multi-subpath editing is handled losslessly by the per-subpath model.
 export function pathToAnchors(el) {
   const s = parsePath(el.getAttribute("d") || "");
   const draw = s.filter((x) => x.end);
   const n = draw.length;
   if (!n) return { anchors: [], closed: false, editable: false };
-  const editable = !s.some((x) => x.t === "A" || x.t === "Q");
+  const subpaths = s.filter((x) => x.t === "M").length;
+  const editable = subpaths <= 1 && !s.some((x) => x.t === "A" || x.t === "Q");
   const closed = s[s.length - 1] && s[s.length - 1].t === "Z";
   const wrap = closed && n >= 2 &&
     Math.hypot(draw[n - 1].end.x - draw[0].end.x, draw[n - 1].end.y - draw[0].end.y) < 1e-6;

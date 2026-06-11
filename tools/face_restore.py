@@ -56,13 +56,23 @@ def main() -> int:
         print(f"error: could not read image: {args.input}", file=sys.stderr)
         return 2
     h, w = bgr.shape[:2]
-    det = cv2.FaceDetectorYN.create(str(args.detector), "", (w, h), 0.6, 0.3, 50)
-    det.setInputSize((w, h))
     sess = ort.InferenceSession(str(args.gfpgan), providers=["CPUExecutionProvider"])
     in_name = sess.get_inputs()[0].name
 
     print("[2/4] detect faces", flush=True)
-    _, faces = det.detect(bgr)
+    # Detect on a downscaled copy (YuNet degrades on large inputs), matching
+    # detect_faces.py's 1024 cap so the analyzer's face count and the restore agree —
+    # otherwise the analyzer offers restore on a big photo and this then finds 0 faces.
+    # Coordinates are scaled back to native before alignment/paste-back below.
+    s = 1024.0 / max(h, w) if max(h, w) > 1024 else 1.0
+    det_img = cv2.resize(bgr, (int(w * s), int(h * s))) if s < 1.0 else bgr
+    dh, dw = det_img.shape[:2]
+    det = cv2.FaceDetectorYN.create(str(args.detector), "", (dw, dh), 0.6, 0.3, 50)
+    det.setInputSize((dw, dh))
+    _, faces = det.detect(det_img)
+    if faces is not None and s < 1.0:
+        faces = faces.copy()
+        faces[:, :14] /= s   # bbox (0:4) + 5 landmarks (4:14) back to native pixels; col 14 = score
     if faces is None or len(faces) == 0:
         print("no faces detected — writing original unchanged", flush=True)
         args.output.parent.mkdir(parents=True, exist_ok=True)

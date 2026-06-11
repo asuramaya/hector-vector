@@ -811,13 +811,12 @@ document.querySelectorAll("[data-vp]").forEach((button) => {
     const vp = viewports[vpName];
     const action = button.dataset.action;
     if (action === "bg") { cycleBg(vpName); return; }
-    if (!vp.el.querySelector(".viewport-content")) return;
-    if (action === "zoom-in") vp.scale *= 1.2;
-    if (action === "zoom-out") vp.scale /= 1.2;
-    if (action === "fit") vp.scale = vp.fitScale || 1, vp.x = 0, vp.y = 0;
-    if (action === "actual") vp.scale = 1, vp.x = 0, vp.y = 0;
-    applyViewportState(vp);
-    if (vp === viewports.output) editor.onViewportChanged();
+    // Route through the shared helpers so the buttons honour the same 0.02–40 clamp
+    // as keyboard/wheel zoom (a held + button used to drive scale arbitrarily high).
+    if (action === "zoom-in") zoomVp(vp, 1.2);
+    else if (action === "zoom-out") zoomVp(vp, 1 / 1.2);
+    else if (action === "fit") fitVp(vp);
+    else if (action === "actual") actualVp(vp);
   });
 });
 
@@ -837,6 +836,11 @@ function floatingInput({ value = "", placeholder = "", title = "", x, y, onCommi
   inp.addEventListener("blur", () => finish(true));
 }
 
+// Fired exactly once whenever the modal closes by ANY path (OK/Cancel buttons,
+// the [data-modal-close] X, backdrop click, or Esc). confirmDialog registers
+// here so dismissals it doesn't own still settle its promise — see :openModal.
+let modalOnClose = null;
+
 function openModal(title, narrow = false) {
   modalTitleEl.textContent = title;
   modalSearchEl.value = "";
@@ -850,6 +854,8 @@ function closeModal() {
   modalRootEl.hidden = true;
   modalBodyEl.innerHTML = "";
   appSettingsOpen = false;
+  const cb = modalOnClose; modalOnClose = null;
+  if (cb) cb();
 }
 
 // A yes/no modal → resolves true (confirmed) or false (cancelled, incl. Esc / backdrop).
@@ -858,10 +864,9 @@ function closeModal() {
 function confirmDialog({ title = "Confirm", message = "", okLabel = "OK", cancelLabel = "Cancel" } = {}) {
   return new Promise((resolve) => {
     let settled = false;
-    const onKey = (e) => { if (e.key === "Escape" && !modalRootEl.hidden) finish(false); };
     function finish(val) {
       if (settled) return; settled = true;
-      document.removeEventListener("keydown", onKey, true);
+      modalOnClose = null;   // we're closing deliberately; don't re-fire as a dismissal
       closeModal(); resolve(val);
     }
     openModal(title, true);
@@ -875,9 +880,9 @@ function confirmDialog({ title = "Confirm", message = "", okLabel = "OK", cancel
     actions.appendChild(ok);
     root.appendChild(actions);
     modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
-    // Capture-phase so this settles BEFORE the generic backdrop/Esc closers (which call
-    // closeModal but wouldn't resolve the promise).
-    document.addEventListener("keydown", onKey, true);
+    // Any other close path (backdrop click, the X button, the generic Esc closer)
+    // routes through closeModal → this hook, so the promise always settles (false).
+    modalOnClose = () => { if (!settled) { settled = true; resolve(false); } };
     setTimeout(() => ok.focus(), 0);
   });
 }
@@ -1229,7 +1234,7 @@ function openColorPicker(opts) {
   if (!host) _activeColorPicker = { cancel };
 
   paint(); paintSide();
-  if (!host) setTimeout(() => inputs.hex.focus(), 0);
+  if (!host) setTimeout(() => hexInput.focus(), 0);
   return { destroy: close, switchTo, swapTargets };   // controller (host/panel mode uses this)
 }
 
@@ -1740,7 +1745,8 @@ function openAppSettings(opts = {}) {
   // the installable unit is the RUNTIME (rembg/realesrgan/vtracer), surfaced once per
   // capability whose models need it. Runtimes with no install path yet (the P3 dejpeg/denoise/
   // deblur/cleanup/face stack) read "coming soon" until their integration task lands.
-  root.appendChild(sectionTitle("AI models & tools"));
+  const toolsTitle = sectionTitle("AI models & tools");
+  root.appendChild(toolsTitle);   // captured so the focus:"tools" deep-link below can scroll to it
   const reopenTools = () => { if (appSettingsOpen) openAppSettings({ focus: "tools" }); };
 
   // need-token → its package installer. A model whose `needs` aren't all in here has no
@@ -2065,6 +2071,24 @@ let rasterStageBusy = false;     // an upscale/bg job in flight (disables button
 
 function rasterHref(node) { return (node && (node.getAttribute("href") || node.getAttribute("xlink:href"))) || ""; }
 function rasterName(node) { return (node && (node.getAttribute("data-hv-name") || "")).replace(/^Image:\s*/, "") || "trace"; }
+// True native pixel size of a placed raster. The node's width/height attributes are the
+// artboard-fit DISPLAY size (placeImage bakes the fit scale in), and an SVG <image> has no
+// naturalWidth — so we load the actual source bytes. (mediaNaturalSize() on an <image> node
+// returns 1×1, which made the cleanup mask 1×1.) Falls back to the display box if load fails.
+function rasterNaturalSize(node) {
+  return new Promise((resolve) => {
+    const href = rasterHref(node);
+    const fallback = () => resolve({
+      w: Math.max(1, Math.round(parseFloat(node.getAttribute("width")) || 1)),
+      h: Math.max(1, Math.round(parseFloat(node.getAttribute("height")) || 1)),
+    });
+    if (!href) { fallback(); return; }
+    const im = new Image();
+    im.onload = () => resolve({ w: im.naturalWidth || 1, h: im.naturalHeight || 1 });
+    im.onerror = fallback;
+    im.src = href;
+  });
+}
 
 // ---- engine schema (single source of truth: /api/vectorize/engines) -------------
 // The vectorize panel is rendered PURELY from each engine's param schema, so a
@@ -4356,42 +4380,24 @@ function showExportResult() {
   modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
 }
 
-let dragDepth = 0;
-function clearDragState() {
-  dragDepth = 0;
-}
-window.addEventListener("dragenter", (event) => {
-  if (!event.dataTransfer?.types?.includes("Files")) return;
-  event.preventDefault();
-  dragDepth += 1;
-});
+// Always swallow window-level drags so the browser never navigates the app away on a
+// drop (a tab-dragged image/link carries text/uri-list, not Files — previously that
+// fell through and the browser opened the URL, destroying the unsaved canvas).
 window.addEventListener("dragover", (event) => {
-  if (!event.dataTransfer?.types?.includes("Files")) return;
   event.preventDefault();
-});
-window.addEventListener("dragleave", (event) => {
-  if (event.relatedTarget) return;
-  clearDragState();
 });
 window.addEventListener("drop", async (event) => {
+  event.preventDefault();
   // A library drag carries our custom type and is handled on #output-preview; never
   // treat it as a file import here (that's what duplicated dragged lib items).
-  if (event.dataTransfer?.types?.includes("application/x-hv-lib")) { clearDragState(); return; }
-  if (!event.dataTransfer?.files?.length) {
-    clearDragState();
-    return;
-  }
-  event.preventDefault();
-  clearDragState();
+  if (event.dataTransfer?.types?.includes("application/x-hv-lib")) return;
+  if (!event.dataTransfer?.files?.length) return;   // non-file drop: swallowed above, nothing to import
   try {
     setStatus(`Uploading ${event.dataTransfer.files.length} file(s)…`);
     await uploadFiles(event.dataTransfer.files);
   } catch (error) {
     setStatus(error.message, 4000);
   }
-});
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) clearDragState();
 });
 fileInputEl.addEventListener("change", async () => {
   const count = fileInputEl.files.length;
@@ -4501,7 +4507,7 @@ async function runProcess(btn) {
     // kicking a second job that would re-trace at the batch ceiling. This collapses the two
     // commit paths into one. Multi-stage / raster-op runs (which can't be previewed as a
     // single SVG) still take the job path below.
-    if (returnNode && stageOn("vectorize") && !stageOn("upscale") && !stageOn("removebg")) {
+    if (returnNode && onlyStage("vectorize")) {
       await commitFocusedVectorize(returnNode);
       return;   // finally{} restores the button
     }
@@ -4633,6 +4639,9 @@ function viewJobOutput(job) {
   const rel = chooseFinalOutput(job);
   if (job.source_name) selectedName = job.source_name;
   manualOutputName = rel ? jobOutputName(rel) : null;
+  // A blank/opened/Save-As'd doc is pinned, and renderPreviews() bails on pinned —
+  // so without this, View does nothing in the default app state. Unpin to land the output.
+  editor.pinned = false;
   refreshLibrary();
   renderPreviews().catch((e) => setStatus(e.message, 2500));
 }
@@ -4778,6 +4787,9 @@ function stageOrder() {
 }
 const stageOn = (id) => !!settings[STAGE_BY_ID[id].key];
 const anyStageEnabled = () => CANON_ORDER.some(stageOn);
+// True when `id` is enabled and every OTHER pipeline stage is off — used to gate the
+// WYSIWYG fast path, which is only valid when nothing else would alter the raster first.
+const onlyStage = (id) => stageOn(id) && CANON_ORDER.every((o) => o === id || !stageOn(o));
 // All pipeline consts + helpers above are initialized → the Processor panel may now
 // render. (The docks IIFE called renderPanels() during module eval, before this point;
 // the guard in renderProcessorPanel made that first call a no-op. Boot's onInspect →
@@ -5367,7 +5379,7 @@ function startCleanup(node) {
   const cancel = ghostBtn("Cancel", () => { teardown(); setStatus("Cleanup cancelled.", 1500); });
   const apply = ghostBtn("Remove", async () => {
     if (!painted) { setStatus("Paint over the area to remove first.", 2500); return; }
-    const nat = mediaNaturalSize(node);
+    const nat = await rasterNaturalSize(node);   // true source resolution, not the 1×1 that mediaNaturalSize gave
     const mc = document.createElement("canvas"); mc.width = nat.w; mc.height = nat.h;
     const mx = mc.getContext("2d");
     mx.drawImage(cv, 0, 0, nat.w, nat.h);                 // scale the painted strokes to native res
