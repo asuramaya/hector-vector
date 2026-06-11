@@ -2955,16 +2955,16 @@ def run_pipeline(payload: dict) -> dict:
             # --- 1) Upscale ---
             if up:
                 tick("Upscale")
-                if source_has_alpha(src):
-                    log(f"Alpha-aware source detected for {src.name}; using deterministic upscale.")
-                    deterministic_upscale(src, upscale_dest, scale)
+                if source_has_alpha(current):
+                    log(f"Alpha-aware source detected for {current.name}; using deterministic upscale.")
+                    deterministic_upscale(current, upscale_dest, scale)
                 elif model in SR_MODELS:
                     log(f"Upscale via spandrel ({model}).")
-                    build_upscale_spandrel(src, upscale_dest, model, 256, log)
+                    build_upscale_spandrel(current, upscale_dest, model, 256, log)
                 else:
                     ensure_tools_ready("realesrgan")
                     lines = run_subprocess(
-                        [str(REALESRGAN_BIN), "-i", str(src), "-o", str(upscale_dest),
+                        [str(REALESRGAN_BIN), "-i", str(current), "-o", str(upscale_dest),
                          "-n", model, "-s", str(scale)],
                         cwd=REALESRGAN_DIR,
                     )
@@ -3622,9 +3622,31 @@ class Handler(SimpleHTTPRequestHandler):
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
+    @staticmethod
+    def _host_is_loopback(value: str) -> bool:
+        if not value:
+            return True   # header absent → non-browser client (curl/tests), not the CSRF threat
+        host = urllib.parse.urlsplit(value if "//" in value else "//" + value).hostname
+        return host in ("127.0.0.1", "localhost", "::1")
+
+    def _request_is_local(self) -> bool:
+        # The server binds 127.0.0.1, but any web page in any browser can still POST to it
+        # cross-site (a text/plain fetch skips CORS preflight). Reject unless the request is
+        # loopback-addressed and same-origin: closes browser CSRF + DNS-rebinding on the
+        # write surface. GET stays open (it serves same-origin UI assets).
+        if not self._host_is_loopback(self.headers.get("Host")):
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            return self._host_is_loopback(origin)
+        return self._host_is_loopback(self.headers.get("Referer"))
+
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         _touch_heartbeat()   # any request from the UI counts as "still alive"
+        if not self._request_is_local():
+            self.send_error(HTTPStatus.FORBIDDEN, "Cross-origin POST refused")
+            return
         try:
             if parsed.path == "/api/upload":
                 result = save_uploaded_files(self)

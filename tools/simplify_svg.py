@@ -301,20 +301,37 @@ def simplify_d(d: str, frac: float, corner_ang: float = 42.0, prec: int = 1, flo
     return " ".join(pieces), segs_count
 
 
+# The parser (_parse/_subpaths) only understands ABSOLUTE M/L/C/Z. Relative
+# m/l/c would be silently treated as absolute (geometry destroyed), and
+# H/V/S/Q/T/A are dropped with their numbers glued onto the previous command.
+# A path containing any of these must be left untouched, not mangled. (vtracer /
+# clean_color_trace emit absolute MLCZ, so the normal pipeline is unaffected;
+# this guards editor-authored or foreign SVGs that reach simplification.)
+_UNSUPPORTED_CMD = re.compile(r'[HVSQTAhvsqtamlc]')
+# Only rewrite d= on <path> elements — never clipPath/marker/defs geometry, and
+# never a d= attribute on some other element. Captures the quote so single-quoted
+# attributes round-trip correctly.
+_PATH_D = re.compile(r'(<path\b[^>]*?\bd=)(["\'])(.*?)\2', re.IGNORECASE | re.DOTALL)
+
+
 # ---------------------------------------------------------------- whole SVG
 def simplify_svg_text(text: str, frac: float = 0.02, corner_ang: float = 42.0):
     """Refit every <path> in an SVG. Tolerance is feature-relative (per subpath),
     so node count is stable across resolutions and small features keep their shape
     while large ones collapse to their minimal anchors."""
     before = after = 0
+    skipped = 0
 
     def repl(m):
-        nonlocal before, after
-        d = m.group(1)
+        nonlocal before, after, skipped
+        prefix, quote, d = m.group(1), m.group(2), m.group(3)
+        if _UNSUPPORTED_CMD.search(d):
+            skipped += 1
+            return m.group(0)   # relative/unsupported commands → leave the path exactly as-is
         before += len(re.findall(r'[MLCZ]', d))
         nd, segs = simplify_d(d, frac, corner_ang)
         after += segs
-        return f'd="{nd}"' if nd else m.group(0)
+        return f'{prefix}{quote}{nd}{quote}' if nd else m.group(0)
 
-    new = re.sub(r'd="([^"]*)"', repl, text)
-    return new, {"nodes_before": before, "nodes_after": after, "frac": frac}
+    new = _PATH_D.sub(repl, text)
+    return new, {"nodes_before": before, "nodes_after": after, "frac": frac, "skipped": skipped}
