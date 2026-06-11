@@ -45,7 +45,6 @@ def main() -> int:
         print(f"error: spandrel/torch not installed in this interpreter ({exc})", file=sys.stderr)
         return 3
 
-    torch.set_num_threads(max(1, (torch.get_num_threads() or 4)))
     device = torch.device("cpu")
     model = ModelLoader().load_from_file(str(args.model))
     model.to(device).eval()
@@ -65,7 +64,7 @@ def main() -> int:
     print(f"[3/4] upscale ({w}×{h} → {w * scale}×{h * scale})", flush=True)
     tile = args.tile
     if tile and (h > tile or w > tile):
-        overlap = 16                                         # blendable margin to hide seams
+        overlap = 16                                         # context margin fed to the model, then cropped (hides tile seams)
         out = np.zeros((h * scale, w * scale, 3), dtype=np.float32)
         for y in range(0, h, tile):
             for x in range(0, w, tile):

@@ -47,17 +47,41 @@ def _attr(tag: str, name: str, default: float = 0.0) -> float:
     return float(m.group(1)) if m else default
 
 
-def _fill(tag: str) -> tuple[int, int, int, int] | None:
-    m = re.search(r'fill\s*=\s*"#([0-9a-fA-F]{6})"', tag)
+# Sentinel: the fill is PRESENT but not something the builtin can render (a named
+# colour, gradient ref, etc.). Distinguished from None (fill="none"/absent → skip the
+# shape) so the caller bails to cairosvg instead of silently dropping it.
+_UNRENDERABLE = object()
+
+
+def _parse_color(val: str) -> tuple[int, int, int] | None:
+    val = val.strip()
+    m = re.fullmatch(r'#([0-9a-fA-F]{6})', val)
+    if m:
+        h = m.group(1)
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    m = re.fullmatch(r'#([0-9a-fA-F]{3})', val)
+    if m:
+        h = m.group(1)
+        return int(h[0] * 2, 16), int(h[1] * 2, 16), int(h[2] * 2, 16)
+    m = re.fullmatch(r'rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', val)
+    if m:
+        return tuple(max(0, min(255, int(g))) for g in m.groups())
+    return None
+
+
+def _fill(tag: str):
+    m = re.search(r'fill\s*=\s*"([^"]*)"', tag)
     if not m:
-        if re.search(r'fill\s*=\s*"none"', tag):
-            return None
+        return None                     # no fill attribute → skip (preserve prior behaviour)
+    val = m.group(1).strip()
+    if val == "none":
         return None
-    h = m.group(1)
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    rgb = _parse_color(val)
+    if rgb is None:
+        return _UNRENDERABLE            # present but unparseable → caller bails to cairosvg
     om = re.search(r'fill-opacity\s*=\s*"(%s)"' % _NUM, tag)
     a = int(round(float(om.group(1)) * 255)) if om else 255
-    return (r, g, b, max(0, min(255, a)))
+    return (rgb[0], rgb[1], rgb[2], max(0, min(255, a)))
 
 
 def _rects_from_axis_path(d: str) -> list[tuple[float, float, float, float]]:
@@ -82,13 +106,20 @@ def _rects_from_axis_path(d: str) -> list[tuple[float, float, float, float]]:
 
 
 def _collect_axis_shapes(svg: str):
-    """Return list of (x,y,w,h,rgba) if the SVG is axis-aligned only, else None."""
-    # bail out if there are primitives we don't rasterise here
+    """Return list of (x,y,w,h,rgba) if the SVG is axis-aligned only, else None.
+
+    Returns None (→ cairosvg fallback) for ANYTHING the builtin can't render exactly:
+    non-rect primitives, curves, transforms, or a present-but-unparseable fill — so we
+    never emit a silently PARTIAL raster."""
     if re.search(r"<(circle|ellipse|polygon|polyline|line|text|image)\b", svg):
         return None
+    if re.search(r"\btransform\s*=", svg):
+        return None  # the builtin ignores transforms — defer to cairosvg rather than misplace shapes
     shapes = []
     for tag in re.findall(r"<rect\b[^>]*>", svg):
         col = _fill(tag)
+        if col is _UNRENDERABLE:
+            return None
         if col is None:
             continue
         shapes.append((_attr(tag, "x"), _attr(tag, "y"), _attr(tag, "width"), _attr(tag, "height"), col))
@@ -100,6 +131,8 @@ def _collect_axis_shapes(svg: str):
         if _CURVE_CMDS.search(d):
             return None  # curved/line path -> not a builtin-renderable SVG
         col = _fill(tag)
+        if col is _UNRENDERABLE:
+            return None
         if col is None:
             continue
         for (x, y, w, h) in _rects_from_axis_path(d):

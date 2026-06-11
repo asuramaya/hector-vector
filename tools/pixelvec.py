@@ -150,7 +150,9 @@ def _cell_color(patch: np.ndarray, sample: str) -> tuple[int, int, int, int] | N
     rgb = patch[..., :3][opaque].astype(np.int32)
     a = int(np.median(alpha[opaque]))
     if sample == "center":
-        c = rgb[len(rgb) // 2]
+        ph, pw = patch.shape[:2]
+        cc = patch[ph // 2, pw // 2]                 # the cell's geometric centre pixel
+        c = cc[:3].astype(np.int32) if cc[3] >= 128 else np.median(rgb, axis=0)   # transparent centre → opaque median
     elif sample == "median":
         c = np.median(rgb, axis=0)
     else:  # mode: most common colour after light quantisation, then its true median
@@ -180,6 +182,11 @@ def quantize_grid(grid, n_colors: int):
     """Snap opaque cell colours to an n-colour median-cut palette."""
     ny, nx = len(grid), len(grid[0])
     arr = np.zeros((ny, nx, 3), dtype=np.uint8)
+    # Seed transparent cells with the MEAN opaque colour, not black — otherwise a sparse
+    # sprite's median-cut palette gets dragged toward black and opaque cells snap wrong.
+    opaque = [grid[j][i][:3] for j in range(ny) for i in range(nx) if grid[j][i] is not None]
+    if opaque:
+        arr[:, :] = np.mean(np.array(opaque, dtype=np.float64), axis=0).astype(np.uint8)
     for j in range(ny):
         for i in range(nx):
             c = grid[j][i]
