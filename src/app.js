@@ -4008,9 +4008,8 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && openMenuEl) closeMenus();
 });
 
-// Header shortcuts: Q / Tab swap Edit ⇄ Process (Ableton-style); Shift+F opens the
-// File menu. Kept here (not in the view/nav handler, which bails while a modal is
-// open) so the swap works *out of* the Process workspace too.
+// Header shortcut: Shift+F opens the File menu. Kept here (not in the view/nav
+// handler, which bails while a modal is open) so it stays reachable.
 document.addEventListener("keydown", (event) => {
   const tag = (event.target?.tagName || "").toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select" || event.target?.isContentEditable) return;
@@ -6066,7 +6065,6 @@ function openShortcutsModal() {
     ["0", "Actual size (1:1)"],
     ["f", "Fit canvas to window"],
     ["b", "Cycle background"],
-    ["Q / Tab", "Swap Edit ⇄ Process workspace"],
     ["Shift + F", "Open the File menu"],
     ["?", "This help"],
   ];
@@ -6188,9 +6186,12 @@ function schedulePoll() {
         refreshLibrary();
       }
       if (completionsHappened) {
-        const stem = selectedName ? stem_(selectedName) : null;
-        const touchesSelection = stem && completedNow.some(
-          (j) => j.source_name && stem_(j.source_name) === stem
+        // Use the canonical stem() (strips @WxH + .cutout/.chromakey/.edited) on BOTH
+        // sides, matching how the rest of the app matches a job to its source — stem_()
+        // (extension-only) here matched inconsistently for suffixed names.
+        const selStem = selectedName ? stem(selectedName) : null;
+        const touchesSelection = selStem && completedNow.some(
+          (j) => j.source_name && stem(j.source_name) === selStem
         );
         refreshLibrary();
         if (touchesSelection) {

@@ -12,20 +12,20 @@ inputs/
 outputs/
 .hector-config.json
 .codex
+# Smoke-test scratch outputs (tests/_out.svg, _nb.png, … — only cleaned on a fully green run)
+tests/_*
 
 # --- Vendored tool binaries (auto-installed on first run, not committed) ---
 tools/cargo/
 tools/realesrgan-ncnn-vulkan/
 tools/realesrgan-ncnn-vulkan.zip
 tools/_tmp_realesrgan/
-tools/supir/run_supir.sh
 tools/**/__pycache__/
 
 # --- AI model weights (downloaded on first use) ---
 *.onnx
 *.pth
 *.bin
-~/.u2net/
 
 # --- OS / editor / agent scaffolding ---
 .DS_Store

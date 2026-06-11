@@ -4,7 +4,6 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
-from scipy import ndimage
 
 
 ALPHA_THRESHOLD = 8
@@ -37,52 +36,6 @@ def has_meaningful_alpha(rgba: Image.Image) -> bool:
     border = np.concatenate([alpha[0, :], alpha[-1, :], alpha[:, 0], alpha[:, -1]])
     transparent_border = float(np.count_nonzero(border < 250)) / float(border.size)
     return coverage < 0.985 or transparent_border > 0.15
-
-
-def _remove_small_regions(mask: np.ndarray, min_area: int) -> np.ndarray:
-    labeled, count = ndimage.label(mask)
-    if count == 0:
-        return mask
-    areas = np.bincount(labeled.ravel())
-    keep = areas >= min_area
-    keep[0] = False
-    return keep[labeled]
-
-
-def _fill_small_holes(mask: np.ndarray, max_area: int) -> np.ndarray:
-    filled = ndimage.binary_fill_holes(mask)
-    holes = filled & ~mask
-    labeled, count = ndimage.label(holes)
-    if count == 0:
-        return mask
-    areas = np.bincount(labeled.ravel())
-    fill = areas <= max_area
-    fill[0] = False
-    return mask | fill[labeled]
-
-
-def refine_mask(mask: np.ndarray) -> np.ndarray:
-    height, width = mask.shape
-    total = width * height
-    min_area = max(24, total // 2500)
-    hole_area = max(24, total // 1800)
-    mask = ndimage.binary_closing(mask, structure=np.ones((3, 3), dtype=bool), iterations=1)
-    mask = _remove_small_regions(mask, min_area)
-    mask = _fill_small_holes(mask, hole_area)
-    mask = ndimage.binary_opening(mask, structure=np.ones((2, 2), dtype=bool), iterations=1)
-    mask = _remove_small_regions(mask, min_area)
-    return mask
-
-
-def refine_stroke_mask(mask: np.ndarray) -> np.ndarray:
-    height, width = mask.shape
-    total = width * height
-    min_area = max(12, total // 5000)
-    mask = ndimage.binary_closing(mask, structure=np.ones((2, 2), dtype=bool), iterations=1)
-    mask = _remove_small_regions(mask, min_area)
-    mask = ndimage.binary_opening(mask, structure=np.ones((2, 2), dtype=bool), iterations=1)
-    mask = _remove_small_regions(mask, min_area)
-    return mask
 
 
 def otsu_threshold(values: np.ndarray) -> int:

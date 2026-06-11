@@ -68,14 +68,6 @@ button, select, input, a { font: inherit; }
   line-height: 1;
 }
 
-.workspace-path {
-  color: var(--muted);
-  min-width: 0;
-  flex: 1 1 auto;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 
 .drop-button, .control-bar button, .ghost-button, .ghost-link, select {
   border: 1px solid var(--line);
