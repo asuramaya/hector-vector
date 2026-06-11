@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import copy
 import hashlib
 import io
 import json
@@ -240,6 +241,34 @@ def _has_active_jobs() -> bool:
         return any(j.get("status") not in TERMINAL_JOB_STATES for j in jobs.values())
 
 
+# Heavy synchronous compute endpoints (cleanup/restore/raster-op/trace-preview) run in
+# the request thread with NO job record — so _has_active_jobs() can't see them. Without
+# this counter, closing the window mid-operation (e.g. while rembg downloads its ~928MB
+# weight) would let the watchdog shut the process down and truncate the in-flight write.
+_inflight = 0
+_inflight_lock = threading.Lock()
+# POST paths whose handler does heavy synchronous compute (and registers no job).
+HEAVY_SYNC_PATHS = {"/api/cleanup", "/api/face-restore", "/api/restore",
+                    "/api/trace-preview", "/api/raster-op"}
+
+
+def _inflight_incr() -> None:
+    global _inflight
+    with _inflight_lock:
+        _inflight += 1
+
+
+def _inflight_decr() -> None:
+    global _inflight
+    with _inflight_lock:
+        _inflight -= 1
+
+
+def _has_inflight() -> bool:
+    with _inflight_lock:
+        return _inflight > 0
+
+
 def _idle_watchdog(server) -> None:
     """Exit when the UI is gone: silent past the grace window AND nothing running.
     Only arms after a client has connected at least once, so a server started a
@@ -250,7 +279,7 @@ def _idle_watchdog(server) -> None:
         time.sleep(5)
         with _beat_lock:
             seen, idle = _client_seen, time.monotonic() - _last_beat
-        if not seen or idle < IDLE_SHUTDOWN_SEC or _has_active_jobs():
+        if not seen or idle < IDLE_SHUTDOWN_SEC or _has_active_jobs() or _has_inflight():
             continue
         print(f"hector-vector: UI gone for {idle:.0f}s — spinning the server down.", flush=True)
         _gc_outputs()                 # tidy scratch on the way out
@@ -320,6 +349,56 @@ def _register_output(path: Path) -> None:
     invalidate_outputs_cache()
 
 
+def _reap_job_proc(job_id: str) -> None:
+    """Terminate a job's child process if it's still alive (called when the job
+    body dies unexpectedly, so we never orphan a Popen / leak a zombie)."""
+    with jobs_lock:
+        proc = job_internals.get(job_id, {}).get("proc")
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _run_guarded(job_id: str, fn) -> None:
+    """Run a job body so it ALWAYS lands in a terminal state and never orphans its
+    subprocess — even if fn() raises something other than the errors it handles
+    itself. A thread dying with the job still "running" pins _has_active_jobs() true
+    forever, which permanently disables auto-spindown (the stale-server class of bug)."""
+    _set_current_job(job_id)
+    try:
+        fn()
+    except Exception as exc:  # noqa: BLE001
+        with jobs_lock:
+            job = jobs.get(job_id)
+            if job is not None:
+                job["log_lines"].append(f"job error: {exc.__class__.__name__}: {exc}")
+                job["log_lines"] = job["log_lines"][-60:]
+                if job["status"] not in TERMINAL_JOB_STATES:
+                    job["status"] = "cancelled" if _cancel_requested(job_id) else "failed"
+                    if job.get("returncode") is None:
+                        job["returncode"] = 1
+        _reap_job_proc(job_id)
+    finally:
+        # Backstop: if fn() returned without marking the job terminal, force it —
+        # a stray early return must not leave the job hanging in "running".
+        with jobs_lock:
+            job = jobs.get(job_id)
+            if job is not None and job["status"] not in TERMINAL_JOB_STATES:
+                job["log_lines"].append("job ended without a terminal status; marking failed")
+                job["status"] = "failed"
+                if job.get("returncode") is None:
+                    job["returncode"] = 1
+        _set_current_job(None)
+        invalidate_outputs_cache()
+
+
 def _queue_worker() -> None:
     while True:
         job_id, runner = job_queue.get()
@@ -337,19 +416,7 @@ def _queue_worker() -> None:
                     continue
                 job["status"] = "running"
                 job["started_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            try:
-                _set_current_job(job_id)
-                runner()
-            except Exception as exc:  # noqa: BLE001
-                with jobs_lock:
-                    job = jobs.get(job_id)
-                    if job is not None:
-                        job["log_lines"].append(f"worker error: {exc}")
-                        job["status"] = "cancelled" if _cancel_requested(job_id) else "failed"
-                        job["returncode"] = 1
-            finally:
-                _set_current_job(None)
-            invalidate_outputs_cache()
+            _run_guarded(job_id, runner)
         finally:
             job_queue.task_done()
 
@@ -691,9 +758,11 @@ def apply_preprocess(src: Path, dest: Path, *, target_max_dim: int | None) -> Pa
     return dest
 
 
-_preprocess_cache: dict[tuple, Path] = {}
+# key -> [path, last_used_monotonic]. Insertion order is the LRU order (hits move to end).
+_preprocess_cache: dict[tuple, list] = {}
 _preprocess_cache_lock = threading.Lock()
-_PREPROCESS_CACHE_MAX = 8
+_PREPROCESS_CACHE_MAX = 24
+_PREPROCESS_EVICT_GRACE = 60.0   # don't unlink an evicted file used within this window (a trace may hold it)
 
 
 def preprocess_for_trace(src: Path, target_max_dim: int) -> Path:
@@ -711,18 +780,26 @@ def preprocess_for_trace(src: Path, target_max_dim: int) -> Path:
     key = (str(src), int(st.st_mtime_ns), int(st.st_size), int(target_max_dim))
     with _preprocess_cache_lock:
         hit = _preprocess_cache.get(key)
-        if hit is not None and (hit == src or hit.exists()):
-            return hit
+        if hit is not None and (hit[0] == src or hit[0].exists()):
+            hit[1] = time.monotonic()                       # mark recently used
+            _preprocess_cache[key] = _preprocess_cache.pop(key)   # move to LRU tail
+            return hit[0]
     # Miss — resize outside the lock (CPU/IO bound), then publish under it.
     SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha1(repr(key).encode()).hexdigest()[:16]
     dest = SCRATCH_DIR / f"pp-{digest}{src.suffix.lower() or '.png'}"
     out = apply_preprocess(src, dest, target_max_dim=target_max_dim)
     with _preprocess_cache_lock:
-        _preprocess_cache[key] = out
+        _preprocess_cache[key] = [out, time.monotonic()]
+        now = time.monotonic()
         while len(_preprocess_cache) > _PREPROCESS_CACHE_MAX:
-            old_key, old_path = next(iter(_preprocess_cache.items()))
+            old_key, (old_path, used) = next(iter(_preprocess_cache.items()))
             del _preprocess_cache[old_key]
+            # Only unlink if it hasn't been handed out recently — a concurrent trace may
+            # still be reading this exact (content-addressed) file. Skipped files are
+            # bounded by _prune_scratch_inline's pp-* sweep.
+            if now - used < _PREPROCESS_EVICT_GRACE:
+                continue
             try:
                 if old_path != src and old_path.parent == SCRATCH_DIR and old_path.exists():
                     old_path.unlink()
@@ -815,20 +892,21 @@ def _materialize_data_url(url: str) -> Path | None:
 
 
 def _prune_scratch_inline(keep: int = 40, exclude: Path | None = None) -> None:
-    """Cap the materialized `inline-*` data-URI scratch files so they don't accumulate
-    across reopen-and-reprocess cycles. Keep the most-recently-modified `keep`; the file
-    just written is always kept (exclude)."""
-    try:
-        files = sorted(SCRATCH_DIR.glob("inline-*"), key=lambda p: p.stat().st_mtime, reverse=True)
-    except OSError:
-        return
-    for p in files[keep:]:
-        if p == exclude:
-            continue
+    """Cap the materialized `inline-*` data-URI scratch files AND the `pp-*` preprocess
+    cache files so they don't accumulate across reopen-and-reprocess cycles. Keep the
+    most-recently-modified `keep` of each; the file just written is always kept (exclude)."""
+    for pattern in ("inline-*", "pp-*"):
         try:
-            p.unlink()
+            files = sorted(SCRATCH_DIR.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
         except OSError:
-            pass
+            continue
+        for p in files[keep:]:
+            if p == exclude:
+                continue
+            try:
+                p.unlink()
+            except OSError:
+                pass
 
 
 def resolve_source_url(url: str) -> Path | None:
@@ -1235,6 +1313,7 @@ def launch_job(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                errors="replace",   # cargo/curl can emit non-UTF-8; strict decode would crash the runner thread
                 bufsize=1,
             )
         except FileNotFoundError as exc:
@@ -1264,16 +1343,8 @@ def launch_job(
                 if out_path.exists():
                     _register_output(out_path)
 
-    def threaded_runner() -> None:
-        _set_current_job(job_id)
-        try:
-            runner()
-        finally:
-            _set_current_job(None)
-            invalidate_outputs_cache()
-
     if immediate:
-        threading.Thread(target=threaded_runner, daemon=True).start()
+        threading.Thread(target=lambda: _run_guarded(job_id, runner), daemon=True).start()
     else:
         start_workers()
         job_queue.put((job_id, runner))
@@ -1321,16 +1392,8 @@ def launch_internal_job(
                 jobs[job_id]["returncode"] = 1
                 jobs[job_id]["status"] = "cancelled" if _cancel_requested(job_id) else "failed"
 
-    def threaded_runner() -> None:
-        _set_current_job(job_id)
-        try:
-            runner()
-        finally:
-            _set_current_job(None)
-            invalidate_outputs_cache()
-
     if immediate:
-        threading.Thread(target=threaded_runner, daemon=True).start()
+        threading.Thread(target=lambda: _run_guarded(job_id, runner), daemon=True).start()
     else:
         start_workers()
         job_queue.put((job_id, runner))
@@ -1648,20 +1711,40 @@ BEN2_MODEL = {
 }
 
 
+def fetch_model(path: Path, url: str, *, label: str, size_mb: float, log=None) -> Path:
+    """Download a model weight ATOMICALLY (returns immediately if already present).
+
+    curl -fsSL writes to a .part sidecar; -f makes curl fail on an HTTP error instead
+    of saving the error page as the model. We then sanity-check the size against the
+    spec and only rename into place on success — so neither an HTTP error body nor a
+    transfer interrupted by cancel/shutdown can ever poison the cache (the old code
+    left such partials in place forever, bricking the capability until hand-deleted)."""
+    if path.exists():
+        return path
+    if not command_exists("curl"):
+        raise ValueError("curl is required to download model weights.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if log:
+        log(f"Downloading {label} (~{size_mb}MB)…")
+    part = path.with_name(path.name + ".part")
+    part.unlink(missing_ok=True)
+    try:
+        run_subprocess(["curl", "-fsSL", "-o", str(part), url])
+        floor = max(64 * 1024, int(size_mb * 1024 * 1024 * 0.5))   # at least half the expected size
+        got = part.stat().st_size if part.exists() else 0
+        if got < floor:
+            raise ValueError(f"{label} download incomplete ({got} bytes, expected ~{size_mb}MB).")
+        part.replace(path)   # atomic on the same filesystem
+    except BaseException:    # incl. cancel/shutdown terminating curl → never leave a partial
+        part.unlink(missing_ok=True)
+        raise
+    return path
+
+
 def ensure_ben2_model(log=None) -> Path:
     """Resolve the BEN2 ONNX weight (under the u2net home dir), downloading on first use."""
-    U2NET_DIR.mkdir(parents=True, exist_ok=True)
-    path = U2NET_DIR / BEN2_MODEL["file"]
-    if not path.exists():
-        if not command_exists("curl"):
-            raise ValueError("curl is required to download the BEN2 model.")
-        if log:
-            log(f"Downloading BEN2 cutout model (~{BEN2_MODEL['size_mb']}MB)…")
-        run_subprocess(["curl", "-sL", "-o", str(path), BEN2_MODEL["url"]])
-        if not path.exists() or path.stat().st_size < 1024:
-            path.unlink(missing_ok=True)
-            raise ValueError("BEN2 model download failed.")
-    return path
+    return fetch_model(U2NET_DIR / BEN2_MODEL["file"], BEN2_MODEL["url"],
+                       label="BEN2 cutout model", size_mb=BEN2_MODEL["size_mb"], log=log)
 
 
 def build_ai_cutout(src: Path, dest: Path, model: str, alpha_matting: bool, log) -> None:
@@ -1732,18 +1815,8 @@ def ensure_sr_model(model_id: str, log=None) -> Path:
     spec = SR_MODELS.get(model_id)
     if spec is None:
         raise ValueError(f"Unknown SR model: {model_id}")
-    SR_MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    path = SR_MODELS_DIR / spec["file"]
-    if not path.exists():
-        if not command_exists("curl"):
-            raise ValueError("curl is required to download SR model weights.")
-        if log:
-            log(f"Downloading {spec['label']} (~{spec['size_mb']}MB)…")
-        run_subprocess(["curl", "-sL", "-o", str(path), spec["url"]])
-        if not path.exists() or path.stat().st_size < 1024:
-            path.unlink(missing_ok=True)
-            raise ValueError(f"SR model download failed: {model_id}")
-    return path
+    return fetch_model(SR_MODELS_DIR / spec["file"], spec["url"],
+                       label=spec["label"], size_mb=spec["size_mb"], log=log)
 
 
 def build_upscale_spandrel(src: Path, dest: Path, model_id: str, tile: int, log) -> None:
@@ -1757,18 +1830,8 @@ def build_upscale_spandrel(src: Path, dest: Path, model_id: str, tile: int, log)
 
 def ensure_inpaint_model(log=None) -> Path:
     """Resolve the big-LaMa ONNX, downloading on first use."""
-    INPAINT_DIR.mkdir(parents=True, exist_ok=True)
-    path = INPAINT_DIR / LAMA_MODEL["file"]
-    if not path.exists():
-        if not command_exists("curl"):
-            raise ValueError("curl is required to download the LaMa model.")
-        if log:
-            log(f"Downloading LaMa cleanup model (~{LAMA_MODEL['size_mb']}MB)…")
-        run_subprocess(["curl", "-sL", "-o", str(path), LAMA_MODEL["url"]])
-        if not path.exists() or path.stat().st_size < 1024:
-            path.unlink(missing_ok=True)
-            raise ValueError("LaMa model download failed.")
-    return path
+    return fetch_model(INPAINT_DIR / LAMA_MODEL["file"], LAMA_MODEL["url"],
+                       label="LaMa cleanup model", size_mb=LAMA_MODEL["size_mb"], log=log)
 
 
 def build_lama_cleanup(src: Path, mask: Path, dest: Path, log) -> None:
@@ -1799,20 +1862,10 @@ def cleanup_inpaint(payload: dict) -> dict:
 
 def ensure_face_models(log=None) -> tuple[Path, Path]:
     """Resolve the GFPGAN + YuNet weights, downloading on first use."""
-    FACE_DIR.mkdir(parents=True, exist_ok=True)
-    if not command_exists("curl"):
-        raise ValueError("curl is required to download the face-restore models.")
     out = []
     for spec in (GFPGAN_MODEL, YUNET_MODEL):
-        path = FACE_DIR / spec["file"]
-        if not path.exists():
-            if log:
-                log(f"Downloading {spec['file']} (~{spec['size_mb']}MB)…")
-            run_subprocess(["curl", "-sL", "-o", str(path), spec["url"]])
-            if not path.exists() or path.stat().st_size < 1024:
-                path.unlink(missing_ok=True)
-                raise ValueError(f"Face model download failed: {spec['file']}")
-        out.append(path)
+        out.append(fetch_model(FACE_DIR / spec["file"], spec["url"],
+                               label=spec["file"], size_mb=spec["size_mb"], log=log))
     return out[0], out[1]
 
 
@@ -3211,6 +3264,32 @@ def _filename_from_disposition(disposition: str) -> str | None:
     return None
 
 
+MAX_BODY_BYTES = 512 * 1024 * 1024   # 512MB ceiling on a single request body
+
+
+class PayloadTooLarge(Exception):
+    """Request body exceeds MAX_BODY_BYTES → answered with 413, not a 400/OOM."""
+
+
+def _read_body(handler: SimpleHTTPRequestHandler, length: int) -> bytes:
+    """Read exactly `length` bytes, looping until satisfied — a single rfile.read()
+    can return a short chunk on a slow socket, silently truncating a large upload.
+    Caps the total so an oversized body can't OOM the process."""
+    if length < 0:
+        raise ValueError("Bad Content-Length.")
+    if length > MAX_BODY_BYTES:
+        raise PayloadTooLarge(f"Request body too large ({length} bytes; max {MAX_BODY_BYTES}).")
+    chunks: list[bytes] = []
+    remaining = length
+    while remaining > 0:
+        chunk = handler.rfile.read(min(remaining, 1 << 20))
+        if not chunk:
+            break   # client closed early; return what we have (parsers will reject it)
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
 def save_uploaded_files(handler: SimpleHTTPRequestHandler) -> dict:
     content_type = handler.headers.get("Content-Type", "")
     if "multipart/form-data" not in content_type:
@@ -3223,7 +3302,7 @@ def save_uploaded_files(handler: SimpleHTTPRequestHandler) -> dict:
     length = int(handler.headers.get("Content-Length", "0") or "0")
     if length <= 0:
         raise ValueError("Empty upload.")
-    body = handler.rfile.read(length)
+    body = _read_body(handler, length)
 
     saved: list[str] = []
     skipped: list[str] = []
@@ -3490,7 +3569,7 @@ def reveal_path(payload: dict) -> dict:
     if not opener:
         raise ValueError("No file manager opener found (xdg-open / open / explorer.exe).")
     try:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             [opener, str(folder)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -3498,6 +3577,9 @@ def reveal_path(payload: dict) -> dict:
         )
     except OSError as exc:
         raise ValueError(f"Failed to launch file manager: {exc}")
+    # xdg-open launches the file manager and exits promptly; reap it off-thread so each
+    # Reveal click doesn't leave a zombie until the next subprocess call cleans it up.
+    threading.Thread(target=proc.wait, daemon=True).start()
     return {"message": f"Opened {folder}"}
 
 
@@ -3550,8 +3632,11 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
         if parsed.path == "/api/jobs":
+            # Deep-copy under the lock: send_json/json.dumps runs unlocked, and worker
+            # threads mutate log_lines/progress live — encoding the shared dicts could
+            # yield torn JSON or a dict-changed-size error in the handler thread.
             with jobs_lock:
-                data = list(reversed(list(jobs.values())))
+                data = copy.deepcopy(list(reversed(list(jobs.values()))))
             self.send_json(data)
             return
         if parsed.path == "/api/outputs":
@@ -3647,13 +3732,16 @@ class Handler(SimpleHTTPRequestHandler):
         if not self._request_is_local():
             self.send_error(HTTPStatus.FORBIDDEN, "Cross-origin POST refused")
             return
+        heavy = parsed.path in HEAVY_SYNC_PATHS   # in-flight while this thread does the compute
+        if heavy:
+            _inflight_incr()
         try:
             if parsed.path == "/api/upload":
                 result = save_uploaded_files(self)
                 self.send_json(result)
                 return
             length = int(self.headers.get("Content-Length", "0"))
-            body = self.rfile.read(length) if length else b"{}"
+            body = _read_body(self, length) if length else b"{}"
             try:
                 payload = json.loads(body.decode("utf-8"))
             except json.JSONDecodeError:
@@ -3724,9 +3812,20 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "Unknown endpoint")
                 return
-        except Exception as exc:  # noqa: BLE001
+        except PayloadTooLarge as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+            return
+        except (ValueError, KeyError) as exc:
+            # Bad/missing payload fields → genuinely the caller's fault.
             self.send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
+        except Exception as exc:  # noqa: BLE001
+            # Server-side fault (disk full, subprocess crash, bug) — don't mis-bucket as 400.
+            self.send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        finally:
+            if heavy:
+                _inflight_decr()
         self.send_json(result)
 
     def serve_thumbnail(self, path: Path, w: int) -> None:
@@ -3754,7 +3853,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(data)
 
     def serve_file(self, path: Path) -> None:
-        if not path.exists():
+        if not path.is_file():   # missing OR a directory — read_bytes() on a dir would crash the handler
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
             return
         self.send_response(HTTPStatus.OK)
