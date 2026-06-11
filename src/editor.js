@@ -365,7 +365,6 @@ const editor = {
     let origs = nodes.map((n) => n.getAttribute("transform"));
     let flats = nodes.map((n) => this._isTranslateOnly(n));   // per node: translate-only stays clean, matrix/rotate composes
     const altDup = startEvent.altKey;        // Alt-drag → drag a duplicate, leave the original
-    const snapper = makeAxisSnapper();
     const ref0 = this._bboxUnion(nodes);     // selection bounds at start (for smart-guide refs)
     const cand = this.smartGuides ? this._guideCandidates(nodes) : null;
     let pushed = false, duped = false;
@@ -384,7 +383,6 @@ const editor = {
       let gx = null, gy = null;
       if (ev.shiftKey) { if (Math.abs(dx) >= Math.abs(dy)) dy = 0; else dx = 0; }   // lock to the H/V axis
       else {
-        snapper.reset();
         if (cand) {                          // smart-guide snap (skipped while Shift-constraining)
           const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
           const rx = [ref0.x0, (ref0.x0 + ref0.x1) / 2, ref0.x1], ry = [ref0.y0, (ref0.y0 + ref0.y1) / 2, ref0.y1];
@@ -1155,8 +1153,7 @@ const editor = {
       const sp = m0 ? new DOMPoint(e.clientX, e.clientY).matrixTransform(m0.inverse()) : { x: 0, y: 0 };
       const group = alt ? [] : [...this._nodeSel].map((kk) => this._nodeEls.get(kk)).filter(Boolean);
       const starts = group.map((ent) => ({ ent, x: ent.nd.x, y: ent.nd.y }));
-      const snapper = makeAxisSnapper();
-      const cand = (!alt && this.smartGuides) ? this._guideCandidates([nd.el]) : null;
+        const cand = (!alt && this.smartGuides) ? this._guideCandidates([nd.el]) : null;
       let pushed = false, moved = false, conv = null;
       const move = (ev) => {
         if (!moved && Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) < 3) return;   // ignore click jitter
@@ -1176,8 +1173,7 @@ const editor = {
         let dx = p.x - sp.x, dy = p.y - sp.y, gx = null, gy = null;
         if (ev.shiftKey) { if (Math.abs(dx) >= Math.abs(dy)) dy = 0; else dx = 0; }   // lock to the H/V axis
         else {
-          snapper.reset();
-          if (cand) { const k = Math.hypot(m.a, m.b) || 1; const s = this._snapMove([nd.x], [nd.y], dx, dy, cand, 6 / k); dx = s.dx; dy = s.dy; gx = s.gx; gy = s.gy; }
+            if (cand) { const k = Math.hypot(m.a, m.b) || 1; const s = this._snapMove([nd.x], [nd.y], dx, dy, cand, 6 / k); dx = s.dx; dy = s.dy; gx = s.gx; gy = s.gy; }
         }
         for (const st of starts) { st.ent.nd.moveTo(st.x + dx, st.y + dy); this._syncNodeEls(st.ent, st.x + dx, st.y + dy); }
         if (cand) { if (gx != null || gy != null) this._drawGuides(gx, gy); else this._clearGuides(); }
@@ -1566,7 +1562,6 @@ const editor = {
     const A0 = { x: A.x, y: A.y }, B0 = { x: B.x, y: B.y };
     const P1 = A.out ? { x: A.out.x, y: A.out.y } : { x: A.x, y: A.y };
     const P2 = B.in ? { x: B.in.x, y: B.in.y } : { x: B.x, y: B.y };
-    const snapper = makeAxisSnapper();
     let pushed = false, moved = false;
     const move = (ev) => {
       if (!moved && Math.hypot(ev.clientX - startEvent.clientX, ev.clientY - startEvent.clientY) < 3) return;
@@ -3438,12 +3433,6 @@ function selectRow(label, value, options, onChange) {
   sel.addEventListener("change", () => onChange(sel.value));
   return inspRow(label, sel);
 }
-function colorRow(label, value, onLive, onCommit) {
-  const inp = document.createElement("input"); inp.type = "color"; inp.value = value || "#000000";
-  inp.addEventListener("input", () => onLive(inp.value));
-  inp.addEventListener("change", () => { onLive(inp.value); if (onCommit) onCommit(); });
-  return inspRow(label, inp);
-}
 // Drag-to-scrub: the row label becomes an "invisible slider" (ew-resize). Drag right
 // to raise / left to lower by `step` per ~4px; coarse Shift = ×10, fine Alt = ÷10. A
 // plain click does nothing (so the number field stays normally typeable). The live
@@ -3568,28 +3557,5 @@ function snapDelta(dx, dy) {
   return { x: ux * proj, y: uy * proj };
 }
 function snapPoint(ox, oy, px, py) { const s = snapDelta(px - ox, py - oy); return { x: ox + s.x, y: oy + s.y }; }
-// A *sticky* 45° snapper for continuous dragging: it locks to the first axis and
-// only switches once the drag direction is well past the sector boundary (~12°
-// hysteresis), so wobble near a boundary doesn't flip the constrained axis. Call
-// reset() when Shift is released so re-pressing it re-decides from the current dir.
-function makeAxisSnapper() {
-  const step = Math.PI / 4;
-  let axis = null;
-  return {
-    reset() { axis = null; },
-    snap(dx, dy) {
-      if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return { x: 0, y: 0 };
-      const raw = Math.atan2(dy, dx);
-      const nearest = Math.round(raw / step) * step;
-      if (axis === null) axis = nearest;
-      else {
-        const diff = Math.abs(Math.atan2(Math.sin(raw - axis), Math.cos(raw - axis)));
-        if (diff > step / 2 + 0.21) axis = nearest;   // >~34.5° from the locked axis → switch
-      }
-      const ux = Math.cos(axis), uy = Math.sin(axis), proj = dx * ux + dy * uy;
-      return { x: ux * proj, y: uy * proj };
-    },
-  };
-}
 
 export { editor, ghostBtn };

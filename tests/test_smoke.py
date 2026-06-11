@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 
 def check_parses() -> None:
-    for rel in ["server.py", "engine.py", "mask_trace_prep.py",
+    for rel in ["server.py", "engine.py",
                 "tools/pixelvec.py", "tools/svg_render.py", "tools/ai_cutout.py"]:
         ast.parse((ROOT / rel).read_text())
     print("ok: all Python modules parse")

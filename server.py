@@ -76,7 +76,6 @@ try:
 except OSError:
     APP_VERSION = "0.0.0"
 GITHUB_REPO = "asuramaya/hector-vector"
-MASK_PREP_SCRIPT = APP_DIR / "mask_trace_prep.py"
 STATIC_FILES = {
     "/": "index.html",
     "/index.html": "index.html",
@@ -139,7 +138,6 @@ REALESRGAN_RELEASE = (
 REALESRGAN_DIR = TOOLS_DIR / "realesrgan-ncnn-vulkan"
 REALESRGAN_BIN = REALESRGAN_DIR / "realesrgan-ncnn-vulkan"
 VTRACER_BIN = TOOLS_DIR / "cargo" / "bin" / "vtracer"
-SUPIR_WRAPPER = TOOLS_DIR / "supir" / "run_supir.sh"
 VENV_DIR = APP_DIR / ".venv"
 VENV_PYTHON = VENV_DIR / "bin" / "python3"
 AI_CUTOUT_SCRIPT = TOOLS_DIR / "ai_cutout.py"
@@ -492,7 +490,6 @@ def tool_status() -> dict:
         "gpu_recommendation": "RTX A3000 12GB: reliable HQ path is Real-ESRGAN; SUPIR is optional low-VRAM experimental.",
         "realesrgan_installed": REALESRGAN_BIN.exists(),
         "vtracer_installed": VTRACER_BIN.exists(),
-        "supir_hook_installed": SUPIR_WRAPPER.exists(),
         "rembg_installed": rembg_ok,
         "spandrel_installed": spandrel_installed(),
         "svg_render_builtin": True,
@@ -1078,10 +1075,6 @@ def select_inputs(payload: dict) -> tuple[list[Path], list[str]]:
     if not files:
         raise ValueError(f"No supported image files found in {APP_DIR}")
     return files, []
-
-
-def resolve_inputs(payload: dict) -> list[Path]:
-    return select_inputs(payload)[0]
 
 
 def clean_log_line(line: str) -> str | None:
@@ -3085,116 +3078,6 @@ def run_pipeline(payload: dict) -> dict:
             "skipped": skipped, "jobs": [j["id"] for j in jobs_started]}
 
 
-def run_selftest(payload: dict) -> dict:
-    targets = payload.get("inputs") or ["bridge.png", "buybot.png", "ci.png", "forcefield.png", "scanner.png"]
-
-    def worker(log) -> None:
-        processes = ["upscale", "cutout", "chromakey", "vectorize", "pipeline"]
-        models = ["realesrgan-x4plus", "realesrnet-x4plus", "realesr-animevideov3"]
-        scales = ["2", "4"]
-        smooth_values = ["3.5", "6.5", "10"]
-        total = 0
-        failed = 0
-
-        def wait_for_child_jobs(before_ids: set[str]) -> list[dict]:
-            deadline = time.time() + 300
-            while time.time() < deadline:
-                with jobs_lock:
-                    new_jobs = [job for jid, job in jobs.items() if jid not in before_ids and job["kind"] != "selftest"]
-                running = [job for job in new_jobs if job["status"] == "running"]
-                if not running:
-                    return new_jobs
-                time.sleep(0.5)
-            return new_jobs
-
-        def validate_outputs_for(proc: str, out_dir: str | None, selected: list[str]) -> None:
-            if not out_dir:
-                return
-            folder = Path(out_dir)
-            if proc == "cutout":
-                for name in selected:
-                    validate_cutout_png(folder / f"{Path(name).stem}.cutout.png")
-            elif proc == "vectorize":
-                for name in selected:
-                    validate_mask_png(folder / f"{Path(name).stem}.mask.png")
-                    validate_svg_file(folder / f"{Path(name).stem}.svg")
-            elif proc == "pipeline":
-                for name in selected:
-                    validate_cutout_png(folder / f"{Path(name).stem}.cutout.png")
-                    validate_mask_png(folder / f"{Path(name).stem}.mask.png")
-                    validate_svg_file(folder / f"{Path(name).stem}.svg")
-
-        for proc in processes:
-            if proc == "upscale":
-                combos = [(m, s, "10") for m in models for s in scales]
-            elif proc == "pipeline":
-                combos = [(m, s, sm) for m in models for s in scales for sm in smooth_values]
-            elif proc == "vectorize":
-                combos = [("realesrgan-x4plus", "4", sm) for sm in smooth_values]
-            else:
-                combos = [("realesrgan-x4plus", "4", "10")]
-
-            for mode in ["single", "batch"]:
-                cases = targets if mode == "single" else [None]
-                for target in cases:
-                    for model, scale, smooth in combos:
-                        total += 1
-                        payload_case = {
-                            "model": model,
-                            "scale": scale,
-                            "trace_mode": "spline",
-                            "filter_speckle": "12",
-                            "corner_threshold": "170",
-                            "segment_length": smooth,
-                            "splice_threshold": "120",
-                            "path_precision": "2",
-                            "inputs": [target] if target else targets,
-                        }
-                        before_ids = set(jobs.keys())
-                        result = globals()[f"run_{proc}"](payload_case)
-                        new_jobs = wait_for_child_jobs(before_ids)
-                        case_failures = [job for job in new_jobs if job["status"] == "failed"]
-                        validation_error = None
-                        try:
-                            validate_outputs_for(proc, result.get("output_dir"), payload_case["inputs"])
-                        except Exception as exc:  # noqa: BLE001
-                            validation_error = str(exc)
-                        if case_failures or validation_error:
-                            failed += 1
-                            details = "; ".join(
-                                f"{job['summary']}: {' | '.join(job['log_lines'][-2:])}" for job in case_failures
-                            )
-                            if validation_error:
-                                details = "; ".join(part for part in [details, validation_error] if part)
-                            log(f"FAIL {proc} {mode} {target or 'all'} {model} {scale} {smooth} :: {details}")
-                        else:
-                            log(f"OK {proc} {mode} {target or 'all'} {model} {scale} {smooth} :: {result.get('message')}")
-        log(f"SELFTEST COMPLETE total={total} failed={failed}")
-
-    job = launch_internal_job("selftest", "Stress test combinations", worker, immediate=True)
-    return {"message": "Started selftest job.", "job_id": job["id"]}
-
-
-def run_supir(payload: dict) -> dict:
-    if not SUPIR_WRAPPER.exists():
-        raise ValueError("SUPIR hook not installed. Drop a wrapper at tools/supir/run_supir.sh first.")
-    out_dir = output_dir("supir")
-    jobs_started = []
-    for src in resolve_inputs(payload):
-        cmd = [str(SUPIR_WRAPPER), str(src), str(out_dir)]
-        jobs_started.append(
-            launch_job(
-                "supir",
-                cmd,
-                cwd=SUPIR_WRAPPER.parent,
-                summary=f"SUPIR {src.name}",
-                source_name=src.name,
-                output_dir=str(out_dir),
-            )
-        )
-    return {"message": f"Started {len(jobs_started)} SUPIR job(s).", "output_dir": str(out_dir)}
-
-
 def _unique_input_path(name: str) -> Path:
     target_dir = source_dir()
     try:
@@ -3763,8 +3646,6 @@ class Handler(SimpleHTTPRequestHandler):
                 result = restore_op(payload)
             elif parsed.path == "/api/install/opencv":
                 result = install_opencv()
-            elif parsed.path == "/api/bootstrap":
-                result = bootstrap_tools()
             elif parsed.path == "/api/update/check":
                 result = check_update(payload)
             elif parsed.path == "/api/update/apply":
@@ -3805,10 +3686,6 @@ class Handler(SimpleHTTPRequestHandler):
                 result = plan_image(payload)
             elif parsed.path == "/api/raster-op":
                 result = apply_raster_op(payload)
-            elif parsed.path == "/api/run/selftest":
-                result = run_selftest(payload)
-            elif parsed.path == "/api/run/supir":
-                result = run_supir(payload)
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "Unknown endpoint")
                 return
