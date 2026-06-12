@@ -26,19 +26,27 @@ function ctmMaps(el) {
   };
 }
 
-// Convert a shape element to an absolute path `d` (baking in any translate),
-// used to build the fill-test outline for booleans / invert-space.
-export function shapeToAbsPath(el) {
+// Convert a shape element to an absolute path `d`, used to build the fill-test
+// outline for booleans / invert-space. Pass `mat` (the element's CTM to stage user
+// space, i.e. `el.getCTM()`) to bake the FULL transform — rotate / scale / shear /
+// group ancestry — so booleans see the true rendered geometry. Without `mat`, only
+// the element's own translate is baked (legacy: the node-tool flatten, which applies
+// the matrix itself, and the truthiness "is this convertible?" filters).
+export function shapeToAbsPath(el, mat) {
   const t = currentTranslate(el);
-  const off = (x, y) => `${nfmt(x + t.x)} ${nfmt(y + t.y)}`;
+  const useM = !!mat && !(mat.a === 1 && mat.b === 0 && mat.c === 0 && mat.d === 1 && mat.e === 0 && mat.f === 0);
+  const mp = useM
+    ? (x, y) => ({ x: mat.a * x + mat.c * y + mat.e, y: mat.b * x + mat.d * y + mat.f })
+    : (x, y) => ({ x: x + t.x, y: y + t.y });
+  const off = (x, y) => { const q = mp(x, y); return `${nfmt(q.x)} ${nfmt(q.y)}`; };
   const num = (a) => parseFloat(el.getAttribute(a)) || 0;
   const tag = el.tagName.toLowerCase();
   if (tag === "path") {
     const segs = parsePath(el.getAttribute("d") || "");
-    if (t.x || t.y) segs.forEach((s) => {
-      if (s.end) { s.end.x += t.x; s.end.y += t.y; }
-      if (s.c1) { s.c1.x += t.x; s.c1.y += t.y; }
-      if (s.c2) { s.c2.x += t.x; s.c2.y += t.y; }
+    if (useM || t.x || t.y) segs.forEach((s) => {
+      if (s.end) { const q = mp(s.end.x, s.end.y); s.end.x = q.x; s.end.y = q.y; }
+      if (s.c1) { const q = mp(s.c1.x, s.c1.y); s.c1.x = q.x; s.c1.y = q.y; }
+      if (s.c2) { const q = mp(s.c2.x, s.c2.y); s.c2.x = q.x; s.c2.y = q.y; }
     });
     return serializeSegs(segs);
   }
@@ -53,13 +61,25 @@ export function shapeToAbsPath(el) {
     for (let i = 2; i + 1 < pts.length; i += 2) s += ` L${off(pts[i], pts[i + 1])}`;
     return s + " Z";
   }
-  if (tag === "circle") {
-    const cx = num("cx"), cy = num("cy"), r = num("r");
-    return `M${off(cx - r, cy)} A${nfmt(r)} ${nfmt(r)} 0 1 0 ${off(cx + r, cy)} A${nfmt(r)} ${nfmt(r)} 0 1 0 ${off(cx - r, cy)} Z`;
-  }
-  if (tag === "ellipse") {
-    const cx = num("cx"), cy = num("cy"), rx = num("rx"), ry = num("ry");
-    return `M${off(cx - rx, cy)} A${nfmt(rx)} ${nfmt(ry)} 0 1 0 ${off(cx + rx, cy)} A${nfmt(rx)} ${nfmt(ry)} 0 1 0 ${off(cx - rx, cy)} Z`;
+  if (tag === "circle" || tag === "ellipse") {
+    const cx = num("cx"), cy = num("cy");
+    const rx = tag === "circle" ? num("r") : num("rx");
+    const ry = tag === "circle" ? num("r") : num("ry");
+    if (rx <= 0 || ry <= 0) return "";
+    if (!useM) {   // axis-aligned: exact SVG arcs (the precise, cheap legacy form)
+      return `M${off(cx - rx, cy)} A${nfmt(rx)} ${nfmt(ry)} 0 1 0 ${off(cx + rx, cy)} A${nfmt(rx)} ${nfmt(ry)} 0 1 0 ${off(cx - rx, cy)} Z`;
+    }
+    // Under rotate/scale/shear an ellipse can't be one A-arc → a 4-cubic bezier whose
+    // control points are mapped through `mat` (kappa = the standard circle-bezier constant).
+    const k = 0.5522847498307936, kx = k * rx, ky = k * ry;
+    return [
+      `M${off(cx + rx, cy)}`,
+      `C${off(cx + rx, cy + ky)} ${off(cx + kx, cy + ry)} ${off(cx, cy + ry)}`,
+      `C${off(cx - kx, cy + ry)} ${off(cx - rx, cy + ky)} ${off(cx - rx, cy)}`,
+      `C${off(cx - rx, cy - ky)} ${off(cx - kx, cy - ry)} ${off(cx, cy - ry)}`,
+      `C${off(cx + kx, cy - ry)} ${off(cx + rx, cy - ky)} ${off(cx + rx, cy)}`,
+      "Z",
+    ].join(" ");
   }
   return "";
 }

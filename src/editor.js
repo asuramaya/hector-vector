@@ -2332,7 +2332,7 @@ const editor = {
   // inside-test for marching squares. Keeps booleans/invert fast at any node count.
   _rasterMask(nodes, bbox, px) {
     const paths = [];
-    for (const n of nodes) { const d = shapeToAbsPath(n); if (d) paths.push({ d, rule: n.getAttribute("fill-rule") }); }
+    for (const n of nodes) { const d = shapeToAbsPath(n, n.getCTM()); if (d) paths.push({ d, rule: n.getAttribute("fill-rule") }); }
     return rasterMask(paths, bbox, px);
   },
 
@@ -2344,13 +2344,13 @@ const editor = {
   _fillableSelection() { return this._effectiveLeaves().filter((n) => shapeToAbsPath(n)); },
   _nodeBBoxUser(n) {
     // getBBox() is the element's LOCAL geometry bbox; map its corners through the
-    // element's full consolidated transform so the box is correct for ANY transform
-    // (translate / scale / rotate / matrix), not just a translate. (The old version
-    // added only the translate, so imported shapes with a matrix/rotate drew a badly
-    // offset transform box — "bounding boxes bug out".)
+    // element's full CTM (to stage user space) so the box is correct for ANY transform
+    // (translate / scale / rotate / matrix) AND any ANCESTOR/group transform — getCTM
+    // composes the whole chain, where the old own-transform consolidate ignored the group
+    // (a grouped leaf's box, boolean bbox, align + size readout were all offset).
     const bb = n.getBBox();
     let m = null;
-    try { const tr = n.transform && n.transform.baseVal; if (tr && tr.numberOfItems) { const c = tr.consolidate(); m = c && c.matrix; } } catch {}
+    try { m = n.getCTM(); } catch { m = null; }
     if (!m) return { x0: bb.x, y0: bb.y, x1: bb.x + bb.width, y1: bb.y + bb.height };
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const [x, y] of [[bb.x, bb.y], [bb.x + bb.width, bb.y], [bb.x + bb.width, bb.y + bb.height], [bb.x, bb.y + bb.height]]) {
@@ -2365,7 +2365,7 @@ const editor = {
     const layer = document.createElementNS(SVG_NS, "g");
     const tps = [];
     for (const n of nodes) {
-      const d = shapeToAbsPath(n); if (!d) continue;
+      const d = shapeToAbsPath(n, n.getCTM()); if (!d) continue;   // full CTM → true rotated/scaled/grouped geometry
       const p = document.createElementNS(SVG_NS, "path");
       p.setAttribute("d", d);
       p.setAttribute("fill-rule", n.getAttribute("fill-rule") || "nonzero");
