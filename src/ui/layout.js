@@ -1,0 +1,213 @@
+// Customizable picture-frame layout: drag toolbar tiles between frame bars
+// (toolstrip, action bar, viewport controls, panel headers); Default / Save /
+// Reset / named profiles. Auto-saves the live arrangement; restores at boot.
+//
+// Extracted from app.js (#25). This is a pure shell-UI module: it owns no app
+// state of its own beyond the layout it manages, and receives everything it
+// touches in the host shell (DOM root, the editor, status line, prompt + menu
+// helpers) through the factory's `deps` object. The factory returns the control
+// object the header Layout dropdown and the E2E suite drive; the caller is
+// responsible for publishing it (e.g. on `window.__layout`).
+export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput, showRichContextMenu, MENU_ITEMS }) {
+  const LAYOUT_KEY = "hector-vector:layout";
+  const SEP = "|";
+  // each frame bar is a drop zone (swatches now live on the canvas, not the toolstrip).
+  const BARS = [
+    { name: "tools",       sel: ".toolstrip",         tail: null },
+    { name: "arrange",     sel: ".stage-toolbar",     tail: null },
+    { name: "actions",     sel: ".actionbar",         tail: null },
+    { name: "viewport",    sel: ".viewport-controls", tail: null },
+    { name: "hdr-history", sel: ".rail-section.history .panel-actions", tail: null },
+    { name: "hdr-layers",  sel: ".rail-section.layers .panel-actions",  tail: null },
+  ];
+  const barOf = (b) => b.el || document.querySelector(b.sel);   // bars are sel- OR element-based (panel headers)
+  const isTile = (el) => !!(el && el.classList && el.classList.contains("tool-button") && !el.classList.contains("panel-x"));   // the × isn't a movable tile
+  const isSep = (el) => !!(el && el.classList && (el.classList.contains("tool-sep") || el.classList.contains("tool-vsep") || el.classList.contains("vp-sep")));
+  const tileKey = (b) => b.id ? "#" + b.id : b.dataset.tool ? "tool:" + b.dataset.tool : (b.dataset.vp && b.dataset.action) ? "vp:" + b.dataset.action : "t:" + (b.textContent || "").trim();
+  const slotKey = (el) => isSep(el) ? SEP : tileKey(el);
+  const tailEl = (cont, bar) => bar.tail ? cont.querySelector(bar.tail) : null;
+  const axisY = (cont) => cont.classList.contains("toolstrip") || cont.classList.contains("actionbar");
+  // movable children of a bar (tiles + separators that sit before the pinned tail)
+  function movable(bar) {
+    const cont = barOf(bar); if (!cont) return [];
+    const tail = tailEl(cont, bar), out = [];
+    for (const ch of cont.children) { if (tail && ch === tail) break; if (isTile(ch) || isSep(ch)) out.push(ch); }
+    return out;
+  }
+  const capture = () => { const m = {}; for (const b of BARS) m[b.name] = movable(b).map(slotKey); return m; };
+  // A fresh divider of the right kind for a bar: a thin rule between vertical-stack
+  // bars (toolstrip/actionbar), a vertical rule between horizontal bars; viewport
+  // keeps its own .vp-sep style.
+  const sepClassFor = (bar) => bar.name === "viewport" ? "vp-sep" : (axisY(barOf(bar)) ? "tool-sep" : "tool-vsep");
+  function makeSep(bar) { const s = document.createElement("span"); s.className = sepClassFor(bar); s.setAttribute("aria-hidden", "true"); return s; }
+  const DEFAULT = capture();   // authored DOM order — taken before applying any saved layout
+
+  // every tile by key, wherever it currently sits (across all registered bars)
+  function collectTiles() {
+    const m = new Map();
+    for (const b of BARS) { const c = barOf(b); if (c) for (const t of c.querySelectorAll(".tool-button")) if (isTile(t)) m.set(tileKey(t), t); }
+    return m;
+  }
+  function applyBar(bar, list, tiles) {
+    const cont = barOf(bar); if (!cont) return;
+    tiles = tiles || collectTiles();
+    const tail = tailEl(cont, bar);
+    const pool = [...cont.children].filter(isSep);   // reuse existing separators, create more on demand
+    let pi = 0;
+    for (const key of (list || [])) {
+      const el = key === SEP ? (pool[pi++] || makeSep(bar)) : tiles.get(key);
+      if (el) cont.insertBefore(el, tail);   // insertBefore(el, null) appends
+    }
+    for (; pi < pool.length; pi++) pool[pi].remove();   // drop separators the layout no longer wants
+  }
+  function apply(layout) {
+    if (!layout) return;
+    const tiles = collectTiles();
+    for (const b of BARS) applyBar(b, layout[b.name], tiles);
+    // tiles a saved layout doesn't mention (e.g. added in a newer build) keep their place
+  }
+  const PROFILES_KEY = "hector-vector:layout-profiles";
+  const loadSaved = () => { try { return JSON.parse(localStorage.getItem(LAYOUT_KEY) || "null"); } catch { return null; } };
+  const persist = () => { try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(capture())); } catch {} };   // auto-save
+  const loadProfiles = () => { try { return JSON.parse(localStorage.getItem(PROFILES_KEY) || "{}") || {}; } catch { return {}; } };
+  const saveProfiles = (p) => { try { localStorage.setItem(PROFILES_KEY, JSON.stringify(p)); } catch {} };
+  apply(loadSaved());   // restore the auto-saved arrangement at boot
+
+  // ---- drag tiles between bars (only while customizing) ----
+  let editing = false, dragEl = null;
+  const layoutMenu = document.querySelector('.menu[data-menu="layout"]');
+  const layoutTrigger = layoutMenu && layoutMenu.querySelector(".menu-trigger");
+  const barFor = (cont) => BARS.find((b) => barOf(b) === cont);
+  function insertionRef(cont, x, y, bar) {
+    const tail = tailEl(cont, bar), useY = axisY(cont);
+    for (const ch of cont.children) {
+      if (tail && ch === tail) break;
+      if ((!isTile(ch) && !isSep(ch)) || ch === dragEl) continue;
+      const r = ch.getBoundingClientRect();
+      if ((useY ? y : x) < (useY ? r.top + r.height / 2 : r.left + r.width / 2)) return ch;
+    }
+    return tail;   // before the pinned tail, or null => append
+  }
+  const onDragStart = (e) => { dragEl = e.currentTarget; e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", ""); } catch {} dragEl.classList.add("dragging"); };
+  const onDragEnd = () => { if (dragEl) dragEl.classList.remove("dragging"); dragEl = null; };
+  const HDR_TILE_CAP = 8;   // headers scroll on overflow now (tile-scroll), so allow more tiles
+  const onBarOver = (e) => {
+    if (!dragEl) return;
+    const cont = e.currentTarget, bar = barFor(cont);
+    // Cap incoming tiles on panel headers (reordering within a full header is still fine).
+    if (bar && bar.name.startsWith("hdr-") && dragEl.parentElement !== cont
+        && movable(bar).filter(isTile).length >= HDR_TILE_CAP) { e.dataTransfer.dropEffect = "none"; return; }
+    e.preventDefault(); e.dataTransfer.dropEffect = "move";
+    const ref = insertionRef(cont, e.clientX, e.clientY, bar);
+    if (ref !== dragEl) cont.insertBefore(dragEl, ref);   // live reflow while dragging
+  };
+  const onBarDrop = (e) => { e.preventDefault(); persist(); };   // DOM already reflects the move → auto-save it
+  const blockClick = (e) => { e.preventDefault(); e.stopPropagation(); };
+  // Both tiles AND dividers are draggable while customizing; dividers can also be
+  // added/removed via the bar's right-click menu.
+  function frameMovables() { const out = []; for (const b of BARS) for (const m of movable(b)) out.push(m); return out; }
+  function wireMovable(el, on) {
+    el.draggable = on;
+    if (on) {
+      if (isTile(el)) { el.disabled = false; el.addEventListener("click", blockClick, true); }   // disabled buttons can't be dragged
+      el.addEventListener("dragstart", onDragStart);
+      el.addEventListener("dragend", onDragEnd);
+    } else {
+      if (isTile(el)) el.removeEventListener("click", blockClick, true);
+      el.removeEventListener("dragstart", onDragStart);
+      el.removeEventListener("dragend", onDragEnd);
+    }
+  }
+  const sepUnder = (t) => isSep(t) ? t : (t && t.closest ? t.closest(".tool-sep, .tool-vsep, .vp-sep") : null);
+  // Right-click any frame bar → the Layout menu (this replaces the old header "Layout ▾"
+  // button). It's always available so customization is discoverable from the frame itself;
+  // while customizing it also offers add/remove-divider at the click point.
+  const onBarContext = (e) => {
+    if (e.target.closest && e.target.closest("input, select, textarea, .panel-x, .menu")) return;   // leave real controls their native menu
+    e.preventDefault(); e.stopPropagation();
+    const cont = e.currentTarget, bar = barFor(cont), onSep = sepUnder(e.target);
+    const cx = e.clientX, cy = e.clientY;
+    const build = () => {
+      const items = MENU_ITEMS.layout();
+      if (editing) {
+        items.push({ type: "sep" });
+        items.push({ label: "Add divider here", onClick: () => {
+          const ref = insertionRef(cont, cx, cy, bar);
+          const s = makeSep(bar); cont.insertBefore(s, ref === dragEl ? null : ref); wireMovable(s, true); persist();
+        } });
+        if (onSep) items.push({ label: "Remove divider", onClick: () => { wireMovable(onSep, false); onSep.remove(); persist(); } });
+      }
+      return items;
+    };
+    showRichContextMenu(cx, cy, build);
+  };
+  // The Layout right-click lives on the bar permanently (independent of customize mode).
+  function wireBarContext(bar) {
+    const cont = barOf(bar); if (!cont || cont._layoutCtxWired) return;
+    cont._layoutCtxWired = true; cont.addEventListener("contextmenu", onBarContext);
+  }
+
+  function wireBar(bar, on) {
+    const cont = barOf(bar); if (!cont) return;
+    for (const m of movable(bar)) wireMovable(m, on);
+    if (on) { cont.addEventListener("dragover", onBarOver); cont.addEventListener("drop", onBarDrop); }
+    else { cont.removeEventListener("dragover", onBarOver); cont.removeEventListener("drop", onBarDrop); }
+  }
+  // Register a panel header's action area as a customize-layout bar (drop receiver). The
+  // panel headers are built dynamically (after this module), so they opt in on creation.
+  function registerBar(name, el) {
+    if (!el || BARS.some((b) => b.name === name)) return;
+    const bar = { name, el, tail: el.querySelector(".panel-x") ? ".panel-x" : null };   // drops land before the × (Dock-to-rail) button
+    BARS.push(bar);
+    if (!(name in DEFAULT)) DEFAULT[name] = movable(bar).map(slotKey);   // authored default (for Reset)
+    const saved = loadSaved();
+    if (saved && saved[name]) applyBar(bar, saved[name]);   // restore this bar's saved arrangement
+    if (editing) wireBar(bar, true);
+    wireBarContext(bar);   // Layout right-click is permanent, regardless of customize mode
+    el.classList.add("layout-bar");   // CSS hook for the customize drop outline
+  }
+  BARS.forEach(wireBarContext);   // arm the Layout right-click on the static frame bars at boot
+  function setEditing(on) {
+    editing = on;
+    appEl.classList.toggle("customizing", on);
+    if (layoutTrigger) layoutTrigger.classList.toggle("active", on);
+    BARS.forEach((b) => wireBar(b, on));
+    if (!on && editor.onInspect) editor.onInspect();   // restore the correct disabled states (onInspect runs refreshActionButtons)
+    setStatus(on ? "Customize layout: drag buttons between bars (incl. panel headers) — changes save automatically." : "Ready.", on ? 6000 : 1500);
+  }
+  // ---- active-profile state (the source of truth for "which profile is selected") ----
+  // null = the unnamed working layout ("Default"). The live arrangement can DIVERGE from
+  // its baseline (a profile snapshot, or the authored DEFAULT) — that's the "edited" state.
+  const ACTIVE_KEY = "hector-vector:layout-active";
+  let activeProfile = null;
+  try { activeProfile = localStorage.getItem(ACTIVE_KEY) || null; } catch {}
+  if (activeProfile && !(activeProfile in loadProfiles())) activeProfile = null;   // pruned/renamed away
+  const setActive = (name) => { activeProfile = name || null; try { activeProfile ? localStorage.setItem(ACTIVE_KEY, activeProfile) : localStorage.removeItem(ACTIVE_KEY); } catch {} };
+  // Dirty = the live arrangement diverges from its baseline. Compare only the bars the
+  // baseline actually records, so a profile saved before a newer panel existed doesn't
+  // read as "edited" the instant it's applied (its missing bars simply aren't compared).
+  const sameAs = (base) => { if (!base) return false; const now = capture(); return Object.keys(base).every((k) => JSON.stringify(base[k]) === JSON.stringify(now[k])); };
+  const isDirty = () => activeProfile ? !sameAs(loadProfiles()[activeProfile]) : !sameAs(DEFAULT);
+
+  function reset() { try { localStorage.removeItem(LAYOUT_KEY); } catch {} apply(DEFAULT); setActive(null); setStatus("Layout reset to default.", 1500); }
+  function applyProfile(name) { const p = loadProfiles()[name]; if (!p) return; apply(p); persist(); setActive(name); setStatus(`Layout: ${name}.`, 1500); }
+  function saveProfile(name) { const nm = (name || "").trim(); if (!nm) return false; const p = loadProfiles(); p[nm] = capture(); saveProfiles(p); setActive(nm); return true; }
+  function updateActive() { if (!activeProfile) return false; const p = loadProfiles(); if (!(activeProfile in p)) return false; p[activeProfile] = capture(); saveProfiles(p); setStatus(`Updated profile "${activeProfile}".`, 1600); return true; }
+  function deleteProfile(name) { const p = loadProfiles(); if (!(name in p)) return; delete p[name]; saveProfiles(p); if (activeProfile === name) setActive(null); }
+  function renameProfile(oldName, newName) { const nm = (newName || "").trim(); if (!nm || nm === oldName) return false; const p = loadProfiles(); if (!(oldName in p) || nm in p) return false; p[nm] = p[oldName]; delete p[oldName]; saveProfiles(p); if (activeProfile === oldName) setActive(nm); return true; }
+
+  // Exposed for the header Layout dropdown (MENU_ITEMS.layout) + E2E.
+  const layoutCtl = {
+    isEditing: () => editing,
+    toggleEdit: () => setEditing(!editing),
+    registerBar,
+    reset, applyProfile, deleteProfile, renameProfile, save: persist,
+    saveProfile, updateActive,
+    activeProfile: () => activeProfile,
+    isDirty,
+    saveProfilePrompt: () => floatingInput({ title: "Save layout as profile", value: activeProfile || "", placeholder: "profile name", onCommit: (nm) => { if (saveProfile(nm)) setStatus(`Saved layout profile "${nm}".`, 1800); } }),
+    renamePrompt: (name) => floatingInput({ title: "Rename profile", value: name, onCommit: (n) => { if (!renameProfile(name, n) && n !== name) setStatus(`A profile named "${n}" already exists.`, 2400); } }),
+    listProfiles: () => Object.keys(loadProfiles()),
+  };
+  return layoutCtl;
+}
