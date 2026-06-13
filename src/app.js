@@ -10,6 +10,11 @@ import { editor, ghostBtn } from "./editor.js";
 import { createLayoutCustomize } from "./ui/layout.js";
 import { createDocks } from "./ui/docks.js";
 import { api } from "./ui/api.js";
+import {
+  jobsCache, activityState, TERMINAL_STATES,
+  configureJobs, resetFailCount, nextJobsSeq, installJobActive,
+  fetchJobs, loadJobs, applyJobsData,
+} from "./ui/jobs.js";
 
 // One-shot panel-layout self-heal. A corrupted persisted dock layout (a panel
 // floated/grouped/stranded in a state that swallows clicks) survives reload AND a
@@ -615,117 +620,17 @@ async function loadOutputs() {
   await renderPreviews();
 }
 
-let lastBatchFailCount = -1;
-let activityState = "idle"; // "idle" | "busy"
-const knownJobStates = new Map();
-const TERMINAL_STATES = new Set(["done", "failed", "cancelled"]);
-let jobsCache = [];
+// Jobs state + poll layer live in src/ui/jobs.js (jobsCache, activityState,
+// TERMINAL_STATES imported above as live bindings). Wire its UI seams once.
+configureJobs({ setStatus, renderJobsPanel, revealPanel, canReplaceStatus });
 
 function stem_(n) { return n.replace(/\.[^.]+$/, ""); }
 
-// Live progress in the chin: a bar that tracks the running job (determinate when
-// the pipeline reports step/total, indeterminate otherwise), hidden when idle.
-function updateFooterProgress(running, queuedCount) {
-  const wrap = document.querySelector("#status-progress");
-  const bar = document.querySelector("#status-progress-bar");
-  const label = document.querySelector("#status-progress-label");
-  if (!wrap || !bar || !label) return;
-  if (!running) { wrap.hidden = true; return; }
-  wrap.hidden = false;
-  const p = running.progress;
-  const tail = queuedCount ? ` · ${queuedCount} queued` : "";
-  if (p && p.total) {
-    const pct = Math.max(0, Math.min(100, Math.round((p.step / p.total) * 100)));
-    bar.style.width = pct + "%"; bar.classList.remove("indeterminate");
-    label.textContent = `${p.step}/${p.total}${p.label ? " " + p.label : ""}${tail}`;
-  } else {
-    bar.style.width = "100%"; bar.classList.add("indeterminate");
-    label.textContent = `working…${tail}`;
-  }
-}
-
-async function fetchJobs() {
-  return api("/api/jobs");
-}
-
-async function loadJobs() {
-  return applyJobsData(await fetchJobs());
-}
-
-function applyJobsData(jobs) {
-  jobsCache = jobs;
-  let completionsHappened = false;
-  const seen = new Set();
-  const completedNow = [];
-  for (const job of jobs) {
-    seen.add(job.id);
-    const prev = knownJobStates.get(job.id);
-    if (prev !== job.status) {
-      if (TERMINAL_STATES.has(job.status) && !TERMINAL_STATES.has(prev || "")) {
-        completionsHappened = true;
-        completedNow.push(job);
-      }
-      knownJobStates.set(job.id, job.status);
-    }
-  }
-  for (const id of Array.from(knownJobStates.keys())) {
-    if (!seen.has(id)) knownJobStates.delete(id);
-  }
-
-  renderJobsPanel();   // keep the dock Jobs panel live
-
-  const running = jobs.find((job) => job.status === "running");
-  updateFooterProgress(running, jobs.filter((j) => j.status === "queued").length);
-  const queuedCount = jobs.filter((job) => job.status === "queued").length;
-  const failedCount = jobs.filter((job) => job.status === "failed").length;
-  const cancelledCount = jobs.filter((job) => job.status === "cancelled").length;
-  activityState = running || queuedCount ? "busy" : "idle";
-
-  if (running) {
-    const line = (running.log_lines || []).slice(-1)[0] || running.status;
-    const tail = queuedCount ? ` (${queuedCount} queued)` : "";
-    const prog = running.progress && running.progress.total
-      ? ` [${running.progress.step}/${running.progress.total}${running.progress.label ? " " + running.progress.label : ""}]`
-      : "";
-    setStatus(`${running.summary}${prog} | ${line}${tail}`);
-    lastBatchFailCount = failedCount;
-    return { completionsHappened, completedNow };
-  }
-  if (queuedCount) {
-    setStatus(`${queuedCount} job(s) queued.`);
-    lastBatchFailCount = failedCount;
-    return { completionsHappened, completedNow };
-  }
-  if (!canReplaceStatus()) return { completionsHappened, completedNow };
-  if (!jobs.length) {
-    setStatus("Ready.");
-    lastBatchFailCount = 0;
-    return { completionsHappened, completedNow };
-  }
-  const latest = jobs[0];
-  if (failedCount > 0 && failedCount !== lastBatchFailCount) {
-    const note = cancelledCount ? `, ${cancelledCount} cancelled` : "";
-    const failedJob = jobs.find((j) => j.status === "failed") || jobs[0];
-    const stage = failedJob && failedJob.progress && failedJob.progress.label
-      ? ` at ${failedJob.progress.label}`
-      : "";
-    const tail = ((failedJob && failedJob.log_lines) || []).slice(-1)[0] || "";
-    const short = tail.length > 160 ? tail.slice(0, 157) + "…" : tail;
-    setStatus(
-      `Failed${stage}: ${short || `${failedCount} job(s) failed${note}.`} — click for Jobs.`,
-      8000,
-      { error: true, onClick: () => revealPanel("jobs"), title: tail }
-    );
-  } else if (failedCount === 0 && cancelledCount === 0) {
-    setStatus(`Done. ${latest.summary}`);
-  } else {
-    setStatus(`${latest.summary} | ${latest.status}`);
-  }
-  lastBatchFailCount = failedCount;
-  return { completionsHappened, completedNow };
-}
+// updateFooterProgress / fetchJobs / loadJobs / applyJobsData live in
+// src/ui/jobs.js (imported above).
 
 async function refreshAll(preferredSelection = null) {
+  const jobsSeq = nextJobsSeq();   // claim the token before the fetch (stale-response guard)
   const [statusData, queueData, outputsData, jobsData] = await Promise.all([
     fetchStatus(),
     fetchQueue(),
@@ -735,7 +640,7 @@ async function refreshAll(preferredSelection = null) {
   applyStatusData(statusData);
   applyQueueData(queueData, preferredSelection);
   applyOutputsData(outputsData);
-  applyJobsData(jobsData);
+  applyJobsData(jobsData, jobsSeq);
   refreshLibrary();
   await renderPreviews();
 }
@@ -744,6 +649,7 @@ async function refreshAll(preferredSelection = null) {
 // (a batch run, or any job starting) must never clear or replace the live editor
 // document — the canvas only changes on explicit user action (open/load/place/view).
 async function refreshExceptCanvas(preferredSelection = null) {
+  const jobsSeq = nextJobsSeq();   // claim the token before the fetch (stale-response guard)
   const [statusData, queueData, outputsData, jobsData] = await Promise.all([
     fetchStatus(),
     fetchQueue(),
@@ -753,7 +659,7 @@ async function refreshExceptCanvas(preferredSelection = null) {
   applyStatusData(statusData);
   applyQueueData(queueData, preferredSelection);
   applyOutputsData(outputsData);
-  applyJobsData(jobsData);
+  applyJobsData(jobsData, jobsSeq);
   refreshLibrary();
 }
 
@@ -1681,7 +1587,7 @@ async function setSourceDir(next) {
 // Install / configuration is consolidated in Settings → "AI models & tools". Stages never
 // install inline; they point here so install prompts don't pop up scattered around the UI.
 function openToolsSettings() { openAppSettings({ focus: "tools" }); }
-function installJobActive(kind) { return jobsCache.some((j) => j.kind === kind && (j.status === "running" || j.status === "queued")); }
+// installJobActive() lives in src/ui/jobs.js (imported above).
 
 function openAppSettings(opts = {}) {
   openModal("Settings", true);
@@ -3454,7 +3360,7 @@ async function runProcess(btn) {
     }
     if (force) payload.force = true;
     const data = await api("/api/run/pipeline", "POST", payload);
-    lastBatchFailCount = 0;
+    resetFailCount();
     const hold = data.started === 0 ? 4000 : 1800;
     setStatus(data.message || "Started.", hold);
     await refreshExceptCanvas();   // queue background work without disturbing the canvas
