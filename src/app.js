@@ -9,6 +9,7 @@ import { shapeToAbsPath } from "./hv/index.js";
 import { editor, ghostBtn } from "./editor.js";
 import { createLayoutCustomize } from "./ui/layout.js";
 import { createDocks } from "./ui/docks.js";
+import { api } from "./ui/api.js";
 
 // One-shot panel-layout self-heal. A corrupted persisted dock layout (a panel
 // floated/grouped/stranded in a state that swallows clicks) survives reload AND a
@@ -214,25 +215,7 @@ function cycleBg(vpName) {
   setStatus(`Background: ${bgModes[vpName]}`, 1200);
 }
 
-async function api(url, method = "GET", payload) {
-  const res = await fetch(url, {
-    method,
-    headers: payload ? { "Content-Type": "application/json" } : undefined,
-    body: payload ? JSON.stringify(payload) : undefined,
-  });
-  const text = await res.text();
-  let data = {};
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      if (!res.ok) throw new Error(`Request failed: ${res.status}`);
-      throw new Error("Unexpected server response.");
-    }
-  }
-  if (!res.ok) throw new Error(data.error || `Request failed: ${res.status}`);
-  return data;
-}
+// api() lives in src/ui/api.js (imported above).
 
 function stem(name) {
   return name
