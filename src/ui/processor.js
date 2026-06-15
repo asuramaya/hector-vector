@@ -19,11 +19,6 @@ export function configureProcessor(deps) {
   ({ setStatus, settings, persistSettings, makeRange, makeNumber, makeSelect, fieldRow } = deps);
 }
 
-export let rasterLive = false;          // live-vectorize preview active?
-export let rasterLiveNode = null;       // the <image> being previewed
-export let rasterLiveSvg = null;        // last previewed SVG (commit fallback)
-export let rasterLiveSeq = 0;           // guards out-of-order debounced traces
-export let rasterLiveTimer = null;
 export let rasterStageBusy = false;     // an upscale/bg job in flight (disables buttons)
 
 export function rasterHref(node) { return (node && (node.getAttribute("href") || node.getAttribute("xlink:href"))) || ""; }
@@ -154,69 +149,6 @@ export async function ensureCapsInfo() {
 }
 export function capById(id) { return (capsInfo || []).find((c) => c.id === id) || null; }
 
-// ---- live raster ops (upscale / remove-bg): debounced transform → swap the canvas
-// image href to the result (keep / revert). Same shape as live vectorize, but the
-// preview is a transient href swap (raster→raster), not a vector overlay. ALWAYS
-// re-runs from the ORIGINAL href so settings never compound on a prior preview. ----
-export let rasterOp = false;       // a raster-op live preview active?
-export let rasterOpNode = null;
-export let rasterOpName = null;    // "upscale" | "removebg"
-export let rasterOpOrig = null;    // original href — revert target AND the re-run source
-export let rasterOpSeq = 0;
-export let rasterOpTimer = null;
-export let rasterOpKicks = 0;      // test-observable: a control fired a re-run
-
-export function startRasterOpLive(node, op) {
-  if (!rasterSourceUsable(node)) return;
-  if (rasterLive) endRasterLive(true);     // one live preview at a time
-  if (rasterOp) endRasterOpLive(true);
-  rasterOp = true; rasterOpNode = node; rasterOpName = op; rasterOpOrig = rasterHref(node);
-  editor._renderInspector();
-  scheduleRasterOpLive(true);
-}
-export function endRasterOpLive(revert) {
-  if (revert && rasterOpNode && rasterOpOrig != null) rasterOpNode.setAttribute("href", rasterOpOrig);
-  rasterOp = false; rasterOpNode = null; rasterOpName = null; rasterOpOrig = null;
-  rasterOpSeq++;
-  if (rasterOpTimer) { clearTimeout(rasterOpTimer); rasterOpTimer = null; }
-}
-export function scheduleRasterOpLive(immediate) {
-  if (!rasterOp || !rasterOpNode) return;
-  rasterOpKicks++;
-  if (rasterOpTimer) clearTimeout(rasterOpTimer);
-  rasterOpTimer = setTimeout(doRasterOpLive, immediate ? 30 : 500);   // ops are heavier → longer debounce
-}
-export async function doRasterOpLive() {
-  if (!rasterOp || !rasterOpNode) return;
-  const node = rasterOpNode, op = rasterOpName, seq = ++rasterOpSeq;
-  setStatus(`${op === "upscale" ? "Upscaling" : "Removing background"}… (a few seconds)`, 0);
-  try {
-    // Re-run from the ORIGINAL source (not the current preview href) — no compounding.
-    const res = await api("/api/raster-op", "POST", Object.assign({}, settings, { input_url: rasterOpOrig, op }));
-    if (seq !== rasterOpSeq || !rasterOp) return;   // superseded or cancelled mid-flight
-    if (!res.url) throw new Error(res.message || res.error || "No result produced.");
-    node.setAttribute("href", res.url);
-    setStatus(`Preview — ${op === "upscale" ? "upscaled" : "background removed"} (not saved).`, 1800);
-  } catch (e) {
-    if (seq !== rasterOpSeq) return;
-    const stale = /\b404\b/.test(e.message || "");
-    setStatus(stale ? "Restart the local server (server.py) — the raster-op endpoint is new."
-                    : `${op === "upscale" ? "Upscale" : "Remove background"} failed: ${e.message}`, 5000);
-  }
-}
-// Keep: the canvas IS the preview (href already points at the scratch result) — just
-// push history. Revert: restore the original href.
-export function commitRasterOpLive() {
-  const node = rasterOpNode;
-  if (!node) return;
-  if (rasterOpOrig != null && rasterHref(node) === rasterOpOrig) { setStatus("Adjust a setting to generate a preview first.", 2800); return; }
-  rasterOp = false; rasterOpNode = null; rasterOpName = null; rasterOpOrig = null; rasterOpSeq++;
-  if (rasterOpTimer) { clearTimeout(rasterOpTimer); rasterOpTimer = null; }
-  editor.push("Process raster");
-  editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
-  setStatus("Applied on canvas (not saved to library).", 3000);
-}
-
 // The resolution at which BOTH the live preview and a focused on-canvas vectorize trace.
 // It's the WYSIWYG number: what you preview is what you commit, so they must match. It is
 // deliberately tighter than the server's batch overproduction ceiling (TRACE_MAX_DIM) —
@@ -224,54 +156,159 @@ export function commitRasterOpLive() {
 // the server's TRACE_PREVIEW_DIM (the server clamps the request to 64..2048 regardless).
 export const TRACE_PREVIEW_DIM = 1000;
 
+// ===== Unified live-preview state machine (#27 Phase B) ==========================
+// ONE machine drives BOTH live previews — live vectorize (raster → vector overlay)
+// and live raster-ops (raster → raster href swap, upscale / remove-bg). The two
+// used to be near-identical twin machines (duplicated debounce + seq-guard +
+// teardown); now they share that machinery and differ only in a per-kind STRATEGY
+// (endpoint, how the preview is applied, how it commits, debounce delay). Only one
+// preview is ever active — starting either kind tears the other down.
+//
+// `live` is the single source of truth. The legacy module exports the rest of the
+// shell reads (rasterLive / rasterOp / rasterLiveNode / rasterOpNode / rasterOpName)
+// are a read-only projection kept in sync by _sync(), so app.js is untouched.
+const live = {
+  kind: null,   // null | "vectorize" | "op"
+  op: null,     // "upscale" | "removebg"  (when kind === "op")
+  node: null,   // the <image> being previewed
+  svg: null,    // vectorize: last previewed SVG (commit fallback)
+  orig: null,   // op: original href — revert target AND the re-run source
+  seq: 0,       // guards out-of-order debounced runs (shared: one machine)
+  timer: null,
+};
+
+// Read-only projection of `live` for the view layer + test seam (live bindings).
+export let rasterLive = false;
+export let rasterOp = false;
+export let rasterLiveNode = null;
+export let rasterOpNode = null;
+export let rasterOpName = null;
+export let rasterLiveKicks = 0;   // test-observable: a vectorize control fired a re-run
+export let rasterOpKicks = 0;     // test-observable: a raster-op control fired a re-run
+function _sync() {
+  rasterLive = live.kind === "vectorize";
+  rasterOp = live.kind === "op";
+  rasterLiveNode = rasterLive ? live.node : null;
+  rasterOpNode = rasterOp ? live.node : null;
+  rasterOpName = rasterOp ? live.op : null;
+}
+
+// Per-kind behaviour: the only places the two previews genuinely diverge.
+const STRATEGY = {
+  vectorize: {
+    debounce: (immediate) => immediate ? 30 : 250,   // traces are ~1.5s now → short debounce feels live
+    status: () => "Tracing preview…",
+    async run(node, seq) {
+      const res = await api("/api/trace-preview", "POST", stagePayload(node, { preview_max_dim: TRACE_PREVIEW_DIM }));
+      if (seq !== live.seq || live.kind !== "vectorize") return;   // superseded or cancelled mid-flight
+      if (res.svg) { live.svg = res.svg; editor.showRasterPreview(node, res.svg); setStatus(`Preview — ${res.nodes} nodes`, 1800); }
+    },
+    onError(e) {
+      // 404 = a server predating the /api/trace-preview route → ask for a restart.
+      const stale = /\b404\b/.test(e.message || "");
+      setStatus(stale ? "Restart the local server (server.py) — the live-trace endpoint is new." : `Preview failed: ${e.message}`, 4500);
+    },
+    revert() { editor.clearRasterPreview(true); },
+  },
+  op: {
+    debounce: (immediate) => immediate ? 30 : 500,   // ops are heavier → longer debounce
+    status: () => `${live.op === "upscale" ? "Upscaling" : "Removing background"}… (a few seconds)`,
+    async run(node, seq) {
+      const op = live.op;
+      // Re-run from the ORIGINAL source (not the current preview href) — no compounding.
+      const res = await api("/api/raster-op", "POST", Object.assign({}, settings, { input_url: live.orig, op }));
+      if (seq !== live.seq || live.kind !== "op") return;   // superseded or cancelled mid-flight
+      if (!res.url) throw new Error(res.message || res.error || "No result produced.");
+      node.setAttribute("href", res.url);
+      setStatus(`Preview — ${op === "upscale" ? "upscaled" : "background removed"} (not saved).`, 1800);
+    },
+    onError(e) {
+      const op = live.op;
+      const stale = /\b404\b/.test(e.message || "");
+      setStatus(stale ? "Restart the local server (server.py) — the raster-op endpoint is new."
+                      : `${op === "upscale" ? "Upscale" : "Remove background"} failed: ${e.message}`, 5000);
+    },
+    revert() { if (live.node && live.orig != null) live.node.setAttribute("href", live.orig); },
+  },
+};
+
+// Shared machinery -----------------------------------------------------------------
+function _schedule(immediate) {
+  if (!live.kind || !live.node) return;
+  if (live.kind === "vectorize") rasterLiveKicks++; else rasterOpKicks++;
+  if (live.timer) clearTimeout(live.timer);
+  live.timer = setTimeout(_run, STRATEGY[live.kind].debounce(immediate));   // superseded in-flight runs drop via the seq guard
+}
+async function _run() {
+  if (!live.kind || !live.node) return;
+  const node = live.node, seq = ++live.seq, strat = STRATEGY[live.kind];
+  setStatus(strat.status(), 0);
+  try {
+    await strat.run(node, seq);
+  } catch (e) {
+    if (seq !== live.seq) return;   // a newer run/teardown superseded this one — stay quiet
+    strat.onError(e);
+  }
+}
+// Drop the live state (invalidate any in-flight run via seq++, kill the debounce timer).
+function _teardown() {
+  live.seq++;
+  if (live.timer) { clearTimeout(live.timer); live.timer = null; }
+  live.kind = null; live.op = null; live.node = null; live.svg = null; live.orig = null;
+}
+function _end(revert) {
+  if (revert && live.kind) STRATEGY[live.kind].revert();   // revert reads live.node/orig → before teardown
+  _teardown();
+  _sync();
+}
+
 // ---- live vectorize: debounced trace → swap the canvas to the vector ----
 export function startRasterLive(node) {
   if (!rasterSourceUsable(node)) return;
-  rasterLive = true; rasterLiveNode = node; rasterLiveSvg = null;
+  if (live.kind) _end(true);   // one live preview at a time
+  live.kind = "vectorize"; live.node = node; live.svg = null;
+  _sync();
   editor._renderInspector();
-  scheduleRasterLive(true);
+  _schedule(true);
 }
-export function endRasterLive(revert) {
-  rasterLive = false; rasterLiveNode = null; rasterLiveSvg = null;
-  rasterLiveSeq++;
-  if (rasterLiveTimer) { clearTimeout(rasterLiveTimer); rasterLiveTimer = null; }
-  if (revert) editor.clearRasterPreview(true);
+export function endRasterLive(revert) { if (live.kind === "vectorize") _end(revert); }
+export function scheduleRasterLive(immediate) { if (live.kind === "vectorize") _schedule(immediate); }
+
+// ---- live raster ops (upscale / remove-bg): debounced transform → href swap (keep/revert).
+// ALWAYS re-runs from the ORIGINAL href so settings never compound on a prior preview. ----
+export function startRasterOpLive(node, op) {
+  if (!rasterSourceUsable(node)) return;
+  if (live.kind) _end(true);   // one live preview at a time
+  live.kind = "op"; live.op = op; live.node = node; live.orig = rasterHref(node);
+  _sync();
+  editor._renderInspector();
+  _schedule(true);
 }
-export let rasterLiveKicks = 0;   // counts re-trace requests (a test-observable signal that a control is live-wired)
-export function scheduleRasterLive(immediate) {
-  if (!rasterLive || !rasterLiveNode) return;
-  rasterLiveKicks++;
-  if (rasterLiveTimer) clearTimeout(rasterLiveTimer);
-  // 250ms settle: traces are ~1.5s now (was 11s), so a short debounce feels live
-  // without spamming — superseded in-flight traces are dropped by the seq guard.
-  rasterLiveTimer = setTimeout(doRasterLiveTrace, immediate ? 30 : 250);
-}
-export async function doRasterLiveTrace() {
-  if (!rasterLive || !rasterLiveNode) return;
-  const node = rasterLiveNode, seq = ++rasterLiveSeq;
-  setStatus("Tracing preview…", 0);
-  try {
-    const res = await api("/api/trace-preview", "POST", stagePayload(node, { preview_max_dim: TRACE_PREVIEW_DIM }));
-    if (seq !== rasterLiveSeq || !rasterLive) return;   // superseded or cancelled mid-flight
-    if (res.svg) { rasterLiveSvg = res.svg; editor.showRasterPreview(node, res.svg); setStatus(`Preview — ${res.nodes} nodes`, 1800); }
-  } catch (e) {
-    if (seq !== rasterLiveSeq) return;
-    // 404 = a server predating the /api/trace-preview route → ask for a restart.
-    const stale = /\b404\b/.test(e.message || "");
-    setStatus(stale ? "Restart the local server (server.py) — the live-trace endpoint is new." : `Preview failed: ${e.message}`, 4500);
-  }
-}
-// Commit: keep exactly what's previewed on the canvas — replace the raster with a
-// real vector layer built from the live preview SVG (the canvas IS the preview, so
-// the kept result matches it 1:1, and it's instant — no second trace round-trip).
+export function endRasterOpLive(revert) { if (live.kind === "op") _end(revert); }
+export function scheduleRasterOpLive(immediate) { if (live.kind === "op") _schedule(immediate); }
+
+// Commit (vectorize): keep exactly what's previewed — replace the raster with a real
+// vector layer built from the live preview SVG (the canvas IS the preview, so the kept
+// result matches it 1:1, and it's instant — no second trace round-trip).
 export function commitRasterLive() {
-  const node = rasterLiveNode, svg = rasterLiveSvg;
-  if (!node) return;
+  if (live.kind !== "vectorize" || !live.node) return;
+  const node = live.node, svg = live.svg;
   if (!svg) { setStatus("Adjust a setting to generate a trace first.", 2800); return; }
   const name = rasterName(node);
-  rasterLive = false; rasterLiveNode = null; rasterLiveSvg = null; rasterLiveSeq++;
-  if (rasterLiveTimer) { clearTimeout(rasterLiveTimer); rasterLiveTimer = null; }
+  _teardown(); _sync();
   editor.commitRasterToVector(node, svg, name);
+}
+
+// Commit (raster-op): the canvas IS the preview (href already points at the scratch
+// result) — just push history. (Revert restores the original href via _end.)
+export function commitRasterOpLive() {
+  if (live.kind !== "op" || !live.node) return;
+  const node = live.node;
+  if (live.orig != null && rasterHref(node) === live.orig) { setStatus("Adjust a setting to generate a preview first.", 2800); return; }
+  _teardown(); _sync();
+  editor.push("Process raster");
+  editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
+  setStatus("Applied on canvas (not saved to library).", 3000);
 }
 
 // Single source of truth for a focused vectorize: trace ONCE at the live-preview
@@ -281,7 +318,7 @@ export function commitRasterLive() {
 // "Run → canvas" calls for a vectorize-only run, so previewing and committing can never
 // disagree and no second job re-traces at the batch ceiling.
 export async function commitFocusedVectorize(node) {
-  let svg = (rasterLive && rasterLiveNode === node && rasterLiveSvg) ? rasterLiveSvg : null;
+  let svg = (live.kind === "vectorize" && live.node === node && live.svg) ? live.svg : null;
   if (!svg) {
     setStatus("Tracing…", 0);
     const res = await api("/api/trace-preview", "POST", stagePayload(node, { preview_max_dim: TRACE_PREVIEW_DIM }));
@@ -290,10 +327,7 @@ export async function commitFocusedVectorize(node) {
   }
   // Tear down any live-preview state for this node first, so its seq-guard / debounce
   // timer / Revert can't fire against the node we're about to replace.
-  if (rasterLive && rasterLiveNode === node) {
-    rasterLive = false; rasterLiveNode = null; rasterLiveSvg = null; rasterLiveSeq++;
-    if (rasterLiveTimer) { clearTimeout(rasterLiveTimer); rasterLiveTimer = null; }
-  }
+  if (live.kind === "vectorize" && live.node === node) { _teardown(); _sync(); }
   const ok = editor.commitRasterToVector(node, svg, rasterName(node));
   if (!ok) setStatus("Couldn't place the traced vector.", 3500);
   return ok;
@@ -315,7 +349,7 @@ export async function autoSuggestTrace(node) {
     if (res.engine && (engineSchemas || []).some((e) => e.id === res.engine)) setEngine(res.engine);
     persistSettings();
     editor._renderInspector();
-    if (rasterLive) scheduleRasterLive(false);
+    if (live.kind === "vectorize") _schedule(false);
     setStatus(res.reason || "Applied suggested settings.", 4500);
   } catch (e) {
     const stale = /\b404\b/.test(e.message || "");
@@ -325,5 +359,5 @@ export async function autoSuggestTrace(node) {
 
 // Arm hooks for the editor test-seam (window.app): set the live target without
 // kicking a trace — the editor drives the actual preview render separately.
-export function armLive(node) { rasterLive = true; rasterLiveNode = node; }
-export function armOp(node, op) { rasterOp = true; rasterOpNode = node; rasterOpName = op; rasterOpOrig = rasterHref(node); }
+export function armLive(node) { live.kind = "vectorize"; live.node = node; live.svg = null; live.op = null; live.orig = null; _sync(); }
+export function armOp(node, op) { live.kind = "op"; live.op = op; live.node = node; live.orig = rasterHref(node); live.svg = null; _sync(); }
