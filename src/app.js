@@ -46,6 +46,10 @@ import {
   configureSettings, openAppSettings, openToolsSettings, loadVersion, versionInfo,
   appSettingsOpen, setAppSettingsOpen, setPwaInstallPrompt,
 } from "./ui/settings.js";
+import {
+  workItems, outputs, projects, selectedName, selectedOutput, manualOutputName,
+  setWorkItems, setOutputs, setProjects, setSelectedName, setSelectedOutput, setManualOutputName,
+} from "./ui/docstate.js";
 
 // One-shot panel-layout self-heal. A corrupted persisted dock layout (a panel
 // floated/grouped/stranded in a state that swallows clicks) survives reload AND a
@@ -175,7 +179,7 @@ async function resumeLastDoc() {
   if (!d) return false;
   try {
     if (d.sel && workItems.some((w) => w.name === d.sel)) {       // a library work item
-      editor.pinned = false; selectedName = d.sel; manualOutputName = d.manual || null;
+      editor.pinned = false; setSelectedName(d.sel); setManualOutputName(d.manual || null);
       refreshLibrary(); await renderPreviews(); return true;
     }
     if (d.url) {                                                   // a saved canvas / standalone vector on disk
@@ -187,16 +191,10 @@ async function resumeLastDoc() {
   return false;
 }
 
-let workItems = [];
-let outputs = [];
-let projects = [];            // saved .hv projects (Canvas tab)
 let libraryMode = "raster";   // canvas (.hv projects) | raster (input images) | vector (output SVGs)
 let librarySortKey = "name";  // name | date
 let librarySortDir = "asc";   // asc | desc
 let librarySelectedUrl = null;  // visual selection for the V/C tabs (R uses selectedName)
-let selectedName = null;
-let selectedOutput = null;
-let manualOutputName = null;
 let workspace = null;
 let statusHoldUntil = 0;
 let outputsDir = "";
@@ -571,8 +569,8 @@ function itemIsProcessed(name) {
 // points at a real item (default to the first), then repaint the Library dock
 // panel (self-guards if not mounted).
 function refreshLibrary() {
-  if (!workItems.length) selectedName = null;
-  else if (!workItems.some((item) => item.name === selectedName)) selectedName = workItems[0].name;
+  if (!workItems.length) setSelectedName(null);
+  else if (!workItems.some((item) => item.name === selectedName)) setSelectedName(workItems[0].name);
   renderLibrary();   // dock panel (self-guards if not mounted)
   if (typeof renderProcessorPanel === "function") renderProcessorPanel();   // library selection drives the Processor target + contextual reveal/dim
   syncDockContext();
@@ -585,7 +583,7 @@ async function renderPreviews() {
   // owns (null when unsaved, the canvas file after Save-As) instead of silently
   // adopting whatever preferredOutput(selectedName) resolves to.
   if (!editor.pinned) {
-    selectedOutput = preferredOutput(selectedName);
+    setSelectedOutput(preferredOutput(selectedName));
     if (selectedOutput) {
       if (viewports.output.url !== selectedOutput.url) {
         try {
@@ -621,9 +619,9 @@ async function fetchQueue() {
 }
 
 function applyQueueData(items, preferredSelection = null) {
-  workItems = items;
+  setWorkItems(items);
   if (preferredSelection && workItems.some((item) => item.name === preferredSelection)) {
-    selectedName = preferredSelection;
+    setSelectedName(preferredSelection);
   }
   refreshLibrary();
 }
@@ -642,7 +640,7 @@ async function fetchOutputs() {
 }
 
 function applyOutputsData(data) {
-  outputs = data;
+  setOutputs(data);
 }
 
 async function loadOutputs() {
@@ -920,9 +918,9 @@ function openFromFile() {
     reader.onload = () => {
       const text = String(reader.result || "");
       if (!/<svg[\s>]/i.test(text)) { setStatus("That doesn't look like an SVG file.", 3000); return; }
-      selectedName = null; manualOutputName = null;
+      setSelectedName(null); setManualOutputName(null);
       mountStageFromText(text, file.name);
-      selectedOutput = null;            // disk-opened doc has no server target → Save = Save-As
+      setSelectedOutput(null);            // disk-opened doc has no server target → Save = Save-As
       rememberLastDoc();
       setStatus(`Opened ${file.name}.`, 2000);
     };
@@ -967,7 +965,7 @@ function mountStageFromText(text, name) {
 
 // Mount a fresh white artboard with no save target (Save → Save-As).
 function mountBlankCanvas(W = 512, H = 512) {
-  selectedOutput = null; manualOutputName = null;
+  setSelectedOutput(null); setManualOutputName(null);
   const txt = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"><rect class="hv-artboard" x="0" y="0" width="${W}" height="${H}" fill="#ffffff"/></svg>`;
   mountStageFromText(txt, `untitled-${W}x${H}.svg`);
 }
@@ -997,11 +995,11 @@ async function loadSvgToStage(url, name, output = null) {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
-    selectedName = null; manualOutputName = null;
+    setSelectedName(null); setManualOutputName(null);
     mountStageFromText(text, name);   // pinned = true; the recompute guard then keeps selectedOutput as set below
     // A re-opened canvas file keeps its save target so Save overwrites it in place;
     // any other standalone vector opens untracked (Save → Save-As).
-    selectedOutput = output;
+    setSelectedOutput(output);
     rememberLastDoc();
     setStatus(`Opened ${name}.`, 2000);
   } catch (e) { setStatus(`Open failed: ${e.message}`, 3000); }
@@ -1017,7 +1015,7 @@ function openOpenModal() {
     renderGalleryGrid(vis, (picked) => {
       closeModal();
       const wi = workItems.find((w) => stem(w.name) === stem(picked.name));
-      if (wi) { editor.pinned = false; selectedName = wi.name; manualOutputName = picked.name; refreshLibrary(); refreshAll(); }
+      if (wi) { editor.pinned = false; setSelectedName(wi.name); setManualOutputName(picked.name); refreshLibrary(); refreshAll(); }
       else {
         const out = picked.folder === "canvas"
           ? { name: picked.name, folder: picked.folder, url: picked.url, kind: "svg", path: picked.path }
@@ -1146,7 +1144,7 @@ async function openProject(item) {
   try { data = await (await fetch(item.url)).json(); }
   catch (e) { setStatus(`Couldn't open ${item.name}: ${e.message}`, 3500); return; }
   if (!data || typeof data.svg !== "string" || !/<svg[\s>]/i.test(data.svg)) { setStatus("That .hv project is invalid.", 3000); return; }
-  selectedName = null; manualOutputName = null; selectedOutput = null;
+  setSelectedName(null); setManualOutputName(null); setSelectedOutput(null);
   mountStageFromText(data.svg, item.name);
   // mountStageFromText syncs (→ editor.adopt, which RESETS history) inside a rAF; restore
   // the saved stacks on the following frame so they survive the adopt.
@@ -1160,7 +1158,7 @@ async function openProject(item) {
 }
 
 async function loadProjects() {
-  try { projects = await api("/api/projects"); } catch { projects = []; }
+  try { setProjects(await api("/api/projects")); } catch { setProjects([]); }
   renderLibrary();
 }
 
@@ -1169,12 +1167,12 @@ async function loadProjects() {
 // stays mounted from memory (no disk remount that would drop the editor state).
 function applySavedCanvas(data) {
   editor.pinned = true;
-  selectedName = null; manualOutputName = null;
-  selectedOutput = {
+  setSelectedName(null); setManualOutputName(null);
+  setSelectedOutput({
     name: data.name, folder: data.folder,
     url: `/outputs/${encodeURIComponent(data.folder)}/${encodeURIComponent(data.name)}`,
     kind: "svg", path: data.output,
-  };
+  });
   viewports.output.name = data.name;
   if (outputLabelEl) outputLabelEl.textContent = `Canvas — ${data.name}`;
   rememberLastDoc();
@@ -2253,8 +2251,8 @@ function jobActions(job) {
 
 function viewJobOutput(job) {
   const rel = chooseFinalOutput(job);
-  if (job.source_name) selectedName = job.source_name;
-  manualOutputName = rel ? jobOutputName(rel) : null;
+  if (job.source_name) setSelectedName(job.source_name);
+  setManualOutputName(rel ? jobOutputName(rel) : null);
   // A blank/opened/Save-As'd doc is pinned, and renderPreviews() bails on pinned —
   // so without this, View does nothing in the default app state. Unpin to land the output.
   editor.pinned = false;
@@ -2600,7 +2598,7 @@ function renderLibraryRasters(host, q) {
       url: `${item.url}?w=256`, name: item.name,
       active: item.name === selectedName, processed: itemIsProcessed(item.name),
       badge: itemIsProcessed(item.name) ? " ✓" : "", title: `${item.name} — click to select, drag to the canvas, right-click for info`,
-      onClick: () => { selectedName = item.name; manualOutputName = null; refreshLibrary(); },
+      onClick: () => { setSelectedName(item.name); setManualOutputName(null); refreshLibrary(); },
       onContext: () => openInfoModal(item.name),
       drag: { mode: "raster", url: item.url, name: item.name },
     });
@@ -3709,7 +3707,7 @@ function schedulePoll() {
         refreshLibrary();
         if (touchesSelection) {
           // Force fresh mount so the new artifact lands on the canvas automatically.
-          manualOutputName = null;
+          setManualOutputName(null);
           editor.pinned = false;
           if (viewports.output) {
             viewports.output.url = null;
@@ -3733,8 +3731,7 @@ document.addEventListener("visibilitychange", () => {
 // current selectedOutput); writes route through a setter since ESM imports
 // are read-only.
 // =========================================================================
-export function setManualOutputName(v) { manualOutputName = v; }
-export { setStatus, api, refreshAll, viewports, measureFit, outputPreviewEl, selectedOutput, inlineSvgImages, serializeForSave };
+export { setStatus, api, refreshAll, viewports, measureFit, outputPreviewEl, selectedOutput, setManualOutputName, inlineSvgImages, serializeForSave };
 
 // =========================================================================
 // Window bridge — exposes the library, the editor, and a small mutable app
@@ -3767,9 +3764,9 @@ window.openProjectInfo = openProjectInfo;
 window.app = {
   viewports, applyViewportState, measureFit, mountStageFromText,
   openFromFile, downloadCurrentSvg, exportFlow, loadVersion,
-  get selectedName() { return selectedName; }, set selectedName(v) { selectedName = v; },
-  get selectedOutput() { return selectedOutput; }, set selectedOutput(v) { selectedOutput = v; },
-  get manualOutputName() { return manualOutputName; }, set manualOutputName(v) { manualOutputName = v; },
+  get selectedName() { return selectedName; }, set selectedName(v) { setSelectedName(v); },
+  get selectedOutput() { return selectedOutput; }, set selectedOutput(v) { setSelectedOutput(v); },
+  get manualOutputName() { return manualOutputName; }, set manualOutputName(v) { setManualOutputName(v); },
   get versionInfo() { return versionInfo; },
   // Live-vectorize introspection / test harness (no network): arm the live state so a
   // control's change handler exercises the real wiring, then read the re-trace counter.
