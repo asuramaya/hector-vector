@@ -39,6 +39,9 @@ import {
 import {
   configureExport, inlineSvgImages, serializeForSave, openExportModal, setSaveByteCap,
 } from "./ui/export.js";
+import {
+  configureModal, floatingInput, openModal, closeModal, confirmDialog,
+} from "./ui/modal.js";
 
 // One-shot panel-layout self-heal. A corrupted persisted dock layout (a panel
 // floated/grouped/stranded in a state that swallows clicks) survives reload AND a
@@ -644,6 +647,10 @@ async function loadOutputs() {
   await renderPreviews();
 }
 
+// Modal shell (src/ui/modal.js): inject the #modal-root elements + the close hook that
+// drops the settings-open flag on every dismissal path (appSettingsOpen is declared
+// further down; the closure only runs post-boot when a modal actually closes).
+configureModal({ modalRootEl, modalTitleEl, modalBodyEl, modalSearchEl, onAnyClose: () => { appSettingsOpen = false; } });
 // Jobs state + poll layer live in src/ui/jobs.js (jobsCache, activityState,
 // TERMINAL_STATES imported above as live bindings). Wire its UI seams once.
 configureJobs({ setStatus, renderJobsPanel, revealPanel, canReplaceStatus });
@@ -741,72 +748,7 @@ document.querySelectorAll("[data-vp]").forEach((button) => {
   });
 });
 
-// A small floating text input that replaces window.prompt for in-app renames/saves
-// (the browser prompt is ugly + blocking). Commits on Enter/blur, cancels on Escape.
-function floatingInput({ value = "", placeholder = "", title = "", x, y, onCommit }) {
-  document.querySelectorAll(".hv-float-input").forEach((e) => e.remove());
-  const wrap = document.createElement("div"); wrap.className = "hv-float-input"; wrap.style.position = "fixed";
-  wrap.style.left = Math.max(8, Math.min((x == null ? window.innerWidth / 2 - 130 : x), window.innerWidth - 268)) + "px";
-  wrap.style.top = Math.max(8, (y == null ? Math.round(window.innerHeight / 3) : y)) + "px";
-  if (title) { const t = document.createElement("div"); t.className = "hv-float-label"; t.textContent = title; wrap.appendChild(t); }
-  const inp = document.createElement("input"); inp.type = "text"; inp.value = value; if (placeholder) inp.placeholder = placeholder;
-  wrap.appendChild(inp); document.body.appendChild(wrap); inp.focus(); inp.select();
-  let done = false;
-  const finish = (commit) => { if (done) return; done = true; const v = inp.value.trim(); wrap.remove(); if (commit && v) onCommit(v); };
-  inp.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); finish(true); } else if (e.key === "Escape") { e.preventDefault(); finish(false); } });
-  inp.addEventListener("blur", () => finish(true));
-}
-
-// Fired exactly once whenever the modal closes by ANY path (OK/Cancel buttons,
-// the [data-modal-close] X, backdrop click, or Esc). confirmDialog registers
-// here so dismissals it doesn't own still settle its promise — see :openModal.
-let modalOnClose = null;
-
-function openModal(title, narrow = false) {
-  modalTitleEl.textContent = title;
-  modalSearchEl.value = "";
-  const win = modalRootEl.querySelector(".modal-window");
-  if (win) win.classList.toggle("modal-narrow", !!narrow);
-  modalRootEl.hidden = false;
-  setTimeout(() => modalSearchEl.focus(), 0);
-}
-
-function closeModal() {
-  modalRootEl.hidden = true;
-  modalBodyEl.innerHTML = "";
-  appSettingsOpen = false;
-  const cb = modalOnClose; modalOnClose = null;
-  if (cb) cb();
-}
-
-// A yes/no modal → resolves true (confirmed) or false (cancelled, incl. Esc / backdrop).
-// Used where an action would otherwise degrade silently (e.g. a save falling back to
-// non-portable linked refs) so the user actively chooses instead of being surprised.
-function confirmDialog({ title = "Confirm", message = "", okLabel = "OK", cancelLabel = "Cancel" } = {}) {
-  return new Promise((resolve) => {
-    let settled = false;
-    function finish(val) {
-      if (settled) return; settled = true;
-      modalOnClose = null;   // we're closing deliberately; don't re-fire as a dismissal
-      closeModal(); resolve(val);
-    }
-    openModal(title, true);
-    modalSearchEl.hidden = true;
-    const root = document.createElement("div"); root.className = "form";
-    const msg = document.createElement("div"); msg.className = "form-hint"; msg.style.whiteSpace = "pre-line"; msg.textContent = message;
-    root.appendChild(msg);
-    const actions = document.createElement("div"); actions.className = "form-actions";
-    const ok = ghostBtn(okLabel, () => finish(true)); ok.classList.add("primary-button");
-    actions.appendChild(ghostBtn(cancelLabel, () => finish(false)));
-    actions.appendChild(ok);
-    root.appendChild(actions);
-    modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
-    // Any other close path (backdrop click, the X button, the generic Esc closer)
-    // routes through closeModal → this hook, so the promise always settles (false).
-    modalOnClose = () => { if (!settled) { settled = true; resolve(false); } };
-    setTimeout(() => ok.focus(), 0);
-  });
-}
+// (modal shell + floatingInput extracted → src/ui/modal.js)
 
 // The standalone Process VIEW was dissolved into dock panels (Library / Processor / Jobs)
 // — the Edit canvas is the only view now. revealPanel un-collapses + scrolls a dock panel
