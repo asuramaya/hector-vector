@@ -32,6 +32,10 @@ import {
   configureWidgets, fieldRow, sectionTitle, fmtBytes,
   makeSelect, makeSelectRaw, makeNumberRaw, makeRange, makeNumber,
 } from "./ui/widgets.js";
+import {
+  configureMenus, openMenuEl, ctxMenuEl, openMenu, closeMenus,
+  hideContextMenu, showContextMenu, showRichContextMenu,
+} from "./ui/menus.js";
 
 // One-shot panel-layout self-heal. A corrupted persisted dock layout (a panel
 // floated/grouped/stranded in a state that swallows clicks) survives reload AND a
@@ -1526,6 +1530,9 @@ const MENU_ITEMS = {
     return items;
   },
 };
+// Menus live in src/ui/menus.js; inject setStatus (error toasts) + the header menu map
+// now that MENU_ITEMS is defined. The eval-time trigger/dismissal wiring stays below.
+configureMenus({ setStatus, menuItems: MENU_ITEMS });
 
 // ---------- editor wiring: tools, header buttons, rail, keyboard ----------
 document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("click", () => editor.setTool(b.dataset.tool)));
@@ -2163,67 +2170,6 @@ document.addEventListener("keydown", (e) => {
 });
 
 
-let openMenuEl = null;
-function closeMenus() {
-  if (!openMenuEl) return;
-  const list = openMenuEl.querySelector(".menu-list");
-  const trigger = openMenuEl.querySelector(".menu-trigger");
-  if (list) list.hidden = true;
-  if (trigger) trigger.setAttribute("aria-expanded", "false");
-  openMenuEl.classList.remove("open");
-  openMenuEl = null;
-}
-// Render menu items into a list element. Shared by the header dropdowns (openMenu) and
-// the right-click rich context menu (showRichContextMenu). `dismiss` closes the host menu
-// on activation; `refresh` rebuilds it in place (used by the manageable profile rows after
-// a rename/delete so the list reflects the mutation).
-function populateMenuList(list, items, opts = {}) {
-  const dismiss = opts.dismiss || (() => {});
-  const refresh = opts.refresh || (() => {});
-  list.innerHTML = "";
-  for (const item of items) {
-    if (item.type === "sep") { const sep = document.createElement("div"); sep.className = "menu-sep"; list.appendChild(sep); continue; }
-    // a manageable row: a label that activates the item + inline rename / delete buttons
-    // (used by the Layout profiles). Refresh the menu after a mutation so the list updates.
-    const badgeHTML = item.badge ? `<span class="menu-badge">${item.badge}</span>` : "";
-    if (item.onRename || item.onDelete) {
-      const row = document.createElement("div"); row.className = "menu-item menu-row" + (item.checked ? " checked" : "");
-      const lab = document.createElement("button"); lab.type = "button"; lab.className = "menu-rowlabel" + (item.checked ? " checked" : ""); lab.setAttribute("role", "menuitemradio"); lab.setAttribute("aria-checked", item.checked ? "true" : "false");
-      lab.innerHTML = `<span class="menu-check">${item.checked ? "✓" : ""}</span><span class="menu-label"></span>${badgeHTML}`;
-      lab.querySelector(".menu-label").textContent = item.label;
-      lab.addEventListener("click", async () => { dismiss(); try { await item.onClick(); } catch (e) { setStatus(e.message || String(e), 3000); } });
-      row.appendChild(lab);
-      const reopen = (mut) => { try { mut(); } catch (e) { setStatus(e.message || String(e), 3000); } refresh(); };
-      if (item.onRename) { const r = document.createElement("button"); r.type = "button"; r.className = "menu-rowbtn"; r.textContent = "✎"; r.title = "Rename"; r.addEventListener("click", (e) => { e.stopPropagation(); reopen(item.onRename); }); row.appendChild(r); }
-      if (item.onDelete) { const d = document.createElement("button"); d.type = "button"; d.className = "menu-rowbtn"; d.textContent = "✕"; d.title = "Delete"; d.addEventListener("click", (e) => { e.stopPropagation(); reopen(item.onDelete); }); row.appendChild(d); }
-      list.appendChild(row); continue;
-    }
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "menu-item" + (item.type === "toggle" ? " menu-toggle" : "") + (item.checked ? " checked" : "");
-    btn.disabled = !!item.disabled;
-    btn.setAttribute("role", "menuitem");
-    btn.innerHTML = `<span class="menu-check">${item.checked ? "✓" : ""}</span><span class="menu-label"></span>${badgeHTML}`;
-    btn.querySelector(".menu-label").textContent = item.label;
-    btn.addEventListener("click", async () => {
-      dismiss();
-      try { await item.onClick(); } catch (e) { setStatus(e.message || String(e), 3000); }
-    });
-    list.appendChild(btn);
-  }
-}
-function openMenu(menuEl) {
-  closeMenus();
-  const itemsFn = MENU_ITEMS[menuEl.dataset.menu];
-  const list = menuEl.querySelector(".menu-list");
-  if (!itemsFn || !list) return;
-  populateMenuList(list, itemsFn(), { dismiss: closeMenus, refresh: () => { const m = openMenuEl; closeMenus(); if (m) openMenu(m); } });
-  list.hidden = false;
-  const trigger = menuEl.querySelector(".menu-trigger");
-  if (trigger) trigger.setAttribute("aria-expanded", "true");
-  menuEl.classList.add("open");
-  openMenuEl = menuEl;
-}
 document.querySelectorAll(".menu .menu-trigger").forEach((trigger) => {
   trigger.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -2253,51 +2199,8 @@ document.addEventListener("keydown", (event) => {
 });
 
 // ---------- right-click context menu (canvas + objects) ----------
-let ctxMenuEl = null;
-function hideContextMenu() { if (ctxMenuEl) { ctxMenuEl.remove(); ctxMenuEl = null; } }
-function appendMenuItems(menu, items, afterClick) {
-  for (const item of items) {
-    if (item.type === "sep") { const s = document.createElement("div"); s.className = "menu-sep"; menu.appendChild(s); continue; }
-    const btn = document.createElement("button");
-    btn.type = "button"; btn.className = "menu-item"; btn.disabled = !!item.disabled; btn.setAttribute("role", "menuitem");
-    btn.innerHTML = `<span class="menu-check"></span><span class="menu-label"></span>`;
-    btn.querySelector(".menu-label").textContent = item.label;
-    btn.addEventListener("click", () => {
-      try { item.onClick(); } catch (e) { setStatus(e.message || String(e), 3000); }
-      if (afterClick) afterClick(); else hideContextMenu();
-    });
-    menu.appendChild(btn);
-  }
-}
-function placeAt(el, x, y) {
-  const r = el.getBoundingClientRect();
-  el.style.left = Math.max(2, Math.min(x, window.innerWidth - r.width - 4)) + "px";
-  el.style.top = Math.max(2, Math.min(y, window.innerHeight - r.height - 4)) + "px";
-}
-function showContextMenu(x, y, items) {
-  hideContextMenu();
-  const menu = document.createElement("div");
-  menu.className = "context-menu menu-list";
-  menu.setAttribute("role", "menu");
-  appendMenuItems(menu, items, null);
-  document.body.appendChild(menu);
-  placeAt(menu, x, y);
-  ctxMenuEl = menu;
-}
-// Rich right-click menu — the full menu vocabulary (toggles, badges, manageable rows with
-// rename/delete). `itemsFn` is re-evaluated when a row mutates so the list stays current.
-// This is how the Layout menu (formerly a header button) now reaches the user: right-click
-// the blank space of any frame toolbar.
-function showRichContextMenu(x, y, itemsFn) {
-  hideContextMenu();
-  const menu = document.createElement("div");
-  menu.className = "context-menu menu-list";
-  menu.setAttribute("role", "menu");
-  populateMenuList(menu, itemsFn(), { dismiss: hideContextMenu, refresh: () => showRichContextMenu(x, y, itemsFn) });
-  document.body.appendChild(menu);
-  placeAt(menu, x, y);
-  ctxMenuEl = menu;
-}
+// (menu render + context-menu builders extracted → src/ui/menus.js;
+// openMenuEl/ctxMenuEl live bindings + functions imported above. DOM wiring stays below.)
 // Properties is a fully dockable, permanent panel owned by the Dockable-panels module
 // (window.__docks): it lives in a dock (or float/shelf), and its body mirrors the current
 // selection (object style / artboard / empty). Right-click the canvas summons it (brings
