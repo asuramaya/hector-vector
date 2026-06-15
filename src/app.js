@@ -28,6 +28,10 @@ import {
   startRasterOpLive, endRasterOpLive, scheduleRasterOpLive, commitRasterOpLive,
 } from "./ui/processor.js";
 import { openColorPicker, activeColorPicker, configureColorPicker } from "./ui/colorpicker.js";
+import {
+  configureWidgets, fieldRow, sectionTitle, fmtBytes,
+  makeSelect, makeSelectRaw, makeNumberRaw, makeRange, makeNumber,
+} from "./ui/widgets.js";
 
 // One-shot panel-layout self-heal. A corrupted persisted dock layout (a panel
 // floated/grouped/stranded in a state that swallows clicks) survives reload AND a
@@ -639,6 +643,9 @@ configureJobs({ setStatus, renderJobsPanel, revealPanel, canReplaceStatus });
 // Colour picker lives in src/ui/colorpicker.js; inject the two shell helpers it needs
 // (both are hoisted top-level fns, so they're in scope at module-eval time).
 configureColorPicker({ floatingInput, showContextMenu });
+// Form primitives (src/ui/widgets.js): inject the live settings object (assigned once
+// at boot, mutated in place) + persistSettings so makeSelect/makeRange/makeNumber bind.
+configureWidgets({ settings, persistSettings });
 
 function stem_(n) { return n.replace(/\.[^.]+$/, ""); }
 
@@ -3837,110 +3844,6 @@ window.addEventListener("resize", () => {
   drawRulers();
 });
 
-function fieldRow(label, control, hint) {
-  const row = document.createElement("label");
-  row.className = "form-row";
-  const span = document.createElement("span");
-  span.className = "form-label";
-  span.textContent = label;
-  row.appendChild(span);
-  row.appendChild(control);
-  if (hint) {
-    const h = document.createElement("span");
-    h.className = "form-hint";
-    h.textContent = hint;
-    row.appendChild(h);
-  }
-  return row;
-}
-
-function makeSelect(key, options) {
-  const sel = document.createElement("select");
-  for (const [value, label] of options) {
-    const o = document.createElement("option");
-    o.value = value;
-    o.textContent = label;
-    if (String(settings[key]) === String(value)) o.selected = true;
-    sel.appendChild(o);
-  }
-  sel.addEventListener("change", () => { settings[key] = sel.value; persistSettings(); });
-  return sel;
-}
-
-function makeSelectRaw(value, options, onChange) {
-  const sel = document.createElement("select");
-  for (const [val, label] of options) {
-    const o = document.createElement("option");
-    o.value = val;
-    o.textContent = label;
-    if (String(value) === String(val)) o.selected = true;
-    sel.appendChild(o);
-  }
-  sel.addEventListener("change", () => onChange(sel.value));
-  return sel;
-}
-
-function makeNumberRaw(value, onChange) {
-  const input = document.createElement("input");
-  input.type = "number";
-  input.className = "form-input";
-  input.min = "1";
-  input.max = "16384";
-  input.value = String(value || "");
-  input.addEventListener("input", () => onChange(parseInt(input.value, 10) || 0));
-  return input;
-}
-
-function makeRange(key, min, max, step) {
-  const wrap = document.createElement("div");
-  wrap.className = "form-range";
-  const input = document.createElement("input");
-  input.type = "range";
-  input.min = String(min);
-  input.max = String(max);
-  input.step = String(step);
-  input.value = String(settings[key]);
-  const out = document.createElement("output");
-  out.textContent = input.value;
-  input.addEventListener("input", () => {
-    out.textContent = input.value;
-    settings[key] = input.value;
-    persistSettings();
-  });
-  wrap.appendChild(input);
-  wrap.appendChild(out);
-  return wrap;
-}
-
-function makeNumber(key, { min, max, step = 1, placeholder = "" } = {}) {
-  const input = document.createElement("input");
-  input.type = "number";
-  input.className = "form-input";
-  if (min !== undefined) input.min = String(min);
-  if (max !== undefined) input.max = String(max);
-  input.step = String(step);
-  input.placeholder = placeholder;
-  input.value = String(settings[key] ?? "");
-  input.addEventListener("input", () => {
-    settings[key] = input.value;
-    persistSettings();
-  });
-  return input;
-}
-
-function sectionTitle(text) {
-  const h = document.createElement("div");
-  h.className = "form-section";
-  h.textContent = text;
-  return h;
-}
-
-function fmtBytes(n) {
-  if (!Number.isFinite(n)) return "—";
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(2)} MB`;
-}
 
 // Trigger a browser download of a URL under a chosen filename.
 function downloadUrl(url, filename) {
