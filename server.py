@@ -94,36 +94,21 @@ from hvserver.pipeline import (  # underscore helpers asserted by test_smoke
     _stage_on, _pipeline_stages, _pipeline_summary,
 )
 
+# Documents layer (hvserver/documents.py, #29 split): document-persistence endpoints —
+# save_render / save_svg / save_hv / list_projects / save_svg_as (+ _resolve_output_svg).
+# Re-exported so the HTTP handler's save endpoints keep resolving.
+from hvserver.documents import *  # noqa: F401,F403,E402
 
+# System layer (hvserver/system.py, #29 split): non-compute endpoints — seed_inputs,
+# tool_status, and the git-pull self-update surface (version_info/check_update/apply_update).
+# Re-exported so the HTTP handler + main() keep reaching them.
+from hvserver.system import *  # noqa: F401,F403,E402
 
 
 # (#29 ensure_dirs relocated -> hvserver/paths.py)
 
 
-def seed_inputs() -> None:
-    if source_dir().resolve() != DEFAULT_SOURCE_DIR.resolve():
-        return
-    if discover_work_items():
-        return
-
-    candidates: list[Path] = []
-    candidates.extend(
-        path for path in APP_DIR.iterdir()
-        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS and not is_derivative_name(path.name)
-    )
-    old_dir = APP_DIR / "old"
-    if old_dir.exists():
-        candidates.extend(
-            path for path in old_dir.iterdir()
-            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS and not is_derivative_name(path.name)
-        )
-
-    seen = set()
-    for src in candidates:
-        if src.name in seen:
-            continue
-        seen.add(src.name)
-        shutil.copy2(src, INPUTS_DIR / src.name)
+# (#29 system layer -> hvserver/system.py: seed_inputs)
 
 
 # (#29 jobs utils -> hvserver/jobs.py: _id_counter + now_id + shell_join)
@@ -134,37 +119,7 @@ def seed_inputs() -> None:
 # (#29 command_exists relocated -> hvserver/paths.py)
 
 
-def tool_status() -> dict:
-    missing_tools = []
-    if not REALESRGAN_BIN.exists():
-        missing_tools.append("realesrgan")
-    if not VTRACER_BIN.exists():
-        missing_tools.append("vtracer")
-    rembg_ok = rembg_installed()
-    return {
-        "gpu_recommendation": "RTX A3000 12GB: reliable HQ path is Real-ESRGAN; SUPIR is optional low-VRAM experimental.",
-        "realesrgan_installed": REALESRGAN_BIN.exists(),
-        "vtracer_installed": VTRACER_BIN.exists(),
-        "rembg_installed": rembg_ok,
-        "spandrel_installed": spandrel_installed(),
-        "svg_render_builtin": True,
-        "svg_render_cairosvg": svg_render.cairosvg_available(),
-        "venv_dir": str(VENV_DIR),
-        "venv_python": str(VENV_PYTHON) if VENV_PYTHON.exists() else "",
-        "cargo_available": command_exists("cargo"),
-        "curl_available": command_exists("curl"),
-        "unzip_available": command_exists("unzip"),
-        "python": shutil.which("python3"),
-        "app_dir": str(APP_DIR),
-        "workspace_dir": str(WORKSPACE_DIR),
-        "workspace_name": WORKSPACE_DIR.name,
-        "outputs_dir": str(OUTPUTS_DIR),
-        "inputs_dir": str(INPUTS_DIR),
-        "source_dir": str(source_dir()),
-        "default_source_dir": str(DEFAULT_SOURCE_DIR),
-        "missing_tools": missing_tools,
-        "work_items": [str(path) for path in discover_work_items()],
-    }
+# (#29 system layer -> hvserver/system.py: tool_status)
 
 
 # (#29 files layer -> hvserver/files.py - region 1/3: path helpers + scratch/pipeline-dir pruning)
@@ -173,302 +128,14 @@ def tool_status() -> dict:
 # (#29 engines layer -> hvserver/engines.py: validators + trace/mask config + preprocess + vtracer bw/colour paths)
 
 
-# ---------------------------------------------------------------------------
-# Version + self-update (git-pull based; the app is distributed as a git clone)
-# ---------------------------------------------------------------------------
-def _git(*args: str, timeout: float = 8.0) -> str | None:
-    """Run a git command in APP_DIR; return stripped stdout, or None on any failure."""
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(APP_DIR), *args],
-            capture_output=True, text=True, timeout=timeout,
-        )
-        if out.returncode != 0:
-            return None
-        return out.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return None
-
-
-def _is_git_repo() -> bool:
-    return _git("rev-parse", "--is-inside-work-tree") == "true"
-
-
-def version_info() -> dict:
-    is_git = _is_git_repo()
-    return {
-        "version": APP_VERSION,
-        "isGit": is_git,
-        "commit": (_git("rev-parse", "--short", "HEAD") or "") if is_git else "",
-        "branch": (_git("rev-parse", "--abbrev-ref", "HEAD") or "") if is_git else "",
-        "dirty": bool(_git("status", "--porcelain")) if is_git else False,
-        "repo": GITHUB_REPO,
-    }
-
-
-def _version_tuple(s: str) -> tuple:
-    nums = re.findall(r"\d+", s or "")
-    return tuple(int(n) for n in nums[:3]) or (0,)
-
-
-def check_update(payload: dict | None = None) -> dict:
-    """Compare the local VERSION against the latest GitHub release tag. Network
-    failures degrade to {error} rather than throwing — this is best-effort."""
-    import urllib.request  # stdlib; local import keeps the module top lean
-    info = version_info()
-    api = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-    latest = None
-    url = f"https://github.com/{GITHUB_REPO}/releases"
-    try:
-        req = urllib.request.Request(api, headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "hector-vector-updater",
-        })
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        latest = (data.get("tag_name") or "").lstrip("v") or None
-        url = data.get("html_url") or url
-    except Exception as exc:  # offline, rate-limited, no releases yet, etc.
-        return {"current": info["version"], "latest": None, "behind": False,
-                "url": url, "isGit": info["isGit"], "dirty": info["dirty"],
-                "error": f"Could not reach GitHub ({exc.__class__.__name__})."}
-    behind = bool(latest) and _version_tuple(latest) > _version_tuple(info["version"])
-    return {"current": info["version"], "latest": latest, "behind": behind,
-            "url": url, "isGit": info["isGit"], "dirty": info["dirty"]}
-
-
-def apply_update(payload: dict | None = None) -> dict:
-    """git pull --ff-only, then sync deps into .venv if present. Refuses on a
-    non-git checkout or a dirty working tree (so we never clobber local edits)."""
-    if not _is_git_repo():
-        raise ValueError("Not a git checkout — update with your package manager or re-clone.")
-    if _git("status", "--porcelain"):
-        raise ValueError("Working tree has local changes — commit or stash them before updating.")
-    if has_running_job("update"):
-        return {"message": "Update already running."}
-    pip = VENV_DIR / "bin" / "pip"
-    cmd = [
-        "bash", "-lc",
-        (
-            f"set -euo pipefail; "
-            f"git -C {shlex_quote(str(APP_DIR))} pull --ff-only; "
-            f"if [ -x {shlex_quote(str(pip))} ]; then "
-            f"  {shlex_quote(str(pip))} install -r {shlex_quote(str(APP_DIR / 'requirements.txt'))}; "
-            f"fi; "
-            f"echo 'Update complete — restart hector-vector to finish.'"
-        ),
-    ]
-    result = launch_job("update", cmd, summary="Update hector-vector (git pull)", immediate=True)
-    result["restart"] = True
-    return result
+# (#29 system layer -> hvserver/system.py: version_info / check_update / apply_update + _git helpers)
 
 
 # (#29 models layer -> hvserver/models.py: tool-readiness + fetch_model + registries + build_* + AI-op endpoints)
 
 
 # (#29 engines layer -> hvserver/engines.py: pixelvec_config + validate_pixelvec_svg)
-def _resolve_output_svg(payload: dict) -> Path:
-    """Resolve a caller-supplied SVG reference to a path inside OUTPUTS_DIR."""
-    requested = (payload.get("path") or "").strip()
-    if not requested:
-        folder = (payload.get("folder") or "").strip()
-        name = (payload.get("name") or "").strip()
-        if not name:
-            raise ValueError("Missing SVG 'path' (or 'folder' + 'name').")
-        requested = str(OUTPUTS_DIR / folder / name) if folder else str(OUTPUTS_DIR / name)
-    target = Path(requested).expanduser().resolve()
-    try:
-        target.relative_to(OUTPUTS_DIR.resolve())
-    except ValueError:
-        raise ValueError(f"SVG is outside the outputs folder: {target}")
-    if not target.exists():
-        raise ValueError(f"SVG not found: {target}")
-    if target.suffix.lower() != ".svg":
-        raise ValueError("Render target must be an .svg file.")
-    return target
-
-
-def save_render(payload: dict) -> dict:
-    """Persist a PNG the BROWSER rendered (the export modal rasterises the SVG on a
-    canvas — full fidelity, no cairosvg/system dependency) next to its source SVG, so
-    the export still lands in the library and can be revealed. Bytes arrive base64."""
-    svg = _resolve_output_svg(payload)
-    raw_b64 = (payload.get("png_base64") or "")
-    if raw_b64.startswith("data:"):
-        raw_b64 = raw_b64.split(",", 1)[-1]
-    try:
-        raw = base64.b64decode(raw_b64, validate=True)
-    except (ValueError, binascii.Error):
-        raise ValueError("Invalid PNG data.")
-    if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise ValueError("Rendered data is not a PNG.")
-    if len(raw) > 96_000_000:
-        raise ValueError("Rendered PNG is too large to save (>96 MB).")
-    try:
-        w, h = int(payload.get("width") or 0), int(payload.get("height") or 0)
-    except (TypeError, ValueError):
-        w = h = 0
-    final = svg.with_name(f"{svg.stem}@{w}x{h}.png" if w > 0 and h > 0 else f"{svg.stem}.export.png")
-    if final.exists():
-        final.unlink()
-    final.write_bytes(raw)
-    invalidate_outputs_cache()
-    return {
-        "message": f"Saved {final.name}.",
-        "output": str(final), "folder": svg.parent.name, "name": final.name,
-        "size": [w, h],
-    }
-
-
-def save_svg(payload: dict) -> dict:
-    """Write an edited SVG (from the in-app editor) next to its source as
-    `{stem}.edited.svg`, confined to the outputs folder."""
-    folder = (payload.get("folder") or "").strip()
-    name = (payload.get("name") or "").strip()
-    svg_text = payload.get("svg")
-    if not folder or not name:
-        raise ValueError("Missing 'folder' + 'name'.")
-    # folder/name come from the client — never let them escape the outputs tree
-    if name != Path(name).name or folder != Path(folder).name:
-        raise ValueError("Folder/name must be plain components (no path separators).")
-    if name.lower().endswith((".png", ".jpg", ".jpeg")) or not name.lower().endswith(".svg"):
-        raise ValueError("Source output must be an .svg file.")
-    if not isinstance(svg_text, str) or "<svg" not in svg_text.lower():
-        raise ValueError("Missing or invalid 'svg' markup.")
-    if len(svg_text) > MAX_SVG_SAVE_BYTES:
-        raise ValueError(f"SVG is too large to save (>{MAX_SVG_SAVE_BYTES // 1_000_000} MB).")
-    target_dir = (OUTPUTS_DIR / folder).resolve()
-    try:
-        target_dir.relative_to(OUTPUTS_DIR.resolve())
-    except ValueError:
-        raise ValueError("Folder is outside the outputs directory.")
-    if not target_dir.is_dir():
-        raise ValueError(f"Output folder not found: {folder}")
-    stem = name[:-4]
-    if stem.endswith(".edited"):       # re-saving an edit shouldn't stack suffixes
-        stem = stem[: -len(".edited")]
-    out = (target_dir / f"{stem}.edited.svg").resolve()
-    try:
-        out.relative_to(OUTPUTS_DIR.resolve())
-    except ValueError:
-        raise ValueError("Resolved path is outside the outputs directory.")
-    out.write_text(svg_text, encoding="utf-8")
-    invalidate_outputs_cache()
-    _register_output(out)
-    return {
-        "message": f"Saved {out.name}.",
-        "output": str(out),
-        "folder": folder,
-        "name": out.name,
-    }
-
-
-def save_hv(payload: dict) -> dict:
-    """Save a full editor PROJECT (.hv) — the canvas markup plus the undo/redo
-    history — as JSON in the outputs `canvas/` folder. Powers the library's Canvas
-    tab; opening one restores layers + history."""
-    raw = (payload.get("name") or "").strip()
-    svg_text = payload.get("svg")
-    if not raw:
-        raise ValueError("Missing 'name'.")
-    if not isinstance(svg_text, str) or "<svg" not in svg_text.lower():
-        raise ValueError("Missing or invalid 'svg' markup.")
-    stem = Path(raw).name
-    for ext in (".hv", ".svg"):
-        if stem.lower().endswith(ext):
-            stem = stem[: -len(ext)]
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-.") or "untitled"
-    target_dir = (OUTPUTS_DIR / "canvas").resolve()
-    target_dir.mkdir(parents=True, exist_ok=True)
-    out = (target_dir / f"{stem}.hv").resolve()
-    try:
-        out.relative_to(OUTPUTS_DIR.resolve())
-    except ValueError:
-        raise ValueError("Resolved path is outside the outputs directory.")
-    if out.exists() and not payload.get("overwrite"):
-        n = 2
-        while (target_dir / f"{stem}-{n}.hv").exists():
-            n += 1
-        stem = f"{stem}-{n}"
-        out = (target_dir / f"{stem}.hv").resolve()
-    doc = {
-        "version": 1,
-        "name": out.name,
-        "svg": svg_text,
-        "history": payload.get("history") or [],
-        "redo": payload.get("redo") or [],
-    }
-    blob = json.dumps(doc)
-    if len(blob) > 96_000_000:
-        raise ValueError("Project is too large to save (>96 MB).")
-    out.write_text(blob, encoding="utf-8")
-    invalidate_outputs_cache()
-    return {"name": out.name, "url": f"/outputs/canvas/{urllib.parse.quote(out.name)}", "message": f"Saved project {out.name}"}
-
-
-def list_projects() -> list[dict]:
-    """List saved .hv projects (newest first) for the library's Canvas tab."""
-    folder = OUTPUTS_DIR / "canvas"
-    items: list[dict] = []
-    if folder.is_dir():
-        for p in sorted(folder.glob("*.hv"), key=lambda x: x.stat().st_mtime, reverse=True):
-            items.append({
-                "name": p.name,
-                "url": f"/outputs/canvas/{urllib.parse.quote(p.name)}",
-                "modified_at": p.stat().st_mtime,
-            })
-    return items
-
-
-def save_svg_as(payload: dict) -> dict:
-    """Save a new/opened canvas under a caller-chosen name into a dedicated
-    `canvas/` folder inside the outputs tree (created on demand). Unlike
-    `save_svg`, this needs no pre-existing source folder — it's the Save-As path
-    for documents made with New blank canvas or Open vector, which otherwise have
-    nowhere to write. Returns the folder+name so the client can wire up plain
-    Save (`/api/save-svg`) for subsequent writes."""
-    raw = (payload.get("name") or "").strip()
-    svg_text = payload.get("svg")
-    if not raw:
-        raise ValueError("Missing 'name'.")
-    if not isinstance(svg_text, str) or "<svg" not in svg_text.lower():
-        raise ValueError("Missing or invalid 'svg' markup.")
-    if len(svg_text) > MAX_SVG_SAVE_BYTES:
-        raise ValueError(f"SVG is too large to save (>{MAX_SVG_SAVE_BYTES // 1_000_000} MB).")
-    # Reduce the caller's name to a single safe stem; force a .svg extension.
-    stem = Path(raw).name
-    if stem.lower().endswith(".svg"):
-        stem = stem[:-4]
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-.") or "untitled"
-    folder = "canvas"
-    target_dir = (OUTPUTS_DIR / folder).resolve()
-    try:
-        target_dir.relative_to(OUTPUTS_DIR.resolve())
-    except ValueError:
-        raise ValueError("Folder is outside the outputs directory.")
-    target_dir.mkdir(parents=True, exist_ok=True)
-    out = (target_dir / f"{stem}.svg").resolve()
-    try:
-        out.relative_to(OUTPUTS_DIR.resolve())
-    except ValueError:
-        raise ValueError("Resolved path is outside the outputs directory.")
-    # Re-saving an existing canvas doc overwrites in place; a fresh Save-As that
-    # would clobber a different file disambiguates with a numeric suffix.
-    if out.exists() and not payload.get("overwrite"):
-        n = 2
-        while (target_dir / f"{stem}-{n}.svg").exists():
-            n += 1
-        stem = f"{stem}-{n}"
-        out = (target_dir / f"{stem}.svg").resolve()
-    out.write_text(svg_text, encoding="utf-8")
-    invalidate_outputs_cache()
-    _register_output(out)
-    return {
-        "message": f"Saved {out.name}.",
-        "output": str(out),
-        "folder": folder,
-        "name": out.name,
-    }
+# (#29 documents layer -> hvserver/documents.py: save_render/save_svg/save_hv/list_projects/save_svg_as + _resolve_output_svg)
 
 
 # (#29 engines layer -> hvserver/engines.py: derive_mask_from_alpha)
