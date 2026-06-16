@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import shutil
 import subprocess
 import sys
 import threading
@@ -178,3 +179,23 @@ def rembg_installed() -> bool:
         return result.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
+
+
+# ---- filesystem + shell setup helpers --------------------------------------
+# Foundational utilities used across layers (dir setup, command presence, shell
+# quoting). They live here so models.py / the installers can reach them without
+# importing server.py. Re-exported through the server façade unchanged.
+def ensure_dirs() -> None:
+    TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    INPUTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def command_exists(name: str) -> bool:
+    return shutil.which(name) is not None
+
+
+def shlex_quote(value: str) -> str:
+    import shlex
+
+    return shlex.quote(value)
