@@ -10,16 +10,17 @@ import { openModal, closeModal } from "./modal.js";
 import { sectionTitle, fieldRow, makeNumberRaw } from "./widgets.js";
 import { serializeForSave, openExportModal } from "./export.js";
 import { hideContextMenu } from "./menus.js";
+import { renderGalleryGrid } from "./gallery.js";
 import {
   selectedOutput, outputs, workItems,
   setSelectedName, setSelectedOutput, setManualOutputName, setProjects,
 } from "./docstate.js";
 
 let setStatus, applyBgMode, measureFit, viewports, outputLabelEl, modalSearchEl, modalBodyEl,
-    rememberLastDoc, renderGalleryGrid, stem, stem_, refreshLibrary, refreshAll, renderLibrary;
+    rememberLastDoc, stem, stem_, refreshLibrary, refreshAll, renderLibrary;
 export function configureDocIO(deps) {
   ({ setStatus, applyBgMode, measureFit, viewports, outputLabelEl, modalSearchEl, modalBodyEl,
-     rememberLastDoc, renderGalleryGrid, stem, stem_, refreshLibrary, refreshAll, renderLibrary } = deps);
+     rememberLastDoc, stem, stem_, refreshLibrary, refreshAll, renderLibrary } = deps);
 }
 
 // ---------- document menu actions ----------
