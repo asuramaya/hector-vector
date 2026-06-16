@@ -11,15 +11,16 @@ import { sectionTitle, fieldRow, makeNumberRaw } from "./widgets.js";
 import { serializeForSave, openExportModal } from "./export.js";
 import { hideContextMenu } from "./menus.js";
 import { renderGalleryGrid } from "./gallery.js";
+import { viewports, applyBgMode, measureFit } from "./viewport.js";
 import {
   selectedOutput, outputs, workItems,
   setSelectedName, setSelectedOutput, setManualOutputName, setProjects,
 } from "./docstate.js";
 
-let setStatus, applyBgMode, measureFit, viewports, outputLabelEl, modalSearchEl, modalBodyEl,
+let setStatus, outputLabelEl, modalSearchEl, modalBodyEl,
     rememberLastDoc, stem, stem_, refreshLibrary, refreshAll, renderLibrary;
 export function configureDocIO(deps) {
-  ({ setStatus, applyBgMode, measureFit, viewports, outputLabelEl, modalSearchEl, modalBodyEl,
+  ({ setStatus, outputLabelEl, modalSearchEl, modalBodyEl,
      rememberLastDoc, stem, stem_, refreshLibrary, refreshAll, renderLibrary } = deps);
 }
 
