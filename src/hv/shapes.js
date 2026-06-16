@@ -237,39 +237,66 @@ export function pathNodes(svg, accept) {
   return out;
 }
 
-// Flatten a <path> to an editable pen-anchor list ({x,y,in,out} with absolute
-// handle coords, mirroring pathNodes' in/out extraction) plus whether it's closed.
-// Lossless round-trip through penPathD for M/L/C paths — `editable` is false when
-// the path carries arcs/quadratics (rebuilding would drop them) OR has more than one
-// subpath (penPathD re-emits a single M…Z, which would fuse the subpaths into one loop
-// — corrupting boolean results / traced art), so callers can refuse structural edits
-// (delete/convert) on those. Plain anchor drags via pathNodes() preserve subpaths and
-// stay unaffected. Multi-subpath editing is handled losslessly by the per-subpath model.
+// Flatten a <path> to an editable pen-anchor list ({x,y,in,out,sub} with absolute
+// handle coords, mirroring pathNodes' in/out extraction). PER-SUBPATH model (#20): the
+// anchors are flat but each carries a `sub` index, and `subs[]` records each subpath's
+// {closed,start,count}. Re-emit through penAnchorsToD(anchors, subs) — one M…Z per
+// subpath — so a compound path (rect-with-hole, traced glyph, boolean result) round-trips
+// losslessly and stays fully node-editable (delete/insert/convert), not just drag-only.
+// `editable` is false ONLY when the path carries arcs/quadratics (penPathD can't rebuild
+// those). The legacy single `closed` mirrors the first subpath for back-compat callers.
 export function pathToAnchors(el) {
   const s = parsePath(el.getAttribute("d") || "");
-  const draw = s.filter((x) => x.end);
-  const n = draw.length;
-  if (!n) return { anchors: [], closed: false, editable: false };
-  const subpaths = s.filter((x) => x.t === "M").length;
-  const editable = subpaths <= 1 && !s.some((x) => x.t === "A" || x.t === "Q");
-  const closed = s[s.length - 1] && s[s.length - 1].t === "Z";
-  const wrap = closed && n >= 2 &&
-    Math.hypot(draw[n - 1].end.x - draw[0].end.x, draw[n - 1].end.y - draw[0].end.y) < 1e-6;
-  const count = wrap ? n - 1 : n;
+  if (s.some((x) => x.t === "A" || x.t === "Q")) {
+    // Arcs/quadratics aren't pen-rebuildable → refuse structural edits (drags still work
+    // via pathNodes, which preserves the raw segments).
+    const draw0 = s.filter((x) => x.end);
+    return { anchors: [], subs: [], closed: s[s.length - 1] && s[s.length - 1].t === "Z", editable: false, _arcQuad: draw0.length > 0 };
+  }
   const lead = (seg) => (seg && seg.t === "C") ? seg.c1 : null;
   const trail = (seg) => (seg && seg.t === "C") ? seg.c2 : null;
-  const anchors = [];
-  for (let k = 0; k < count; k++) {
-    const inSeg = k >= 1 ? draw[k] : (wrap ? draw[n - 1] : null);
-    const outSeg = (k + 1 < n) ? draw[k + 1] : null;
-    const ih = trail(inSeg), oh = lead(outSeg);
-    anchors.push({
-      x: draw[k].end.x, y: draw[k].end.y,
-      in: ih ? { x: ih.x, y: ih.y } : null,
-      out: oh ? { x: oh.x, y: oh.y } : null,
-    });
+  // Split the segment stream into subpaths at each M; a trailing Z marks that subpath closed.
+  const groups = [];
+  let cur = null;
+  for (const seg of s) {
+    if (seg.t === "M") { cur = { segs: [seg], closed: false }; groups.push(cur); }
+    else if (cur) { cur.segs.push(seg); if (seg.t === "Z") cur.closed = true; }
   }
-  return { anchors, closed: !!closed, editable };
+  const anchors = [];
+  const subs = [];
+  groups.forEach((g, si) => {
+    const draw = g.segs.filter((x) => x.end);
+    const n = draw.length;
+    if (!n) return;
+    const closed = g.closed;
+    const wrap = closed && n >= 2 &&
+      Math.hypot(draw[n - 1].end.x - draw[0].end.x, draw[n - 1].end.y - draw[0].end.y) < 1e-6;
+    const count = wrap ? n - 1 : n;   // the wrap segment is anchor-0's incoming, not its own anchor
+    const start = anchors.length;
+    for (let k = 0; k < count; k++) {
+      const inSeg = k >= 1 ? draw[k] : (wrap ? draw[n - 1] : null);
+      const outSeg = (k + 1 < n) ? draw[k + 1] : null;
+      const ih = trail(inSeg), oh = lead(outSeg);
+      anchors.push({
+        x: draw[k].end.x, y: draw[k].end.y,
+        in: ih ? { x: ih.x, y: ih.y } : null,
+        out: oh ? { x: oh.x, y: oh.y } : null,
+        sub: si,
+      });
+    }
+    subs.push({ closed, start, count });
+  });
+  if (!anchors.length) return { anchors: [], subs: [], closed: false, editable: false };
+  return { anchors, subs, closed: !!subs[0].closed, editable: true };
+}
+
+// Per-subpath bounds for the anchor at flat index `i` (start index, anchor count, closed,
+// and the subpath's slot in `subs`). Edit ops (insert/segment-wrap) use this so "the next
+// anchor" wraps WITHIN its subpath instead of jumping into the next one. (#20)
+export function subOf(anchors, subs, i) {
+  const si = anchors[i] ? anchors[i].sub : 0;
+  const u = subs[si] || { closed: false, start: 0, count: anchors.length };
+  return { si, start: u.start, count: u.count, closed: u.closed, end: u.start + u.count };
 }
 
 function _cubicAt(p0, p1, p2, p3, t) {
@@ -287,7 +314,7 @@ export function nearestOnPaths(svg, x, y, tol, maxPaths = 300) {
   let bestA = null, bestS = null;
   paths.forEach((el) => {
     if (_anchorSkip(el)) return;
-    const { anchors, closed, editable } = pathToAnchors(el);
+    const { anchors, subs, editable } = pathToAnchors(el);
     if (!editable || anchors.length < 2) return;
     // Anchors are LOCAL; the query (x,y) and tolerance are stage-space. Map the query
     // into local for the distance test, then report hit coords back in stage space.
@@ -295,17 +322,26 @@ export function nearestOnPaths(svg, x, y, tol, maxPaths = 300) {
     const q = toL(x, y);
     for (let k = 0; k < anchors.length; k++) {
       const d = Math.hypot(anchors[k].x - q.x, anchors[k].y - q.y);
-      if (d <= tol && (!bestA || d < bestA.dist)) { const sp = toS(anchors[k]); bestA = { el, mode: "anchor", k, x: sp.x, y: sp.y, dist: d, closed, count: anchors.length }; }
+      if (d <= tol && (!bestA || d < bestA.dist)) {
+        const u = subs[anchors[k].sub] || subs[0];
+        const sp = toS(anchors[k]);
+        bestA = { el, mode: "anchor", k, x: sp.x, y: sp.y, dist: d, closed: !!(u && u.closed), count: anchors.length };
+      }
     }
-    const segCount = closed ? anchors.length : anchors.length - 1;
-    for (let i = 0; i < segCount; i++) {
-      const A = anchors[i], B = anchors[(i + 1) % anchors.length];
-      const P1 = A.out || A, P2 = B.in || B;
-      const N = 24;
-      for (let s = 0; s <= N; s++) {
-        const t = s / N, pt = _cubicAt(A, P1, P2, B, t);
-        const d = Math.hypot(pt.x - q.x, pt.y - q.y);
-        if (d <= tol && (!bestS || d < bestS.dist)) { const sp = toS(pt); bestS = { el, mode: "segment", i, t, x: sp.x, y: sp.y, dist: d }; }
+    // Segments are scanned PER-SUBPATH so the closing segment wraps within its own
+    // subpath (and an open subpath's last anchor has no outgoing segment). (#20)
+    for (const u of subs) {
+      const segCount = u.closed ? u.count : u.count - 1;
+      for (let j = 0; j < segCount; j++) {
+        const ai = u.start + j, bi = (j + 1 < u.count) ? u.start + j + 1 : u.start;
+        const A = anchors[ai], B = anchors[bi];
+        const P1 = A.out || A, P2 = B.in || B;
+        const N = 24;
+        for (let sp2 = 0; sp2 <= N; sp2++) {
+          const t = sp2 / N, pt = _cubicAt(A, P1, P2, B, t);
+          const d = Math.hypot(pt.x - q.x, pt.y - q.y);
+          if (d <= tol && (!bestS || d < bestS.dist)) { const sp = toS(pt); bestS = { el, mode: "segment", i: ai, t, x: sp.x, y: sp.y, dist: d }; }
+        }
       }
     }
   });
@@ -314,11 +350,23 @@ export function nearestOnPaths(svg, x, y, tol, maxPaths = 300) {
 
 // Insert an anchor into a pen-anchor list on segment i at parameter t (de Casteljau
 // split: a straight segment yields a corner, a cubic yields a smooth point and the
-// neighbours keep their adjusted handles). Mutates `anchors` in place.
-export function splitCubicInsert(anchors, closed, i, t) {
-  const n = anchors.length, A = anchors[i], B = anchors[(i + 1) % n];
+// neighbours keep their adjusted handles). Mutates `anchors` + `subs` in place: the new
+// anchor inherits subpath i's tag, its subpath's count grows, and later subpaths shift. (#20)
+export function splitCubicInsert(anchors, subs, i, t) {
+  const sb = subOf(anchors, subs, i);
+  const A = anchors[i];
+  const bi = (i + 1 < sb.end) ? i + 1 : (sb.closed ? sb.start : i);   // next anchor WITHIN this subpath
+  const B = anchors[bi];
+  const place = (a) => {
+    a.sub = A.sub;
+    anchors.splice(i + 1, 0, a);
+    for (let si = 0; si < subs.length; si++) {
+      if (si === sb.si) subs[si].count += 1;
+      else if (subs[si].start > sb.start) subs[si].start += 1;
+    }
+  };
   if (!A.out && !B.in) {     // straight segment → corner midpoint, halves stay lines
-    anchors.splice(i + 1, 0, { x: A.x + (B.x - A.x) * t, y: A.y + (B.y - A.y) * t, in: null, out: null });
+    place({ x: A.x + (B.x - A.x) * t, y: A.y + (B.y - A.y) * t, in: null, out: null });
     return;
   }
   const P1 = A.out || A, P2 = B.in || B, L = (p, q) => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t });
@@ -326,7 +374,27 @@ export function splitCubicInsert(anchors, closed, i, t) {
   const p012 = L(p01, p12), p123 = L(p12, p23), M = L(p012, p123);
   A.out = { x: p01.x, y: p01.y };
   B.in = { x: p23.x, y: p23.y };
-  anchors.splice(i + 1, 0, { x: M.x, y: M.y, in: { x: p012.x, y: p012.y }, out: { x: p123.x, y: p123.y } });
+  place({ x: M.x, y: M.y, in: { x: p012.x, y: p012.y }, out: { x: p123.x, y: p123.y } });
+}
+
+// Rebuild the `subs` metadata after anchors were spliced out (delete): regroup the surviving
+// anchors by their `sub` tag (preserving order), drop any subpath left with <2 anchors
+// (degenerate — can't draw), and renumber the tags densely. Returns the surviving
+// {anchors, subs} to feed penAnchorsToD. (#20)
+export function rebuildSubs(anchors, oldSubs) {
+  const groups = new Map();
+  for (const a of anchors) { if (!groups.has(a.sub)) groups.set(a.sub, []); groups.get(a.sub).push(a); }
+  const out = [], subs = [];
+  let ns = 0;
+  for (const [oldSub, list] of groups) {
+    if (list.length < 2) continue;
+    const closed = oldSubs[oldSub] ? oldSubs[oldSub].closed : false;
+    const start = out.length;
+    for (const a of list) { a.sub = ns; out.push(a); }
+    subs.push({ closed, start, count: list.length });
+    ns++;
+  }
+  return { anchors: out, subs };
 }
 
 // Curvature tool: turn a list of {x,y,corner} points into pen anchors with

@@ -3,7 +3,7 @@
 // methods run with `this === editor`, reaching editor state + the methods that stayed there
 // (this._nodeBBoxUser / this._artworkNodes / this.mountNodeHandles / this._nodeFocusAccept) via
 // `this`. Only module-level helpers are imported.
-import { SVG_NS, nfmt, penPathD, pathToAnchors, pathNodes } from "../../hv/index.js";
+import { SVG_NS, nfmt, penPathD, penAnchorsToD, pathToAnchors, pathNodes, subOf } from "../../hv/index.js";
 import { setStatus } from "../../app.js";
 
 // Ray-cast point-in-polygon for lasso hit-testing; pts: [{x,y}]. Local to this tool —
@@ -28,7 +28,8 @@ export const marqueeMixin = {
     if (!pa.editable) { this._beginNodeMarquee(startEvent, startEvent.shiftKey); return; }
     const inv = () => this.stage.getScreenCTM().inverse();
     const start = new DOMPoint(startEvent.clientX, startEvent.clientY).matrixTransform(inv());
-    const n = pa.anchors.length, A = pa.anchors[i], B = pa.anchors[(i + 1) % n];
+    const sb = subOf(pa.anchors, pa.subs, i);   // wrap to the NEXT anchor within i's subpath (#20)
+    const A = pa.anchors[i], B = pa.anchors[(i + 1 < sb.end) ? i + 1 : (sb.closed ? sb.start : i)];
     const straight = !A.out && !B.in;
     const t = Math.max(0.1, Math.min(0.9, t0));
     const A0 = { x: A.x, y: A.y }, B0 = { x: B.x, y: B.y };
@@ -48,7 +49,7 @@ export const marqueeMixin = {
         A.out = { x: P1.x + dx * a / denom, y: P1.y + dy * a / denom };
         B.in = { x: P2.x + dx * b / denom, y: P2.y + dy * b / denom };
       }
-      el.setAttribute("d", penPathD(pa.anchors, pa.closed));
+      el.setAttribute("d", penAnchorsToD(pa.anchors, pa.subs));
     };
     const up = () => {
       window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);

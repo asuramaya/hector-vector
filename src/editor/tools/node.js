@@ -7,8 +7,8 @@
 // (this.selectedNodes / this.unmountNodeHandles / this._overlayEl / this._bakeArtTransforms /
 // this._renderSelection) by identity. Only module-level helpers are imported.
 import {
-  SVG_NS, MAX_HANDLES, nfmt, penPathD, pathToAnchors, pathNodes, collectAnchors,
-  nearestOnPaths, shapeWasEdited, freezeShape,
+  SVG_NS, MAX_HANDLES, nfmt, penPathD, penAnchorsToD, pathToAnchors, pathNodes, collectAnchors,
+  nearestOnPaths, shapeWasEdited, freezeShape, subOf, rebuildSubs,
 } from "../../hv/index.js";
 import { setStatus } from "../../app.js";
 import { snap45 } from "../snap.js";
@@ -157,13 +157,13 @@ export const nodeMixin = {
   },
   // Alt-click a smooth anchor → corner (retract its handles). One undo step.
   _altClickAnchor(nd) {
-    const { anchors, closed, editable } = pathToAnchors(nd.el);
+    const { anchors, subs, editable } = pathToAnchors(nd.el);
     if (!editable || nd.k >= anchors.length) return;
     const a = anchors[nd.k];
     if (!a.in && !a.out) return;        // already a corner
     this.push("Corner");
     a.in = null; a.out = null;
-    nd.el.setAttribute("d", penPathD(anchors, closed));
+    nd.el.setAttribute("d", penAnchorsToD(anchors, subs));
   },
   _bindAnchorDrag(c, nd, r, refs) {
     c.addEventListener("pointerdown", (e) => {
@@ -197,7 +197,7 @@ export const nodeMixin = {
           const q = ev.shiftKey ? snap45(nd.x, nd.y, p.x, p.y) : p;
           conv.anchors[nd.k].out = { x: q.x, y: q.y };
           conv.anchors[nd.k].in = { x: 2 * nd.x - q.x, y: 2 * nd.y - q.y };
-          nd.el.setAttribute("d", penPathD(conv.anchors, conv.closed));
+          nd.el.setAttribute("d", penAnchorsToD(conv.anchors, conv.subs));
           return;
         }
         let dx = p.x - sp.x, dy = p.y - sp.y, gx = null, gy = null;
@@ -242,8 +242,11 @@ export const nodeMixin = {
     this.push("Delete points");
     for (const { el, ks, pa } of jobs) {
       ks.sort((a, b) => b - a).forEach((k) => { if (k >= 0 && k < pa.anchors.length) pa.anchors.splice(k, 1); });
-      if (pa.anchors.length < 2) { el.remove(); continue; }
-      el.setAttribute("d", penPathD(pa.anchors, pa.closed));
+      // Regroup the survivors by subpath: a compound path keeps its OTHER subpaths intact even
+      // when one is gutted (rebuildSubs drops any subpath left with <2 anchors). (#20)
+      const rb = rebuildSubs(pa.anchors, pa.subs);
+      if (rb.anchors.length < 2) { el.remove(); continue; }
+      el.setAttribute("d", penAnchorsToD(rb.anchors, rb.subs));
     }
     this._nodeSel = new Set();
     this.mountNodeHandles(); this._renderLayers(); this._renderInspector();
@@ -262,6 +265,7 @@ export const nodeMixin = {
       const el = this.nodeById(A.id); if (!el) return false;
       const pa = pathToAnchors(el);
       if (!pa.editable) { setStatus("Can't join this path.", 2500); return false; }
+      if (pa.subs.length > 1) { setStatus("Join isn't supported on compound (multi-subpath) paths.", 3200); return false; }
       if (pa.closed) { setStatus("Path is already closed.", 2000); return false; }
       const last = pa.anchors.length - 1, ks = [A.k, B.k].sort((a, b) => a - b);
       if (!(ks[0] === 0 && ks[1] === last)) { setStatus("Select an open path's two endpoints to close it.", 3200); return false; }
@@ -274,6 +278,7 @@ export const nodeMixin = {
     const elA = this.nodeById(A.id), elB = this.nodeById(B.id); if (!elA || !elB) return false;
     const paA = pathToAnchors(elA), paB = pathToAnchors(elB);
     if (!paA.editable || !paB.editable || paA.closed || paB.closed) { setStatus("Join needs two open editable paths.", 3200); return false; }
+    if (paA.subs.length > 1 || paB.subs.length > 1) { setStatus("Join isn't supported on compound (multi-subpath) paths.", 3200); return false; }
     const endA = A.k === paA.anchors.length - 1, startA = A.k === 0;
     const endB = B.k === paB.anchors.length - 1, startB = B.k === 0;
     if (!(endA || startA) || !(endB || startB)) { setStatus("Select an endpoint on each path.", 3200); return false; }
@@ -318,13 +323,15 @@ export const nodeMixin = {
     this.push(type === "smooth" ? "Round" : "Sharpen");
     const f = 1 / 3;
     for (const { el, ks, pa } of jobs) {
-      const n = pa.anchors.length;
       for (const k of ks) {
-        if (k < 0 || k >= n) continue;
+        if (k < 0 || k >= pa.anchors.length) continue;
         const A = pa.anchors[k];
         if (type === "corner") { A.in = null; A.out = null; continue; }
-        const P = pa.closed ? pa.anchors[(k - 1 + n) % n] : (k > 0 ? pa.anchors[k - 1] : null);
-        const N = pa.closed ? pa.anchors[(k + 1) % n] : (k < n - 1 ? pa.anchors[k + 1] : null);
+        // prev/next neighbours WITHIN A's subpath (so a smooth never reaches across a
+        // subpath boundary on a compound path). (#20)
+        const sb = subOf(pa.anchors, pa.subs, k), rel = k - sb.start;
+        const P = sb.closed ? pa.anchors[sb.start + (rel - 1 + sb.count) % sb.count] : (rel > 0 ? pa.anchors[k - 1] : null);
+        const N = sb.closed ? pa.anchors[sb.start + (rel + 1) % sb.count] : (rel < sb.count - 1 ? pa.anchors[k + 1] : null);
         let dx, dy;
         if (P && N) { dx = N.x - P.x; dy = N.y - P.y; }
         else if (N) { dx = N.x - A.x; dy = N.y - A.y; }
@@ -334,7 +341,7 @@ export const nodeMixin = {
         A.out = N ? { x: A.x + ux * Math.hypot(N.x - A.x, N.y - A.y) * f, y: A.y + uy * Math.hypot(N.x - A.x, N.y - A.y) * f } : null;
         A.in = P ? { x: A.x - ux * Math.hypot(A.x - P.x, A.y - P.y) * f, y: A.y - uy * Math.hypot(A.x - P.x, A.y - P.y) * f } : null;
       }
-      el.setAttribute("d", penPathD(pa.anchors, pa.closed));
+      el.setAttribute("d", penAnchorsToD(pa.anchors, pa.subs));
     }
     this.mountNodeHandles(); this._renderInspector();
     setStatus(type === "smooth" ? "Rounded point(s)." : "Sharpened point(s).", 1500);

@@ -5,7 +5,7 @@
 // stayed there (this._renderSelection / this.beginCoalesce / mountNodeHandles via this) by
 // identity. Only module-level helpers are imported.
 import {
-  SVG_NS, nfmt, penPathD, pathToAnchors, splitCubicInsert, nearestOnPaths,
+  SVG_NS, nfmt, penPathD, penAnchorsToD, pathToAnchors, splitCubicInsert, nearestOnPaths, rebuildSubs,
 } from "../../hv/index.js";
 import { setStatus } from "../../app.js";
 import { snapPoint, snap45 } from "../snap.js";
@@ -151,8 +151,8 @@ export const penMixin = {
   _insertPenAnchor(el, i, t) {
     const pa = pathToAnchors(el); if (!pa.editable) return;
     this.push("Add point");
-    splitCubicInsert(pa.anchors, pa.closed, i, t);
-    el.setAttribute("d", penPathD(pa.anchors, pa.closed));
+    splitCubicInsert(pa.anchors, pa.subs, i, t);   // subpath-aware: new anchor joins segment i's subpath
+    el.setAttribute("d", penAnchorsToD(pa.anchors, pa.subs));
     this.selection = new Set([el.getAttribute("data-hv-id")]); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector();
     setStatus("Anchor added.", 1200);
@@ -161,8 +161,9 @@ export const penMixin = {
     const pa = pathToAnchors(el); if (!pa.editable) return;
     this.push("Delete point");
     pa.anchors.splice(k, 1);
-    if (pa.anchors.length < 2) { el.remove(); this.selection = new Set(); }
-    else { el.setAttribute("d", penPathD(pa.anchors, pa.closed)); this.selection = new Set([el.getAttribute("data-hv-id")]); }
+    const rb = rebuildSubs(pa.anchors, pa.subs);   // keep the other subpaths of a compound path
+    if (rb.anchors.length < 2) { el.remove(); this.selection = new Set(); }
+    else { el.setAttribute("d", penAnchorsToD(rb.anchors, rb.subs)); this.selection = new Set([el.getAttribute("data-hv-id")]); }
     this.artboardSelected = false;
     this._renderSelection(); this._renderInspector(); this._renderLayers();
     setStatus("Anchor removed.", 1200);
@@ -171,6 +172,7 @@ export const penMixin = {
   // element (keeps its id + style); orient so the clicked end is the last pen point.
   _continuePen(el, k) {
     const pa = pathToAnchors(el); if (!pa.editable || pa.closed) return;
+    if (pa.subs.length > 1) return;   // the in-progress pen draft is single-subpath; don't flatten a compound path
     this._renderPenHint(null); this._setPenCursor(null);
     this.beginCoalesce();
     let pts = pa.anchors.map((a) => ({ x: a.x, y: a.y, in: a.in, out: a.out }));
