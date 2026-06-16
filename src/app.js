@@ -55,6 +55,7 @@ import {
   openOpenModal, placeFromUrl, openPlaceModal, saveDocument, defaultSaveName,
   saveAsDocument, saveProject, openProject, loadProjects, exportFlow,
 } from "./ui/docio.js";
+import { configureShortcuts, openShortcutsModal } from "./ui/shortcuts.js";
 
 // One-shot panel-layout self-heal. A corrupted persisted dock layout (a panel
 // floated/grouped/stranded in a state that swallows clicks) survives reload AND a
@@ -681,6 +682,8 @@ configureDocIO({
   setStatus, applyBgMode, measureFit, viewports, outputLabelEl, modalSearchEl, modalBodyEl,
   rememberLastDoc, renderGalleryGrid, stem, stem_, refreshLibrary, refreshAll, renderLibrary,
 });
+// Keyboard-shortcuts modal (src/ui/shortcuts.js): inject the modal content elements.
+configureShortcuts({ modalSearchEl, modalBodyEl });
 
 function stem_(n) { return n.replace(/\.[^.]+$/, ""); }
 
@@ -3284,92 +3287,7 @@ function renderInfoModal(info) {
   showInfoPanel(`Info — ${info.name}`, root);
 }
 
-function openShortcutsModal() {
-  openModal("Keyboard shortcuts");
-  modalSearchEl.hidden = true;
-  const mod = /Mac|iP(hone|ad|od)/.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl";
-  // Mirrors the live keymap in app.js (editor keymap + view/nav keymap + space-pan).
-  const rows = [
-    ["§", "Tools"],
-    ["V", "Select / move (drag empty = marquee, Alt = lasso; Shift = 45°, Alt-drag = copy)"],
-    [`${mod} + T / ${mod} + R`, "Scale / rotate the selection (within Select)"],
-    ["A", "Edit points (direct select)"],
-    ["P", "Pen"],
-    ["C", "Curvature (Alt = corner, Shift = 45°, drag = move point, ⌫ = remove last)"],
-    ["R / E / L", "Rectangle / Ellipse / Line"],
-    ["Shift + O", "Select the artboard"],
-    ["§", "Edit"],
-    [`${mod} + Z`, "Undo"],
-    [`${mod} + Shift + Z`, "Redo"],
-    [`${mod} + C / X / V`, "Copy / Cut / Paste"],
-    [`${mod} + D`, "Duplicate"],
-    [`${mod} + A`, "Select all"],
-    ["Delete / Backspace", "Delete selection"],
-    ["← ↑ ↓ →", "Nudge (Shift = ×10)"],
-    ["Esc", "Deselect / cancel"],
-    ["§", "Arrange"],
-    [`${mod} + G`, "Group"],
-    [`${mod} + Shift + G`, "Ungroup"],
-    [`${mod} + ] / [`, "Bring forward / send backward"],
-    [`${mod} + Shift + ] / [`, "Bring to front / send to back"],
-    ["§", "Pen"],
-    ["Click / drag", "Corner point / smooth curve"],
-    ["Alt + drag", "Break handle (cusp)"],
-    ["Shift", "Constrain to 45°"],
-    ["Click path / anchor", "Add (+) / remove (−) a point"],
-    ["Click an endpoint", "Continue an open path"],
-    [`${mod} (hold)`, "Temporarily edit points (Direct-Select)"],
-    ["Enter", "Finish path"],
-    ["Esc", "Cancel path"],
-    ["§", "Node tool"],
-    ["Click / Shift-click", "Select anchor / multi-select"],
-    ["Drag empty canvas", "Marquee-select anchors (Shift adds)"],
-    ["Drag a segment", "Reshape it (curve bends, line moves)"],
-    ["Drag square", "Move selected anchors (Shift = 45°)"],
-    ["Drag round dot", "Reshape curve (Alt = break)"],
-    ["Alt-click anchor", "Smooth → corner"],
-    ["Alt-drag anchor", "Corner → smooth"],
-    [`${mod} + J`, "Join two selected endpoints"],
-    ["Right-click a point", "Smooth / sharpen / join / delete"],
-    ["Delete / Backspace", "Remove selected anchors"],
-    ["§", "View & navigation"],
-    ["Space (hold)", "Pan; or reposition a shape/point while creating"],
-    ["+ / −", "Zoom in / out"],
-    ["0", "Actual size (1:1)"],
-    ["f", "Fit canvas to window"],
-    ["b", "Cycle background"],
-    ["Shift + F", "Open the File menu"],
-    ["?", "This help"],
-  ];
-  const root = document.createElement("div");
-  root.className = "form";
-  const grid = document.createElement("div");
-  grid.className = "info-grid shortcut-grid";
-  for (const [keys, desc] of rows) {
-    if (keys === "§") {
-      const h = document.createElement("div");
-      h.className = "shortcut-section";
-      h.textContent = desc;
-      grid.appendChild(h);
-      continue;
-    }
-    const k = document.createElement("div");
-    k.className = "info-key";
-    k.textContent = keys;
-    const d = document.createElement("div");
-    d.className = "info-val";
-    d.textContent = desc;
-    grid.appendChild(k);
-    grid.appendChild(d);
-  }
-  root.appendChild(grid);
-  const note = document.createElement("p");
-  note.className = "form-hint";
-  note.textContent = "Tip: right-click an object for its style + actions (fill, stroke, rotate, flip…), or empty canvas for artboard actions.";
-  root.appendChild(note);
-  modalBodyEl.innerHTML = "";
-  modalBodyEl.appendChild(root);
-}
+// (keyboard-shortcuts modal extracted → src/ui/shortcuts.js)
 
 shortcutButtonEl.addEventListener("click", openShortcutsModal);
 
