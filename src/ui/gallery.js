@@ -9,11 +9,12 @@
 import { editor } from "../editor.js";
 import { api } from "./api.js";
 import { inlineSvgImages } from "./export.js";
+import { viewports } from "./viewport.js";
 import { selectedOutput, setSelectedName, setManualOutputName, setSelectedOutput } from "./docstate.js";
 
-let setStatus, modalBodyEl, viewports, mountBlankCanvas, mountStageFromText, rememberLastDoc, defaultSaveName;
+let setStatus, modalBodyEl, mountBlankCanvas, mountStageFromText, rememberLastDoc, defaultSaveName;
 export function configureGallery(deps) {
-  ({ setStatus, modalBodyEl, viewports, mountBlankCanvas, mountStageFromText, rememberLastDoc, defaultSaveName } = deps);
+  ({ setStatus, modalBodyEl, mountBlankCanvas, mountStageFromText, rememberLastDoc, defaultSaveName } = deps);
 }
 
 export async function copyToClipboard(text, label) {
