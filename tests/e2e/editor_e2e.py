@@ -9,10 +9,24 @@ Run:  .venv-e2e/bin/python tests/e2e/editor_e2e.py [base_url]
 Needs the app running (default http://localhost:2002).
 """
 from __future__ import annotations
-import json, os, sys, time
+import json, os, re, sys, time
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:2002"
+# Positional base URL stays argv[1] (back-compat); flags are parsed out so they don't get
+# mistaken for the base. --only=<substr> (or --only <substr>) focuses sections (see
+# section()); failures always grab a screenshot into tests/e2e/_failshots/ for the flake.
+def _flag(name, default=None):
+    """Read --name=value or --name value; returns the string value (or default)."""
+    pre = f"--{name}="
+    argv = sys.argv[1:]
+    for i, a in enumerate(argv):
+        if a.startswith(pre): return a[len(pre):]
+        if a == f"--{name}": return argv[i + 1] if i + 1 < len(argv) else True
+    return default
+ONLY = _flag("only")   # substring; focus sections whose name contains it (case-insensitive)
+_VALUES = {ONLY} if isinstance(ONLY, str) else set()
+_ARGS = [a for a in sys.argv[1:] if not a.startswith("--") and a not in _VALUES]
+BASE = _ARGS[0] if _ARGS else "http://localhost:2002"
 
 CTL = """
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
@@ -33,9 +47,37 @@ SUMMARY = """() => {
 }"""
 
 results = []
+_PAGE = None                       # set by main() once the browser page exists
+_SHOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_failshots")
+_CUR_SECTION = "boot"              # current section label (for screenshot names + skip checks)
+
+def set_page(page):
+    global _PAGE
+    _PAGE = page
+
+def section(name):
+    """Mark the start of a named test section: narrates progress and tags any failing
+    check's screenshot with the section label. Returns whether this section is in scope
+    for the current --only filter, so a caller can gate optional/expensive work:
+        if not section("Boolean ops"): ...skip heavy setup...
+    (Full per-section execution isolation is the pending part of #32 — it needs main()'s
+    body broken into per-section functions; until then --only just focuses the narration.)"""
+    global _CUR_SECTION
+    _CUR_SECTION = name
+    in_scope = (not ONLY) or (ONLY.lower() in name.lower())
+    print(f"\n=== {name} ==={'' if in_scope else '  (out of --only scope)'}")
+    return in_scope
+
 def check(name, ok, detail=""):
     results.append((name, bool(ok), detail))
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f"  — {detail}" if detail and not ok else ""))
+    if not ok and _PAGE is not None:
+        try:
+            os.makedirs(_SHOT_DIR, exist_ok=True)
+            slug = re.sub(r"[^a-z0-9]+", "-", f"{_CUR_SECTION}-{name}".lower()).strip("-")[:70]
+            _PAGE.screenshot(path=os.path.join(_SHOT_DIR, f"{len(results):03d}-{slug}.png"))
+        except Exception:
+            pass   # screenshotting must never mask the real assertion failure
 
 def node_rect(page, nid):
     return page.evaluate(
@@ -195,6 +237,7 @@ def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
         page = browser.new_page(viewport={"width": 1500, "height": 900})
+        set_page(page)   # so a failing check() auto-captures a screenshot into _failshots/
         page.goto(BASE, wait_until="networkidle")
         page.wait_for_function("typeof editor!=='undefined' && typeof mountStageFromText==='function'", timeout=20000)
         # Boot is async (refreshAll → mountBlankCanvas; no auto-install) and refreshAll
@@ -215,7 +258,7 @@ def main():
         if not page.evaluate("!!editor.stage"):
             mount_ctl(page)
 
-        # ---- A. Save on the auto-loaded (library) document ----
+        section("A. Save on the auto-loaded (library) document")
         big_nodes = page.evaluate("editor.stage.querySelectorAll('[data-hv-id]').length")
         has_output = page.evaluate("!!window.app.selectedOutput")
         if has_output:
@@ -226,7 +269,7 @@ def main():
         else:
             check("save library doc (skipped, no selectedOutput)", True)
 
-        # ---- B. Node tool on a HUGE path: LOD instead of refusing. A 5000-anchor path
+        section("B. Node tool on a HUGE path: LOD instead of refusing. A 5000-anchor path")
         # must (a) mount handles (editable, not the old hard refuse) yet (b) stay bounded
         # under the render budget so the DOM never blows up; zooming in reveals more. ----
         big_d = "M10 10 " + " ".join(
@@ -248,7 +291,7 @@ def main():
         check("node tool LOD: zooming in keeps handles bounded", 0 < zoomed <= 1500, f"zoomed={zoomed}")
         page.evaluate("() => { fitVp(viewports.output); editor.setTool('select'); }")
 
-        # ---- C. Controlled 3-rect document for precise interaction tests ----
+        section("C. Controlled 3-rect document for precise interaction tests")
         mount_ctl(page)
         check("controlled doc adopted", page.evaluate("editor.stage.querySelectorAll('[data-hv-id]').length") == 3)
 
@@ -327,7 +370,7 @@ def main():
         check("saving a swatch persists it", bool(saved) and first_hex.lower() == "#123456", f"saved={saved}")
         page.evaluate("window.__docks.close('color')"); page.wait_for_timeout(40)
 
-        # ---- Colour panel: RGB/HSL/HSB model tabs + recent-colours strip ----
+        section("Colour panel: RGB/HSL/HSB model tabs + recent-colours strip")
         page.evaluate("() => { localStorage.removeItem('hector-vector:swatches-recent'); localStorage.removeItem('hector-vector:cp-model'); }")
         page.click("#swatch-fill"); page.wait_for_function("!!document.querySelector('.cp-window')", timeout=4000)
         check("colour panel has RGB/HSL/HSB model tabs",
@@ -486,7 +529,7 @@ def main():
             check("node drag is undoable", page.evaluate("editor.history.length") >= hh + 1)
         page.evaluate("editor.setTool('select')")
 
-        # ---- D. Stress: zoom+pan drag accuracy, multi-move, none-toggles, undo consistency ----
+        section("D. Stress: zoom+pan drag accuracy, multi-move, none-toggles, undo consistency")
         mount_ctl(page)
 
         # drag accuracy must hold under zoom + pan (catches double-scaling of the CTM)
@@ -541,7 +584,7 @@ def main():
         page.wait_for_timeout(60)
         check("redo replays all ops", page.evaluate("editor.redo.length") == 0 and n_redo >= 3, f"redo_steps={n_redo}")
 
-        # ---- E. Phase 2: invert-space, duplicate, z-order ----
+        section("E. Phase 2: invert-space, duplicate, z-order")
         mount_ctl(page)
         # duplicate (Cmd/Ctrl+D)
         click_node(page, "r1"); page.wait_for_timeout(40)
@@ -651,7 +694,7 @@ def main():
         check("round → smooth and Alt-click → corner both work", rounded and cornered, f"round={rounded} corner={cornered}")
         page.evaluate("() => editor.setTool('select')")
 
-        # ---- F. Header structure (the standalone Process VIEW is dissolved into panels) ----
+        section("F. Header structure (the standalone Process VIEW is dissolved into panels)")
         check("Process view fully removed (no #process-view, no Edit/Process view-swap buttons)",
               page.evaluate("!document.querySelector('#process-view') && !document.querySelector('#process-button') && !document.querySelector('#view-edit')"))
         # the q/Tab Process-view shortcut is GONE — its shims are removed (q is a free key now).
@@ -849,7 +892,7 @@ def main():
         page.click("#rail-toggle"); page.wait_for_timeout(120)
         check("dock re-expands", page.evaluate("getComputedStyle(document.querySelector('#rightdock')).display !== 'none'"))
 
-        # ---- G. Phase 3: layers panel ----
+        section("G. Phase 3: layers panel")
         mount_ctl(page)
         page.wait_for_timeout(60)
         rows = page.evaluate("[...document.querySelectorAll('#layers-list .layer-row:not(.artboard-row)')].map(r=>r.dataset.id)")
@@ -898,7 +941,7 @@ def main():
         page.keyboard.press("Control+z"); page.wait_for_timeout(40)
         check("ungroup is undoable", page.evaluate("editor._artworkNodes().length") == 2)
 
-        # ---- drag layers in/out of groups, selection normalization, header counts, mixed inspector ----
+        section("drag layers in/out of groups, selection normalization, header counts, mixed inspector")
         mount_ctl(page)
         page.evaluate("editor.selection=new Set(['r1','r2']); editor.artboardSelected=false; editor.group();")
         page.wait_for_timeout(40)
@@ -956,7 +999,7 @@ def main():
                 const inp = row && row.querySelector('input[type=number]');
                 return !!inp && (inp.placeholder.toLowerCase()==='mixed' || inp.value===''); }"""))
 
-        # ---- redesigned Object panel: Transform / Shape / Stroke / Appearance + align chin ----
+        section("redesigned Object panel: Transform / Shape / Stroke / Appearance + align chin")
         page.evaluate("""() => { app.selectedOutput=null;
             mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
               + '<rect data-hv-id="t1" x="20" y="30" width="40" height="20"/>'
@@ -1052,7 +1095,7 @@ def main():
         page.evaluate("editor.setAttrAll('fill-rule','evenodd')")
         check("fill-rule applies to the path", page.evaluate("editor.nodeById('t2').getAttribute('fill-rule')") == "evenodd")
 
-        # ---- H. Polish pass: handle scaling, panel collapse, modal width, swatch, flatten ----
+        section("H. Polish pass: handle scaling, panel collapse, modal width, swatch, flatten")
         # node handles stay a constant screen size under zoom
         mount_ctl(page)
         page.evaluate("editor.setTool('node')"); page.wait_for_timeout(80)
@@ -1104,7 +1147,7 @@ def main():
         check("serialize strips live-shape params, keeps the path d",
               "data-hv-shape" not in page.evaluate("editor.serialize()") and "data-hv-bx" not in page.evaluate("editor.serialize()"))
 
-        # ---- Phase 4: shape tools ----
+        section("Phase 4: shape tools")
         mount_ctl(page)
         base = n_nodes(page)
         page.evaluate("editor.style.fill = '#123456'")   # last-used fill new shapes should inherit
@@ -1157,7 +1200,7 @@ def main():
         check("bare click draws nothing / no history", n_nodes(page) == base and page.evaluate("editor.history.length") == 0,
               f"n={n_nodes(page)} hist={page.evaluate('editor.history.length')}")
 
-        # ---- parametric "live shapes": rect/poly/star/ellipse as paths + Shape panel ----
+        section("parametric 'live shapes': rect/poly/star/ellipse as paths + Shape panel")
         mount_ctl(page)
         draw_shape(page, "rect", 0.2, 0.2, 0.7, 0.6)
         sid = page.evaluate("[...editor.selection][0]")
@@ -1218,7 +1261,7 @@ def main():
               and page.evaluate("document.querySelectorAll('.hv-node-handle').length") > 0)
         page.evaluate("editor.setTool('select')")
 
-        # ---- contextual stroke rows: Join only where a shape has POINTY corners, Cap only
+        section("contextual stroke rows: Join only where a shape has POINTY corners, Cap only")
         #      where the stroke has visible ENDS (open path or dash/dotted pattern). ----
         def stroke_labels():
             return page.evaluate("""() => { const g=[...document.querySelectorAll('.context-panel .insp-group')]
@@ -1281,7 +1324,7 @@ def main():
               page.evaluate("() => !editor._xformMode && !document.querySelector('.hv-xform-box')"))
         page.evaluate("editor.setTool('select'); editor.selection = new Set();")
 
-        # ---- Phase 4: pen tool ----
+        section("Phase 4: pen tool")
         mount_ctl(page)
         base = n_nodes(page)
         page.evaluate("editor.setTool('pen')")
@@ -1366,7 +1409,7 @@ def main():
         page.keyboard.press("Escape"); page.wait_for_timeout(30)
         check("Escape cancels the pen path", not page.evaluate("!!editor._pen"))
 
-        # ---- Curvature tool: advanced keybinds (Alt corner / Shift 45° / Backspace / drag) ----
+        section("Curvature tool: advanced keybinds (Alt corner / Shift 45° / Backspace / drag)")
         mount_ctl(page)
         page.evaluate("editor.setTool('curvature')")
         curv_click(page, 0.2, 0.3); curv_click(page, 0.5, 0.3); curv_click(page, 0.7, 0.6)
@@ -1407,7 +1450,7 @@ def main():
         page.keyboard.press("Escape"); page.wait_for_timeout(30)
         check("Escape cancels the curvature path", not page.evaluate("!!editor._curv"))
 
-        # ---- Phase 4: boolean ops (point-membership on the result path) ----
+        section("Phase 4: boolean ops (point-membership on the result path)")
         # A-only=(30,30), B-only=(130,130), overlap=(80,80), outside=(10,10)
         mount_bool(page)
         page.evaluate("editor.booleanOp('union')"); page.wait_for_timeout(120)
@@ -1495,7 +1538,7 @@ def main():
               not result_inside(page, 30, 30) and not result_inside(page, 80, 80)
               and not result_inside(page, 130, 130))
 
-        # ---- Layers cleanup: drop ghost/empty nodes, keep valid ones ----
+        section("Layers cleanup: drop ghost/empty nodes, keep valid ones")
         page.evaluate("""svg => { app.selectedOutput=null; app.manualOutputName=null; mountStageFromText(svg,'ghosts.svg'); }""",
                       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
                       '<rect data-hv-id="ra" x="20" y="20" width="60" height="60" fill="#36c"/>'
@@ -1511,7 +1554,7 @@ def main():
         page.evaluate("editor.undo()"); page.wait_for_timeout(60)
         check("layers cleanup is undoable", page.evaluate("editor._artworkNodes().length") == 4)
 
-        # ---- Merge same-colour layers (consolidate trace output) ----
+        section("Merge same-colour layers (consolidate trace output)")
         # Mimics a monochrome trace: same fill, each path positioned by translate.
         page.evaluate("""svg => { app.selectedOutput=null; app.manualOutputName=null; mountStageFromText(svg,'mono.svg'); }""",
                       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
@@ -1535,7 +1578,7 @@ def main():
         page.evaluate("editor.undo()"); page.wait_for_timeout(60)
         check("merge is undoable", page.evaluate("editor._artworkNodes().length") == 3)
 
-        # ---- Place / merge a vector INTO the current canvas (not replace) ----
+        section("Place / merge a vector INTO the current canvas (not replace)")
         page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
             mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect data-hv-id="a1" x="10" y="10" width="40" height="40" fill="#36c"/></svg>','A.svg'); }""")
         page.wait_for_function("editor.stage && editor.nodeById('a1')", timeout=8000)
@@ -1559,7 +1602,7 @@ def main():
         page.evaluate("editor.undo()"); page.wait_for_timeout(60)
         check("place is undoable", page.evaluate("!!editor.nodeById('a1') && editor._artworkNodes().length") == 1)
 
-        # ---- Artboard navigation: Shift+O selects it, spacebar pans ----
+        section("Artboard navigation: Shift+O selects it, spacebar pans")
         page.evaluate("editor.selection=new Set(); editor.artboardSelected=false; editor._renderSelection(); if(document.activeElement?.blur) document.activeElement.blur();")
         page.keyboard.press("Shift+O"); page.wait_for_timeout(40)
         check("Shift+O selects the artboard", page.evaluate("editor.artboardSelected === true"))
@@ -1568,7 +1611,7 @@ def main():
         page.keyboard.up("Space"); page.wait_for_timeout(30)
         check("releasing space ends pan mode", page.evaluate("!editor._spacePan && !document.querySelector('.stage-wrap').classList.contains('space-pan')"))
 
-        # ---- Phase 4: contextual transforms (rotate / flip) ----
+        section("Phase 4: contextual transforms (rotate / flip)")
         page.evaluate("""svg => { app.selectedOutput=null; app.manualOutputName=null; mountStageFromText(svg,'xf.svg'); }""",
                       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect data-hv-id="rr" x="50" y="50" width="40" height="20" fill="#36c"/></svg>')
         page.wait_for_function("editor.stage && editor.nodeById('rr')", timeout=8000)
@@ -1594,7 +1637,7 @@ def main():
         page.evaluate("editor.undo()"); page.wait_for_timeout(60)
         check("transform is undoable", page.evaluate("editor.stage.getAttribute('viewBox').trim()") == "0 0 300 200")
 
-        # ---- Command layer: clipboard, select-all, nudge, context menu ----
+        section("Command layer: clipboard, select-all, nudge, context menu")
         mount_ctl(page)
         page.evaluate("editor.selection=new Set(['r1']); editor.copy(); editor.paste();")
         check("copy + paste adds a selected object", n_nodes(page) == 4 and page.evaluate("editor.selection.size") == 1)
@@ -1621,7 +1664,7 @@ def main():
         page.keyboard.press("Escape"); page.wait_for_timeout(40)
         check("Escape closes the context menu", page.evaluate("!document.querySelector('.context-menu')"))
 
-        # ---- nested layers tree: group → indented children with ids; collapse hides them ----
+        section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)
         page.evaluate("editor.selection=new Set(['r1','r2','r3']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector(); editor.group();")
         page.wait_for_timeout(80)
@@ -1648,7 +1691,7 @@ def main():
                 && [...editor.selection].every(id=>{const n=editor.nodeById(id); return n && n.parentNode.tagName.toLowerCase()==='g';})"""))
         page.evaluate("window.hideFloatPanel && window.hideFloatPanel()"); page.wait_for_timeout(40)
 
-        # ---- node-edit focus: a selection limits visible anchors; nothing selected shows all ----
+        section("node-edit focus: a selection limits visible anchors; nothing selected shows all")
         mount_ctl(page)
         n_anch = lambda: page.evaluate("document.querySelectorAll('.hv-handles .hv-node-anchor, .hv-handles circle.hv-handle').length")
         page.evaluate("editor.selection=new Set(); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector(); editor.setTool('node');")
@@ -1660,7 +1703,7 @@ def main():
         check("node mode hides the selection bbox", page.evaluate("editor._overlayEl().querySelectorAll('.hv-sel-box').length") == 0)
         page.evaluate("editor.setTool('select'); editor.selection=new Set(); editor._renderSelection(); editor._renderInspector();")
 
-        # ---- group right-click registers its objects ("N objects") and recolours them all ----
+        section("group right-click registers its objects ('N objects') and recolours them all")
         mount_ctl(page)
         page.evaluate("editor.selection=new Set(['r1','r2','r3']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector(); editor.group();")
         page.wait_for_timeout(60)
@@ -1685,7 +1728,7 @@ def main():
               page.evaluate("!!document.querySelector('.viewport-controls #vp-guides') && !!document.querySelector('.viewport-controls #vp-selectall')"))
         page.keyboard.press("Escape")
 
-        # ---- transparent artboard shows a checker (not solid white) ----
+        section("transparent artboard shows a checker (not solid white)")
         page.evaluate("window.hideFloatPanel && window.hideFloatPanel()")
         mount_ctl(page)
         page.evaluate("editor.selectArtboard(); editor.applyArtboardBg('#ffffff');")
@@ -1706,7 +1749,7 @@ def main():
         mount_ctl(page); page.evaluate("editor.selection=new Set(['r1']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector();")
         check("header shows the selected object name", "Rectangle" in page.evaluate("document.querySelector('#sel-label').textContent"))
 
-        # ---- Pipeline kind/output mapping (the standalone Process VIEW + its stage strip
+        section("Pipeline kind/output mapping (the standalone Process VIEW + its stage strip")
         # are gone; the Processor dock panel covers the stage UI — see the Processor checks
         # above). effectiveProcessKind/outputChipInfo are still the shared mapping driving
         # previews + skip-detection; verify them off `settings` via the Processor chip. ----
@@ -1728,7 +1771,7 @@ def main():
               and kinds["noneOut"] == "" and kinds["pixel"] == "pixelvec", str(kinds))
         page.evaluate("() => { Object.assign(settings,{trace_simplify:'medium', trace_colormode:'bw'}); }")
 
-        # ---- Settings: registry-driven AI models & tools inventory (#51) ----
+        section("Settings: registry-driven AI models & tools inventory (#51)")
         # The panel renders itself from GET /api/capabilities, so it scales with the model
         # count: capability groups, per-model size/intents, and an availability chip each.
         file_menu_click(page, "Settings"); page.wait_for_timeout(100)
@@ -1756,7 +1799,7 @@ def main():
         page.evaluate("closeModal();")
         check("openToolsSettings deep-links to the centralized install hub (no scattered inline installers)", deep)
 
-        # ---- Cleanup / object removal (LaMa) — overlay hook + /api/cleanup endpoint (#56) ----
+        section("Cleanup / object removal (LaMa) — overlay hook + /api/cleanup endpoint (#56)")
         check("the cleanup mask-overlay launcher is exposed", page.evaluate("() => typeof window.app.startCleanup === 'function'"))
         # Drive the backend the way the overlay does: a tiny image + a white mask square → /api/cleanup.
         clean = page.evaluate("""async () => {
@@ -1773,7 +1816,7 @@ def main():
         }""")
         check("POST /api/cleanup runs LaMa and returns a scratch result URL (#56)", clean.get("ok"), str(clean))
 
-        # ---- Face restore (GFPGAN ONNX) — overlay hook + capability availability (#57) ----
+        section("Face restore (GFPGAN ONNX) — overlay hook + capability availability (#57)")
         # (The actual restore needs a real face image, verified server-side; here we check wiring.)
         check("the face-restore launcher is exposed", page.evaluate("() => typeof window.app.restoreFaces === 'function'"))
         faceavail = page.evaluate("""async () => {
@@ -1783,7 +1826,7 @@ def main():
         }""")
         check("face-restore capability is registered + available (onnxruntime+opencv) (#57)", faceavail)
 
-        # ---- Degradation fixers (SCUNet/FBCNN/NAFNet via spandrel) — hook + endpoint (#58) ----
+        section("Degradation fixers (SCUNet/FBCNN/NAFNet via spandrel) — hook + endpoint (#58)")
         check("the degradation-fix launcher is exposed", page.evaluate("() => typeof window.app.applyRestore === 'function'"))
         fixavail = page.evaluate("""async () => {
           const caps = await (await fetch('/api/capabilities')).json();
@@ -1827,7 +1870,7 @@ def main():
               thumbs["objects"] == 0 and thumbs["imgs"] == thumbs["cells"], str(thumbs))
         page.evaluate("closeModal()")
 
-        # ---- Detail (Info) is a dock PANEL now (not a modal); carries Rename / Download /
+        section("Detail (Info) is a dock PANEL now (not a modal); carries Rename / Download /")
         # Delete for C/R/V. Drive the vector detail with a synthetic item; the body fetch may
         # 404 (leaves dashes) but the action row is built regardless.
         page.evaluate("""() => openVectorInfoModal({name:'probe.svg', url:'/outputs/__none__/probe.svg', path:''})""")
@@ -1857,7 +1900,7 @@ def main():
               page.evaluate("() => !!document.querySelector('.hv-float-input')"))
         page.evaluate("""() => { const i=document.querySelector('.hv-float-input input'); if(i){ i.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})); } window.__docks.close('info'); }""")
 
-        # ---- Processor panel: pipeline stages (de-crammed from Properties) + live preview ----
+        section("Processor panel: pipeline stages (de-crammed from Properties) + live preview")
         page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
             mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
               + '<rect class="hv-artboard" x="0" y="0" width="200" height="200" fill="#fff"/></svg>','raster-host.svg'); }""")
@@ -1954,7 +1997,7 @@ def main():
                      visible: !!node && !node.classList.contains('hv-raster-hidden') }; }""")
         check("revert clears the preview and restores the raster", rev["gone"] and rev["visible"], str(rev))
 
-        # ---- schema-driven Vectorize card + EVERY control live-wired (now in the Processor panel) ----
+        section("schema-driven Vectorize card + EVERY control live-wired (now in the Processor panel)")
         # Regression guard for the half-wired bug (only 3 of ~12 controls re-traced) and the
         # phantom-knob bug (panel showed controls the active engine ignored). The card is
         # rendered purely from /api/vectorize/engines → only the selected engine's params show.
@@ -1985,7 +2028,7 @@ def main():
         check("every Vectorize value control re-triggers the live trace (number + select)",
               wired["hadNum"] and wired["hadSel"] and wired["afterNum"] > wired["before"] and wired["afterSel"] > wired["afterNum"], str(wired))
 
-        # ---- Upscale / Remove-bg cards: schema-driven + live-wired (raster ops) ----
+        section("Upscale / Remove-bg cards: schema-driven + live-wired (raster ops)")
         rop = page.evaluate("""() => {
             // expand the upscale + removebg cards, and open their Advanced (model/params live there now, #49)
             for (const sid of ['upscale','removebg']) { const c=[...document.querySelectorAll('#processor-body .proc-stage')].find(x=>x.dataset.stage===sid); if(c && !c.classList.contains('expanded')) c.querySelector('.proc-stage-title').click(); }
@@ -2024,7 +2067,7 @@ def main():
         check("commit replaces the raster with an editable vector layer",
               com["imgs"] == 0 and com["isGroup"] and com["paths"] >= 1 and not com["preview"], str(com))
 
-        # ---- Save-As: a new/opened canvas (no selectedOutput) can be saved ----
+        section("Save-As: a new/opened canvas (no selectedOutput) can be saved")
         page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
             mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
               + '<rect data-hv-id="r1" x="10" y="10" width="40" height="40" fill="#36c"/></svg>','saveas-probe.svg'); }""")
@@ -2043,7 +2086,7 @@ def main():
               "Saved" in saveas["status"] and saveas["folder"] == "canvas"
               and str(saveas["name"]).endswith(".svg"), str(saveas))
 
-        # ---- File surface: version, file menu items, download, open-from-disk, export routing ----
+        section("File surface: version, file menu items, download, open-from-disk, export routing")
         ver = page.evaluate("async () => { const r = await fetch('/api/version'); return r.ok ? await r.json() : null; }")
         check("/api/version returns a version", bool(ver) and bool(ver.get("version")), str(ver))
 
@@ -2098,7 +2141,7 @@ def main():
         check("Download PNG emits an a[download$=.png] blob", bool(png) and str(png.get("name")).endswith(".png") and png.get("blob"), str(png))
         page.evaluate("closeModal()")
 
-        # ---- known-problem fix: SVG export bakes placed-raster hrefs to data URIs (self-contained) ----
+        section("known-problem fix: SVG export bakes placed-raster hrefs to data URIs (self-contained)")
         inl = page.evaluate("""async () => {
             const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><image href="/assets/hv_logo.svg" x="0" y="0" width="50" height="50"/></svg>';
             const out = await window.app.inlineSvgImages(svg);
@@ -2106,7 +2149,7 @@ def main():
         check("SVG export inlines same-origin <image> hrefs to data URIs (portable off-machine)",
               inl["hasData"] and inl["droppedUrl"], str(inl))
 
-        # ---- self-contained PERSISTED save: Save-As bakes a server-href raster into the
+        section("self-contained PERSISTED save: Save-As bakes a server-href raster into the")
         #      saved .svg, while the LIVE editor keeps its server href (re-processable). Uses a
         #      small same-origin asset so the baked file stays under the server's save cap. ----
         IMG_HREF = "/assets/hv_logo.svg"
@@ -2134,7 +2177,7 @@ def main():
         check("persisted .svg bakes the raster href → data URI; live editor keeps its server href",
               baked["savedData"] and baked["liveNotBaked"], str(baked))
 
-        # ---- self-contained save degrades EXPLICITLY, not silently (#32): when baking would
+        section("self-contained save degrades EXPLICITLY, not silently (#32): when baking would")
         #      exceed the save cap, the user is ASKED — Cancel aborts, "Save linked" keeps
         #      (non-portable) refs. Force a cap just under the baked size so a small raster
         #      trips it (no giant image needed). The cap itself is sourced from the server.
@@ -2165,7 +2208,7 @@ def main():
               isinstance(lim.get("max_svg_bytes"), int) and lim["max_svg_bytes"] >= 1 and cancelled and linked["isLinked"],
               str({"cap": lim, "cancelled": cancelled, **linked}))
 
-        # ---- raster is a first-class object: fill/stroke no-op on <image> (clean DOM), and
+        section("raster is a first-class object: fill/stroke no-op on <image> (clean DOM), and")
         #      its layers row shows a live thumbnail instead of a colour chip ----
         page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
             mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
@@ -2200,7 +2243,7 @@ def main():
               rfc["isRaster"] and rfc["noFill"] and rfc["noStroke"] and rfc["noPaint"] and rfc["swatchRaster"]
               and thumb["isPng"] and thumb["notRawHref"] and thumb["cached"], str({**rfc, **thumb}))
 
-        # ---- pipeline dissolves into the editor: an on-canvas raster is runnable in place
+        section("pipeline dissolves into the editor: an on-canvas raster is runnable in place")
         #      (no library name needed) and the Run label is honest about where it lands ----
         runl = page.evaluate("""() => {
             const id=[...editor.selection][0];
@@ -2223,7 +2266,7 @@ def main():
               runl["canvasLabel"]=="Run → canvas" and runl["canvasEnabled"]
               and runl["libLabel"]=="Run → canvas" and runl["batchLabel"]=="Run library", str(runl))
 
-        # ---- res-swing regression: a float shoved off-screen (e.g. a 4K layout opened on a
+        section("res-swing regression: a float shoved off-screen (e.g. a 4K layout opened on a")
         #      1080p screen) re-clamps fully into the viewport instead of stranding unreachable ----
         clamp = page.evaluate("""() => {
             const was = window.__docks.loc('history');   // restore EXACTLY afterwards
@@ -2242,7 +2285,7 @@ def main():
         check("floating panel re-clamps into the viewport on resize/shrink (no off-screen stranding)",
               clamp.get("before") and clamp.get("after"), str(clamp))
 
-        # ---- res-swing regression: a locking-bezel GROUP container also re-clamps ----
+        section("res-swing regression: a locking-bezel GROUP container also re-clamps")
         gclamp = page.evaluate("""() => {
             const wasH = window.__docks.loc('history'), wasL = window.__docks.loc('library');
             window.__docks.float('history'); window.__docks.float('library');
@@ -2273,7 +2316,7 @@ def main():
         check("floating GROUP container re-clamps into the viewport AND its members stay pristine (#41)",
               gclamp.get("nogroup") or (gclamp.get("before") and gclamp.get("after") and gclamp.get("pristine")), str(gclamp))
 
-        # ---- #41: the clamp fires on ANY layout reconcile (fold / dock / restore), not only
+        section("#41: the clamp fires on ANY layout reconcile (fold / dock / restore), not only")
         #      window resize — a float stranded by a programmatic move is recovered the next time
         #      the layout reconciles, WITHOUT an explicit clampFloats() call. ----
         recl = page.evaluate("""() => {
@@ -2296,7 +2339,7 @@ def main():
         check("floats re-clamp on a non-resize layout change too (reconcile-driven, #41)",
               recl.get("nofloat") or (recl.get("before") and recl.get("after")), str(recl))
 
-        # ---- Task 3 end-to-end (real job): a FOCUSED on-canvas run returns the result IN PLACE.
+        section("Task 3 end-to-end (real job): a FOCUSED on-canvas run returns the result IN PLACE.")
         #      (a) vectorize → the raster becomes an editable vector group; the resolution
         #      ceiling + tiny-image seeding fix keep this fast and crash-free. ----
         page.evaluate("""() => { app.selectedOutput=null; app.manualOutputName=null;
@@ -2442,7 +2485,7 @@ def main():
             if (typeof loadJobs === 'function') { try { await loadJobs(); } catch {} } }""")
         page.wait_for_timeout(200)
 
-        # ---- regression fix: stroke-align clip is re-anchored on clone (was sharing the source's clip id) ----
+        section("regression fix: stroke-align clip is re-anchored on clone (was sharing the source's clip id)")
         SA_DOC = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">'
                   '<rect class="hv-artboard" x="0" y="0" width="200" height="200" fill="#fff"/>'
                   '<path data-hv-id="sp" d="M40 40 L120 40 L120 120 Z" fill="#cde" stroke="#036" stroke-width="6"/></svg>')
@@ -2462,7 +2505,7 @@ def main():
         check("stroke-align clip is re-anchored on clone (own clip def, no id collision)",
               sa["distinct"] and sa["origDef"] and sa["cloneDef"] and sa["noIdCollision"], str(sa))
 
-        # ---- Node tool under a transformed/grouped ancestor (anchors map through the CTM) ----
+        section("Node tool under a transformed/grouped ancestor (anchors map through the CTM)")
         XF_DOC = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300">'
                   '<g data-hv-id="g1" transform="translate(100 50)">'
                   '<path data-hv-id="p1" d="M0 0 L40 0 L40 40 Z" fill="#888"/></g></svg>')
@@ -2485,7 +2528,7 @@ def main():
         check("node drag writes back into local geometry", moved is True)
         page.evaluate("editor.setTool('select')")
 
-        # ---- Ruler guides: persistent, editable when unlocked, view tied to rulers ----
+        section("Ruler guides: persistent, editable when unlocked, view tied to rulers")
         mount_ctl(page)
         # guides + rulers share one visibility; default locked (no accidental moves)
         page.evaluate("editor.guidesHidden=false; editor.guidesLocked=true; editor.guides=[]; editor.renderGuides(); editor.addGuide('v', 30); editor.addGuide('h', 40);")
@@ -2517,7 +2560,7 @@ def main():
         check("clearGuides empties the layer",
               page.evaluate("editor.guides.length === 0 && editor.stage.querySelectorAll('.hv-guideobj').length === 0"))
 
-        # ---- Customize layout: draggable dividers + right-click add/remove ----
+        section("Customize layout: draggable dividers + right-click add/remove")
         page.evaluate("window.__layout.toggleEdit()"); page.wait_for_timeout(80)
         check("dividers become draggable in customize mode",
               page.evaluate("() => { const s=document.querySelector('.actionbar .tool-sep'); return !!s && s.draggable === true; }") is True)
@@ -2574,7 +2617,7 @@ def main():
         check("Reset returns the moved tile to the action bar",
               page.evaluate("!!document.querySelector('.actionbar #act-union') && !document.querySelector('.rail-section.properties #act-union')"))
 
-        # ---- Dockable panels: float, dock left/right, reorder, fold, Properties ----
+        section("Dockable panels: float, dock left/right, reorder, fold, Properties")
         check("docking controller is exposed", page.evaluate("!!window.__docks") is True)
         # leftdock is the leftmost grid child (before the toolstrip)
         check("left dock is the leftmost column",
@@ -2611,7 +2654,7 @@ def main():
         check("panels reorder within a dock (Layers above History)", order == ["layers", "history"], f"order={order}")
         page.evaluate("window.__docks.dock('history','right','layers'); window.__docks.dock('layers','right')"); page.wait_for_timeout(40)
 
-        # ---- Locking-bezel groups: snap two floating panels into one move/scale group ----
+        section("Locking-bezel groups: snap two floating panels into one move/scale group")
         page.evaluate("window.__docks.float('history'); window.__docks.float('layers')"); page.wait_for_timeout(60)
         grp = page.evaluate("""() => {
             window.__docks.joinGroup('history','layers','right');   // what an auto-snap drop does
@@ -2707,7 +2750,7 @@ def main():
         page.evaluate("window.__docks.dock('color','right')"); page.wait_for_timeout(60)
         check("Colour docks like any other panel",
               page.evaluate("window.__docks.loc('color')==='right' && !!document.querySelector('#rightdock .rail-section.color')"))
-        # ---- Shelf: closed/unused panels park in the top-right header as squares ----
+        section("Shelf: closed/unused panels park in the top-right header as squares")
         shelf = page.evaluate("""() => {
             const infoSq = !!document.querySelector('#panel-shelf .shelf-sq[data-shelf="info"]');   // Info is unused by default → shelved
             window.__docks.dock('history','right'); window.__docks.close('history');                // close History → shelf
@@ -2739,7 +2782,7 @@ def main():
             return { floatedBack: window.__docks.loc('history') === 'float', onScreen }; }""")
         check("a floated panel reopens floating, on-screen (open/close state memory)",
               mem["floatedBack"] and mem["onScreen"], str(mem))
-        # ---- Contextual auto-shelving: an unused panel parks itself into a shelf square, and
+        section("Contextual auto-shelving: an unused panel parks itself into a shelf square, and")
         # pops back the moment it's relevant again (Colour follows the canvas selection). ----
         page.evaluate("""() => { mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
             + '<rect class="hv-artboard" x="0" y="0" width="100" height="100" fill="#fff"/>'
@@ -2830,7 +2873,7 @@ def main():
         check("dock layout is persisted",
               page.evaluate("() => { const s=JSON.parse(localStorage.getItem('hector-vector:docks')||'{}'); return !!s.history && !!s.layers; }"))
 
-        # ---- App-window mode (standalone Chromium window) ----
+        section("App-window mode (standalone Chromium window)")
         # Headless can't exercise WCO/AWC, but the ?app=1 gate must engage and make
         # the header a draggable titlebar without disturbing normal layout. Window
         # controls are left to the native window manager (no custom buttons).
