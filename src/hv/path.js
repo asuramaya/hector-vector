@@ -148,3 +148,17 @@ export function penPathD(pts, closed, preview) {
   if (closed && all.length >= 2) { d += seg(all[all.length - 1], all[0]) + " Z"; }
   return d;
 }
+
+// Subpath-aware re-emit (#20): emit one M…Z per subpath so a compound path (rect-with-hole,
+// traced glyph, boolean result) survives the pathToAnchors → edit → re-serialize round-trip
+// without its subpaths fusing into one loop. `subs` is pathToAnchors' per-subpath metadata
+// ({closed,start,count}); falls back to a single subpath when absent (single-path callers).
+export function penAnchorsToD(anchors, subs) {
+  if (!subs || subs.length <= 1) return penPathD(anchors, subs && subs[0] ? subs[0].closed : false);
+  let d = "";
+  for (const u of subs) {
+    const a = anchors.slice(u.start, u.start + u.count);
+    if (a.length) d += penPathD(a, u.closed);   // penPathD starts each group with "M…" → clean concat
+  }
+  return d;
+}
