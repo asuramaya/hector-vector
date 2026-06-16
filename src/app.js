@@ -66,6 +66,11 @@ import {
   applyViewportState, mountViewport, clearViewport, bindRulerGuides,
   zoomVp, fitVp, actualVp, bindViewportDragging, bindViewportZoom,
 } from "./ui/viewport.js";
+import {
+  configureDataSync, workspace, refreshAll, refreshExceptCanvas, loadOutputs, uploadFiles,
+  latestOutputsFor, itemIsProcessed, renderPreviews, refreshLibrary,
+  applyStatusData, fetchStatus, applyOutputsData, fetchOutputs,
+} from "./ui/datasync.js";
 
 // One-shot panel-layout self-heal. A corrupted persisted dock layout (a panel
 // floated/grouped/stranded in a state that swallows clicks) survives reload AND a
@@ -211,9 +216,8 @@ let libraryMode = "raster";   // canvas (.hv projects) | raster (input images) |
 let librarySortKey = "name";  // name | date
 let librarySortDir = "asc";   // asc | desc
 let librarySelectedUrl = null;  // visual selection for the V/C tabs (R uses selectedName)
-let workspace = null;
 let statusHoldUntil = 0;
-let outputsDir = "";
+// workspace + outputsDir now live in src/ui/datasync.js (workspace imported below).
 
 // (output viewport + background modes extracted → src/ui/viewport.js)
 
@@ -279,152 +283,7 @@ function canReplaceStatus() {
   return Date.now() >= statusHoldUntil;
 }
 
-function latestOutputsFor(name) {
-  if (!name) return [];
-  const targetStem = stem(name);
-  const fromGlobal = outputs.filter((item) => stem(item.name) === targetStem);
-  // Also surface every variant produced by recent jobs for this source.
-  // /api/outputs dedupes by filename across folders so it can miss intermediates
-  // (preview.png, mask.png, etc.). job.outputs[] keeps the full list per job.
-  const known = new Set(fromGlobal.map((x) => `${x.folder}/${x.name}`));
-  const extras = [];
-  for (const job of jobsCache) {
-    if (!job.source_name || stem(job.source_name) !== targetStem) continue;
-    for (const rel of job.outputs || []) {
-      const folder = jobOutputFolder(rel);
-      const name = jobOutputName(rel);
-      if (name.includes(".mask.")) continue;
-      const key = `${folder}/${name}`;
-      if (known.has(key)) continue;
-      known.add(key);
-      extras.push({ name, folder, url: jobOutputUrl(job, rel), kind: jobOutputKind(name), path: rel });
-    }
-  }
-  return fromGlobal.concat(extras);
-}
-
-function jobsTouchingStem(targetStem) {
-  return jobsCache.filter((j) => j.source_name && stem(j.source_name) === targetStem);
-}
-
-function preferredOutput(name) {
-  const matches = latestOutputsFor(name);
-  if (!matches.length) return null;
-  if (manualOutputName) {
-    const manual = matches.find((x) => x.name === manualOutputName);
-    if (manual) return manual;
-  }
-  // If a recent terminal job for this source produced output, prefer its headline file
-  const targetStem = stem(name);
-  const recentJobs = jobsTouchingStem(targetStem).slice();
-  // jobsCache is newest-first per /api/jobs ordering
-  for (const job of recentJobs) {
-    if (!TERMINAL_STATES.has(job.status)) continue;
-    const rel = chooseFinalOutput(job);
-    if (!rel) continue;
-    const targetName = jobOutputName(rel);
-    const targetFolder = jobOutputFolder(rel);
-    const hit = matches.find((x) => x.name === targetName && x.folder === targetFolder)
-      || matches.find((x) => x.name === targetName);
-    if (hit) return hit;
-  }
-  const process = effectiveProcessKind();
-  if (process === "cutout") return matches.find((x) => x.name.includes(".cutout.")) || matches[0];
-  if (process === "chromakey") return matches.find((x) => x.name.includes(".chromakey.")) || matches[0];
-  if (process === "upscale") return matches.find((x) => x.kind === "png" && !x.name.includes(".cutout.") && !x.name.includes(".chromakey.") && !x.name.includes(".preview.")) || matches[0];
-  if (process === "vectorize") return matches.find((x) => x.kind === "svg") || matches[0];
-  return matches.find((x) => x.kind === "svg") || matches.find((x) => x.name.includes(".cutout.")) || matches[0];
-}
-
-// (viewport content/fit/mount/clear + rulers + guides extracted → src/ui/viewport.js)
-
-function itemIsProcessed(name) {
-  return latestOutputsFor(name).length > 0;
-}
-
-// Reconcile library state after work-items change: ensure selectedName still
-// points at a real item (default to the first), then repaint the Library dock
-// panel (self-guards if not mounted).
-function refreshLibrary() {
-  if (!workItems.length) setSelectedName(null);
-  else if (!workItems.some((item) => item.name === selectedName)) setSelectedName(workItems[0].name);
-  renderLibrary();   // dock panel (self-guards if not mounted)
-  if (typeof renderProcessorPanel === "function") renderProcessorPanel();   // library selection drives the Processor target + contextual reveal/dim
-  syncDockContext();
-}
-
-async function renderPreviews() {
-  // editor.pinned = showing a blank/opened/Save-As'd doc that isn't tied to the
-  // library; don't let a library-driven render clobber it. The selectedOutput
-  // recompute lives inside this guard too: a pinned doc keeps the save target it
-  // owns (null when unsaved, the canvas file after Save-As) instead of silently
-  // adopting whatever preferredOutput(selectedName) resolves to.
-  if (!editor.pinned) {
-    setSelectedOutput(preferredOutput(selectedName));
-    if (selectedOutput) {
-      if (viewports.output.url !== selectedOutput.url) {
-        try {
-          await mountViewport(viewports.output, selectedOutput.kind, selectedOutput.url, selectedOutput.name, selectedOutput.path);
-        } catch (error) {
-          clearViewport(viewports.output, error.message);
-        }
-      }
-    } else if (viewports.output.url !== null) {
-      clearViewport(viewports.output, "Import or open a vector to start.");
-    }
-    if (outputLabelEl) {
-      outputLabelEl.textContent = selectedOutput ? `Canvas — ${selectedOutput.name}` : "Canvas";
-    }
-    editor.sync();
-    rememberLastDoc();
-  }
-}
-
-async function uploadFiles(files) {
-  if (!files.length) return;
-  const form = new FormData();
-  for (const file of files) form.append("files", file);
-  const res = await fetch("/api/upload", { method: "POST", body: form });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `Upload failed: ${res.status}`);
-  await refreshAll((data.files || []).at(-1) || null);
-  setStatus(data.message, 2500);
-}
-
-async function fetchQueue() {
-  return api("/api/work-items");
-}
-
-function applyQueueData(items, preferredSelection = null) {
-  setWorkItems(items);
-  if (preferredSelection && workItems.some((item) => item.name === preferredSelection)) {
-    setSelectedName(preferredSelection);
-  }
-  refreshLibrary();
-}
-
-async function fetchStatus() {
-  return api("/api/status");
-}
-
-function applyStatusData(data) {
-  workspace = data;
-  outputsDir = workspace.outputs_dir || "";
-}
-
-async function fetchOutputs() {
-  return api("/api/outputs");
-}
-
-function applyOutputsData(data) {
-  setOutputs(data);
-}
-
-async function loadOutputs() {
-  applyOutputsData(await fetchOutputs());
-  refreshLibrary();
-  await renderPreviews();
-}
+// (output resolution + fetch/apply/refresh data-sync layer extracted → src/ui/datasync.js)
 
 // Modal shell (src/ui/modal.js): inject the #modal-root elements + the close hook that
 // drops the settings-open flag on every dismissal path (appSettingsOpen is declared
@@ -433,6 +292,14 @@ configureModal({ modalRootEl, modalTitleEl, modalBodyEl, modalSearchEl, onAnyClo
 // Output viewport (src/ui/viewport.js): owns the `viewports` state + bg modes + all
 // fit/zoom/pan/ruler mechanics. Only seam it needs is setStatus (the bg-cycle toast).
 configureViewport({ setStatus });
+// Data-sync layer (src/ui/datasync.js): the fetch→apply→refresh chain + output
+// resolution. State is in docstate/jobs/viewport (imported there); inject the
+// library/processor/dock render seams + the job-output path helpers + the active
+// process kind (all hoisted fns / top consts here).
+configureDataSync({
+  setStatus, outputLabelEl, rememberLastDoc, renderLibrary, renderProcessorPanel, syncDockContext,
+  stem, jobOutputUrl, jobOutputName, jobOutputFolder, jobOutputKind, chooseFinalOutput, effectiveProcessKind,
+});
 // Jobs state + poll layer live in src/ui/jobs.js (jobsCache, activityState,
 // TERMINAL_STATES imported above as live bindings). Wire its UI seams once.
 configureJobs({ setStatus, renderJobsPanel, revealPanel, canReplaceStatus });
@@ -468,41 +335,8 @@ configureShortcuts({ modalSearchEl, modalBodyEl });
 function stem_(n) { return n.replace(/\.[^.]+$/, ""); }
 
 // updateFooterProgress / fetchJobs / loadJobs / applyJobsData live in
-// src/ui/jobs.js (imported above).
-
-async function refreshAll(preferredSelection = null) {
-  const jobsSeq = nextJobsSeq();   // claim the token before the fetch (stale-response guard)
-  const [statusData, queueData, outputsData, jobsData] = await Promise.all([
-    fetchStatus(),
-    fetchQueue(),
-    fetchOutputs(),
-    fetchJobs(),
-  ]);
-  applyStatusData(statusData);
-  applyQueueData(queueData, preferredSelection);
-  applyOutputsData(outputsData);
-  applyJobsData(jobsData, jobsSeq);
-  refreshLibrary();
-  await renderPreviews();
-}
-
-// Like refreshAll, but DOES NOT re-render the canvas preview. Background processing
-// (a batch run, or any job starting) must never clear or replace the live editor
-// document — the canvas only changes on explicit user action (open/load/place/view).
-async function refreshExceptCanvas(preferredSelection = null) {
-  const jobsSeq = nextJobsSeq();   // claim the token before the fetch (stale-response guard)
-  const [statusData, queueData, outputsData, jobsData] = await Promise.all([
-    fetchStatus(),
-    fetchQueue(),
-    fetchOutputs(),
-    fetchJobs(),
-  ]);
-  applyStatusData(statusData);
-  applyQueueData(queueData, preferredSelection);
-  applyOutputsData(outputsData);
-  applyJobsData(jobsData, jobsSeq);
-  refreshLibrary();
-}
+// src/ui/jobs.js; refreshAll / refreshExceptCanvas / fetch* / apply* live in
+// src/ui/datasync.js (both imported above).
 
 Object.values(viewports).forEach(bindViewportDragging);
 Object.values(viewports).forEach(bindViewportZoom);
