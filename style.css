@@ -1726,11 +1726,14 @@ button:disabled {
    auto pins it to the bottom; the negative margins bleed past the embedded picker's
    8px body padding so the border spans edge-to-edge and the chin sits flush. */
 .cp-chin { margin-top: auto; border-top: 1px solid var(--ink); padding: 7px 10px; }
-/* Embedded (docked Colour panel): the cp-window itself is the scroll container, so the
-   recents chin must STICK to its bottom edge — otherwise it scrolls away when the panel
-   is short. Opaque bg covers content scrolling beneath it; bottom:-8px + the negative
-   margins keep it flush edge-to-edge inside the 8px body padding. */
-.cp-embedded .cp-chin { margin: auto -8px -8px; position: sticky; bottom: -8px; background: var(--bg); z-index: 2; }
+/* Embedded (docked Colour panel): margin-top:auto (via the `auto` top in the shorthand)
+   already pins the recents chin to the panel's bottom when it's short — the cp-window is a
+   flex column. We deliberately do NOT position:sticky it: when the panel overflows and
+   scrolls, a sticky bottom strip rides up and covers the .cp-actions row (None/OK/Cancel)
+   sitting just above it, making those buttons unclickable. In-flow keeps recents below the
+   actions, so both stay reachable. Negative margins bleed past the 8px body padding so the
+   border spans edge-to-edge; opaque bg keeps it clean. */
+.cp-embedded .cp-chin { margin: auto -8px -8px; background: var(--bg); }
 
 /* Keyboard-shortcuts modal: section headers span the grid; key column auto-fits. */
 .shortcut-grid { grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; }
