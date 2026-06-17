@@ -10,6 +10,8 @@
 // and returns the control object the rest of the shell drives via window.__docks.
 // Behaviour-identical to the original inline block (reconcile() still runs before
 // the control object is published, exactly as before).
+import { showContextMenu } from "./menus.js";   // shelf-square right-click options menu
+
 export function createDocks({ editor, measureFit, viewports, renderProcessorPanel, renderLibrary }) {
   function wireSectionCollapse(section) {
     const head = section.querySelector(".section-head"); if (!head || head._collapseWired) return;
