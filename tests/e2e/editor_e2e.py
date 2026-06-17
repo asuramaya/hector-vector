@@ -95,7 +95,10 @@ def click_node(page, nid, shift=False):
 
 def mount_ctl(page):
     page.evaluate("svg => { app.selectedOutput = null; app.manualOutputName = null; mountStageFromText(svg, 'ctl.svg'); }", CTL)
-    page.wait_for_function("editor.stage && editor.nodeById('r2')", timeout=8000)
+    # 20s, not 8s: when this runs right after the 5000-anchor LOD stress section the
+    # renderer is still busy and the adopt can take ~12s under load. It's a condition
+    # wait, so a higher ceiling is free on the fast path and only saves us under load.
+    page.wait_for_function("editor.stage && editor.nodeById('r2')", timeout=20000)
     page.wait_for_timeout(150)
 
 def open_ctx_panel(page):
@@ -238,7 +241,11 @@ def main():
         browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
         page = browser.new_page(viewport={"width": 1500, "height": 900})
         set_page(page)   # so a failing check() auto-captures a screenshot into _failshots/
-        page.goto(BASE, wait_until="networkidle")
+        # domcontentloaded, NOT networkidle: a populated workspace fires dozens of
+        # /work-items thumbnail requests on boot, so the network never idles within 30s
+        # and goto() times out. Readiness is the editor globals + mounted stage below —
+        # those condition waits are the real signal; networkidle was a fragile proxy.
+        page.goto(BASE, wait_until="domcontentloaded")
         page.wait_for_function("typeof editor!=='undefined' && typeof mountStageFromText==='function'", timeout=20000)
         # Boot is async (refreshAll → mountBlankCanvas; no auto-install) and refreshAll
         # awaits mounting the newest library preview first, so the gap to the blank canvas

@@ -14,6 +14,8 @@ outputs/
 .codex
 # Smoke-test scratch outputs (tests/_out.svg, _nb.png, … — only cleaned on a fully green run)
 tests/_*
+# editor_e2e fail screenshots (#32): one PNG per failing check, regenerated each run
+tests/e2e/_failshots/
 
 # --- Vendored tool binaries (auto-installed on first run, not committed) ---
 tools/cargo/
