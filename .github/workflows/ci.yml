@@ -28,8 +28,12 @@ jobs:
       - name: Check Python sources parse
         run: |
           python3 - <<'PY'
-          import ast
-          for f in ("server.py", "engine.py", "mask_trace_prep.py"):
+          import ast, glob
+          # Glob the server-side sources (root + the hvserver/ package + tools/) rather than
+          # a hardcoded list, so deletions (mask_trace_prep, #17) and the server split (#29)
+          # can't silently break this step again.
+          files = sorted(set(glob.glob("*.py") + glob.glob("hvserver/*.py") + glob.glob("tools/*.py")))
+          for f in files:
               ast.parse(open(f).read()); print(f, "OK")
           PY
 
