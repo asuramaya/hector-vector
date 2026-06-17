@@ -21,7 +21,11 @@ from PIL import Image
 
 import analyze   # noqa: E402  (classical analyze→plan brain; resolved via paths' sys.path insert)
 
-from hvserver.paths import REALESRGAN_BIN, REALESRGAN_DIR
+from hvserver.paths import (
+    REALESRGAN_BIN, REALESRGAN_DIR, TRACE_PREVIEW_DIM,
+    spandrel_installed, rembg_installed,
+)
+from hvserver.capabilities import resolve_capability_step
 from hvserver.jobs import (
     run_subprocess, _report_progress, launch_internal_job, _register_output,
     log_subprocess_lines, _prune_focused_pipeline_dirs,
@@ -38,6 +42,8 @@ from hvserver.engines import (
     build_mask_with_overrides, clean_color_trace, validate_svg_file,
     validate_cutout_png, validate_mask_png, VECTORIZE_ENGINES,
     deterministic_upscale, source_has_alpha,
+    apply_preprocess, build_chromakey_cutout, pixelvec_config,
+    validate_pixelvec_svg, image_is_near_binary,
 )
 
 
