@@ -1,0 +1,13 @@
+{
+  "parserOptions": { "ecmaVersion": 2022, "sourceType": "module" },
+  "env": { "browser": true, "es2022": true, "worker": true },
+  "globals": {
+    "structuredClone": "readonly", "queueMicrotask": "readonly", "reportError": "readonly",
+    "requestIdleCallback": "readonly", "cancelIdleCallback": "readonly",
+    "ResizeObserver": "readonly", "IntersectionObserver": "readonly", "MutationObserver": "readonly",
+    "DOMParser": "readonly", "XMLSerializer": "readonly",
+    "DOMPoint": "readonly", "DOMMatrix": "readonly", "DOMRect": "readonly",
+    "Path2D": "readonly", "OffscreenCanvas": "readonly", "createImageBitmap": "readonly"
+  },
+  "rules": { "no-undef": "error" }
+}

@@ -25,6 +25,14 @@ jobs:
             cp "$f" "$f.mjs" && node --check "$f.mjs" && rm "$f.mjs"
           done
 
+      # JS twin of the Python import guard: no-undef catches an identifier used but neither
+      # imported, declared, nor a browser global — the missing-import ReferenceError class the
+      # app.js/editor.js splits keep introducing (docks.js's showContextMenu + cycleBg). node
+      # --check (above) only checks syntax. Pinned eslint via npx keeps the repo build-free
+      # (no package.json / node_modules). ESLINT_USE_FLAT_CONFIG=false → use the legacy -c config.
+      - name: JS undefined-name guard (no-undef across src/)
+        run: ESLINT_USE_FLAT_CONFIG=false npx --yes eslint@8.57.1 --no-eslintrc -c tests/eslintrc.json --ext .js src/
+
       - name: Check Python sources parse
         run: |
           python3 - <<'PY'
