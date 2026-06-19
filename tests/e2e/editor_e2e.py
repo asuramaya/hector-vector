@@ -79,6 +79,17 @@ def check(name, ok, detail=""):
         except Exception:
             pass   # screenshotting must never mask the real assertion failure
 
+def settle(page, js, timeout=4000):
+    """#33: replace a fixed wait_for_timeout that exists only to outlast a debounce/async
+    write with a wait for the actual end-state (`js` returns truthy). Fast when the state
+    is already there; bounded otherwise. A timeout is SWALLOWED on purpose — the assertion
+    that follows then reports the real (still-wrong) state with context instead of this
+    turning a behavioural failure into a raw Playwright abort."""
+    try:
+        page.wait_for_function(js, timeout=timeout)
+    except Exception:
+        pass
+
 def node_rect(page, nid):
     return page.evaluate(
         "id => { const n = editor.nodeById(id); if(!n) return null; const r = n.getBoundingClientRect();"
@@ -395,7 +406,7 @@ def main():
         check("HSB tab exposes H/S/B", page.evaluate("!!document.querySelector('.cp-triple input[data-k=v]')"))
         check("the chosen colour model persists", page.evaluate("localStorage.getItem('hector-vector:cp-model')") == "hsb")
         page.evaluate("""() => { const el=document.querySelector('.cp-hex input'); el.value='3366cc'; el.dispatchEvent(new Event('input',{bubbles:true})); }""")
-        page.wait_for_timeout(820)   # past the recents debounce
+        settle(page, "() => (JSON.parse(localStorage.getItem('hector-vector:swatches-recent')||'[]')).some(c => c.toLowerCase()==='#3366cc')")  # the recents debounce, waited as a condition not a fixed 820ms
         rec = page.evaluate("() => JSON.parse(localStorage.getItem('hector-vector:swatches-recent')||'[]')")
         check("recent colours are tracked", any(c.lower() == "#3366cc" for c in rec), str(rec))
         check("recent strip is shown", page.evaluate("() => { const r=document.querySelector('.cp-recent'); return !!r && !r.hidden; }"))
