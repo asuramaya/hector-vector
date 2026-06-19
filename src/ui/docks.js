@@ -540,17 +540,30 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
       const secs = [...dock.querySelectorAll(":scope > .rail-section")];
       const dockH = dock.getBoundingClientRect().height || 600;
       const even = Math.round(dockH / Math.max(1, secs.length));
+      // Minimum height each section needs so the stack can never overflow the dock (open =
+      // CSS min-height, shut ≈ header; a non-last open section also carries a 7px resize
+      // separator). Used to reserve room for the sections that follow.
+      const MIN_OPEN = 96, MIN_SHUT = 32, VSEP = 7, lastIdx = secs.length - 1;
+      const needOf = (s, idx) => (s.classList.contains("collapsed") ? MIN_SHUT : MIN_OPEN)
+        + (idx < lastIdx && !s.classList.contains("collapsed") ? VSEP : 0);
+      let used = 0;
       secs.forEach((sec, i) => {
         const name = sec.dataset.section, collapsed = sec.classList.contains("collapsed");
-        if (i < secs.length - 1 && !collapsed) {
+        if (i < lastIdx && !collapsed) {
           // A user-resized panel keeps its explicit height; an untouched one opens at its
           // CONTENT height (so a small panel shrinks to fit instead of claiming a full even
-          // slice of empty space), capped at the even share so the stack never overflows.
-          const h = state[name].h != null ? state[name].h : Math.max(110, Math.min(even, contentHeight(sec)));
+          // slice of empty space). CAP it to whatever's left after reserving the minimum for
+          // every following section (+ its separator), so a height persisted at a taller window
+          // (or a big manual resize) can't push the stack past the dock and spill off-screen.
+          let reserve = 0; for (let j = i + 1; j < secs.length; j++) reserve += needOf(secs[j], j);
+          const cap = Math.max(MIN_OPEN, dockH - used - reserve);
+          const wanted = state[name].h != null ? state[name].h : Math.max(110, Math.min(even, contentHeight(sec)));
+          const h = Math.max(MIN_OPEN, Math.min(wanted, cap));
           sec.style.flex = "0 0 " + h + "px";
+          used += h + VSEP;
           const sep = document.createElement("div"); sep.className = "dock-vsep"; sep.title = "Drag to resize";
           bindVSep(sep, sec, name); sec.after(sep);
-        } else { sec.style.flex = collapsed ? "0 0 auto" : "1 1 auto"; }
+        } else { sec.style.flex = collapsed ? "0 0 auto" : "1 1 auto"; used += collapsed ? MIN_SHUT : 0; }
       });
     }
     function bindVSep(sep, sec, name) {

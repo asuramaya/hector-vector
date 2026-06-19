@@ -284,6 +284,7 @@ button:disabled {
   margin-left: 10px;   /* set apart from the picture-frame (which has no gaps) */
   width: 270px;
   min-height: 0;
+  overflow: hidden;   /* backstop: a mis-sized section can never spill the dock off-screen */
   display: flex;
   flex-direction: column;
 }
@@ -298,7 +299,7 @@ button:disabled {
 /* Left dock — mirror of the right dock (margin + resizer on the opposite edge). */
 .leftdock {
   position: relative; border: 1px solid var(--line); background: var(--bg);
-  margin-right: 10px; width: 270px; min-height: 0; flex-direction: column;
+  margin-right: 10px; width: 270px; min-height: 0; overflow: hidden; flex-direction: column;
 }
 .dock-resizer-l { left: auto; right: -5px; }
 /* The Properties panel reuses .context-panel for inspector-style selectors, but as a
