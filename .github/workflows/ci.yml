@@ -37,5 +37,11 @@ jobs:
               ast.parse(open(f).read()); print(f, "OK")
           PY
 
+      - name: Import guard (no undefined module globals after a split)
+        run: python3 tests/test_imports.py
+
       - name: Smoke tests (parse + pixelvec + render)
         run: python3 tests/test_smoke.py
+
+      - name: Capability + analyzer/router suite
+        run: python3 tests/test_capabilities.py
