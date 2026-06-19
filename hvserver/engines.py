@@ -28,7 +28,7 @@ from hvserver.paths import (
     OUTPUTS_DIR, SCRATCH_DIR, REALESRGAN_BIN, REALESRGAN_DIR, VTRACER_BIN,
     TRACE_MAX_DIM, TRACE_ABS_MAX_DIM, rembg_installed,
 )
-from hvserver.jobs import run_subprocess
+from hvserver.jobs import run_subprocess, log_subprocess_lines
 from hvserver.models import ensure_tools_ready, build_ai_cutout, build_upscale_spandrel, SR_MODELS
 from hvserver.files import resolve_source_url
 
