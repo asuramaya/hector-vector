@@ -160,7 +160,11 @@ def pick_color(page, swatch_index, hexes=None, none=False):
             el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }""", h)
     if none:
         page.click(".cp-window .cp-none")
-    page.wait_for_timeout(360)   # let the coalesced "Colour" undo entry commit (debounce)
+    # wait for the coalesced "Colour" undo entry to actually commit (app.js debounces
+    # editor.commitCoalesce ~280ms after the last edit, clearing editor._coalescing) before
+    # closing — a condition, not a fixed 360ms. _coalescing is set true synchronously by the
+    # colour-apply, so this can't return early mid-coalesce and drop the entry.
+    settle(page, "() => !editor._coalescing")
     page.evaluate("window.__docks && window.__docks.close('color')")
     page.wait_for_timeout(40)
 
@@ -436,7 +440,7 @@ def main():
         swapped = page.evaluate("""() => ({ fill: editor.nodeById('r1').getAttribute('fill'),
             stroke: editor.nodeById('r1').getAttribute('stroke') })""")
         check("Shift+X swaps fill/stroke", swapped["fill"] == "#def456" and swapped["stroke"] == "#abc123", f"{swapped}")
-        page.wait_for_timeout(320); page.evaluate("window.__docks.close('color')"); page.wait_for_timeout(40)
+        settle(page, "() => !editor._coalescing"); page.evaluate("window.__docks.close('color')"); page.wait_for_timeout(40)   # commit the coalesced undo (condition, not 320ms) before closing
 
         # inspector: stroke width (the v0 'stroke not applied' regression). Addressed by
         # row label now that Transform (X/Y/W/H) leads the object panel.
