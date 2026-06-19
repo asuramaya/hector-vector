@@ -22,6 +22,9 @@ jobs:
       - name: Install runtime deps
         run: pip install -r requirements.txt
 
+      - name: Import guard (no undefined module globals)
+        run: python3 tests/test_imports.py
+
       - name: Smoke tests
         run: python3 tests/test_smoke.py
 
