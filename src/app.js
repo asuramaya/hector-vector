@@ -980,7 +980,7 @@ function buildRasterTools(node) {
   // Collapsible rail sections (Photopea/Illustrator-style accordion), persisted. Shared so
   // dynamically-built panels (Properties, Colour) get a working caret too.
   // ---- Dockable panels + collapse carets + shelf + bezel groups (extracted → src/ui/docks.js) ----
-  window.__docks = createDocks({ editor, measureFit, viewports, renderProcessorPanel, renderLibrary });
+  window.__docks = createDocks({ editor, measureFit, viewports, renderProcessorPanel, renderLibrary, renderJobsPanel, processorRelevant, cycleBg });
 
   // ---- Keep-alive: let the server self-spin-down when this window closes ----
   // The server is the program's compute half; while a window is open it should

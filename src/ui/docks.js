@@ -12,7 +12,7 @@
 // the control object is published, exactly as before).
 import { showContextMenu } from "./menus.js";   // shelf-square right-click options menu
 
-export function createDocks({ editor, measureFit, viewports, renderProcessorPanel, renderLibrary }) {
+export function createDocks({ editor, measureFit, viewports, renderProcessorPanel, renderLibrary, renderJobsPanel, processorRelevant, cycleBg }) {
   function wireSectionCollapse(section) {
     const head = section.querySelector(".section-head"); if (!head || head._collapseWired) return;
     head._collapseWired = true;
