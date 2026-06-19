@@ -165,7 +165,11 @@ def check_analyzer_router() -> None:
     # auto-apply (#47 follow-up): the analyzer plans these with registry ids → resolve_capability_step
     # annotates them (available + invoke), so the auto-pipeline can compose them as stages.
     info = server.resolve_capability_step("denoise", "scunet-denoise")
-    assert info and info["available"] and info["invoke"] == {}, info
+    # `available` reflects whether the optional dep (spandrel) is installed, which varies by
+    # environment (CI installs only requirements.txt → spandrel absent → available False). Assert
+    # the router ANNOTATES the step correctly (returns the dict, available is a bool, invoke empty),
+    # not that the dep happens to be present here.
+    assert info and isinstance(info["available"], bool) and info["invoke"] == {}, info
     # face-OFFER gating (#47): detect_face_count is robust (returns an int; 0 on a faceless synthetic)
     import tempfile as _tempfile
     import numpy as _np
