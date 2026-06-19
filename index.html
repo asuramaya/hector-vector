@@ -21,6 +21,12 @@
           </div>
           <!-- Layout customization lives on the frame itself now: right-click any toolbar's
                blank space for the Layout menu (customize / profiles / reset). -->
+          <!-- Edit ⇄ Manage: two stations on one bench. Edit = the canvas workbench;
+               Manage borrows Library/Processor/Jobs into a roomy browse + batch surface. -->
+          <div class="view-swap" role="group" aria-label="View">
+            <button id="view-edit" class="view-tab active" type="button" aria-pressed="true" title="Edit — the canvas workbench">Edit</button>
+            <button id="view-manage" class="view-tab" type="button" aria-pressed="false" title="Manage — browse &amp; batch-process your library">Manage</button>
+          </div>
         </div>
         <!-- the canvas name + current selection live in the header (frees the stage) -->
         <span class="doc-title" title="Current document"><span id="output-label">Canvas</span><span id="sel-label" class="doc-sel"></span></span>
@@ -191,6 +197,12 @@
 
       <!-- The standalone Process view was dissolved into dock panels: Library (pick an
            image) → Processor (compose + run the pipeline) → Jobs (watch). -->
+
+      <!-- Manage screen: the A-side of the Edit/Manage swap. Empty until you switch to it —
+           manage.js borrows the Library / Processor / Jobs sections out of the right dock and
+           reparents them here for a roomy browse + batch-process surface, then hands them back
+           on return to Edit. Hidden via CSS (.app:not(.manage) .manage-grid { display:none }). -->
+      <section class="manage-grid" aria-label="Manage — browse &amp; batch-process"></section>
 
       <!-- Hidden file inputs: Add images (raster import) + File ▸ Open from file (svg). -->
       <input id="file-input" type="file" accept="image/*" multiple hidden />

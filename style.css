@@ -180,6 +180,33 @@ button:disabled {
    track added only when that dock is shown. Empty/folded docks are set display:none. */
 .leftdock { display: none; }   /* default until JS shows it / a panel docks here */
 
+/* ---- Manage screen (Edit/Manage swap) ----
+   The A-side surface. Lives in the same grid cell as .editor-grid; display toggles by
+   the .app.manage class (a display:none element is not a grid item, so auto-placement
+   just works — header→row1, whichever grid is shown→1fr row2, footer→row3). manage.js
+   reparents Library / Processor / Jobs into here, so they get room the 270px dock can't. */
+.manage-grid { display: none; min-height: 0; }
+.app.manage .editor-grid { display: none; }
+.app.manage .manage-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  grid-template-rows: minmax(0, 1fr) minmax(140px, 0.42fr);
+  gap: 10px;
+}
+/* Library = the big browse pane (full-height left); Processor top-right; Jobs below it. */
+.manage-grid .rail-section.library { grid-column: 1; grid-row: 1 / span 2; }
+.manage-grid .rail-section.processor { grid-column: 2; grid-row: 1; }
+.manage-grid .rail-section.jobs { grid-column: 2; grid-row: 2; }
+/* In the dock the sections share the dock's frame; standalone in the grid they need
+   their own border/surface + rounded corners, and must clip their own scroll. */
+.manage-grid .rail-section {
+  border: 1px solid var(--line); background: var(--bg); border-radius: var(--r);
+  min-height: 0; min-width: 0; overflow: hidden; flex: 1 1 auto;
+}
+/* Borrowed panels are never collapsed/floated here — neutralise the dock's collapse caret. */
+.manage-grid .rail-section.collapsed { flex: 1 1 auto; }
+.manage-grid .rail-section .caret { display: none; }
+
 .toolstrip {
   border: 1px solid var(--line);
   background: var(--bg);
@@ -259,6 +286,18 @@ button:disabled {
   font-size: 9px; font-weight: 700; line-height: 14px; text-align: center;
 }
 .view-count:empty { display: none; }
+/* Edit ⇄ Manage tabs: text-labelled segmented control (the icon .view-btn is for the
+   old swap). The active station reads inked; click the other to cross the seam. */
+.view-tab {
+  box-sizing: border-box; height: 30px; padding: 0 14px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--muted); font: inherit; font-size: 12px; font-weight: 600;
+  letter-spacing: 0.02em; line-height: 1; cursor: pointer;
+}
+.view-tab + .view-tab { border-left: 0; }
+.view-tab:first-child { border-radius: var(--r) 0 0 var(--r); }
+.view-tab:last-child { border-radius: 0 var(--r) var(--r) 0; }
+.view-tab:hover:not(.active) { background: var(--surface); color: var(--ink); }
+.view-tab.active { background: var(--ink); color: #fff; border-color: var(--ink); }
 .tool-sep { height: 1px; background: var(--line); margin: 2px 4px; align-self: stretch; }
 /* Fill (primary) / stroke (secondary) swatches — float in the canvas's inner
    bottom-right corner (over the stage body, above the rulers). */

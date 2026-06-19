@@ -9,6 +9,7 @@ import { shapeToAbsPath } from "./hv/index.js";
 import { editor, ghostBtn } from "./editor.js";
 import { createLayoutCustomize } from "./ui/layout.js";
 import { createDocks } from "./ui/docks.js";
+import { createManage } from "./ui/manage.js";
 import { api } from "./ui/api.js";
 import {
   jobsCache, activityState, TERMINAL_STATES,
@@ -982,6 +983,10 @@ function buildRasterTools(node) {
   // ---- Dockable panels + collapse carets + shelf + bezel groups (extracted → src/ui/docks.js) ----
   window.__docks = createDocks({ editor, measureFit, viewports, renderProcessorPanel, renderLibrary, renderJobsPanel, processorRelevant, cycleBg });
 
+  // ---- Manage screen: A/Bs with the workbench; borrows Library/Processor/Jobs into a
+  //      roomy grid (extracted → src/ui/manage.js). ----
+  window.__manage = createManage({ docks: window.__docks, measureFit, viewports });
+
   // ---- Keep-alive: let the server self-spin-down when this window closes ----
   // The server is the program's compute half; while a window is open it should
   // stay up, and once the window closes it should GC + exit (no lingering stale
@@ -1318,6 +1323,10 @@ async function runProcess(btn) {
     const payload = { ...settings };
     const force = processForce;
     const t = processTarget();
+    // Seam (Manage → workbench): a focused "Run → canvas" delivers its result onto the
+    // canvas, so cross back to Edit and let it land in front of you. A batch run is headless
+    // (watch it in the Jobs panel) — stay on the Manage screen.
+    if (!t.batch && window.__manage && window.__manage.isManage()) window.__manage.leave();
     // Resolve the FOCUSED target node — the raster whose result lands on the canvas in
     // place. The pipeline dissolves into the editor for BOTH cases:
     //   • on-canvas raster  → process its href directly

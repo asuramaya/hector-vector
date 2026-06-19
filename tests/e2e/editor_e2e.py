@@ -717,8 +717,11 @@ def main():
         page.evaluate("() => editor.setTool('select')")
 
         section("F. Header structure (the standalone Process VIEW is dissolved into panels)")
-        check("Process view fully removed (no #process-view, no Edit/Process view-swap buttons)",
-              page.evaluate("!document.querySelector('#process-view') && !document.querySelector('#process-button') && !document.querySelector('#view-edit')"))
+        # The old disconnected Process VIEW (a modal #process-view + its #process-button) is gone.
+        # NB: #view-edit / #view-manage now belong to the NEW Edit/Manage screen swap (Section Z),
+        # a different feature — so we no longer assert their absence here.
+        check("Process view fully removed (no #process-view modal, no #process-button)",
+              page.evaluate("!document.querySelector('#process-view') && !document.querySelector('#process-button')"))
         # the q/Tab Process-view shortcut is GONE — its shims are removed (q is a free key now).
         page.keyboard.press("q"); page.keyboard.press("Tab"); page.wait_for_timeout(40)
         check("q / Tab Process-view shortcut + shims removed",
@@ -2894,6 +2897,36 @@ def main():
         # state persisted
         check("dock layout is persisted",
               page.evaluate("() => { const s=JSON.parse(localStorage.getItem('hector-vector:docks')||'{}'); return !!s.history && !!s.layers; }"))
+
+        section("Manage screen: Edit/Manage swap borrows Library/Processor/Jobs into a roomy grid")
+        # The Manage screen A/Bs with the workbench. Tapping Manage borrows the Library,
+        # Processor and Jobs sections OUT of the right dock into a roomy .manage-grid (browse +
+        # batch room the 270px dock can't give); tapping Edit hands them back intact. The panels
+        # keep their fixed IDs + renderers — only their parent element moves. See manage-screen-plan.
+        check("Edit/Manage tabs exist; Edit active by default",
+              page.evaluate("() => !!document.querySelector('#view-edit') && !!document.querySelector('#view-manage') && document.querySelector('#view-edit').classList.contains('active')"))
+        parent = lambda sel: page.evaluate("(s) => { const e=document.querySelector(s); return e && e.parentElement ? (e.parentElement.id || e.parentElement.className) : null; }", sel)
+        # ENTER Manage
+        page.click("#view-manage"); page.wait_for_function("() => document.querySelector('.app').classList.contains('manage')", timeout=4000)
+        page.wait_for_timeout(60)
+        check("Manage tab active + .app.manage set", page.evaluate("() => document.querySelector('.app').classList.contains('manage') && document.querySelector('#view-manage').classList.contains('active')"))
+        check("Library / Processor / Jobs reparented into .manage-grid",
+              ("manage-grid" in (parent(".rail-section.library") or "")) and ("manage-grid" in (parent(".rail-section.processor") or "")) and ("manage-grid" in (parent(".rail-section.jobs") or "")))
+        check("docks marks the borrowed panels 'away'", page.evaluate("() => window.__docks.isAway('library') && window.__docks.isAway('processor') && window.__docks.isAway('jobs')"))
+        check("editor-grid hidden, manage-grid shown as a grid",
+              page.evaluate("() => getComputedStyle(document.querySelector('.editor-grid')).display === 'none' && getComputedStyle(document.querySelector('.manage-grid')).display === 'grid'"))
+        check("panel renderers still target their fixed IDs (re-rendered Processor has content)",
+              page.evaluate("() => !!document.querySelector('.manage-grid #library-list') && (document.querySelector('#processor-body')||{}).childElementCount >= 0"))
+        # LEAVE Manage → panels return to the dock, canvas comes back
+        page.click("#view-edit"); page.wait_for_function("() => !document.querySelector('.app').classList.contains('manage')", timeout=4000)
+        page.wait_for_timeout(60)
+        check("Edit tab active again; panels back in #rightdock",
+              page.evaluate("() => document.querySelector('#view-edit').classList.contains('active')") and parent(".rail-section.library") == "rightdock" and parent(".rail-section.processor") == "rightdock" and parent(".rail-section.jobs") == "rightdock")
+        check("docks no longer marks them away; editor-grid visible",
+              page.evaluate("() => !window.__docks.isAway('library') && getComputedStyle(document.querySelector('.editor-grid')).display !== 'none'"))
+        # round-trip is idempotent (a second swap returns them cleanly too)
+        page.click("#view-manage"); page.wait_for_timeout(60); page.click("#view-edit"); page.wait_for_timeout(60)
+        check("Manage round-trip is idempotent (library home after a 2nd swap)", parent(".rail-section.library") == "rightdock")
 
         section("App-window mode (standalone Chromium window)")
         # Headless can't exercise WCO/AWC, but the ?app=1 gate must engage and make

@@ -103,6 +103,11 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
     }
     const groupOf = (name) => Object.keys(groups).find((gid) => groups[gid].members.includes(name)) || null;
     let gidSeq = 0;
+    // Panels the Manage screen has BORROWED out of the dock into its own roomy grid. While
+    // a panel is "away" the dock leaves it alone — reconcile() won't yank it back, relayout
+    // skips it (it isn't a dock child anymore), and contextual auto-shelving ignores it.
+    // The Manage controller reparents the actual section element; docks only tracks intent.
+    const away = new Set();
     const persist = () => { try { localStorage.setItem(DOCKS_KEY, JSON.stringify(state)); localStorage.setItem(GROUPS_KEY, JSON.stringify(groups)); localStorage.setItem(FOLD_KEY, folded ? "1" : "0"); } catch {} };
     const isShown = (name) => { const l = state[name].loc; if (l === "left" || l === "right") return true; if (l === "float") return state[name].visible; return false; };   // "shelf" / anything else → not shown
     const propsVisible = () => isShown("properties");
@@ -508,6 +513,7 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
     function reconcile() {
       for (const name of ORDER) {
         const st = state[name];
+        if (away.has(name)) continue;   // borrowed by the Manage screen — leave it where it put it
         if (st.loc === "shelf") { detachFromWindow(name); continue; }   // parked on the shelf
         if (groupOf(name)) continue;   // grouped members are placed by renderGroups()
         if (SUMMONED.has(name) && st.loc === "float" && !st.visible) { detachFromWindow(name); continue; }
@@ -515,7 +521,7 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
       }
       for (const side of ["left", "right"]) {
         const dock = dockElFor(side);
-        const items = ORDER.filter((n) => state[n].loc === side && !isFloatWanted(n) && !groupOf(n)).sort((a, b) => (state[a].order || 0) - (state[b].order || 0));
+        const items = ORDER.filter((n) => state[n].loc === side && !isFloatWanted(n) && !groupOf(n) && !away.has(n)).sort((a, b) => (state[a].order || 0) - (state[b].order || 0));
         for (const n of items) { const s = ensureSection(n); if (!s) continue; detachWinKeepSection(n); s.style.flex = ""; dock.appendChild(s); }
       }
       renderGroups();
@@ -531,6 +537,34 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
     }
     const isFloatWanted = (n) => state[n].loc === "float";
     function detachWinKeepSection(name) { const s = sectionEl(name); const w = s && s.closest(".dock-window"); if (w) { if (w._ro) w._ro.disconnect(); w.remove(); document.body.appendChild(s); } }
+
+    // ---- Manage screen: lend panels out of the dock and take them back ----
+    // borrow() hands the Manage screen the bare section elements for a set of panels and
+    // marks them "away" so the dock stops managing them; the caller reparents them into its
+    // own grid. A borrowed panel is first pulled out of any group/float and pointed at a
+    // dock home (so restore() reliably re-docks it, even if it was idle-shelved). restore()
+    // clears "away" and reconciles — which physically moves the sections back into the dock.
+    function borrowSections(names) {
+      const out = [];
+      for (const n of names) {
+        removeFromGroup(n);
+        detachWinKeepSection(n);   // floating → bare section in the body
+        if (state[n].loc !== "left" && state[n].loc !== "right") state[n].loc = DEFAULT_LOC[n] === "left" ? "left" : "right";
+        state[n].autoShelved = false;
+        away.add(n);
+        const s = ensureSection(n);
+        if (!s) continue;
+        s.style.flex = "";
+        s.classList.remove("collapsed");   // open it in the roomy Manage grid
+        out.push([n, s]);
+      }
+      syncChrome();   // the dock lost panels — recompute its columns / fold state
+      return out;
+    }
+    function restoreSections(names) {
+      for (const n of names) away.delete(n);
+      reconcile();   // re-docks the sections (appendChild moves them out of the Manage grid)
+    }
 
     // Resize between stacked docked panels: every section but the last in a dock gets an
     // explicit height + a drag handle below it; the last fills the remainder.
@@ -758,7 +792,7 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
       syncingCtx = true;
       try {
         for (const name of Object.keys(CTX_RELEVANT)) {
-          if (!state[name]) continue;
+          if (!state[name] || away.has(name)) continue;   // borrowed by Manage → not under dock contextual control
           const relevant = !!CTX_RELEVANT[name]();
           if (relevant) {
             if (state[name].loc === "shelf" && state[name].autoShelved) unshelve(name);
@@ -867,6 +901,8 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
       clampFloats: clampFloatsOnResize,
       loc: curLoc, isFolded: () => folded, toggleFold: () => { folded = !folded; reconcile(); persist(); },
       summonProps, showColor, showInfo, close, shelve, unshelve, syncContextual, renderProps, renderPanels, renderColor, propsVisible,
+      // Manage screen borrows panels out of the dock into its own grid, then hands them back.
+      borrow: borrowSections, restore: restoreSections, isAway: (n) => away.has(n),
       relayout: () => { relayoutDock("left"); relayoutDock("right"); },
       reflowGroups: () => { for (const gid of Object.keys(groups)) applyFracs(gid); },
       state: () => state,
