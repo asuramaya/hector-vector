@@ -57,7 +57,7 @@ import {
 } from "./ui/docio.js";
 import { configureShortcuts, openShortcutsModal } from "./ui/shortcuts.js";
 import {
-  configureGallery, renderGalleryGrid, loadRasterToCanvas,
+  configureGallery, renderGalleryGrid, loadRasterToCanvas, loadFileToCanvas,
   copyToClipboard, downloadBlob, downloadUrl, revealInFileManager,
   copySvgSource, downloadCurrentSvg, openFromFile, revealCurrentFile,
 } from "./ui/gallery.js";
@@ -1205,10 +1205,26 @@ window.addEventListener("drop", async (event) => {
   // A library drag carries our custom type and is handled on #output-preview; never
   // treat it as a file import here (that's what duplicated dragged lib items).
   if (event.dataTransfer?.types?.includes("application/x-hv-lib")) return;
-  if (!event.dataTransfer?.files?.length) return;   // non-file drop: swallowed above, nothing to import
+  const files = event.dataTransfer?.files;
+  if (!files?.length) return;   // non-file drop: swallowed above, nothing to import
+  // Route by where it landed. A drop ON the Library panel imports (that's its job).
+  // Anywhere else — the canvas, the editor chrome — places raster images straight onto
+  // the working canvas (mint-if-empty) so a drag isn't "eaten" into the library. Files
+  // the canvas can't take as pixels (SVG/PDF/…) still import.
+  const onLibrary = !!(event.target?.closest && event.target.closest(".rail-section.library"));
+  const all = [...files];
+  const rasters = all.filter((f) => f.type && f.type.startsWith("image/") && f.type !== "image/svg+xml");
+  const others = all.filter((f) => !rasters.includes(f));
   try {
-    setStatus(`Uploading ${event.dataTransfer.files.length} file(s)…`);
-    await uploadFiles(event.dataTransfer.files);
+    if (onLibrary || rasters.length === 0) {
+      setStatus(`Importing ${all.length} file(s)…`);
+      await uploadFiles(files);
+      return;
+    }
+    for (const f of rasters) await loadFileToCanvas(f);
+    if (others.length) await uploadFiles(others);
+    setStatus(`Placed ${rasters.length} image${rasters.length === 1 ? "" : "s"} on the canvas`
+      + (others.length ? `, imported ${others.length} other file(s)` : ""), 2500);
   } catch (error) {
     setStatus(error.message, 4000);
   }

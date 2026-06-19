@@ -78,6 +78,31 @@ export function canvasIsEmpty() {
   return !editor.stage || editor.stage.querySelectorAll("[data-hv-id]").length === 0;
 }
 
+// Place a dropped/opened image FILE straight onto the canvas (read as a data URL →
+// <image> node), minting a canvas sized to it when the editor is empty. The File twin
+// of loadRasterToCanvas, so a drag-drop lands where you're working instead of being
+// imported into the library. Returns true on success.
+export async function loadFileToCanvas(file) {
+  if (!file) return false;
+  try {
+    const url = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result);
+      r.onerror = () => rej(new Error(`Couldn't read ${file.name}`));
+      r.readAsDataURL(file);
+    });
+    const dim = await new Promise((res, rej) => {
+      const im = new Image();
+      im.onload = () => res({ w: im.naturalWidth, h: im.naturalHeight });
+      im.onerror = () => rej(new Error(`Couldn't load ${file.name}`));
+      im.src = url;
+    });
+    if (canvasIsEmpty() && dim.w > 0 && dim.h > 0) mountBlankCanvas(Math.round(dim.w), Math.round(dim.h));
+    editor.placeImage(url, file.name, dim.w, dim.h);
+    return true;
+  } catch (e) { setStatus(e.message, 3000); return false; }
+}
+
 export function renderGalleryGrid(items, onPick) {
   if (!items.length) {
     modalBodyEl.innerHTML = `<div class="gallery-empty">Nothing to show.</div>`;
