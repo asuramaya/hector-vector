@@ -9,8 +9,9 @@
 // (the dock stops reconciling them) and returns their section elements for us to
 // reparent; restore un-marks them and lets the dock pull them home.
 
-// Library (browse) · Processor (compose + run) · Jobs (watch) — the processing workflow.
-const BORROW = ["library", "processor", "jobs"];
+// Library (browse) · Processor (compose + run) · Info (inspect the selected image) · Jobs
+// (watch) — the processing workflow. All four are Manage citizens, not Edit-dock panels.
+const BORROW = ["library", "processor", "info", "jobs"];
 
 let docks, measureFit, viewports;
 let appEl, gridEl, btnEdit, btnManage;
@@ -29,7 +30,11 @@ export function createManage(deps) {
   // Edit dock then keeps only the editing panels (History / Layers / Properties / Colour).
   // The toggle just shows/hides the grid — no per-switch reparenting. docks.borrow() marks
   // them "away" so the dock won't reclaim them on any reconcile.
-  if (gridEl && docks) for (const [, el] of docks.borrow(BORROW)) gridEl.appendChild(el);
+  if (gridEl && docks) for (const [name, el] of docks.borrow(BORROW)) {
+    gridEl.appendChild(el);
+    // Info is the selection inspector — give it a hint until an image is opened into it.
+    if (name === "info") { const body = el.querySelector(".fp-body"); if (body && !body.textContent.trim()) body.innerHTML = '<div class="info-empty">Open an image (right-click a Library tile, or its ⓘ) to inspect it here.</div>'; }
+  }
   syncButtons();
   return { enter, leave, toggle, isManage: () => manageOn };
 }

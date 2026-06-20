@@ -2840,26 +2840,27 @@ def main():
               page.evaluate("window.__docks.loc('color')==='right' && !!document.querySelector('#rightdock .rail-section.color')"))
         section("Shelf: closed/unused panels park in the top-right header as squares")
         shelf = page.evaluate("""() => {
-            const infoSq = !!document.querySelector('#panel-shelf .shelf-sq[data-shelf="info"]');   // Info is unused by default → shelved
             window.__docks.dock('history','right'); window.__docks.close('history');                // close History → shelf
             const histSq = !!document.querySelector('#panel-shelf .shelf-sq[data-shelf="history"]');
             const histGone = !document.querySelector('#rightdock .rail-section.history');
             document.querySelector('#panel-shelf .shelf-sq[data-shelf="history"]').click();          // click square → reopen
             const histBack = !!document.querySelector('#rightdock .rail-section.history');
             const sqGone = !document.querySelector('#panel-shelf .shelf-sq[data-shelf="history"]');
-            return { infoSq, histSq, histGone, histBack, sqGone }; }""")
+            return { histSq, histGone, histBack, sqGone }; }""")
         check("shelf parks closed/unused panels as squares; clicking a square reopens them",
-              shelf["infoSq"] and shelf["histSq"] and shelf["histGone"] and shelf["histBack"] and shelf["sqGone"], str(shelf))
+              shelf["histSq"] and shelf["histGone"] and shelf["histBack"] and shelf["sqGone"], str(shelf))
         # right-click a panel header → close it to the shelf (contextual close)
         rc = page.evaluate("""() => { window.__docks.dock('layers','right');
             document.querySelector('#rightdock .rail-section.layers .section-head').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true}));
             const shelved = !document.querySelector('#rightdock .rail-section.layers') && !!document.querySelector('#panel-shelf .shelf-sq[data-shelf="layers"]');
             window.__docks.unshelve('layers'); return shelved; }""")
         check("right-clicking a panel header shelves it", rc, str(rc))
-        # Info is a standard panel object — not the ghostly borderless context-panel
-        check("Info panel is a standard panel (no ghost context-panel chrome)",
-              page.evaluate("""() => { window.__docks.unshelve('info'); const s=document.querySelector('.rail-section.info');
-                  const ok = !!s && !s.classList.contains('context-panel'); window.__docks.shelve('info'); return ok; }"""))
+        # Info is a Manage-screen citizen now (the selection inspector), not an Edit shelf/dock
+        # panel — it lives in the manage-grid and is a standard panel (no ghost context-panel chrome).
+        check("Info is a Manage-grid panel (standard chrome, not on the Edit shelf)",
+              page.evaluate("""() => { const s=document.querySelector('.manage-grid .rail-section.info');
+                  return !!s && !s.classList.contains('context-panel') && window.__docks.isAway('info')
+                      && !document.querySelector('#panel-shelf .shelf-sq[data-shelf="info"]'); }"""))
         # state memory: a FLOATING panel that's shelved reopens FLOATING (not docked), on-screen
         mem = page.evaluate("""() => {
             window.__docks.float('history'); window.__docks.shelve('history'); window.__docks.unshelve('history');
@@ -2897,15 +2898,13 @@ def main():
             const stayed = !!document.querySelector('#rightdock .rail-section.color');
             window.__docks.state().color.pinned = false; return stayed; }""")
         check("a user-pinned panel is exempt from contextual auto-shelving", pin, str(pin))
-        # clicking the Info shelf square fills it with the current context (not a blank panel)
+        # Info is the Manage selection inspector — its grid panel is never blank (a hint until an
+        # image is opened into it; refillInfoContext fills it with the current context).
         info = page.evaluate("""() => {
-            window.__docks.shelve('info');
-            const sq = document.querySelector('#panel-shelf .shelf-sq[data-shelf="info"]');
-            if (!sq) return { ok:false, why:'no info square' };
-            sq.click();
-            const b = document.querySelector('.rail-section.info .fp-body');
-            return { ok: !!b && b.textContent.trim().length > 0, text:(b?b.textContent:'').slice(0,32) }; }""")
-        check("clicking the Info shelf square fills it with current context (not empty)", info["ok"], str(info))
+            if (typeof window.refillInfoContext === 'function') window.refillInfoContext();
+            const b = document.querySelector('.manage-grid .rail-section.info .fp-body');
+            return { ok: !!b && b.textContent.trim().length > 0, text:(b?b.textContent:'').slice(0,40) }; }""")
+        check("the Manage Info inspector fills with context (never blank)", info["ok"], str(info))
         # right-clicking a shelf square opens an options menu (open / float / dock either side)
         menu = page.evaluate("""() => {
             window.__docks.shelve('history');
@@ -2971,12 +2970,12 @@ def main():
         parent = lambda sel: page.evaluate("(s) => { const e=document.querySelector(s); return e && e.parentElement ? (e.parentElement.id || e.parentElement.className) : null; }", sel)
         # In EDIT, the manage panels are NOT in the dock (they live hidden in the manage-grid) and
         # the Edit dock holds only editing panels (no library/processor/jobs leaking in).
-        check("Library/Processor/Jobs live in .manage-grid, not the Edit dock",
-              ("manage-grid" in (parent(".rail-section.library") or "")) and ("manage-grid" in (parent(".rail-section.processor") or "")) and ("manage-grid" in (parent(".rail-section.jobs") or "")))
-        check("the Edit right-dock has NO manage panels (only editing panels)",
-              page.evaluate("() => [...document.querySelectorAll('#rightdock > .rail-section')].every(s => !['library','processor','jobs'].includes(s.dataset.section))"))
+        check("Library/Processor/Info/Jobs live in .manage-grid, not the Edit dock",
+              all("manage-grid" in (parent(".rail-section." + n) or "") for n in ("library", "processor", "info", "jobs")))
+        check("the Edit right-dock + header shelf have NO manage panels (only editing panels)",
+              page.evaluate("() => [...document.querySelectorAll('#rightdock > .rail-section')].every(s => !['library','processor','info','jobs'].includes(s.dataset.section)) && !document.querySelector('#panel-shelf .shelf-sq[data-shelf=\"info\"]')"))
         check("docks marks them 'away' (exempt from dock reconcile / shelving)",
-              page.evaluate("() => window.__docks.isAway('library') && window.__docks.isAway('processor') && window.__docks.isAway('jobs')"))
+              page.evaluate("() => window.__docks.isAway('library') && window.__docks.isAway('processor') && window.__docks.isAway('info') && window.__docks.isAway('jobs')"))
         check("in Edit the manage-grid is hidden", page.evaluate("() => getComputedStyle(document.querySelector('.manage-grid')).display === 'none'"))
         # ENTER Manage → reveal the grid, hide the canvas; panels DON'T move (already there).
         page.click("#view-manage"); page.wait_for_function("() => document.querySelector('.app').classList.contains('manage')", timeout=4000)

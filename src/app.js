@@ -2108,7 +2108,16 @@ function buildProcessorRail() {
   // Target row: the focused raster (default) or the whole library (explicit batch).
   // The ▦/🖼 button on the right is the EXPLICIT batch toggle — batch is never silent.
   const tgt = document.createElement("div"); tgt.className = "proc-target" + (t.batch ? " batch" : "");
-  const ic = document.createElement("span"); ic.className = "proc-target-ic"; ic.textContent = t.batch ? "▦" : "🖼";
+  // Make the currently-loaded image unmistakable: show its thumbnail (when a focused raster
+  // resolves to a real URL), falling back to the 🖼/▦ glyph for batch / data-URL sources.
+  const tgtUrl = t.batch ? null : procPlanSourceUrl(t);
+  let ic;
+  if (tgtUrl && !tgtUrl.startsWith("data:")) {
+    ic = document.createElement("img"); ic.className = "proc-target-thumb";
+    ic.src = tgtUrl + (tgtUrl.includes("?") ? "" : "?w=80"); ic.alt = ""; ic.loading = "lazy"; ic.decoding = "async";
+  } else {
+    ic = document.createElement("span"); ic.className = "proc-target-ic"; ic.textContent = t.batch ? "▦" : "🖼";
+  }
   const nm = document.createElement("span"); nm.className = "proc-target-name"; nm.textContent = t.label;
   const swap = document.createElement("button");
   swap.type = "button"; swap.className = "proc-target-swap tool-button" + (t.batch ? " on" : "");

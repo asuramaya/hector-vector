@@ -190,13 +190,18 @@ button:disabled {
 .app.manage .manage-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
-  grid-template-rows: minmax(0, 1fr) minmax(140px, 0.42fr);
+  grid-template-rows: minmax(0, 1fr) minmax(120px, 0.7fr) minmax(96px, 0.45fr);
   gap: 10px;
 }
-/* Library = the big browse pane (full-height left); Processor top-right; Jobs below it. */
-.manage-grid .rail-section.library { grid-column: 1; grid-row: 1 / span 2; }
+/* Library = the big browse pane (full-height left); right column stacks Processor (the active
+   image's pipeline) · Info (inspect the selection) · Jobs (the queue). */
+.manage-grid .rail-section.library { grid-column: 1; grid-row: 1 / span 3; }
 .manage-grid .rail-section.processor { grid-column: 2; grid-row: 1; }
-.manage-grid .rail-section.jobs { grid-column: 2; grid-row: 2; }
+.manage-grid .rail-section.info { grid-column: 2; grid-row: 2; }
+.manage-grid .rail-section.jobs { grid-column: 2; grid-row: 3; }
+.manage-grid .rail-section.info .fp-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.manage-grid .rail-section .panel-x { display: none; }   /* a Manage citizen has no close button */
+.info-empty { padding: 14px 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
 /* In the dock the sections share the dock's frame; standalone in the grid they need
    their own border/surface + rounded corners, and must clip their own scroll. */
 .manage-grid .rail-section {
@@ -1135,9 +1140,13 @@ button:disabled {
    flow connectors, drag to reorder, expand for settings). */
 .processor-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px; }
 .proc-rail { display: flex; flex-direction: column; gap: 10px; }
-.proc-target { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
+.proc-target { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); min-width: 0; }
 .proc-target-ic { flex: 0 0 auto; }
-.proc-target-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+/* The currently-loaded image: a real thumbnail makes "what am I processing" unmistakable. */
+.proc-target-thumb { flex: 0 0 auto; width: 34px; height: 34px; object-fit: cover; border: 1px solid var(--line); border-radius: var(--r);
+  background: repeating-conic-gradient(#e9e9e9 0% 25%, #fff 0% 50%) 50% / 12px 12px; }
+.proc-target-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; color: var(--ink); font-weight: 600; font-size: 13px; }
+.proc-target.batch .proc-target-name { color: var(--muted); }
 .proc-target.batch .proc-target-name { font-style: italic; }
 .proc-target-swap { flex: 0 0 auto; height: 22px; min-width: 26px; font-size: 12px; }
 .proc-target-swap.on { background: var(--ink); color: #fff; border-color: var(--ink); }
@@ -1516,10 +1525,19 @@ button:disabled {
   overflow: hidden;
 }
 
+/* The active (currently-loaded) tile must stand out among 50 — accent ring + tinted frame +
+   a corner pip, not a thin black outline that's lost in the grid. */
 .gallery-cell.active {
-  outline: 2px solid #000;
+  outline: 2px solid var(--accent);
   outline-offset: -2px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
+.gallery-cell.active .gallery-caption { background: var(--accent); color: #fff; font-weight: 600; }
+.gallery-cell.active .gallery-thumb::after {
+  content: "●"; position: absolute; top: 4px; right: 5px; font-size: 11px; line-height: 1;
+  color: var(--accent); text-shadow: 0 0 0 1px #fff, 0 0 3px #fff;
+}
+.gallery-thumb { position: relative; }
 
 .gallery-thumb {
   width: 100%;

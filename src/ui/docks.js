@@ -755,6 +755,7 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
     // won't auto-return. An AUTO shelve (the contextual sync parking an unused panel) sets
     // autoShelved so it pops back the moment it's relevant again.
     function shelve(name, auto) {
+      if (away.has(name)) return;   // Manage-screen citizen — never shelves (would re-create a header square)
       removeFromGroup(name);
       const cur = state[name].loc;
       // Remember the FULL prior placement (dock side OR float) so reopening restores it
