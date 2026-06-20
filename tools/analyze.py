@@ -28,19 +28,25 @@ _DEG_CROP = 512
 _STAT_DIM = 256          # downscale for colour/palette/edge stats (fast, scale-robust)
 
 
-def _flatten_rgb(path: Path) -> Image.Image:
-    im = Image.open(path).convert("RGBA")
-    bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
-    bg.alpha_composite(im)
-    return bg.convert("RGB")
-
-
-def _has_alpha(path: Path) -> bool:
+def _prep(path: Path) -> tuple[Image.Image, bool]:
+    """Decode the image ONCE → (RGB-on-white, has_alpha). The old path decoded the file
+    three times over (flatten re-opened it, _has_alpha re-opened it again) and ran a
+    full-resolution RGBA convert + alpha-composite even on opaque images — the dominant
+    cost on huge inputs (≈10s on a 150MP PNG). Here an opaque image skips the composite
+    entirely (compositing an opaque image onto white is the identity), so the returned RGB
+    is BIT-IDENTICAL to the old flatten and every downstream signal is unchanged; only
+    genuinely-transparent images pay for the composite. Alpha is read from the same decode."""
     im = Image.open(path)
-    if im.mode not in ("RGBA", "LA", "PA") and "transparency" not in im.info:
-        return False
-    a = np.asarray(im.convert("RGBA"))[..., 3]
-    return bool((a < 250).mean() > 0.01)        # >1% non-opaque = meaningful alpha
+    im.load()
+    transparent = im.mode in ("RGBA", "LA", "PA") or "transparency" in im.info
+    if not transparent:
+        return im.convert("RGB"), False
+    rgba = im.convert("RGBA")
+    a = np.asarray(rgba)[..., 3]
+    has_alpha = bool((a < 250).mean() > 0.01)   # >1% non-opaque = meaningful alpha
+    bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+    bg.alpha_composite(rgba)
+    return bg.convert("RGB"), has_alpha
 
 
 def _luma(arr: np.ndarray) -> np.ndarray:
@@ -95,7 +101,7 @@ def _blur_ratio(luma: np.ndarray) -> float:
 
 def analyze(path: Path) -> dict:
     path = Path(path)
-    rgb = _flatten_rgb(path)
+    rgb, has_alpha = _prep(path)
     w, h = rgb.size
     max_dim = max(w, h)
     mp = (w * h) / 1e6
@@ -144,7 +150,7 @@ def analyze(path: Path) -> dict:
     return {
         "width": w, "height": h, "max_dim": max_dim, "megapixels": round(mp, 2),
         "low_res": max_dim < 700 or mp < 0.3,
-        "has_alpha": _has_alpha(path),
+        "has_alpha": has_alpha,
         "content_class": content,
         "color": {"chroma": round(chroma, 1), "colorful_frac": round(colorful_frac, 3),
                   "significant_colors": significant, "top6_coverage": round(top6, 3)},
