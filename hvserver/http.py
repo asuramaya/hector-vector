@@ -34,6 +34,7 @@ from hvserver.engines import *      # noqa: F401,F403
 from hvserver.pipeline import *     # noqa: F401,F403
 from hvserver.documents import *    # noqa: F401,F403
 from hvserver.system import *       # noqa: F401,F403
+from hvserver.fonts import font_catalog, load_font, text_to_outline, installed_fonts  # noqa: E402
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -91,6 +92,13 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/capabilities":
             self.send_json(capabilities_info())
+            return
+        if parsed.path == "/api/fonts/catalog":
+            params = urllib.parse.parse_qs(parsed.query)
+            self.send_json(font_catalog((params.get("q") or [""])[0], source=(params.get("source") or [""])[0]))
+            return
+        if parsed.path == "/api/fonts/installed":
+            self.send_json(installed_fonts())
             return
         if parsed.path == "/api/limits":
             # Save guards the client mirrors (so the bake-vs-link decision uses the real cap).
@@ -241,6 +249,10 @@ class Handler(SimpleHTTPRequestHandler):
                 result = plan_image(payload)
             elif parsed.path == "/api/raster-op":
                 result = apply_raster_op(payload)
+            elif parsed.path == "/api/fonts/load":
+                result = load_font(payload)
+            elif parsed.path == "/api/text-outline":
+                result = text_to_outline(payload)
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "Unknown endpoint")
                 return

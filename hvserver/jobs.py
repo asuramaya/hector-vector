@@ -95,7 +95,8 @@ _inflight = 0
 _inflight_lock = threading.Lock()
 # POST paths whose handler does heavy synchronous compute (and registers no job).
 HEAVY_SYNC_PATHS = {"/api/cleanup", "/api/face-restore", "/api/restore",
-                    "/api/trace-preview", "/api/raster-op"}
+                    "/api/trace-preview", "/api/raster-op",
+                    "/api/fonts/load", "/api/text-outline"}
 
 
 def _inflight_incr() -> None:

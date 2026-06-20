@@ -24,6 +24,10 @@ OUTPUTS_DIR = APP_DIR / "outputs"
 # publish a library copy. Served via /outputs/ so the client (and a later vectorize)
 # can still resolve the URL.
 SCRATCH_DIR = OUTPUTS_DIR / ".scratch"
+# Downloaded web-font cache (Google Fonts). Dot-prefixed so the library scan skips it;
+# under OUTPUTS_DIR so the existing /outputs/ route serves the cached .woff2 to the
+# client's @font-face, and the housekeeping GC (scratch/pipeline only) never touches it.
+FONTS_DIR = OUTPUTS_DIR / ".fonts"
 INPUTS_DIR = APP_DIR / "inputs"
 # Safety ceiling for the vectorize stage. Tracing scales with PIXELS, not display size,
 # so an oversized raster — most acutely an upscaled one (Real-ESRGAN x4 → a 7000px+ image)
