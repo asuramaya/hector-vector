@@ -3045,6 +3045,17 @@ def main():
         check("catalog is multi-source (reports providers + per-font source)", page.evaluate(
             "async () => { const r = await fetch('/api/fonts/catalog?q=mono').then(x=>x.json());"
             " return Array.isArray(r.sources) && r.sources.length>=1 && (r.fonts[0]? !!r.fonts[0].source : true); }"))
+        # Browse default leads with recognisable popular families (not a wall of alphabetical "A"
+        # fonts), and a query searches the FULL catalogue — 'garamond' isn't in the curated 36, so
+        # finding it proves search reaches the whole 2000+ list, not just the visible page.
+        check("font catalog: popular-first default + full-catalog search", page.evaluate(
+            "async () => { try {"
+            " const d = await fetch('/api/fonts/catalog?q=').then(x=>x.json());"
+            " if(!d.fonts || !d.fonts.length) return true;"
+            " const popFirst = ['Inter','Roboto','Open Sans','Lato','Montserrat'].includes(d.fonts[0].family);"
+            " const g = await fetch('/api/fonts/catalog?q=garamond').then(x=>x.json());"
+            " const deepHit = (g.fonts||[]).some(f=>/garamond/i.test(f.family));"
+            " return popFirst && deepHit; } catch { return true; } }"))
         # text→vector is SHAPED (kerning + ligatures so it matches the rendered text) and emits
         # clean all-cubic geometry with a reported advance. Network-tolerant: passes if offline.
         check("text→outline is shaped, all-cubic, reports advance", page.evaluate(

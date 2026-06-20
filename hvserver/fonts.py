@@ -48,6 +48,9 @@ CATALOG = [
     ("Righteous", "display"), ("Abril Fatface", "display"), ("Comfortaa", "display"),
 ]
 
+# Popularity rank (curated order) → leads the empty-query browse view with recognisable families.
+_POPULAR = {name.lower(): i for i, (name, _cat) in enumerate(CATALOG)}
+
 
 # ---- HTTP + disk cache helpers --------------------------------------------
 def _http_bytes(url: str, timeout: int = 20) -> bytes:
@@ -71,14 +74,17 @@ def _cache_json(name: str, fetch):
     path = FONTS_DIR / f"catalog-{name}.json"
     if path.is_file():
         try:
-            return json.loads(path.read_text("utf-8"))
+            cached = json.loads(path.read_text("utf-8"))
+            if cached:                         # ignore an empty/failed cache and refetch
+                return cached
         except Exception:  # noqa: BLE001 — a corrupt cache just refetches
             pass
     data = fetch()
-    try:
-        path.write_text(json.dumps(data), "utf-8")
-    except Exception:  # noqa: BLE001
-        pass
+    if data:                                   # only persist a real result, never an empty/failed one
+        try:
+            path.write_text(json.dumps(data), "utf-8")
+        except Exception:  # noqa: BLE001
+            pass
     return data
 
 
@@ -131,17 +137,24 @@ _CATALOG_LOCK = threading.Lock()
 
 
 def _build_catalog():
+    """Build the merged catalogue → (catalog, index). Latches in memory ONLY when at least one
+    REMOTE source succeeded. If every remote fetch fails (network down at the first call), the
+    curated fallback is served for THIS request but NOT cached — so the next request retries
+    instead of the server being stuck on the tiny fallback list for its whole lifetime."""
     global _CATALOG, _SOURCE_INDEX
     with _CATALOG_LOCK:
         if _CATALOG is not None:
-            return
+            return _CATALOG, _SOURCE_INDEX
         by_family: dict[str, dict] = {}
         index: dict[str, dict] = {}
+        any_remote = False
         for src in SOURCE_ORDER:
             try:
                 entries = _SOURCE_FETCH[src]()
             except Exception:  # noqa: BLE001 — one source down must not sink the rest
                 entries = []
+            if entries:
+                any_remote = True
             index[src] = {}
             for e in entries:
                 fl = (e.get("family") or "").lower()
@@ -158,21 +171,29 @@ def _build_catalog():
                                              "key": n, "weights": [400], "styles": ["normal"], "subset": "latin"})
             index.setdefault("google", {}).setdefault(n.lower(), {"family": n, "category": c, "source": "google",
                                              "key": n, "weights": [400], "styles": ["normal", "italic"], "subset": "latin"})
-        _CATALOG = sorted(by_family.values(), key=lambda e: e["family"].lower())
-        _SOURCE_INDEX = index
+        catalog = sorted(by_family.values(), key=lambda e: e["family"].lower())
+        if any_remote:                       # only latch a REAL catalogue; a fallback-only build retries
+            _CATALOG, _SOURCE_INDEX = catalog, index
+        return catalog, index
 
 
 def font_catalog(query: str = "", limit: int = 60, source: str = "") -> dict:
     """Search the merged catalogue. Ranks exact/prefix matches first so 'roboto' surfaces
-    'Roboto' before 'Roboto Slab'. `source` (optional) filters to one provider."""
-    _build_catalog()
+    'Roboto' before 'Roboto Slab'. With NO query, leads with recognisable popular families
+    (the curated list) instead of a wall of alphabetical 'A' fonts. `source` filters to one
+    provider."""
+    catalog, _ = _build_catalog()
     q = (query or "").strip().lower()
-    items = _CATALOG or []
+    items = catalog or []
     if source:
         items = [e for e in items if e.get("source") == source or source in (e.get("also") or [])]
     if q:
         items = [e for e in items if q in e["family"].lower()]
         items.sort(key=lambda e: (e["family"].lower() != q, not e["family"].lower().startswith(q), len(e["family"])))
+    else:
+        # Empty query → lead with the curated popular families (in their curated order), then the
+        # rest alphabetically. Otherwise the default view is just every "A" font, which reads broken.
+        items = sorted(items, key=lambda e: (_POPULAR.get(e["family"].lower(), 1 << 20), e["family"].lower()))
     out = [{"family": e["family"], "category": e.get("category", "sans-serif"),
             "source": e.get("source", "google"), "sourceLabel": SOURCE_LABELS.get(e.get("source", "google"), "Web"),
             "license": e.get("license", ""), "also": e.get("also", [])} for e in items[:limit]]
@@ -209,13 +230,13 @@ def _fontshare_woff2(slug: str, weight: int) -> str | None:
 
 
 def _entry_for(family: str, source: str = "") -> dict | None:
-    _build_catalog()
+    _, index = _build_catalog()
     fl = (family or "").lower()
-    if source and source in _SOURCE_INDEX and fl in _SOURCE_INDEX[source]:
-        return _SOURCE_INDEX[source][fl]
+    if source and source in index and fl in index[source]:
+        return index[source][fl]
     for src in SOURCE_ORDER:                       # any source that has it
-        if fl in _SOURCE_INDEX.get(src, {}):
-            return _SOURCE_INDEX[src][fl]
+        if fl in index.get(src, {}):
+            return index[src][fl]
     return {"family": family, "source": "google", "key": family, "weights": [400], "subset": "latin"}
 
 
