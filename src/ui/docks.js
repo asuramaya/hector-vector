@@ -686,12 +686,13 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
     function bindHeaderDrag(section) {
       const head = section.querySelector(".section-head"); if (!head || head._dragBound) return;
       head._dragBound = true;
-      // Right-click a panel header → close it to the shelf (contextual close).
-      head.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); shelve(section.dataset.section); });
+      // Right-click a panel header → close it to the shelf (contextual close). Away panels
+      // (Manage-screen citizens) aren't dock panels — they don't shelve.
+      head.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); if (!away.has(section.dataset.section)) shelve(section.dataset.section); });
       head.addEventListener("pointerdown", (e) => {
         if (e.target.closest(".panel-actions") || e.button !== 0) return;
         const name = section.dataset.section;
-        if (groupOf(name)) return;   // grouped → the container's bindGroupMove drives the move
+        if (groupOf(name) || away.has(name)) return;   // grouped → container drives the move; away → it lives in the Manage grid, not draggable into a dock
         const sx = e.clientX, sy = e.clientY;
         let moved = false, win = section.closest(".dock-window"), offX = 24, offY = 12, snap = null;
         if (win) { const r = win.getBoundingClientRect(); offX = sx - r.left; offY = sy - r.top; }

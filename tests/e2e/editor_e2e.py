@@ -2326,12 +2326,13 @@ def main():
         # surfaces a plan. With a blank canvas the library pick IS the Processor target, so the
         # banner must appear where it was absent. It renders synchronously in its "Reading the
         # image…" busy state, so we don't wait on the (variable-cost) server analyze.
-        # Mount an EMPTY stage (mountStageFromText, NOT newBlankDoc — that opens a modal) so the
-        # canvas holds no raster and the library pick becomes the Processor target.
+        # The Library + Processor live on the Manage screen, so drive this from there. Mount an
+        # EMPTY stage (mountStageFromText, NOT newBlankDoc — that opens a modal) so the canvas holds
+        # no raster and the library pick becomes the Processor target, then open Manage.
         page.evaluate("""() => {
-            if (window.__docks) window.__docks.dock('processor','right');
             mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"></svg>', 'autoplan-probe.svg');
             app.selectedName=null; editor.selection=new Set(); editor.artboardSelected=false; renderProcessorPanel(); }""")
+        page.click("#view-manage"); page.wait_for_function("() => document.querySelector('.app').classList.contains('manage')", timeout=4000)
         page.wait_for_timeout(80)
         page.evaluate("""() => { const r=document.querySelector('.lib-mode[data-mode="raster"]'); if (r) r.click(); }""")
         page.wait_for_timeout(60)
@@ -2348,8 +2349,9 @@ def main():
         else:
             check("auto-banner browse→process check (skipped — empty library)", True)
         # Drop the library selection so the in-flight /api/plan is superseded+aborted (don't leave
-        # the server analyzing a 150MP image into later sections).
-        page.evaluate("() => { app.selectedName=null; editor.selection=new Set(); renderProcessorPanel(); }"); page.wait_for_timeout(60)
+        # the server analyzing a 150MP image into later sections), then return to Edit.
+        page.evaluate("() => { app.selectedName=null; editor.selection=new Set(); renderProcessorPanel(); }")
+        page.click("#view-edit"); page.wait_for_timeout(60)
 
         section("res-swing regression: a float shoved off-screen (e.g. a 4K layout opened on a")
         #      1080p screen) re-clamps fully into the viewport instead of stranding unreachable ----
@@ -2372,10 +2374,10 @@ def main():
 
         section("res-swing regression: a locking-bezel GROUP container also re-clamps")
         gclamp = page.evaluate("""() => {
-            const wasH = window.__docks.loc('history'), wasL = window.__docks.loc('library');
-            window.__docks.float('history'); window.__docks.float('library');
-            if (!window.__docks.joinGroup) { window.__docks.shelve('history'); window.__docks.shelve('library'); return { nogroup: true }; }
-            window.__docks.joinGroup('history','library','bottom');
+            const wasH = window.__docks.loc('history'), wasL = window.__docks.loc('layers');
+            window.__docks.float('history'); window.__docks.float('layers');
+            if (!window.__docks.joinGroup) { window.__docks.shelve('history'); window.__docks.shelve('layers'); return { nogroup: true }; }
+            window.__docks.joinGroup('history','layers','bottom');
             const g = document.querySelector('.dock-group');
             if (!g) return { nogroup: true };
             g.style.left = (innerWidth + 500) + 'px'; g.style.top = '8px';   // width still fits → reposition-only
@@ -2392,11 +2394,11 @@ def main():
             const pristine = mBefore.length >= 2 && mBefore.length === mAfter.length
                 && mAfter.every((m, i) => m.vis && m.n === mBefore[i].n
                     && Math.abs(m.w - mBefore[i].w) <= 1 && Math.abs(m.h - mBefore[i].h) <= 1);
-            // Restore EXACTLY (don't leave persisted float rects — a stranded Library float
-            // would otherwise re-open over the rail toggle after the suite's ?app=1 reload).
+            // Restore EXACTLY (don't leave persisted float rects — a stranded float would
+            // otherwise re-open over the rail toggle after the suite's ?app=1 reload).
             const restore = (n, was) => { if (was === 'left' || was === 'right') window.__docks.dock(n, was); else window.__docks.shelve(n); };
-            restore('history', wasH); restore('library', wasL);
-            const st = window.__docks.state(); if (st.history) delete st.history.rect; if (st.library) delete st.library.rect;
+            restore('history', wasH); restore('layers', wasL);
+            const st = window.__docks.state(); if (st.history) delete st.history.rect; if (st.layers) delete st.layers.rect;
             return { before, after, pristine, members: mAfter.length }; }""")
         check("floating GROUP container re-clamps into the viewport AND its members stay pristine (#41)",
               gclamp.get("nogroup") or (gclamp.get("before") and gclamp.get("after") and gclamp.get("pristine")), str(gclamp))
@@ -2707,9 +2709,10 @@ def main():
         # leftdock is the leftmost grid child (before the toolstrip)
         check("left dock is the leftmost column",
               page.evaluate("() => document.querySelector('.editor-grid').firstElementChild.id === 'leftdock'"))
-        # Properties + Colour + Library + Jobs default docked-right (permanent panels); float
-        # them out so the History/Layers checks below see a clean right dock.
-        page.evaluate("window.__docks.float('properties'); window.__docks.float('color'); window.__docks.float('library'); window.__docks.float('jobs'); window.__docks.float('processor')"); page.wait_for_timeout(60)
+        # Properties + Colour default docked-right; float them out so the History/Layers checks
+        # below see a clean right dock. (Library/Processor/Jobs aren't dock panels — they live on
+        # the Manage screen — so they're already absent from the dock.)
+        page.evaluate("window.__docks.float('properties'); window.__docks.float('color')"); page.wait_for_timeout(60)
         # float History (no detach button — controller / header-drag does it)
         page.evaluate("window.__docks.float('history')"); page.wait_for_timeout(80)
         check("a panel floats into a dock-window",
@@ -2765,16 +2768,18 @@ def main():
         # Splitting a 3-panel group must NOT orphan the multi-panel side. (Regression: the
         # stale container was removed before its HTML sections were re-homed → they vanished.)
         vis3 = page.evaluate("""() => {
-            window.__docks.float('history'); window.__docks.float('layers'); window.__docks.float('jobs');
+            window.__docks.float('history'); window.__docks.float('layers'); window.__docks.float('properties');
             window.__docks.joinGroup('layers','history','right');
-            window.__docks.joinGroup('jobs', window.__docks.groupOf('history'), 'right');   // history|layers|jobs
-            window.__docks.splitGroup(window.__docks.groupOf('history'), 1);                // [history] | [layers,jobs]
+            window.__docks.joinGroup('properties', window.__docks.groupOf('history'), 'right');   // history|layers|properties
+            window.__docks.splitGroup(window.__docks.groupOf('history'), 1);                // [history] | [layers,properties]
             const seen = (n) => { const e=document.querySelector('.rail-section.'+n); if(!e) return false;
                 const r=e.getBoundingClientRect(); return r.width>4 && r.height>4 && !!e.closest('.dock-window,.dock-group'); };
-            return { history: seen('history'), layers: seen('layers'), jobs: seen('jobs'),
-                     subgroup: Object.values(window.__docks.groups()).some(g => g.members.length===2) }; }""")
+            const r = { history: seen('history'), layers: seen('layers'), properties: seen('properties'),
+                     subgroup: Object.values(window.__docks.groups()).some(g => g.members.length===2) };
+            window.__docks.dock('properties','right');   // restore the borrowed grouping subject
+            return r; }""")
         check("splitting a 3-panel group keeps every panel mounted (no orphaned side)",
-              vis3["history"] and vis3["layers"] and vis3["jobs"] and vis3["subgroup"], str(vis3))
+              vis3["history"] and vis3["layers"] and vis3["properties"] and vis3["subgroup"], str(vis3))
         # collapsing a grouped (snapped) member folds it to its header — flex 0 0 auto, no blank slot
         fold = page.evaluate("""() => {
             window.__docks.float('history'); window.__docks.float('layers'); window.__docks.joinGroup('layers','history','right');
@@ -2786,28 +2791,26 @@ def main():
             return res; }""")
         check("collapsing a snapped panel folds it to its header (no blank slot)",
               fold["collapsed"] and fold["hugs"], str(fold))
-        page.evaluate("window.__docks.dock('history','right'); window.__docks.dock('layers','right'); window.__docks.dock('jobs','right')"); page.wait_for_timeout(40)
-        # Jobs is a first-class dock panel now (batch queue lifted out of the Process view → visible in Edit) — step toward dissolving Q
-        page.evaluate("window.__docks.dock('jobs','right')"); page.wait_for_timeout(40)
-        jb = page.evaluate("""() => ({ inDock: !!document.querySelector('#rightdock .rail-section.jobs'),
+        page.evaluate("window.__docks.dock('history','right'); window.__docks.dock('layers','right')"); page.wait_for_timeout(40)
+        # Jobs + Processor are Manage-screen citizens now (not Edit-dock panels): they live in the
+        # manage-grid, render their panels there, and are exempt from dock float/shelve. Verify they
+        # render + their controls work AND that they do NOT sit in the Edit dock.
+        jb = page.evaluate("""() => ({ notInEditDock: !document.querySelector('#rightdock .rail-section.jobs'),
+            inGrid: !!document.querySelector('.manage-grid .rail-section.jobs'),
             hasPanel: !!document.querySelector('#jobs-list .jobs-panel'),
-            canFloat: (window.__docks.float('jobs'), window.__docks.loc('jobs')==='float') })""")
-        page.evaluate("window.__docks.dock('jobs','right')"); page.wait_for_timeout(40)
-        check("Jobs is a dockable panel in the Edit view (batch queue out of the Process view)",
-              jb["inDock"] and jb["hasPanel"] and jb["canFloat"], str(jb))
-        # Processor: the pipeline as a vertical flow rail, a first-class dock panel.
-        page.evaluate("window.__docks.dock('processor','right')"); page.wait_for_timeout(60)
+            away: window.__docks.isAway('jobs') })""")
+        check("Jobs is a Manage-screen panel (renders), not in the Edit dock",
+              jb["notInEditDock"] and jb["inGrid"] and jb["hasPanel"] and jb["away"], str(jb))
         proc = page.evaluate("""() => {
             const stages = [...document.querySelectorAll('#processor-body .proc-stage')].map(c => c.dataset.stage);
             const up = document.querySelector('#processor-body .proc-stage[data-stage="upscale"] .stage-toggle');
             const wasOn = up.checked; up.click(); const toggled = up.checked !== wasOn; up.click();
-            return { inDock: !!document.querySelector('#rightdock .rail-section.processor'),
-                     stages, hasStages: stages.length === 6, toggled,
-                     canFloat: (window.__docks.float('processor'), window.__docks.loc('processor') === 'float') };
+            return { notInEditDock: !document.querySelector('#rightdock .rail-section.processor'),
+                     inGrid: !!document.querySelector('.manage-grid .rail-section.processor'),
+                     stages, hasStages: stages.length === 6, toggled, away: window.__docks.isAway('processor') };
         }""")
-        page.evaluate("window.__docks.dock('processor','right')"); page.wait_for_timeout(40)
-        check("Processor is a dockable flow-rail panel with the pipeline stages",
-              proc["inDock"] and proc["hasStages"] and proc["toggled"] and proc["canFloat"], str(proc))
+        check("Processor is a Manage-screen flow-rail (stages render + toggle), not in the Edit dock",
+              proc["notInEditDock"] and proc["inGrid"] and proc["hasStages"] and proc["toggled"] and proc["away"], str(proc))
         # Properties is the same kind of object — float it, then dock it back
         page.evaluate("window.__docks.float('properties')"); page.wait_for_timeout(60)
         check("Properties can float into a window",
@@ -2958,35 +2961,40 @@ def main():
         check("dock layout is persisted",
               page.evaluate("() => { const s=JSON.parse(localStorage.getItem('hector-vector:docks')||'{}'); return !!s.history && !!s.layers; }"))
 
-        section("Manage screen: Edit/Manage swap borrows Library/Processor/Jobs into a roomy grid")
-        # The Manage screen A/Bs with the workbench. Tapping Manage borrows the Library,
-        # Processor and Jobs sections OUT of the right dock into a roomy .manage-grid (browse +
-        # batch room the 270px dock can't give); tapping Edit hands them back intact. The panels
-        # keep their fixed IDs + renderers — only their parent element moves. See manage-screen-plan.
+        section("Manage screen: Library/Processor/Jobs are Manage citizens, NOT in the Edit dock")
+        # The Manage screen A/Bs with the workbench. Library / Processor / Jobs are NOT Edit-dock
+        # panels — they live permanently in the .manage-grid (moved there once at startup, marked
+        # "away" so the dock won't reclaim them), and the Edit dock keeps only the editing panels.
+        # The toggle just shows/hides the grid — no per-switch reparenting. See manage-screen-plan.
         check("Edit/Manage tabs exist; Edit active by default",
               page.evaluate("() => !!document.querySelector('#view-edit') && !!document.querySelector('#view-manage') && document.querySelector('#view-edit').classList.contains('active')"))
         parent = lambda sel: page.evaluate("(s) => { const e=document.querySelector(s); return e && e.parentElement ? (e.parentElement.id || e.parentElement.className) : null; }", sel)
-        # ENTER Manage
+        # In EDIT, the manage panels are NOT in the dock (they live hidden in the manage-grid) and
+        # the Edit dock holds only editing panels (no library/processor/jobs leaking in).
+        check("Library/Processor/Jobs live in .manage-grid, not the Edit dock",
+              ("manage-grid" in (parent(".rail-section.library") or "")) and ("manage-grid" in (parent(".rail-section.processor") or "")) and ("manage-grid" in (parent(".rail-section.jobs") or "")))
+        check("the Edit right-dock has NO manage panels (only editing panels)",
+              page.evaluate("() => [...document.querySelectorAll('#rightdock > .rail-section')].every(s => !['library','processor','jobs'].includes(s.dataset.section))"))
+        check("docks marks them 'away' (exempt from dock reconcile / shelving)",
+              page.evaluate("() => window.__docks.isAway('library') && window.__docks.isAway('processor') && window.__docks.isAway('jobs')"))
+        check("in Edit the manage-grid is hidden", page.evaluate("() => getComputedStyle(document.querySelector('.manage-grid')).display === 'none'"))
+        # ENTER Manage → reveal the grid, hide the canvas; panels DON'T move (already there).
         page.click("#view-manage"); page.wait_for_function("() => document.querySelector('.app').classList.contains('manage')", timeout=4000)
         page.wait_for_timeout(60)
-        check("Manage tab active + .app.manage set", page.evaluate("() => document.querySelector('.app').classList.contains('manage') && document.querySelector('#view-manage').classList.contains('active')"))
-        check("Library / Processor / Jobs reparented into .manage-grid",
-              ("manage-grid" in (parent(".rail-section.library") or "")) and ("manage-grid" in (parent(".rail-section.processor") or "")) and ("manage-grid" in (parent(".rail-section.jobs") or "")))
-        check("docks marks the borrowed panels 'away'", page.evaluate("() => window.__docks.isAway('library') && window.__docks.isAway('processor') && window.__docks.isAway('jobs')"))
-        check("editor-grid hidden, manage-grid shown as a grid",
-              page.evaluate("() => getComputedStyle(document.querySelector('.editor-grid')).display === 'none' && getComputedStyle(document.querySelector('.manage-grid')).display === 'grid'"))
-        check("panel renderers still target their fixed IDs (re-rendered Processor has content)",
+        check("Manage shows the grid + hides the editor-grid; panels stay put",
+              page.evaluate("() => getComputedStyle(document.querySelector('.editor-grid')).display === 'none' && getComputedStyle(document.querySelector('.manage-grid')).display === 'grid'")
+              and "manage-grid" in (parent(".rail-section.library") or ""))
+        check("panel renderers still target their fixed IDs in the grid",
               page.evaluate("() => !!document.querySelector('.manage-grid #library-list') && (document.querySelector('#processor-body')||{}).childElementCount >= 0"))
-        # LEAVE Manage → panels return to the dock, canvas comes back
+        # LEAVE → canvas back, panels STAY in the grid (now hidden), never re-entering the dock.
         page.click("#view-edit"); page.wait_for_function("() => !document.querySelector('.app').classList.contains('manage')", timeout=4000)
         page.wait_for_timeout(60)
-        check("Edit tab active again; panels back in #rightdock",
-              page.evaluate("() => document.querySelector('#view-edit').classList.contains('active')") and parent(".rail-section.library") == "rightdock" and parent(".rail-section.processor") == "rightdock" and parent(".rail-section.jobs") == "rightdock")
-        check("docks no longer marks them away; editor-grid visible",
-              page.evaluate("() => !window.__docks.isAway('library') && getComputedStyle(document.querySelector('.editor-grid')).display !== 'none'"))
-        # round-trip is idempotent (a second swap returns them cleanly too)
+        check("back in Edit: editor-grid visible, manage panels still in the (hidden) grid — never leak into the dock",
+              page.evaluate("() => document.querySelector('#view-edit').classList.contains('active') && getComputedStyle(document.querySelector('.editor-grid')).display !== 'none'")
+              and "manage-grid" in (parent(".rail-section.library") or ""))
+        # a second round-trip is stable
         page.click("#view-manage"); page.wait_for_timeout(60); page.click("#view-edit"); page.wait_for_timeout(60)
-        check("Manage round-trip is idempotent (library home after a 2nd swap)", parent(".rail-section.library") == "rightdock")
+        check("Manage round-trip is stable (library stays a grid citizen)", "manage-grid" in (parent(".rail-section.library") or ""))
 
         section("App-window mode (standalone Chromium window)")
         # Headless can't exercise WCO/AWC, but the ?app=1 gate must engage and make

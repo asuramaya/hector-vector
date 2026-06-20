@@ -24,30 +24,34 @@ export function createManage(deps) {
   btnManage = document.querySelector("#view-manage");
   if (btnEdit) btnEdit.addEventListener("click", () => leave());
   if (btnManage) btnManage.addEventListener("click", () => enter());
+  // The Library / Processor / Jobs panels are Manage-screen citizens — NOT Edit-dock panels.
+  // Move them out of the dock ONCE, into the Manage grid, where they live permanently; the
+  // Edit dock then keeps only the editing panels (History / Layers / Properties / Colour).
+  // The toggle just shows/hides the grid — no per-switch reparenting. docks.borrow() marks
+  // them "away" so the dock won't reclaim them on any reconcile.
+  if (gridEl && docks) for (const [, el] of docks.borrow(BORROW)) gridEl.appendChild(el);
   syncButtons();
   return { enter, leave, toggle, isManage: () => manageOn };
 }
 
-// Flip TO the Manage screen: borrow the panels, drop them into the grid, hide the canvas.
-// This is also the "Process this" seam — the Processor auto-targets whatever raster is on
+// Flip TO the Manage screen: reveal the grid (the panels already live there), hide the
+// canvas. Also the "Process this" seam — the Processor auto-targets whatever raster is on
 // the canvas (processTarget → currentRasterTarget), so crossing over carries your current
 // work in as the pipeline source; we re-render it so the target row is fresh.
 function enter() {
   if (manageOn || !gridEl || !docks) return;
   manageOn = true;
-  for (const [, el] of docks.borrow(BORROW)) gridEl.appendChild(el);
   appEl.classList.add("manage");
   if (typeof window.renderProcessorPanel === "function") window.renderProcessorPanel();
   syncButtons();
 }
 
-// Flip BACK to the workbench: hand the panels back, then re-fit the stage (it was hidden,
-// so its measured size was stale — the dock does this same rAF dance on every relayout).
+// Flip BACK to the workbench: hide the grid, then re-fit the stage (it was hidden, so its
+// measured size was stale — the dock does this same rAF dance on every relayout).
 function leave() {
   if (!manageOn) return;
   manageOn = false;
   appEl.classList.remove("manage");
-  docks.restore(BORROW);
   requestAnimationFrame(() => { if (measureFit && viewports) measureFit(viewports.output); });
   syncButtons();
 }
