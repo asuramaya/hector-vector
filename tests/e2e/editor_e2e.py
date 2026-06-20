@@ -55,14 +55,42 @@ def set_page(page):
     global _PAGE
     _PAGE = page
 
+def _recover(page):
+    """Section-boundary cleanup (#38): dismiss any modal / open menu a PRIOR section left
+    behind, so a leaked overlay backdrop can't intercept the NEXT section's first click —
+    the failure mode where one section's leak aborted the whole run at a later, unrelated
+    click (the cascade). Best-effort + silent: recovery must never mask or invent a real
+    assertion. It touches ONLY transient chrome (modal-root, header menus) — never the
+    canvas / dock / selection state sections legitimately carry forward — so on a clean run
+    it is a verified no-op (no modal open ⇒ nothing happens)."""
+    if page is None:
+        return
+    try:
+        page.evaluate("""() => {
+            const m = document.querySelector('#modal-root');
+            if (m && !m.hidden) {
+                const close = m.querySelector('.modal-backdrop[data-modal-close]') || m.querySelector('[data-modal-close]');
+                if (close) close.click();         // route through the app's own closeModal
+                if (!m.hidden) m.hidden = true;   // hard fallback if something kept it open
+            }
+            document.querySelectorAll('.menu-list:not([hidden])').forEach(el => { el.hidden = true; });
+        }""")
+    except Exception:
+        pass   # recovery is best-effort; never let it surface as a section result
+
 def section(name):
-    """Mark the start of a named test section: narrates progress and tags any failing
-    check's screenshot with the section label. Returns whether this section is in scope
-    for the current --only filter, so a caller can gate optional/expensive work:
+    """Mark the start of a named test section: scrubs any overlay a prior section leaked
+    (_recover — #38 isolation), narrates progress, and tags any failing check's screenshot
+    with the section label. Returns whether this section is in scope for the current --only
+    filter, so a caller can gate optional/expensive work:
         if not section("Boolean ops"): ...skip heavy setup...
-    (Full per-section execution isolation is the pending part of #32 — it needs main()'s
-    body broken into per-section functions; until then --only just focuses the narration.)"""
+    Sections still run inline (shared page/state), but a leaked modal can no longer cascade
+    into unrelated sections, and an outright crash is now reported per-section by the
+    module-level net (see bottom of file) instead of hanging the run. Full per-section
+    execution isolation (each section a standalone fn) stays deferred — low value vs the
+    reindent risk on this green 2.9k-line suite."""
     global _CUR_SECTION
+    _recover(_PAGE)                      # scrub leaked overlays before this section starts
     _CUR_SECTION = name
     in_scope = (not ONLY) or (ONLY.lower() in name.lower())
     print(f"\n=== {name} ==={'' if in_scope else '  (out of --only scope)'}")
@@ -2987,4 +3015,16 @@ def main():
     return 1 if n_fail else 0
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Crash net (#38): if a section throws/stalls (e.g. a stuck click) it used to abort the
+    # run with a bare traceback and NO tally — you couldn't see how far it got or which
+    # section died. Catch it here, name the offending section, and print the partial tally.
+    try:
+        _rc = main()
+    except Exception as _e:
+        import traceback
+        _nf = sum(1 for _, ok, _ in results if not ok)
+        print(f"\n{'='*48}\n!! RUN ABORTED in section: {_CUR_SECTION}\n   {type(_e).__name__}: {_e}")
+        print(f"   {len(results)-_nf}/{len(results)} checks passed before the abort")
+        traceback.print_exc()
+        _rc = 2
+    sys.exit(_rc)
