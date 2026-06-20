@@ -82,6 +82,13 @@ Shape tools are **live shapes** — rect/ellipse keep editable parameters (size,
 - **Join / close** paths (`Ctrl/Cmd+J`), delete selected points, insert points on a segment.
 - **Edits scale to huge paths** — the node tool **LOD-culls** handles so a 10,000-anchor traced path stays editable (zoom in for more detail) instead of refusing to open.
 
+### Text & fonts
+
+- **Text tool** (`T`) — click for point text, drag for a wrapping **text box** (with a Width/Height frame + overflow warning), or bind text to a path. Edits in an inline overlay aligned under any zoom/pan/rotate; multi-line, alignment, weight/style, letter- and line-spacing in Properties.
+- **Multi-source font discovery** — search and download from **Fontsource, Fontshare, Google, and Bunny** (2000+ families, no API keys) without leaving the app. Picked fonts install to a local cache and join an **Installed** library that survives reloads; offline, Installed + System fonts still work.
+- **Text on a path** — flow text along any curve (offset / side / detach), with a **live curved preview** as you type.
+- **Convert to outlines** — turn text into editable vector paths that match the rendered glyphs exactly. Shaping (kerning + ligatures) is browser-faithful via **HarfBuzz** when available, with a Latin-grade fallback otherwise; **text-on-path outlines follow the curve**. System fonts vectorise via a free metric-compatible OFL stand-in (Arial→Arimo, Times→Tinos…); missing glyphs and complex scripts are flagged rather than silently dropped.
+
 ### Object operations
 
 - **Transform** — move, **scale** (`Ctrl/Cmd+T`), and rotate; numeric X/Y/W/H/rotation in Properties.
@@ -175,7 +182,9 @@ Heavily *bilinear*-resampled art is genuinely ambiguous; set **Native size (cell
 
 ## Requirements
 
-- **Python 3.10+** with `pip`. The base runtime (`Pillow`, `numpy`, `scipy`) is installed by `./install.sh` (or `pip install -r requirements.txt`).
+- **Python 3.10+** with `pip`. The base runtime (`Pillow`, `numpy`, `scipy`, and `fonttools[woff]` for Text → outlines) is installed by `./install.sh` (or `pip install -r requirements.txt`).
+- For **browser-exact text shaping** of complex scripts (Arabic / Indic / RTL / combining marks) in Text → outlines: optional `uharfbuzz` (`pip install uharfbuzz` into `./.venv`). Without it, Latin shapes faithfully and complex scripts get a best-effort outline plus a warning to verify.
+- **Fonts need internet to discover/download**; once cached they work offline, and System fonts always do.
 - For **Upscale / Trace**: `curl` + `unzip` (Real-ESRGAN download) and `cargo` (builds VTracer). Installed on first launch or via the Settings buttons.
 - For **AI Cutout**: nothing up front — click *Install rembg* in Settings to pull `rembg[cpu]` into a project-local `./.venv` (~500 MB, one-time). BiRefNet / BEN2 weights download on first use.
 - For **spandrel upscalers/restorers, face restore, object removal**: a one-time `torch`/`spandrel`/`onnxruntime` install into `./.venv` (from Settings); per-model weights fetch on first use. CPU works; a GPU is faster.
@@ -214,6 +223,7 @@ The deep research behind pipeline picks — every category, the OSS SOTA, and th
 - [x] **Restoration** — denoise / de-JPEG / deblur pre-pass (SCUNet / FBCNN / NAFNet via `spandrel`); **GFPGAN** face restore; **LaMa** object removal (mask-paint).
 - [x] **Auto pipeline** — classical analyzer → suggested compose with *why* + one-click Apply; outcome→model router driven by a capability registry.
 - [x] **Pixel Art → SVG**, **client-side PNG export**, **`.hv` projects**, **Library**, in-app **self-update**, **app-window** mode with tied server lifecycle.
+- [x] **Text & fonts** — point / box / on-path text, multi-source font discovery (Fontsource / Fontshare / Google / Bunny) with an Installed library, and **Convert to outlines** with browser-faithful shaping (HarfBuzz) and curve-following on-path outlines.
 
 ### In progress / open edges
 
@@ -223,7 +233,6 @@ The deep research behind pipeline picks — every category, the OSS SOTA, and th
 
 ### Planned
 
-- [ ] **Text tool** (the main parity gap).
 - [ ] **Distribute** spacing + **multi-object transform handles** (group rotate/scale) + **multiple artboards**.
 - [ ] **Vectorize "quality" tier** — VTracer is the only viable OSS colour vectorizer; closed engines (Vectorizer.ai) are meaningfully better on photos. Optional paid-API fallback is on the table.
 
@@ -231,6 +240,7 @@ The deep research behind pipeline picks — every category, the OSS SOTA, and th
 
 - Pixel-grid recovery is genuinely ambiguous on heavily *bilinear*-resampled art — set the native size manually.
 - Exported VTracer (curved) SVGs need `cairosvg` to rasterize back to PNG; pixel-art SVGs don't.
+- **Text → outlines** needs internet to fetch the font the first time (then it's cached). Without `uharfbuzz`, complex scripts (Arabic / Indic / RTL) get a best-effort outline with a warning rather than browser-exact shaping. System fonts vectorise via a metric-compatible OFL stand-in, not the exact installed face. An area text box's width/height frame is an editing aid — on save the text bakes to positioned lines (the frame bound isn't persisted).
 - Non-commercial models (SUPIR, CodeFormer, BRIA RMBG, MAT, …) are deliberately **not** shipped — see the licensing avoid-list in `ROADMAP.md`.
 
 ## Architecture

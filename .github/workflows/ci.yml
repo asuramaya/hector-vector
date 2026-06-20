@@ -53,3 +53,9 @@ jobs:
 
       - name: Capability + analyzer/router suite
         run: python3 tests/test_capabilities.py
+
+      # Text → outlines deps + logic (network-free). Guards the fonttools[woff]/Brotli packaging
+      # fix (woff2 decode), the system-font substitution map + complex-script guardrail, and the
+      # font endpoint contract. The full browser e2e (editor_e2e.py "Text:") stays a local gate.
+      - name: Text feature guard (deps + shaping logic)
+        run: python3 tests/test_text.py

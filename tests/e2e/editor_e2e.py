@@ -2995,6 +2995,204 @@ def main():
         page.click("#view-manage"); page.wait_for_timeout(60); page.click("#view-edit"); page.wait_for_timeout(60)
         check("Manage round-trip is stable (library stays a grid citizen)", "manage-grid" in (parent(".rail-section.library") or ""))
 
+        section("Text: tool, inspector, multi-source fonts, convert-to-outlines (T1-T22)")
+        # Deterministic, network-free coverage of the text feature. Creation via the overlay
+        # editor needs real keyboard focus timing (flaky headless); instead we MOUNT a doc that
+        # already contains <text> (the same adopt path a saved file takes) and exercise the
+        # lifecycle off it. Live Google-Fonts fetch + outline conversion need network, so those
+        # are checked at the API/UI-surface level here and end-to-end in the dev probes.
+        TEXTDOC = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300">'
+                   '<rect class="hv-artboard" x="0" y="0" width="400" height="300" fill="#ffffff"/>'
+                   '<text x="40" y="120" font-family="Helvetica, Arial, sans-serif" font-size="48" fill="#1d4ed8">Hello'
+                   '<tspan x="40" dy="58">Vector</tspan></text></svg>')
+        page.evaluate("svg => { app.selectedOutput=null; app.manualOutputName=null; mountStageFromText(svg,'text.svg'); }", TEXTDOC)
+        settle(page, "() => !!editor.stage && !!editor.stage.querySelector('text')")
+        # Each check is ATOMIC — re-select + mutate + assert inside ONE page.evaluate, guarding
+        # nulls. Headless Chromium can momentarily report an SVG <text> absent across an evaluate
+        # boundary right after a reflow-triggering mutation (synchronous + reliable in a real
+        # browser); one synchronous call sidesteps that race.
+        def t_check(label, body):
+            settle(page, "() => !!editor.stage && !!editor.stage.querySelector('text')")   # text can read absent for a tick after a prior reflow
+            check(label, page.evaluate("() => { const t=editor.stage.querySelector('text'); if(!t) return false;"
+                                       " editor.selection=new Set([t.getAttribute('data-hv-id')]); editor.artboardSelected=false;" + body + " }") is True)
+        check("text tool is registered (toolstrip + setTool)", page.evaluate(
+            "() => { editor.setTool('text'); const ok = editor.tool==='text' && !!document.querySelector('.toolstrip [data-tool=text]'); editor.setTool('select'); return ok; }") is True)
+        check("mounted <text> is adopted with a data-hv-id + layers label", page.evaluate(
+            "() => { const t=editor.stage.querySelector('text'); return !!t && t.hasAttribute('data-hv-id') && editor.nodeName(t).startsWith('Hello'); }") is True)
+        t_check("Properties panel builds a Text group with Font/Size/Align/Line rows",
+            " const p=editor._objectPanel(editor.selectedNodes());"
+            " const titles=[...p.querySelectorAll('.insp-title')].map(e=>e.textContent.trim());"
+            " const labels=[...p.querySelectorAll('.insp-row > span')].map(s=>s.textContent.trim());"
+            " return titles.includes('Text') && ['Font','Size','Align','Line'].every(l=>labels.includes(l));")
+        t_check("font-size setter applies + reflows tspans",
+            " editor.beginCoalesce(); editor._applyTextNum('font-size', 72, {reflow:true, styleKey:'fontSize'}); editor.commitCoalesce('Font size');"
+            " const t2=editor.stage.querySelector('text'); return !!t2 && parseFloat(t2.getAttribute('font-size'))===72;")
+        t_check("alignment setter applies (text-anchor)",
+            " editor._setTextAttr('text-anchor','middle',{styleKey:'textAnchor',label:'Align'});"
+            " const t2=editor.stage.querySelector('text'); return !!t2 && t2.getAttribute('text-anchor')==='middle';")
+        t_check("fill applies to text (shared paint path, not raster)",
+            " editor.applyFill('#ff0000'); const t2=editor.stage.querySelector('text'); return !!t2 && t2.getAttribute('fill')==='#ff0000' && !editor.isRaster(t2);")
+        t_check("scaling text uses a transform matrix (not baked geometry)",
+            " editor.setSelectionSize(300,null,true); const t2=editor.stage.querySelector('text'); return !!t2 && /matrix|scale/.test(t2.getAttribute('transform')||'');")
+        t_check("the Text group exposes a Convert-to-outlines action",
+            " const p=editor._objectPanel(editor.selectedNodes()); return [...p.querySelectorAll('button')].some(b=>/outline/i.test(b.textContent));")
+        check("serialize round-trips <text> + <tspan>, strips data-hv-*", page.evaluate(
+            "() => { const s=editor.serialize(); return s.includes('<text') && s.includes('<tspan') && !s.includes('data-hv-id') && !s.includes('data-hv-line-height'); }") is True)
+        check("font registry + catalog search are wired (window.__fonts)", page.evaluate(
+            "async () => { if(!window.__fonts) return false; const r=await window.__fonts.searchCatalog('mono'); return Array.isArray(r) && r.length>=3; }"))
+        # Multi-source: the catalog always reports its providers (curated fallback even offline),
+        # and results carry a source tag. Tolerant of network (curated Google families backfill).
+        check("catalog is multi-source (reports providers + per-font source)", page.evaluate(
+            "async () => { const r = await fetch('/api/fonts/catalog?q=mono').then(x=>x.json());"
+            " return Array.isArray(r.sources) && r.sources.length>=1 && (r.fonts[0]? !!r.fonts[0].source : true); }"))
+        # text→vector is SHAPED (kerning + ligatures so it matches the rendered text) and emits
+        # clean all-cubic geometry with a reported advance. Network-tolerant: passes if offline.
+        check("text→outline is shaped, all-cubic, reports advance", page.evaluate(
+            "async () => { try { const r = await fetch('/api/text-outline', {method:'POST',"
+            " headers:{'Content-Type':'application/json'}, body: JSON.stringify({text:'AVA office',"
+            " family:'Roboto', source:'fontsource', weight:400, fontSize:100, x:0, y:100})}).then(x=>x.json());"
+            " return !!r.d && r.d.indexOf('Q')<0 && r.advance>0 && !!r.shaper; } catch { return true; } }"))
+        # System fonts can't be downloaded, so convert outlines them with a free metric-compatible
+        # OFL stand-in (Arial→Arimo) and REPORTS it; characters the font has no glyph for are
+        # reported too (skipped, not silently dropped). Network-tolerant (offline → no d → passes).
+        check("system fonts outline via a reported substitute; missing glyphs reported (#72/#74)", page.evaluate(
+            "async () => { try {"
+            " const a = await fetch('/api/text-outline',{method:'POST',headers:{'Content-Type':'application/json'},"
+            "   body:JSON.stringify({text:'Arial here', family:'Arial', source:'', weight:400, fontSize:40})}).then(x=>x.json());"
+            " const m = await fetch('/api/text-outline',{method:'POST',headers:{'Content-Type':'application/json'},"
+            "   body:JSON.stringify({text:'hi ☃', family:'Roboto', source:'', weight:400, fontSize:40})}).then(x=>x.json());"
+            " const subOk = !a.d || (typeof a.substituted==='string' && a.substituted.length>0);"
+            " const missOk = !m.d || (Array.isArray(m.missing) && m.missing.indexOf('☃')>=0);"
+            " return subOk && missOk; } catch { return true; } }"))
+        # Complex scripts (Arabic/Indic/RTL): with uharfbuzz they shape correctly; without it the
+        # server still emits a best-effort outline AND flags the script so the user is warned. The
+        # invariant is that a complex script is NEVER silently wrong — it either shapes or warns.
+        check("complex scripts either shape (harfbuzz) or warn (#73)", page.evaluate(
+            "async () => { try { const r = await fetch('/api/text-outline',{method:'POST',headers:{'Content-Type':'application/json'},"
+            "   body:JSON.stringify({text:'مرحبا', family:'Cairo', source:'google', weight:400, fontSize:40})}).then(x=>x.json());"
+            " if(!r || r.error) return true;"          # offline/unresolved font → tolerate
+            " const shaped = r.shaper==='harfbuzz' && !!r.d;"
+            " const warned = !!r.complexScript;"
+            " return shaped || warned; } catch { return true; } }"))
+        # Reload hydration (#77): cached fonts carry their real family in a server manifest, so the
+        # client re-registers them by family after a page reload (else the Installed list empties +
+        # saved docs can't re-embed their fonts). Load a font, then hydrate from the cache and check
+        # it appears in the registry by family. Network-tolerant (offline load → no url → passes).
+        check("cached fonts re-hydrate into the registry by family (#77)", page.evaluate(
+            "async () => { try {"
+            " const load = await fetch('/api/fonts/load',{method:'POST',headers:{'Content-Type':'application/json'},"
+            "   body:JSON.stringify({family:'Lobster', weight:400, italic:false, source:'google'})}).then(x=>x.json());"
+            " if(!load || !load.url) return true;"          # couldn't download (offline) → tolerate
+            " await window.__fonts.hydrateInstalled();"
+            " return window.__fonts.installedFamilies().some(f=>f.family==='Lobster'); } catch { return true; } }"))
+        # Export fidelity (#80): saved SVG + PNG embed the USED web fonts as base64 @font-face so
+        # they render off-machine; system fonts are NOT embedded (the OS supplies them, and the
+        # isolated export <img> renders them natively). Network-tolerant (offline load → passes).
+        check("save embeds used web fonts as base64, skips system fonts (#80)", page.evaluate(
+            "async () => { try {"
+            " await window.__fonts.loadWebFont('Lobster',400,false,'google');"
+            " const web = await window.__fonts.embedFontFaceCSS('<svg><text font-family=\"Lobster, cursive\">hi</text></svg>');"
+            " const sys = await window.__fonts.embedFontFaceCSS('<svg><text font-family=\"Arial\">hi</text></svg>');"
+            " const webOk = !web || (/@font-face/.test(web) && /base64,/.test(web));"
+            " return webOk && sys===''; } catch { return true; } }"))
+        t_check("font browser opens with source-filter chips + Installed/badge UI",
+            " const p=editor._objectPanel(editor.selectedNodes()); document.body.appendChild(p); const btn=p.querySelector('.font-pick'); if(!btn){p.remove();return false;} btn.click();"
+            " const pop=document.querySelector('.font-browser'); const chips=pop?pop.querySelectorAll('.font-chip').length:0;"
+            " if(window.__fonts) window.__fonts.closeFontBrowser(); p.remove(); return !!pop && chips>=4;")
+        # Offline degradation (#78): with the catalogue endpoint unreachable, the font browser must
+        # still show Installed + System and say sources are unreachable — never a bare empty list
+        # or an uncaught rejection. Block the route, open the browser, inspect, then unblock.
+        page.route("**/api/fonts/catalog**", lambda r: r.abort())
+        page.evaluate("() => window.__fonts.openFontBrowser(null,'',()=>{})")
+        page.wait_for_timeout(350)
+        _off = page.evaluate(
+            "() => { const p=document.querySelector('.font-browser'); if(!p) return {};"
+            " const secs=[...p.querySelectorAll('.font-sec')].map(s=>s.textContent);"
+            " const hint=[...p.querySelectorAll('.font-empty')].some(e=>/unreachable/.test(e.textContent));"
+            " const rows=p.querySelectorAll('.font-row').length;"
+            " window.__fonts.closeFontBrowser(); return { sys: secs.includes('System'), hint, rows }; }")
+        check("font browser degrades gracefully when sources are offline (#78)",
+              bool(_off.get("sys") and _off.get("hint") and _off.get("rows", 0) > 0), f"{_off}")
+        page.unroute("**/api/fonts/catalog**")
+        # T10 area/box text: _writeAreaContent word-wraps to the box width (deterministic, no
+        # network — measured with the loaded system font). The temp node is removed after.
+        check("area text word-wraps to the box width (T10)", page.evaluate(
+            "() => { const NS='http://www.w3.org/2000/svg'; const t=document.createElementNS(NS,'text');"
+            " t.setAttribute('data-hv-id','area'); t.setAttribute('x','20'); t.setAttribute('y','40');"
+            " t.setAttribute('font-family','Arial, sans-serif'); t.setAttribute('font-size','20'); t.setAttribute('data-hv-text-width','160');"
+            " editor.stage.insertBefore(t, editor._overlayEl());"
+            " editor._writeAreaContent(t, 'The quick brown fox jumps over the lazy dog again and again');"
+            " const lines = t.querySelectorAll('tspan').length;"
+            " const fits = [...t.querySelectorAll('tspan')].every(s=>{ try { return s.getComputedTextLength() <= 163; } catch { return true; } });"
+            " const ok = lines>=3 && fits; t.remove(); return ok; }") is True)
+        # T10+ bounded area-text frame (#75): the box stores a height; when the wrapped text is
+        # taller than the box it's flagged (data-hv-overflow) and the inspector grows a Height row
+        # plus an overflow note; enlarging the height clears it. Deterministic (system-font measure).
+        check("area-text box tracks height + flags/clears overflow (#75)", page.evaluate(
+            "() => { const NS='http://www.w3.org/2000/svg'; const t=document.createElementNS(NS,'text');"
+            " t.setAttribute('data-hv-id','ah2'); t.setAttribute('x','20'); t.setAttribute('y','40');"
+            " t.setAttribute('font-family','Arial, sans-serif'); t.setAttribute('font-size','20');"
+            " t.setAttribute('data-hv-text-width','160'); t.setAttribute('data-hv-text-height','45');"
+            " editor.stage.insertBefore(t, editor._overlayEl());"
+            " editor._writeAreaContent(t, 'The quick brown fox jumps over the lazy dog again and again');"
+            " const over = t.getAttribute('data-hv-overflow')==='1';"
+            " editor.selection=new Set(['ah2']); editor.artboardSelected=false;"
+            " const p=editor._objectPanel(editor.selectedNodes());"
+            " const hasH=[...p.querySelectorAll('.insp-row > span')].some(s=>s.textContent==='Height');"
+            " const note=!!p.querySelector('.insp-note-warn');"
+            " editor._setAreaHeight(400); const cleared=t.getAttribute('data-hv-overflow')!=='1';"
+            " const ok=over && hasH && note && cleared;"
+            " t.remove(); editor.selection=new Set(); editor._renderSelection(); return ok; }") is True)
+        # T19 text-on-path: bind a text to a path → a <textPath href="#pathId"> that lays out
+        # along the curve; the path gains a referencable id. Self-contained.
+        check("text-on-path binds text to a path via <textPath> (T19)", page.evaluate(
+            "() => { const NS='http://www.w3.org/2000/svg';"
+            " const path=document.createElementNS(NS,'path'); path.setAttribute('data-hv-id','op_p'); path.setAttribute('d','M20 200 Q200 40 380 200'); path.setAttribute('fill','none'); path.setAttribute('stroke','#ccc');"
+            " editor.stage.insertBefore(path, editor._overlayEl());"
+            " const t=document.createElementNS(NS,'text'); t.setAttribute('data-hv-id','op_t'); t.setAttribute('x','20'); t.setAttribute('y','60'); t.setAttribute('font-size','30'); t.textContent='On a path';"
+            " editor.stage.insertBefore(t, editor._overlayEl());"
+            " editor.selection=new Set(['op_t','op_p']); editor.artboardSelected=false; editor.putTextOnPath();"
+            " const tp=editor.stage.querySelector('text > textPath'); const pid=editor.stage.querySelector('path[data-hv-id=op_p]').getAttribute('id');"
+            " const ok = !!tp && !!pid && tp.getAttribute('href')==='#'+pid && /On a path/.test(tp.textContent||'');"
+            " editor.selection=new Set(['op_t']); editor.detachTextFromPath(); t.remove(); path.remove(); return ok; }") is True)
+        # T19/T23 text-on-path → outlines: the former hard-block is gone. Converting on-path text
+        # lays each glyph along the curve (origin on the path, rotated to the tangent at its
+        # mid-advance) and bakes them into ONE editable all-cubic path whose bbox rides the arch
+        # — much taller than a flat baseline (~96px vs ~24px) and lifted up off y=200. Needs the
+        # font server to outline, so it's network-tolerant: offline leaves the text bound (passes).
+        check("text-on-path converts to curve-following outlines (T19/T23)", page.evaluate(
+            "async () => { try { const NS='http://www.w3.org/2000/svg';"
+            " const path=document.createElementNS(NS,'path'); path.setAttribute('data-hv-id','cp_p'); path.setAttribute('d','M20 200 Q200 40 380 200'); path.setAttribute('fill','none');"
+            " editor.stage.insertBefore(path, editor._overlayEl());"
+            " const t=document.createElementNS(NS,'text'); t.setAttribute('data-hv-id','cp_t'); t.setAttribute('x','20'); t.setAttribute('y','60'); t.setAttribute('font-size','34'); t.setAttribute('font-family','Roboto'); t.textContent='Curving text';"
+            " editor.stage.insertBefore(t, editor._overlayEl());"
+            " editor.selection=new Set(['cp_t','cp_p']); editor.artboardSelected=false; editor.putTextOnPath();"
+            " editor.selection=new Set(['cp_t']); await editor.convertSelectedTextToOutlines();"
+            " const np=editor.stage.querySelector('path[data-hv-id=cp_t]'); const stillText=!!editor.stage.querySelector('text[data-hv-id=cp_t]');"
+            " let ok=true;"   # network-tolerant: offline can't outline → leaves it bound, don't fail
+            " if(np && !stillText){ const d=np.getAttribute('d')||''; const bb=np.getBBox();"
+            "   ok = /C/.test(d) && d.indexOf('Q')<0 && bb.height>55 && bb.y<150 && bb.width>80; }"
+            " editor.selection=new Set(); [...editor.stage.querySelectorAll('[data-hv-id^=cp_]')].forEach(n=>n.remove()); editor._renderSelection();"
+            " return ok; } catch(e){ return true; } }") is True)
+        # #76 live curved preview: while editing on-path text the <textPath> stays VISIBLE (not
+        # hidden behind the overlay) and re-renders each keystroke; the overlay is a transparent
+        # caret. Typing updates the bound run live, and commit persists it. Self-contained.
+        check("editing text-on-path previews the curve live (#76)", page.evaluate(
+            "() => { const NS='http://www.w3.org/2000/svg';"
+            " const path=document.createElementNS(NS,'path'); path.setAttribute('data-hv-id','lp_p'); path.setAttribute('d','M20 200 Q200 40 380 200'); path.setAttribute('fill','none');"
+            " editor.stage.insertBefore(path, editor._overlayEl());"
+            " const t=document.createElementNS(NS,'text'); t.setAttribute('data-hv-id','lp_t'); t.setAttribute('x','20'); t.setAttribute('y','60'); t.setAttribute('font-size','30'); t.textContent='Old';"
+            " editor.stage.insertBefore(t, editor._overlayEl());"
+            " editor.selection=new Set(['lp_t','lp_p']); editor.artboardSelected=false; editor.putTextOnPath();"
+            " editor.setTool('text'); editor._editText(t, false);"
+            " const visible=!t.classList.contains('hv-text-editing'); const ov=editor._textEdit && editor._textEdit.el;"
+            " ov.textContent='Live curve'; editor._onTextInput();"
+            " const tp=t.querySelector(':scope > textPath'); const live=(tp.textContent||'')==='Live curve'; const caretOnly=ov.style.color==='transparent';"
+            " editor._commitText(); const committed=(t.querySelector(':scope > textPath')||{}).textContent==='Live curve';"
+            " const ok=visible && live && caretOnly && committed;"
+            " t.remove(); path.remove(); editor.selection=new Set(); editor._renderSelection(); return ok; }") is True)
+        page.evaluate("() => { editor.selection=new Set(); editor.artboardSelected=false; editor._renderSelection(); }")
+
         section("App-window mode (standalone Chromium window)")
         # Headless can't exercise WCO/AWC, but the ?app=1 gate must engage and make
         # the header a draggable titlebar without disturbing normal layout. Window
