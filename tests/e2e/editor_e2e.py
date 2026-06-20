@@ -2291,6 +2291,38 @@ def main():
               runl["canvasLabel"]=="Run → canvas" and runl["canvasEnabled"]
               and runl["libLabel"]=="Run → canvas" and runl["batchLabel"]=="Run library", str(runl))
 
+        section("auto-routing: clicking a library raster surfaces its plan banner (#50 + browse→process)")
+        # The auto-pipeline banner (.proc-auto) reads the analyzer's plan for the focused raster.
+        # Regression guard: a Library raster CLICK must drive the Processor (re-render + schedule
+        # /api/plan), not merely highlight the cell — else the Manage browse→process flow never
+        # surfaces a plan. With a blank canvas the library pick IS the Processor target, so the
+        # banner must appear where it was absent. It renders synchronously in its "Reading the
+        # image…" busy state, so we don't wait on the (variable-cost) server analyze.
+        # Mount an EMPTY stage (mountStageFromText, NOT newBlankDoc — that opens a modal) so the
+        # canvas holds no raster and the library pick becomes the Processor target.
+        page.evaluate("""() => {
+            if (window.__docks) window.__docks.dock('processor','right');
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"></svg>', 'autoplan-probe.svg');
+            app.selectedName=null; editor.selection=new Set(); editor.artboardSelected=false; renderProcessorPanel(); }""")
+        page.wait_for_timeout(80)
+        page.evaluate("""() => { const r=document.querySelector('.lib-mode[data-mode="raster"]'); if (r) r.click(); }""")
+        page.wait_for_timeout(60)
+        has_thumb = page.evaluate("() => document.querySelectorAll('#library-list .gallery-thumb-button').length > 0")
+        if has_thumb:
+            before = page.evaluate("() => !!document.querySelector('#processor-body .proc-auto')")
+            page.evaluate("() => document.querySelector('#library-list .gallery-thumb-button').click()")
+            try:
+                page.wait_for_function("() => !!document.querySelector('#processor-body .proc-auto')", timeout=3000); appeared = True
+            except Exception:
+                appeared = False
+            check("a Library raster click drives the Processor auto-banner (was select-only; #50 browse→process)",
+                  (not before) and appeared, f"before={before} after={appeared}")
+        else:
+            check("auto-banner browse→process check (skipped — empty library)", True)
+        # Drop the library selection so the in-flight /api/plan is superseded+aborted (don't leave
+        # the server analyzing a 150MP image into later sections).
+        page.evaluate("() => { app.selectedName=null; editor.selection=new Set(); renderProcessorPanel(); }"); page.wait_for_timeout(60)
+
         section("res-swing regression: a float shoved off-screen (e.g. a 4K layout opened on a")
         #      1080p screen) re-clamps fully into the viewport instead of stranding unreachable ----
         clamp = page.evaluate("""() => {

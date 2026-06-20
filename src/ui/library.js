@@ -151,7 +151,15 @@ function renderLibraryRasters(host, q) {
       url: `${item.url}?w=256`, name: item.name,
       active: item.name === selectedName, processed: itemIsProcessed(item.name),
       badge: itemIsProcessed(item.name) ? " ✓" : "", title: `${item.name} — click to select, drag to the canvas, right-click for info`,
-      onClick: () => { setSelectedName(item.name); setManualOutputName(null); refreshLibrary(); },
+      // Selecting a library raster makes it the Processor's target when the canvas is empty,
+      // so re-render the Processor (target row + auto-routing banner) + run the contextual
+      // reveal — otherwise picking an image in the Library / Manage browse never surfaces its
+      // plan (a raster already on the canvas still wins the target, so this is then a no-op).
+      onClick: () => {
+        setSelectedName(item.name); setManualOutputName(null); refreshLibrary();
+        if (typeof renderProcessorPanel === "function") renderProcessorPanel();
+        if (typeof syncDockContext === "function") syncDockContext();
+      },
       onContext: () => openInfoModal(item.name),
       drag: { mode: "raster", url: item.url, name: item.name },
     });
