@@ -26,6 +26,7 @@ import { curvatureMixin } from "./editor/tools/curvature.js";
 import { marqueeMixin } from "./editor/tools/marquee.js";
 import { nodeMixin } from "./editor/tools/node.js";
 import { transformMixin } from "./editor/tools/transform.js";
+import { textMixin } from "./editor/tools/text.js";
 import { snap45 } from "./editor/snap.js";
 import {
   CAP_GLYPH, JOIN_GLYPH, DASH_GLYPH, ALIGN_ICON, AB_FIT_ICON, BLEND_MODES,
@@ -118,6 +119,7 @@ const editor = {
     svgEl.classList.add("hv-pickable");
     if (!svgEl._hvBound) {
       svgEl.addEventListener("pointerdown", (e) => this._onPointerDown(e));
+      svgEl.addEventListener("dblclick", (e) => this._onDblClick(e));
       svgEl._hvBound = true;
     }
     this.renderGuides();   // re-create the (data-backed) guides layer on this fresh stage
@@ -218,6 +220,7 @@ const editor = {
     if (e.button !== 0) return;   // right/middle clicks are for the context menu, not draw/select
     if (this.tool === "pen") { this._penDown(e); return; }
     if (this.tool === "curvature") { this._curvDown(e); return; }
+    if (this.tool === "text") { this._textDown(e); return; }
     if (SHAPE_TOOLS.has(this.tool)) {
       if (e.button !== 0) return;
       e.stopPropagation(); e.preventDefault();   // draw, don't pan
@@ -373,9 +376,10 @@ const editor = {
   // creation sub-tools. Marquee + transform are folded into select (empty-drag
   // rubber-bands; Ctrl+T/Ctrl+R toggle the scale/rotate sub-mode).
   setTool(t) {
-    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && !SHAPE_TOOLS.has(t)) return;
+    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "text" && !SHAPE_TOOLS.has(t)) return;
     if (this._pen && t !== "pen") this._finishPen(true);   // keep any in-progress path
     if (this._curv && t !== "curvature") this._curvFinish(true);
+    if (this._textEdit && t !== "text") this._commitText();   // leaving the text tool finishes the edit in progress
     if (t !== this.tool) this._xformMode = null;           // leaving select drops the transform sub-mode
     if (t !== "node") this._nodeSel = new Set();           // anchor selection is node-tool-only
     this.tool = t;
@@ -420,6 +424,7 @@ const editor = {
     if (this.tool === "pen" && !this._pen && this.stage) this._renderPenPoints();   // anchor dots stay constant-screen-size
     if (this._pen) { this._redrawPen(); this._renderPenMarks(); }
     if (this._curv) { this._curvRedraw(); this._curvMarks(); }
+    if (this._textEdit) this._positionTextOverlay();   // keep the text overlay glued to the canvas as it zooms/pans
   },
   // Node handles render at the artwork's LOCAL coords (in the overlay, which has no
   // transform), so any translate left by an object move would offset them from the
@@ -437,6 +442,11 @@ const editor = {
   // A rotated rect/circle/ellipse can't stay itself → convert to a <path> first.
   _flattenNode(n) {
     const tag = n.tagName.toLowerCase();
+    // Text carries its placement/scale/rotation as a transform ATTRIBUTE (SVG renders it
+    // natively); there's no glyph geometry to bake a matrix into without the font outlines.
+    // So leave text transform-carried — baking it would corrupt the node. (To node-edit a
+    // glyph, Convert to outlines first — then it's a path and bakes like any other.)
+    if (tag === "text") return;
     if (tag === "g") {   // groups: only translate groups bake cleanly (rare non-translate groups left as-is)
       const t = currentTranslate(n);
       if (Math.abs(t.x) > 1e-9 || Math.abs(t.y) > 1e-9) bakeMatrixInto(n, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, 0, 0);
@@ -967,6 +977,14 @@ const editor = {
     if (!this._coalescing) this.push("Resize");
     const ax = bb.x0, ay = bb.y0;
     nodes.forEach((n) => {
+      // Text has no geometry to bake a scale into (font-size is one number, glyph shapes
+      // live in the font), so it scales via a consolidated transform MATRIX — non-destructive
+      // and serialization-safe. (Convert to outlines first to scale the actual glyph paths.)
+      if (n.tagName.toLowerCase() === "text") {
+        const M = `matrix(${nfmt(sx)} 0 0 ${nfmt(sy)} ${nfmt(ax * (1 - sx))} ${nfmt(ay * (1 - sy))})`;
+        const o = n.getAttribute("transform"); n.setAttribute("transform", o ? `${M} ${o}` : M); this._consolidateTransform(n);
+        return;
+      }
       // A live shape resizes by rewriting its bounding-box params (stays parametric) —
       // but only while unrotated; a rotated one is frozen to a path, then baked normally.
       if (isLiveShape(n)) {
@@ -1142,6 +1160,14 @@ const editor = {
   },
   booleanOp(op) {
     if (!this.stage) return;
+    // Guard rail (T18): a raw <text> has no path geometry, so it can't take part in a boolean.
+    // Rather than silently drop it, convert the selected text to outlines first (ids are
+    // preserved, so the selection survives) and re-run the op on the resulting paths.
+    if (this.selectedNodes().some((n) => n.tagName.toLowerCase() === "text")) {
+      setStatus("Converting text to outlines first…", 0);
+      this.convertSelectedTextToOutlines().then(() => this.booleanOp(op)).catch(() => {});
+      return;
+    }
     const nodes = this._fillableSelection();
     if (nodes.length < 2) { setStatus("Select 2 or more filled shapes for a boolean op.", 2800); return; }
     // Order by z (document position), NOT selection/click order: subtract removes the
@@ -1331,6 +1357,7 @@ const editor = {
   // ---------- layers ----------
   nodeName(n) {
     const custom = n.getAttribute("data-hv-name"); if (custom) return custom;
+    if (n.tagName.toLowerCase() === "text") { const s = (n.textContent || "").replace(/\s+/g, " ").trim(); return s ? (s.length > 24 ? s.slice(0, 23) + "…" : s) : "Text"; }
     if (isLiveShape(n)) return shapeKindName(n) || "Path";
     const map = { path: "Path", rect: "Rectangle", circle: "Circle", ellipse: "Ellipse", polygon: "Polygon", polyline: "Polyline", line: "Line", g: "Group", image: "Image", text: "Text" };
     return map[n.tagName.toLowerCase()] || n.tagName.toLowerCase();
@@ -1641,6 +1668,20 @@ const editor = {
           this.beginCoalesce(); this.rotateSelectionBy(v - lastAng, rotCentre); lastAng = v; },
         null, () => { this.commitCoalesce("Rotate"); rotCentre = null; this._renderInspector(); }, ang == null];
       wrap.appendChild(inspGroup("Transform", [posRow, sizeRow, numHalfRow(rotField)]));
+    }
+    // ---- TEXT — font family / size / weight / style / alignment / spacing (T6). Shown
+    //  only when every selected node is a <text>; fill/stroke fall through to the shared
+    //  paint rows below (text isn't a raster, so it gets the full paint inspector). ----
+    if (reads.length && reads.every((n) => n.tagName.toLowerCase() === "text")) {
+      wrap.appendChild(inspGroup("Text", this._textPanel(reads, common)));
+    }
+    // Text on path (T19): a text + a path co-selected → offer to flow the text along the curve.
+    if (this._canPutOnPath && this._canPutOnPath(nodes)) {
+      const onp = document.createElement("button");
+      onp.type = "button"; onp.className = "insp-action"; onp.textContent = "Put text on path";
+      onp.title = "Flow the selected text along the selected path";
+      onp.addEventListener("click", () => this.putTextOnPath());
+      wrap.appendChild(inspGroup("Text on path", [inspRow("Bind", onp)]));
     }
     // (Align → the panel's bottom chin via _alignBar(); Flip + z-order Arrange were removed
     //  — both are global on the action bar.)
@@ -1989,7 +2030,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 

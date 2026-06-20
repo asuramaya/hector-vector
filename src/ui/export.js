@@ -73,6 +73,7 @@ export async function serializeForSave() {
   if (!raw) return raw;
   let baked = raw;
   try { baked = await inlineSvgImages(raw); } catch { baked = raw; }
+  baked = await withEmbeddedFonts(baked);   // embed used web fonts so the .svg renders off-machine (T13)
   const cap = await saveByteCap();
   if (baked.length <= cap) return baked;
   if (raw.length > cap) {
@@ -89,6 +90,21 @@ export async function serializeForSave() {
   if (!ok) { setStatus("Save cancelled.", 2500); return null; }
   setStatus("Saved with linked image references (not portable off-machine).", 4500);
   return raw;
+}
+
+// Bake the used web fonts into the SVG as base64 @font-face (T13/T14). An <img>-rendered
+// SVG (both the save file off-machine AND the export canvas) is an ISOLATED document — it
+// can't see document.fonts, so the faces must live inside the markup or text falls back to a
+// system font. Returns the SVG unchanged when no web fonts are in play.
+async function withEmbeddedFonts(svgText) {
+  try {
+    const css = window.__fonts ? await window.__fonts.embedFontFaceCSS(svgText) : "";
+    if (!css) return svgText;
+    const m = svgText.match(/<svg\b[^>]*>/i);
+    if (!m) return svgText;
+    const at = m.index + m[0].length;
+    return svgText.slice(0, at) + css + svgText.slice(at);
+  } catch { return svgText; }
 }
 
 // Rasterise an SVG string to a PNG Blob on a canvas — the browser's own SVG renderer,
@@ -197,8 +213,11 @@ export function openExportModal() {
     go.disabled = true; go.textContent = "Rendering…";
     const [w, h] = targetSizeFor(native);
     try {
-      // Browser-side rasterise (no cairosvg). Inline rasters first so they don't drop out.
-      const svgText = await inlineSvgImages(src.svg);
+      // Browser-side rasterise (no cairosvg). Inline rasters + embed web fonts first so
+      // neither drops out of the isolated <img> render.
+      if (window.__fonts) await window.__fonts.fontsReady();
+      let svgText = await inlineSvgImages(src.svg);
+      svgText = await withEmbeddedFonts(svgText);
       const blob = await renderSvgToPngBlob(svgText, w, h, exportState.background);
       if (lastExport && lastExport.url) URL.revokeObjectURL(lastExport.url);
       const base = src.target ? src.target.name.replace(/\.svg$/i, "") : (defaultSaveName() || "export");

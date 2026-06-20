@@ -542,6 +542,10 @@ button:disabled {
 .insp-field.is-disabled { opacity: 0.38; }
 .insp-field.is-disabled input { cursor: not-allowed; }
 
+/* Small inline note under inspector rows (e.g. area-text overflow warning). */
+.insp-note { font-size: 11px; line-height: 1.35; color: var(--label); }
+.insp-note-warn { color: #d2691e; }
+
 /* No native number spinners — the drag-to-scrub label replaces them. */
 .insp-row input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .insp-row input[type="number"]::-webkit-outer-spin-button,
@@ -932,6 +936,7 @@ button:disabled {
 .stage-wrap[data-tool="rect"] .viewport-shell,    .stage-wrap[data-tool="rect"] .inline-svg,
 .stage-wrap[data-tool="ellipse"] .viewport-shell, .stage-wrap[data-tool="ellipse"] .inline-svg,
 .stage-wrap[data-tool="line"] .viewport-shell,    .stage-wrap[data-tool="line"] .inline-svg { cursor: crosshair; }
+.stage-wrap[data-tool="text"] .viewport-shell,    .stage-wrap[data-tool="text"] .inline-svg { cursor: text; }
 /* Select / Transform: move cursor over a pickable object, arrow on empty canvas. */
 .stage-wrap[data-tool="select"] .viewport-shell, .stage-wrap[data-tool="node"] .viewport-shell,
 .stage-wrap[data-tool="transform"] .viewport-shell { cursor: default; }
@@ -1770,6 +1775,50 @@ button:disabled {
 .hv-float-label { font-size: 11px; color: var(--muted); letter-spacing: 0.02em; }
 .hv-float-input input { border: 1px solid var(--hair); background: #fff; color: var(--fg); padding: 5px 8px; font: inherit; font-size: 13px; }
 .hv-float-input input:focus { outline: none; border-color: var(--ink); }
+
+/* Live text editor overlay (the text tool). The WRAPPER is a 0×0 anchor at the viewport
+   origin carrying the stage's screen CTM as a CSS matrix, so the inner editable can use
+   plain local user-units and still land pixel-exact under zoom/pan/rotate. pointer-events
+   pass through the wrapper (only the text box itself is interactive) so a click on bare
+   canvas commits + starts the next action. The matching <text> is hidden while editing. */
+.hv-text-overlay-wrap { position: fixed; left: 0; top: 0; z-index: 1200; transform-origin: 0 0; pointer-events: none; }
+.hv-text-overlay {
+  position: absolute; pointer-events: auto; display: inline-block;
+  white-space: pre; outline: none; border: 0; margin: 0; padding: 0;
+  background: transparent; caret-color: currentColor; cursor: text;
+  min-width: 1px; min-height: 1em;
+}
+text.hv-text-editing { visibility: hidden; }
+/* The drag-to-create rubber-band for an AREA text box (lives in the overlay layer). */
+.hv-textbox-preview { fill: none; stroke: var(--accent); stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+
+/* Font picker: the Text inspector's Font row is a button (current family, shown in its own
+   face) that opens a searchable Google-Fonts browser popover. */
+.font-pick { width: 100%; text-align: left; padding: 5px 8px; border: 1px solid var(--hair); background: #fff; color: var(--fg); font: inherit; font-size: 13px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.font-pick:hover { border-color: var(--ink); }
+.insp-action { width: 100%; padding: 5px 8px; border: 1px solid var(--hair); background: var(--bg); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer; }
+.insp-action:hover { border-color: var(--ink); }
+
+.font-browser { position: fixed; z-index: 1300; width: 304px; max-height: 384px; display: flex; flex-direction: column;
+  border: 1px solid var(--ink); background: var(--bg); box-shadow: 0 8px 30px rgba(0, 0, 0, 0.28); }
+.font-search { margin: 8px 8px 6px; padding: 6px 8px; border: 1px solid var(--hair); background: #fff; color: var(--fg); font: inherit; font-size: 13px; }
+.font-search:focus { outline: none; border-color: var(--ink); }
+.font-srcbar { display: flex; gap: 4px; padding: 0 8px 8px; flex-wrap: wrap; border-bottom: 1px solid var(--hair); }
+.font-chip { padding: 3px 9px; border: 1px solid var(--hair); background: var(--bg); color: var(--muted); font: inherit; font-size: 11px; cursor: pointer; border-radius: 999px; }
+.font-chip:hover { border-color: var(--ink); color: var(--fg); }
+.font-chip.active { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.font-row-src { font-size: 9px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); flex: 0 0 auto; border: 1px solid var(--hair); border-radius: 3px; padding: 1px 5px; }
+.font-row.active .font-row-src { color: rgba(255, 255, 255, 0.85); border-color: rgba(255, 255, 255, 0.4); }
+.font-results { overflow-y: auto; padding: 0 4px 6px; }
+.font-sec { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); padding: 6px 8px 2px; position: sticky; top: 0; background: var(--bg); }
+.font-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; width: 100%; text-align: left; padding: 6px 8px; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: 15px; cursor: pointer; border-radius: 3px; }
+.font-row:hover { background: var(--hover, rgba(0, 0, 0, 0.05)); }
+.font-row.active { background: var(--accent); color: #fff; }
+.font-row.loading { opacity: 0.5; cursor: progress; }
+.font-row.err { color: #c0392b; }
+.font-row-cat { font-size: 10px; color: var(--muted); flex: 0 0 auto; }
+.font-row.active .font-row-cat { color: rgba(255, 255, 255, 0.8); }
+.font-empty { padding: 12px 8px; color: var(--muted); font-size: 12px; }
 
 /* Floating tag-style rename editor (replaces window.prompt). */
 .hv-rename-pop {

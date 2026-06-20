@@ -11,6 +11,7 @@ import { createLayoutCustomize } from "./ui/layout.js";
 import { createDocks } from "./ui/docks.js";
 import { createManage } from "./ui/manage.js";
 import { api } from "./ui/api.js";
+import * as fonts from "./ui/fonts.js";
 import {
   jobsCache, activityState, TERMINAL_STATES,
   configureJobs, resetFailCount, nextJobsSeq, installJobActive,
@@ -986,6 +987,8 @@ function buildRasterTools(node) {
   // ---- Manage screen: A/Bs with the workbench; borrows Library/Processor/Jobs into a
   //      roomy grid (extracted → src/ui/manage.js). ----
   window.__manage = createManage({ docks: window.__docks, measureFit, viewports });
+  window.__fonts = fonts;   // text inspector's font browser + save-embed/export hooks
+  fonts.hydrateInstalled();   // re-register cached fonts after a reload (Installed list + save-embed)
 
   // ---- Keep-alive: let the server self-spin-down when this window closes ----
   // The server is the program's compute half; while a window is open it should
@@ -1084,6 +1087,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "r" || e.key === "R") { editor.setTool("rect"); return; }
   if (e.key === "e" || e.key === "E") { editor.setTool("ellipse"); return; }
   if (e.key === "l" || e.key === "L") { editor.setTool("line"); return; }
+  if (e.key === "t" || e.key === "T") { editor.setTool("text"); return; }
   if (e.key === "Escape" && editor.stage) {
     if (editor._xformMode) { editor.clearXform(); return; }   // first Esc exits scale/rotate
     editor.selection = new Set(); editor.artboardSelected = false; editor._renderSelection(); editor._renderInspector(); editor._showHint();
