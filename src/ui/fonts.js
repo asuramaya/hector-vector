@@ -235,9 +235,14 @@ export function openFontBrowser(anchorEl, current, onPick) {
         list.appendChild(row);
       }
     }
-    if (webFonts.length) {
+    // A family shown under Installed shouldn't also repeat in the Web list below. Only dedupe when
+    // the Installed section is actually visible (it's hidden under a source filter, where the web
+    // list is the only place the family can appear).
+    const shown = (!srcFilter) ? new Set(inst.map((f) => f.family.toLowerCase())) : null;
+    const webShow = shown ? webFonts.filter((f) => !shown.has(f.family.toLowerCase())) : webFonts;
+    if (webShow.length) {
       section(srcFilter ? SOURCE_FILTERS.find(([id]) => id === srcFilter)[1] : "Web fonts · all sources");
-      for (const f of webFonts) list.appendChild(webRow(f));
+      for (const f of webShow) list.appendChild(webRow(f));
     } else if (failed) {
       // The catalogue fetch failed (offline / sources down) — say so rather than imply "no fonts
       // exist". Installed + System above still work; downloads just can't resolve right now.

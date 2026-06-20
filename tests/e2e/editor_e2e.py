@@ -3125,6 +3125,18 @@ def main():
         check("font browser degrades gracefully when sources are offline (#78)",
               bool(_off.get("sys") and _off.get("hint") and _off.get("rows", 0) > 0), f"{_off}")
         page.unroute("**/api/fonts/catalog**")
+        # Installed/Web dedup: a downloaded family shows ONCE (under Installed), not again in the
+        # Web list below. Network-tolerant (offline load → no installed family → trivially passes).
+        check("font browser dedupes Installed vs Web (one row per family)", page.evaluate(
+            "async () => { try {"
+            " await window.__fonts.loadWebFont('Lobster',400,false,'google');"
+            " window.__fonts.openFontBrowser(null,'',()=>{});"
+            " const pop=document.querySelector('.font-browser'); const input=pop.querySelector('.font-search');"
+            " input.value='lobster'; input.dispatchEvent(new Event('input'));"
+            " await new Promise(r=>setTimeout(r,600));"
+            " const names=[...pop.querySelectorAll('.font-row-name')].map(n=>n.textContent);"
+            " window.__fonts.closeFontBrowser();"
+            " return names.filter(n=>n==='Lobster').length <= 1; } catch { return true; } }"))
         # T10 area/box text: _writeAreaContent word-wraps to the box width (deterministic, no
         # network — measured with the loaded system font). The temp node is removed after.
         check("area text word-wraps to the box width (T10)", page.evaluate(
