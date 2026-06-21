@@ -188,7 +188,17 @@ export const transformMixin = {
         const { sx, sy, ax, ay } = last;
         if (flat) {
           const M = { a: sx, b: 0, c: 0, d: sy, e: ax * (1 - sx), f: ay * (1 - sy) };
-          nodes.forEach((n, i) => { setTranslate(n, bases[i].x, bases[i].y); bakeMatrixInto(n, M, 0, 0); });
+          nodes.forEach((n, i) => {
+            // Text can't bake a scale — font-size is a single number and the glyph shapes live in
+            // the font — so baking would drop the scale and SNAP the text back to its original
+            // size on release. Keep the scale as a matrix transform instead (same as the inspector
+            // resize path). Convert to outlines first to scale the actual glyph paths.
+            if (n.tagName.toLowerCase() === "text") {
+              n.setAttribute("transform", `matrix(${nfmt(sx)} 0 0 ${nfmt(sy)} ${nfmt(sx * bases[i].x + ax * (1 - sx))} ${nfmt(sy * bases[i].y + ay * (1 - sy))})`);
+            } else {
+              setTranslate(n, bases[i].x, bases[i].y); bakeMatrixInto(n, M, 0, 0);
+            }
+          });
         } else {   // consolidate the composed scale·original into a single matrix
           nodes.forEach((n) => { try { const co = n.transform.baseVal.consolidate(); if (co) { const mm = co.matrix; n.setAttribute("transform", `matrix(${nfmt(mm.a)} ${nfmt(mm.b)} ${nfmt(mm.c)} ${nfmt(mm.d)} ${nfmt(mm.e)} ${nfmt(mm.f)})`); } } catch {} });
         }

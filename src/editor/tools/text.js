@@ -421,7 +421,7 @@ export const textMixin = {
     const tp = text.querySelector(":scope > textPath");
     const content = tp.textContent || "";
     let px = 20, py = 40;
-    try { const p = this.stage.querySelector("#" + CSS.escape(tp.getAttribute("href").slice(1))); const pt = p.getPointAtLength(0); px = Math.round(pt.x * 100) / 100; py = Math.round(pt.y * 100) / 100; } catch { /* fallback coords */ }
+    try { const href = tp.getAttribute("href") || tp.getAttribute("xlink:href") || ""; const p = this.stage.querySelector("#" + CSS.escape(href.slice(1))); const pt = p.getPointAtLength(0); px = Math.round(pt.x * 100) / 100; py = Math.round(pt.y * 100) / 100; } catch { /* fallback coords */ }
     while (text.firstChild) text.removeChild(text.firstChild);
     text.setAttribute("x", String(px)); text.setAttribute("y", String(py));
     this._writeTextContent(text, content);
@@ -645,6 +645,7 @@ export const textMixin = {
   },
 
   async convertSelectedTextToOutlines() {
+    if (this._textEdit) this._commitText();   // flush in-progress typing so we outline live content, not the stale pre-edit text
     const texts = this.selectedNodes().filter((n) => n.tagName.toLowerCase() === "text");
     if (!texts.length || !window.__fonts) return;
     const jobs = [];

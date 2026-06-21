@@ -679,8 +679,23 @@ const editor = {
       n.setAttribute("data-hv-id", "n" + (++this.idSeq));
     });
   },
+  // Re-mint REAL `id`s across freshly-cloned roots and rewire intra-clone references to them.
+  // data-hv-id is handled by _reidSubtree, but a real `id` (a path hosting a <textPath>, a
+  // <clipPath>, a <use> target) would otherwise collide with the original (invalid SVG) and the
+  // clone's href/clip-path would resolve to the ORIGINAL element. Batched across all roots so a
+  // co-cloned text-on-path + its path rewire to each other rather than back to the originals.
+  _reidRealIds(roots) {
+    const map = new Map();
+    const walk = (fn) => roots.forEach((r) => { if (r.getAttribute) fn(r); if (r.querySelectorAll) r.querySelectorAll("*").forEach(fn); });
+    walk((n) => { const old = n.getAttribute("id"); if (old && !map.has(old)) { const fresh = "hvid" + (++this.idSeq); n.setAttribute("id", fresh); map.set(old, fresh); } });
+    if (!map.size) return;
+    walk((n) => {
+      for (const a of ["href", "xlink:href"]) { const v = n.getAttribute(a); if (v && v.charAt(0) === "#" && map.has(v.slice(1))) n.setAttribute(a, "#" + map.get(v.slice(1))); }
+      const cp = n.getAttribute("clip-path"); if (cp) { const m = /url\(#([^)]+)\)/.exec(cp); if (m && map.has(m[1])) n.setAttribute("clip-path", "url(#" + map.get(m[1]) + ")"); }
+    });
+  },
   _cloneSelection(offsetX = 0, offsetY = 0) {
-    const ov = this._overlayEl(); const ids = [];
+    const ov = this._overlayEl(); const ids = []; const clones = [];
     for (const n of this.selectedNodes()) {
       const c = n.cloneNode(true);
       const id = "n" + (++this.idSeq); c.setAttribute("data-hv-id", id);
@@ -688,8 +703,9 @@ const editor = {
       if (offsetX || offsetY) { const t = currentTranslate(c); setTranslate(c, t.x + offsetX, t.y + offsetY); }
       this.stage.insertBefore(c, ov);
       this._reanchorStrokeAlign(c);   // rebuild any stroke-align clip against the clone's new id
-      ids.push(id);
+      clones.push(c); ids.push(id);
     }
+    this._reidRealIds(clones);        // fresh REAL ids (textPath host path, clipPath, use) + rewire refs
     return ids;
   },
   duplicate() {
@@ -718,15 +734,16 @@ const editor = {
     }
     if (!els.length) return;
     this.push("Paste");
-    const ov = this._overlayEl(); const ids = [];
+    const ov = this._overlayEl(); const ids = []; const pasted = [];
     for (const el of els) {
       const id = "n" + (++this.idSeq); el.setAttribute("data-hv-id", id);
       this._reidSubtree(el);           // fresh ids for group descendants (no duplicate-id collisions)
       const t = currentTranslate(el); setTranslate(el, t.x + 12, t.y + 12);
       this.stage.insertBefore(el, ov);
       this._reanchorStrokeAlign(el);   // rebuild any stroke-align clip against the paste's new id
-      ids.push(id);
+      pasted.push(el); ids.push(id);
     }
+    this._reidRealIds(pasted);         // fresh REAL ids (textPath host path, clipPath, use) + rewire refs
     this.selection = new Set(ids); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector(); this._renderLayers();
     setStatus(`Pasted ${ids.length} object${ids.length > 1 ? "s" : ""}.`, 1200);

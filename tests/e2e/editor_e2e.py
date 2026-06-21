@@ -3056,6 +3056,45 @@ def main():
             " const g = await fetch('/api/fonts/catalog?q=garamond').then(x=>x.json());"
             " const deepHit = (g.fonts||[]).some(f=>/garamond/i.test(f.family));"
             " return popFirst && deepHit; } catch { return true; } }"))
+        # Search isn't hard-capped at 60: a high limit returns ALL matches for a query, and the
+        # limit is clamped server-side so a client can't ask for an unbounded render. Net-tolerant.
+        check("font catalog honours limit (full-list search, clamped)", page.evaluate(
+            "async () => { try {"
+            " const a = await fetch('/api/fonts/catalog?q=sans&limit=500').then(x=>x.json());"
+            " if(!a.fonts || !a.total) return true;"
+            " const full = a.total <= 500 ? a.fonts.length === a.total : a.fonts.length >= 60;"
+            " const c = await fetch('/api/fonts/catalog?q=&limit=99999').then(x=>x.json());"
+            " return full && (c.fonts||[]).length <= 1000; } catch { return true; } }"))
+        # Duplicating a text-on-path mints fresh REAL ids (not just data-hv-id) and rewires the
+        # clone's <textPath> to the CLONE's path — no duplicate id, no cross-wiring to the original.
+        check("cloning text-on-path re-ids real ids + rewires textPath", page.evaluate(
+            "() => { const NS='http://www.w3.org/2000/svg';"
+            " const p=document.createElementNS(NS,'path'); p.setAttribute('data-hv-id','di_p'); p.setAttribute('d','M20 200 Q200 40 380 200'); p.setAttribute('fill','none');"
+            " editor.stage.insertBefore(p, editor._overlayEl());"
+            " const t=document.createElementNS(NS,'text'); t.setAttribute('data-hv-id','di_t'); t.setAttribute('x','20'); t.setAttribute('y','60'); t.textContent='Dup';"
+            " editor.stage.insertBefore(t, editor._overlayEl());"
+            " editor.selection=new Set(['di_t','di_p']); editor.artboardSelected=false; editor.putTextOnPath();"
+            " editor.selection=new Set(['di_t','di_p']); const ids=editor._cloneSelection(10,10);"
+            " const real=[...editor.stage.querySelectorAll('[id]')].map(n=>n.getAttribute('id'));"
+            " const noDup = real.length===new Set(real).size;"
+            " const cs=ids.map(i=>editor.stage.querySelector('[data-hv-id=\"'+i+'\"]'));"
+            " const ct=cs.find(n=>n.tagName.toLowerCase()==='text'); const cp=cs.find(n=>n.tagName.toLowerCase()==='path');"
+            " const tp=ct&&ct.querySelector(':scope > textPath');"
+            " const wired = !!(cp&&tp&&tp.getAttribute('href')==='#'+cp.getAttribute('id'));"
+            " [...editor.stage.querySelectorAll('[data-hv-id^=di_]')].forEach(n=>n.remove()); cs.forEach(n=>n&&n.remove()); editor.selection=new Set(); editor._renderSelection();"
+            " return noDup && wired; }") is True)
+        # Resizing text via the bbox handles keeps the scale (a matrix transform) instead of baking
+        # it away — baking can't scale font-size, which snapped the text back to its original size.
+        page.evaluate("() => { const NS='http://www.w3.org/2000/svg'; const t=document.createElementNS(NS,'text'); t.setAttribute('data-hv-id','rzt'); t.setAttribute('x','120'); t.setAttribute('y','120'); t.setAttribute('font-size','40'); t.setAttribute('font-family','sans-serif'); t.textContent='Resize'; editor.stage.insertBefore(t, editor._overlayEl()); editor.selection=new Set(['rzt']); editor.artboardSelected=false; editor.setTool('select'); editor.enterTransform('scale'); }")
+        page.wait_for_timeout(120)
+        _rb = page.evaluate("() => editor.stage.querySelector('[data-hv-id=rzt]').getBoundingClientRect().width")
+        _hp = page.evaluate("() => { const h=document.querySelector('.hv-xform-handle.hv-xform-se'); if(!h) return null; const r=h.getBoundingClientRect(); return {cx:r.x+r.width/2, cy:r.y+r.height/2}; }")
+        if _hp:
+            page.mouse.move(_hp["cx"], _hp["cy"]); page.mouse.down(); page.mouse.move(_hp["cx"]+100, _hp["cy"]+100, steps=6); page.mouse.up()
+            page.wait_for_timeout(120)
+            _raw = page.evaluate("() => editor.stage.querySelector('[data-hv-id=rzt]').getBoundingClientRect().width")
+            check("resizing text keeps its scale (no snap-back)", _raw > _rb * 1.3, f"{_rb}->{_raw}")
+        page.evaluate("() => { const n=editor.stage.querySelector('[data-hv-id=rzt]'); if(n) n.remove(); editor._xformMode=null; editor.selection=new Set(); editor._renderSelection(); }")
         # text→vector is SHAPED (kerning + ligatures so it matches the rendered text) and emits
         # clean all-cubic geometry with a reported advance. Network-tolerant: passes if offline.
         check("text→outline is shaped, all-cubic, reports advance", page.evaluate(
