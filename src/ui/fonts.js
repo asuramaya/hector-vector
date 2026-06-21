@@ -207,14 +207,19 @@ export function openFontBrowser(anchorEl, current, onPick) {
   const webRow = (f) => {
     const row = document.createElement("button");
     row.type = "button"; row.className = "font-row" + (f.family === curFam ? " active" : "");
-    row.innerHTML = `<span class="font-row-name">${f.family}</span><span class="font-row-src" data-s="${f.source}">${f.sourceLabel || f.source}</span>`;
+    // textContent, not innerHTML — family/source come from a remote catalogue and a name with
+    // <, &, or " would otherwise inject markup into the popover.
+    const name = document.createElement("span"); name.className = "font-row-name"; name.textContent = f.family;
+    const src = document.createElement("span"); src.className = "font-row-src";
+    src.setAttribute("data-s", f.source || ""); src.textContent = f.sourceLabel || f.source || "";
+    row.append(name, src);
     if (isWebFontLoaded(f.family)) row.style.fontFamily = webFontStack(f.family, f.category);
     const meta = { family: f.family, category: f.category, web: true, source: f.source, row };
     row.addEventListener("click", () => pick(webFontStack(f.family, f.category), meta));
     return row;
   };
 
-  const render = (webFonts, failed) => {
+  const render = (webFonts, failed, total) => {
     list.innerHTML = "";
     const section = (title) => { const h = document.createElement("div"); h.className = "font-sec"; h.textContent = title; list.appendChild(h); };
     const q = input.value.trim().toLowerCase();
@@ -243,6 +248,13 @@ export function openFontBrowser(anchorEl, current, onPick) {
     if (webShow.length) {
       section(srcFilter ? SOURCE_FILTERS.find(([id]) => id === srcFilter)[1] : "Web fonts · all sources");
       for (const f of webShow) list.appendChild(webRow(f));
+      // The server caps how many it returns; if there are more matches, say so rather than imply
+      // this is the whole list — refining the query narrows it down to what fits.
+      if (total && total > webFonts.length) {
+        const more = document.createElement("div"); more.className = "font-empty";
+        more.textContent = `Showing ${webFonts.length} of ${total} matches — type more to narrow it down.`;
+        list.appendChild(more);
+      }
     } else if (failed) {
       // The catalogue fetch failed (offline / sources down) — say so rather than imply "no fonts
       // exist". Installed + System above still work; downloads just can't resolve right now.
@@ -259,12 +271,17 @@ export function openFontBrowser(anchorEl, current, onPick) {
     const mine = ++seq;
     // Fetch directly (not via searchCatalog) so we can tell a FAILED fetch (offline) from an empty
     // result and surface the difference. searchCatalog stays the swallow-errors helper for others.
-    let web = [], failed = false;
+    // A typed query asks for a big page (so search is effectively complete); the empty browse view
+    // asks for a smaller one (popular-first + a scroll's worth), since the full catalogue is 2000+.
+    let web = [], failed = false, total = 0;
     try {
-      const qs = `q=${encodeURIComponent(input.value.trim())}` + (srcFilter ? `&source=${encodeURIComponent(srcFilter)}` : "");
-      web = (await api(`/api/fonts/catalog?${qs}`)).fonts || [];
+      const q = input.value.trim();
+      const lim = q ? 500 : 150;
+      const qs = `q=${encodeURIComponent(q)}&limit=${lim}` + (srcFilter ? `&source=${encodeURIComponent(srcFilter)}` : "");
+      const r = await api(`/api/fonts/catalog?${qs}`);
+      web = r.fonts || []; total = r.total || web.length;
     } catch { failed = true; }
-    if (mine === seq && openEl === pop) render(web, failed);
+    if (mine === seq && openEl === pop) render(web, failed, total);
   }
   let t = null;
   input.addEventListener("input", () => { clearTimeout(t); t = setTimeout(run, 200); });

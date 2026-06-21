@@ -95,7 +95,12 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/fonts/catalog":
             params = urllib.parse.parse_qs(parsed.query)
-            self.send_json(font_catalog((params.get("q") or [""])[0], source=(params.get("source") or [""])[0]))
+            try:
+                limit = int((params.get("limit") or ["60"])[0])
+            except ValueError:
+                limit = 60
+            self.send_json(font_catalog((params.get("q") or [""])[0], limit=limit,
+                                        source=(params.get("source") or [""])[0]))
             return
         if parsed.path == "/api/fonts/installed":
             self.send_json(installed_fonts())

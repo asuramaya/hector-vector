@@ -13,6 +13,7 @@ positioned path data via SVGPathPen/TransformPen).
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import urllib.parse
@@ -153,7 +154,12 @@ def _build_catalog():
                 entries = _SOURCE_FETCH[src]()
             except Exception:  # noqa: BLE001 — one source down must not sink the rest
                 entries = []
-            if entries:
+            # Only a REAL remote (Fontsource/Fontshare) counts toward "did the network work". The
+            # google source is the local curated CATALOG constant — it never fails, so counting it
+            # would make any_remote always true and defeat the retry-on-outage self-heal, latching
+            # the catalogue to the tiny fallback for the whole server lifetime (the "castrated
+            # search" bug). google still contributes its families; it just doesn't vouch for the net.
+            if entries and src in ("fontsource", "fontshare"):
                 any_remote = True
             index[src] = {}
             for e in entries:
@@ -183,6 +189,7 @@ def font_catalog(query: str = "", limit: int = 60, source: str = "") -> dict:
     (the curated list) instead of a wall of alphabetical 'A' fonts. `source` filters to one
     provider."""
     catalog, _ = _build_catalog()
+    limit = max(1, min(int(limit or 60), 1000))   # clamp: never unbounded, never zero
     q = (query or "").strip().lower()
     items = catalog or []
     if source:
@@ -278,8 +285,13 @@ def ensure_font(family: str, weight: int = 400, italic: bool = False, source: st
             if not url:
                 continue
             data = _http_bytes(url, 20)
-            if data and len(data) > 64:
-                path.write_bytes(data)
+            # Guard against caching a non-font (HTML error page, truncated body): require the woff2
+            # magic. Write atomically (temp + replace) so a concurrent/interrupted download can't
+            # leave a half-written file that then 500s TTFont() forever (it's >64B so it'd be reused).
+            if data and len(data) > 64 and data[:4] == b"wOF2":
+                tmp = path.with_suffix(".woff2.part")
+                tmp.write_bytes(data)
+                os.replace(tmp, path)
                 return path
         except Exception as exc:  # noqa: BLE001
             tried.append(f"{cand.get('source')}: {exc}")
@@ -664,7 +676,14 @@ def text_to_outline(payload: dict) -> dict:
     scale = size / upm
     glyphset = font.getGlyphSet()
     tables = _shape_tables(path, font)
-    hbfont = _hb_font(font) if _hb is not None else None
+    # HarfBuzz needs to re-emit the SFNT (font.save), which can fail on some inputs even when the
+    # uharfbuzz import succeeded — fall back to the fontTools shaper rather than 500 the request.
+    hbfont = None
+    if _hb is not None:
+        try:
+            hbfont = _hb_font(font)
+        except Exception:  # noqa: BLE001
+            hbfont = None
     ls_font = (letter_spacing / scale) if scale else 0       # tracking, converted to font units
     # Characters the font has no glyph for — they'd shape to a blank advance (silent gap), so
     # report them and the client warns the user instead of letting them vanish.
