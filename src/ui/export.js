@@ -157,11 +157,21 @@ export function openExportModal() {
 
   // Preview of what's being exported (the live canvas), on a checker so transparency reads.
   const preview = document.createElement("div"); preview.className = "export-preview";
-  const pimg = document.createElement("img");
-  const previewUrl = URL.createObjectURL(new Blob([src.svg], { type: "image/svg+xml;charset=utf-8" }));
-  pimg.src = previewUrl; pimg.alt = "Export preview";
-  pimg.addEventListener("load", () => URL.revokeObjectURL(previewUrl), { once: true });
+  const pimg = document.createElement("img"); pimg.alt = "Export preview";
   preview.appendChild(pimg); root.appendChild(preview);
+  const showPreview = (svg) => {
+    const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
+    pimg.addEventListener("load", () => URL.revokeObjectURL(url), { once: true });
+    pimg.src = url;
+  };
+  showPreview(src.svg);   // show the plain SVG instantly…
+  // …then upgrade to the font-embedded SVG the export actually renders, so the preview matches
+  // the PNG. The <img> render is isolated from the document, so un-embedded web fonts would
+  // otherwise fall back to a system face in the preview only.
+  (async () => {
+    try { if (window.__fonts) await window.__fonts.fontsReady(); showPreview(await withEmbeddedFonts(src.svg)); }
+    catch { /* keep the plain preview */ }
+  })();
 
   const sizeOut = document.createElement("div");
   sizeOut.className = "form-hint";

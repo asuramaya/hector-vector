@@ -1105,6 +1105,16 @@ const editor = {
     this._renderSelection(); this._renderInspector(); this._renderLayers();
   },
   invertSpace() {
+    // Like booleanOp: a raw <text> has no fillable geometry, so it would silently contribute
+    // nothing to the inverted region. Convert the selected text to outlines first (ids survive),
+    // then re-run on the resulting paths.
+    if (this.selectedNodes().some((n) => n.tagName.toLowerCase() === "text")) {
+      setStatus("Converting text to outlines first…", 0);
+      this.convertSelectedTextToOutlines().then((ids) => {
+        if (ids && ids.length && !this.selectedNodes().some((n) => n.tagName.toLowerCase() === "text")) this.invertSpace();
+      }).catch((e) => setStatus(`Couldn't convert the text to outlines: ${(e && e.message) || e}`, 5000));
+      return;
+    }
     const sel = this._fillableSelection();
     const nodes = sel.length ? sel : this._artworkNodes().filter((n) => shapeToAbsPath(n));
     if (!nodes.length || !this.stage) return;
@@ -1182,7 +1192,12 @@ const editor = {
     // preserved, so the selection survives) and re-run the op on the resulting paths.
     if (this.selectedNodes().some((n) => n.tagName.toLowerCase() === "text")) {
       setStatus("Converting text to outlines first…", 0);
-      this.convertSelectedTextToOutlines().then(() => this.booleanOp(op)).catch(() => {});
+      this.convertSelectedTextToOutlines().then((ids) => {
+        // Re-run only if the conversion actually produced paths AND no text remains —
+        // otherwise convert already surfaced WHY (server error / needs a web font), so
+        // re-running would loop forever and bury that message under "select 2+ shapes".
+        if (ids && ids.length && !this.selectedNodes().some((n) => n.tagName.toLowerCase() === "text")) this.booleanOp(op);
+      }).catch((e) => setStatus(`Couldn't convert the text to outlines: ${(e && e.message) || e}`, 5000));
       return;
     }
     const nodes = this._fillableSelection();

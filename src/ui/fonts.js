@@ -55,12 +55,6 @@ export async function searchCatalog(q = "", source = "") {
   } catch { return []; }
 }
 
-// The provider list for the browser's source filter (label + id). Fetched lazily; falls back.
-export async function fontSources() {
-  try { const r = await api("/api/fonts/catalog?q=__none__"); return r.sources || []; }
-  catch { return ["Fontsource", "Fontshare", "Google Fonts"]; }
-}
-
 // Ensure a web font is cached server-side (from `source`, or resolved across sources) AND
 // registered as a live FontFace. Idempotent; records the source + category for reuse/embedding.
 export async function loadWebFont(family, weight = 400, italic = false, source = "", category = "sans-serif") {
@@ -179,7 +173,7 @@ export function openFontBrowser(anchorEl, current, onPick) {
   openEl = pop;
   const r = anchorEl ? anchorEl.getBoundingClientRect() : { left: 200, bottom: 120, width: 200 };
   pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 312)) + "px";
-  pop.style.top = Math.min(r.bottom + 4, window.innerHeight - 392) + "px";
+  pop.style.top = Math.max(8, Math.min(r.bottom + 4, window.innerHeight - 392)) + "px";
   const input = pop.querySelector(".font-search");
   const srcbar = pop.querySelector(".font-srcbar");
   const list = pop.querySelector(".font-results");
@@ -240,10 +234,12 @@ export function openFontBrowser(anchorEl, current, onPick) {
         list.appendChild(row);
       }
     }
-    // A family shown under Installed shouldn't also repeat in the Web list below. Only dedupe when
-    // the Installed section is actually visible (it's hidden under a source filter, where the web
-    // list is the only place the family can appear).
-    const shown = (!srcFilter) ? new Set(inst.map((f) => f.family.toLowerCase())) : null;
+    // A family already shown under Installed or System shouldn't repeat in the Web list below.
+    // Only dedupe when those sections are actually visible (they're hidden under a source filter,
+    // where the web list is the only place the family can appear).
+    const shown = (!srcFilter)
+      ? new Set([...inst.map((f) => f.family.toLowerCase()), ...sys.map(([stack]) => primaryFamily(stack).toLowerCase())])
+      : null;
     const webShow = shown ? webFonts.filter((f) => !shown.has(f.family.toLowerCase())) : webFonts;
     if (webShow.length) {
       section(srcFilter ? SOURCE_FILTERS.find(([id]) => id === srcFilter)[1] : "Web fonts · all sources");

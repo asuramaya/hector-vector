@@ -276,6 +276,16 @@ def ensure_font(family: str, weight: int = 400, italic: bool = False, source: st
         return path
     tried = []
     candidates = [entry]
+    # Fontsource encodes the subset in the woff2 path ({key}@latest/{subset}-{w}-{style}.woff2),
+    # so a family whose defSubset isn't "latin" can 404 on that path while the latin file exists
+    # (and our text is Latin-grade anyway). Try the family's own subset first, then latin/latin-ext.
+    if entry.get("source") == "fontsource":
+        candidates = []
+        seen = set()
+        for sub in (entry.get("subset", "latin"), "latin", "latin-ext"):
+            if sub and sub not in seen:
+                seen.add(sub)
+                candidates.append({**entry, "subset": sub})
     # cross-source fallback: try Google last for any Google-mirrored family
     if entry.get("source") != "google":
         candidates.append({"family": family, "source": "google", "key": family, "weights": [400], "subset": "latin"})
@@ -397,6 +407,7 @@ except Exception:  # noqa: BLE001
 
 _SHAPE_CACHE: dict = {}   # path -> {"kern": fn, "liga": dict}
 _SHAPE_LOCK = threading.Lock()
+_SHAPE_CACHE_MAX = 64     # bound the cache so a long-lived server can't grow it without limit
 
 
 def _kern_func(font):
@@ -546,7 +557,11 @@ def _shape_tables(path, font):
         ent = _SHAPE_CACHE.get(key)
         if ent is None:
             ent = {"kern": _kern_func(font), "liga": _ligatures(font)}
+            if len(_SHAPE_CACHE) >= _SHAPE_CACHE_MAX:   # FIFO-evict the oldest entry
+                _SHAPE_CACHE.pop(next(iter(_SHAPE_CACHE)), None)
             _SHAPE_CACHE[key] = ent
+        else:   # touch: move to the end so it's the last to be evicted
+            _SHAPE_CACHE[key] = _SHAPE_CACHE.pop(key)
         return ent
 
 

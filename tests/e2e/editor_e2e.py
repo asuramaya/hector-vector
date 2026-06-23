@@ -3187,6 +3187,18 @@ def main():
             " const lines = t.querySelectorAll('tspan').length;"
             " const fits = [...t.querySelectorAll('tspan')].every(s=>{ try { return s.getComputedTextLength() <= 163; } catch { return true; } });"
             " const ok = lines>=3 && fits; t.remove(); return ok; }") is True)
+        # Area-text wrap fidelity: a single overlong token (no spaces) must CHAR-BREAK to fit the
+        # box width — mirroring the overlay's overflow-wrap:break-word — instead of overflowing on
+        # commit. Without the break-word path it'd be one long tspan far wider than the box.
+        check("area text char-breaks an overlong token (break-word parity)", page.evaluate(
+            "() => { const NS='http://www.w3.org/2000/svg'; const t=document.createElementNS(NS,'text');"
+            " t.setAttribute('data-hv-id','areabw'); t.setAttribute('x','20'); t.setAttribute('y','40');"
+            " t.setAttribute('font-family','Arial, sans-serif'); t.setAttribute('font-size','20'); t.setAttribute('data-hv-text-width','120');"
+            " editor.stage.insertBefore(t, editor._overlayEl());"
+            " editor._writeAreaContent(t, 'supercalifragilisticexpialidocious_AND_then_some_more_letters');"
+            " const sp=[...t.querySelectorAll('tspan')]; const lines=sp.length;"
+            " const fits = sp.every(s=>{ try { return s.getComputedTextLength() <= 123; } catch { return true; } });"
+            " const ok = lines>=2 && fits; t.remove(); return ok; }") is True)
         # T10+ bounded area-text frame (#75): the box stores a height; when the wrapped text is
         # taller than the box it's flagged (data-hv-overflow) and the inspector grows a Height row
         # plus an overflow note; enlarging the height clears it. Deterministic (system-font measure).

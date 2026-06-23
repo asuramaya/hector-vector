@@ -278,6 +278,13 @@ export const textMixin = {
     return node.textContent || "";
   },
   _hasTextPath(node) { return !!(node && node.querySelector && node.querySelector(":scope > textPath")); },
+  // The <path> element a text node is bound to via its <textPath href>, or null.
+  _boundPathEl(node) {
+    const tp = node && node.querySelector && node.querySelector(":scope > textPath");
+    if (!tp) return null;
+    const href = tp.getAttribute("href") || tp.getAttribute("xlink:href") || "";
+    return href ? this.stage.querySelector("#" + CSS.escape(href.slice(1))) : null;
+  },
   // Dispatch: on-path → single run; AREA (has a wrap width) → word-wrap; POINT → hard breaks only.
   _writeContent(node, str) {
     const tp = node.querySelector(":scope > textPath");
@@ -294,17 +301,26 @@ export const textMixin = {
     const ctx = this._measureCtx();
     const fs = parseFloat(node.getAttribute("font-size")) || 16;
     ctx.font = `${node.getAttribute("font-style") || "normal"} ${node.getAttribute("font-weight") || "400"} ${fs}px ${node.getAttribute("font-family") || "sans-serif"}`;
+    // Match the live overlay's CSS wrap (white-space:pre-wrap; overflow-wrap:break-word). Canvas
+    // measureText ignores letter-spacing, so add it (≈ ls per char) — otherwise tracked text wraps
+    // at a different column than the overlay showed. And char-break a token too long to fit any
+    // line (a long URL/word), like break-word — else it wraps in the overlay but overflows the box.
+    const ls = parseFloat(node.getAttribute("letter-spacing")) || 0;
+    const w = (s) => (s ? ctx.measureText(s).width + ls * s.length : 0);
+    const fitPrefix = (s) => { let lo = 1, hi = s.length, n = 1; while (lo <= hi) { const m = (lo + hi) >> 1; if (w(s.slice(0, m)) <= width) { n = m; lo = m + 1; } else hi = m - 1; } return n; };
     const out = [];
     String(text).split("\n").forEach((para, pi) => {
       if (!para.trim()) { out.push({ text: "", br: pi > 0 }); return; }
-      const words = para.split(/(\s+)/);
       let line = "", first = true;
-      for (const tok of words) {
-        const test = line + tok;
-        if (line.trim() && ctx.measureText(test).width > width) { out.push({ text: line.replace(/\s+$/, ""), br: pi > 0 && first }); first = false; line = tok.replace(/^\s+/, ""); }
-        else line = test;
+      const push = (t) => { out.push({ text: t, br: pi > 0 && first }); first = false; };
+      // Emit full-width chunks of an overlong token; return the trailing remainder that fits.
+      const charBreak = (s) => { let rest = s; while (w(rest) > width) { const n = fitPrefix(rest); push(rest.slice(0, n)); rest = rest.slice(n); } return rest; };
+      for (const tok of para.split(/(\s+)/)) {
+        if (line.trim() && w(line + tok) > width) { push(line.replace(/\s+$/, "")); line = ""; }
+        if (!line.trim()) { const head = tok.replace(/^\s+/, ""); line = (w(head) > width) ? charBreak(head) : head; }
+        else line += tok;
       }
-      out.push({ text: line.replace(/\s+$/, ""), br: pi > 0 && first });
+      push(line.replace(/\s+$/, ""));
     });
     return out;
   },
@@ -398,10 +414,11 @@ export const textMixin = {
     const text = nodes.find((n) => n.tagName.toLowerCase() === "text");
     const path = nodes.find((n) => n.tagName.toLowerCase() === "path");
     if (!text || !path) { setStatus("Select one text and one path to put the text on the path.", 3500); return; }
+    const content = this._literalLines(text).replace(/\n/g, " ").trim();
+    if (!content) { setStatus("This text is empty — type something into it before putting it on the path.", 3000); return; }
     this.push("Text on path");
     let pid = path.getAttribute("id");
     if (!pid) { pid = "hvpath-" + (path.getAttribute("data-hv-id") || ("n" + (++this.idSeq))); path.setAttribute("id", pid); }
-    const content = this._literalLines(text).replace(/\n/g, " ").trim() || "Text on a path";
     while (text.firstChild) text.removeChild(text.firstChild);
     text.removeAttribute("x"); text.removeAttribute("y"); text.removeAttribute("data-hv-text-width");
     const tp = document.createElementNS(SVG_NS, "textPath");
@@ -533,7 +550,12 @@ export const textMixin = {
     // On-path controls (T19): a single text bound to a path gets offset / side / detach.
     if (reads.length === 1 && this._hasTextPath(reads[0])) {
       const tp = reads[0].querySelector(":scope > textPath");
-      const off = parseFloat(tp.getAttribute("startOffset")) || 0;
+      // startOffset may be saved as a percentage (e.g. "50%"). The inspector edits in px, so
+      // resolve a % against the bound path length first — otherwise scrubbing would silently
+      // reinterpret "50%" as 50px and jump the text. After this, the row always reads/writes px.
+      const soRaw = (tp.getAttribute("startOffset") || "").trim();
+      let off = parseFloat(soRaw) || 0;
+      if (soRaw.endsWith("%")) { const pe = this._boundPathEl(reads[0]); const L = (pe && pe.getTotalLength) ? pe.getTotalLength() : 0; if (L) off = (off / 100) * L; }
       const side = tp.getAttribute("side") || "left";
       rows.push(numRow("Offset", r2(off), null, 1,
         (v) => { this.beginCoalesce(); this._setTextPathAttr("startOffset", v, "Path offset"); },
@@ -600,8 +622,7 @@ export const textMixin = {
   _layoutGlyphsOnPath(node, glyphs) {
     const tp = node.querySelector(":scope > textPath");
     if (!tp || !glyphs || !glyphs.length) return null;
-    const href = tp.getAttribute("href") || tp.getAttribute("xlink:href") || "";
-    const pathEl = href ? this.stage.querySelector("#" + CSS.escape(href.slice(1))) : null;
+    const pathEl = this._boundPathEl(node);
     if (!pathEl || !pathEl.getTotalLength) return null;
     const L = pathEl.getTotalLength();
     if (!(L > 0)) return null;
