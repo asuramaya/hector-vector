@@ -1815,6 +1815,17 @@ def main():
             return { tabsOk: tabs.join(',')==='none,solid,linear,radial', isLinear, handles, isRadial, solidOk }; }""")
         check("gradient UI: Colour panel paint-type tabs apply linear/radial gradient + revert to solid",
               gu["tabsOk"] and gu["isLinear"] and gu["handles"]==2 and gu["isRadial"] and gu["solidOk"], str(gu))
+        # Gradient survives a boolean (G.8): the union copies the source's url() fill → the result
+        # is still gradient-filled (the def moves with it, no orphan, no dropped paint).
+        bg = page.evaluate(r"""() => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="a" x="20" y="20" width="90" height="90" fill="#888"/><rect data-hv-id="b" x="70" y="70" width="90" height="90" fill="#888"/></svg>','bg');
+            editor.selection=new Set(['b']); editor.artboardSelected=false;
+            editor.push('g'); editor.applyPaint('fill', { kind:'gradient', spec:{ type:'linear', x1:0,y1:0,x2:1,y2:0, stops:[{offset:0,color:'#f00'},{offset:1,color:'#00f'}] } });
+            editor.selection=new Set(['a','b']); editor.booleanOp('union');
+            const ps=[...editor.stage.querySelectorAll('path[data-hv-id]')]; const res=ps[ps.length-1];
+            const m=/url\(#([^)]+)\)/.exec(res?res.getAttribute('fill')||'':''); const g=m?editor.stage.querySelector('#'+CSS.escape(m[1])):null;
+            return !!(g && /gradient$/i.test(g.tagName)); }""")
+        check("gradient survives a boolean op (union keeps the url() fill)", bg is True)
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)

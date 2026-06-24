@@ -103,6 +103,7 @@ Shape tools are **live shapes** — rect/ellipse keep editable parameters (size,
 ### Fill, stroke & colour
 
 - **Fill & stroke** with a live colour picker (the **Colour** panel hosts an embedded duo editor — swap fill/stroke with `X`).
+- **Gradients** — fill or stroke with a **linear or radial gradient**: pick the type in the Colour panel, then add/drag/remove colour stops on the gradient strip (each stop edits through the same picker). Gradients scale with the object, save into the SVG, render in PNG export, survive boolean ops, and stay independent when you duplicate.
 - **Stroke** width and **alignment** (centre / inside / outside).
 - **Opacity** and **blend mode** per object.
 - Edits are live — drag a swatch and the canvas updates immediately.
