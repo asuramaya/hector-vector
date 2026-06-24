@@ -132,46 +132,81 @@ export const expandMixin = {
     this.offsetPath(amt);
   },
 
-  // ---------- Pathfinder Divide (X.3) ----------
-  // Split N overlapping fillable shapes into every distinct face: the plane is partitioned
-  // by which shapes contain each point. For each non-empty membership signature we trace the
-  // region where (inside shape i) === bit i, and colour it with the TOPMOST covering shape —
-  // exactly Illustrator's Divide. Faces come out grouped. Capped at 6 inputs (64 signatures).
+  // ---------- Pathfinder (X.3 / X.4) ----------
+  // Region ops over N≤6 overlapping fillable shapes, all on the raster engine:
+  //   divide     → every membership face, coloured by the topmost covering shape (grouped)
+  //   trim       → each shape minus the shapes IN FRONT of it; colours kept, nothing merged
+  //   merge      → trim, then unite touching SAME-colour pieces (front diff-colour wins)
+  //   crop       → keep only what's inside the FRONT shape; the front shape is consumed
+  //   minus-back → the front shape minus everything behind it (single path)
+  // Each builds a region predicate per output and traces it to crisp cubics.
   pathfinder(op) {
     if (!this.stage) return;
-    if (op !== "divide") { setStatus("Unknown pathfinder op.", 2000); return; }
+    const ops = { divide: "Divide", trim: "Trim", merge: "Merge", crop: "Crop", "minus-back": "Minus Back" };
+    if (!ops[op]) { setStatus("Unknown pathfinder op.", 2000); return; }
     let nodes = this._fillableSelection();
-    if (nodes.length < 2) { setStatus("Select 2 or more overlapping shapes to divide.", 3000); return; }
-    if (nodes.length > 6) { setStatus("Divide handles up to 6 shapes at once.", 3000); return; }
+    if (nodes.length < 2) { setStatus("Select 2 or more overlapping shapes.", 3000); return; }
+    if (nodes.length > 6) { setStatus("Pathfinder handles up to 6 shapes at once.", 3000); return; }
     nodes = nodes.slice().sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1);   // back → front
+    const N = nodes.length;
     const bb = this._pad(this._bboxUnion(nodes), 0.02);
     const masks = nodes.map((n) => rasterMask([{ d: shapeToAbsPath(n, n.getCTM()), rule: n.getAttribute("fill-rule") }], bb, 1200));
     const big = Math.max(bb.x1 - bb.x0, bb.y1 - bb.y0);
-    const res = Math.max(160, Math.min(360, Math.round(big / 4)));
-    const N = nodes.length;
-    this.push("Divide");
-    const anchor = nodes[0];
-    const g = document.createElementNS(SVG_NS, "g");
-    const gid = "n" + (++this.idSeq); g.setAttribute("data-hv-id", gid);
-    let faces = 0;
-    for (let sig = 1; sig < (1 << N); sig++) {
-      const pred = (x, y) => { for (let i = 0; i < N; i++) { if (masks[i].inside(x, y) !== !!(sig & (1 << i))) return false; } return true; };
-      const d = marchingSquares(pred, bb, res);
-      if (!d) continue;
-      let top = -1; for (let i = N - 1; i >= 0; i--) { if (sig & (1 << i)) { top = i; break; } }
+    const res = Math.max(170, Math.min(380, Math.round(big / 3.5)));
+    const inAbove = (i, x, y) => { for (let j = i + 1; j < N; j++) if (masks[j].inside(x, y)) return true; return false; };
+    const fillOf = (n) => n.getAttribute("fill") || "#000000";
+    const mkPath = (d, src) => {
       const path = document.createElementNS(SVG_NS, "path");
       path.setAttribute("data-hv-id", "n" + (++this.idSeq));
       path.setAttribute("d", d); path.setAttribute("fill-rule", "nonzero");
-      const srcFill = nodes[top].getAttribute("fill");
-      path.setAttribute("fill", srcFill || "#000000");
-      for (const a of ["fill-opacity", "opacity"]) { const v = nodes[top].getAttribute(a); if (v) path.setAttribute(a, v); }
-      g.appendChild(path); faces++;
+      path.setAttribute("fill", fillOf(src));
+      for (const a of ["fill-opacity", "opacity"]) { const v = src.getAttribute(a); if (v) path.setAttribute(a, v); }
+      return path;
+    };
+    // Build the list of output regions: { pred, src }.
+    const outs = [];
+    if (op === "divide") {
+      for (let sig = 1; sig < (1 << N); sig++) {
+        let top = -1; for (let i = N - 1; i >= 0; i--) if (sig & (1 << i)) { top = i; break; }
+        outs.push({ pred: (x, y) => { for (let i = 0; i < N; i++) if (masks[i].inside(x, y) !== !!(sig & (1 << i))) return false; return true; }, src: nodes[top] });
+      }
+    } else if (op === "trim") {
+      for (let i = 0; i < N; i++) outs.push({ pred: (x, y) => masks[i].inside(x, y) && !inAbove(i, x, y), src: nodes[i] });
+    } else if (op === "crop") {
+      const top = N - 1;
+      for (let i = 0; i < top; i++) outs.push({ pred: (x, y) => masks[i].inside(x, y) && masks[top].inside(x, y) && !((() => { for (let j = i + 1; j < top; j++) if (masks[j].inside(x, y)) return true; return false; })()), src: nodes[i] });
+    } else if (op === "minus-back") {
+      const f = N - 1;
+      outs.push({ pred: (x, y) => masks[f].inside(x, y) && !((() => { for (let j = 0; j < f; j++) if (masks[j].inside(x, y)) return true; return false; })()), src: nodes[f] });
+    } else if (op === "merge") {
+      // group shapes by fill; a colour's region is the union of its shapes minus any
+      // DIFFERENT-colour shape sitting in front (same-colour fronts merge, so don't trim).
+      const colours = []; const seen = new Map();
+      nodes.forEach((n) => { const c = fillOf(n); if (!seen.has(c)) { seen.set(c, colours.length); colours.push({ c, idx: [] }); } colours[seen.get(c)].idx.push(nodes.indexOf(n)); });
+      for (const grp of colours) {
+        outs.push({ pred: (x, y) => { for (const i of grp.idx) { if (masks[i].inside(x, y)) { let blocked = false; for (let j = i + 1; j < N; j++) { if (fillOf(nodes[j]) !== grp.c && masks[j].inside(x, y)) { blocked = true; break; } } if (!blocked) return true; } } return false; }, src: nodes[grp.idx[grp.idx.length - 1]] });
+      }
     }
-    if (!faces) { this.undo(); setStatus("Nothing to divide — the shapes don't overlap into faces.", 3000); return; }
-    (anchor.parentNode || this.stage).insertBefore(g, anchor);
+    this.push(ops[op]);
+    const anchor = nodes[0];
+    const single = op === "minus-back";
+    const g = single ? null : document.createElementNS(SVG_NS, "g");
+    if (g) { g.setAttribute("data-hv-id", "n" + (++this.idSeq)); }
+    const made = [];
+    for (const o of outs) {
+      const d = marchingSquares(o.pred, bb, res);
+      if (!d) continue;
+      const path = mkPath(d, o.src);
+      (g || document.createDocumentFragment()).appendChild(path);
+      made.push(path);
+    }
+    if (!made.length) { this.undo(); setStatus("Nothing produced — the shapes don't overlap that way.", 3000); return; }
+    if (single) { made.forEach((p) => (anchor.parentNode || this.stage).insertBefore(p, anchor)); }
+    else { (anchor.parentNode || this.stage).insertBefore(g, anchor); }
     nodes.forEach((n) => n.remove());
-    this.selection = new Set([gid]); this.artboardSelected = false;
+    const ids = single ? made.map((p) => p.getAttribute("data-hv-id")) : [g.getAttribute("data-hv-id")];
+    this.selection = new Set(ids); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector(); this._renderLayers();
-    setStatus(`Divided into ${faces} face${faces > 1 ? "s" : ""}.`, 2500);
+    setStatus(`${ops[op]} → ${made.length} path${made.length > 1 ? "s" : ""}.`, 2500);
   },
 };

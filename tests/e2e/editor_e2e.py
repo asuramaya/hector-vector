@@ -1980,6 +1980,75 @@ def main():
             return { undoOk, delGc, nested, gradKept, reopenRel }; }""")
         check("mask hardening: undo restores, delete GC's, masks nest, clip-shape gradient kept, reopen-release",
               mh["undoOk"] and mh["delGc"] and mh["nested"] and mh["gradKept"] and mh["reopenRel"], str(mh))
+        # Expand & Pathfinder (Epic X): outline stroke (filled-path replaces the stroke, honouring
+        # width/cap via the raster→bézier engine), offset path (grow/shrink copies), and Pathfinder
+        # Divide (overlap → grouped face regions, each coloured by the topmost shape). Round-trips.
+        section("Expand & Pathfinder: outline-stroke, offset-path, divide (Epic X)")
+        ox = page.evaluate(r"""() => {
+            // 1. outline an OPEN stroked path (no fill) → replaced by a filled outline path
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><path data-hv-id="p1" d="M30 100 L170 100" fill="none" stroke="#cc3333" stroke-width="20" stroke-linecap="round"/></svg>','ox1');
+            editor.setTool('select'); editor.selection=new Set(['p1']); editor.artboardSelected=false; editor.outlineStroke();
+            const gone = editor.nodeById('p1')===null;
+            const out = editor.stage.querySelector('path[data-hv-id]');
+            const filledOutline = !!out && out.getAttribute('fill')==='#cc3333' && (out.getAttribute('stroke')||'none')==='none' && (out.getAttribute('d')||'').length>20;
+            const ser = editor.serialize(); const serOk = ser.includes('path') && !ser.includes('data-hv-');
+            // 2. outline a FILLED+stroked rect → original kept (no stroke) + outline added
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="40" y="40" width="120" height="120" fill="#ffffff" stroke="#000000" stroke-width="12"/></svg>','ox2');
+            editor.selection=new Set(['r1']); editor.outlineStroke();
+            const r1=editor.nodeById('r1');
+            const keptFill = !!r1 && r1.getAttribute('fill')==='#ffffff' && (r1.getAttribute('stroke')||'none')==='none' && editor.stage.querySelectorAll('[data-hv-id]').length===2;
+            return { gone, filledOutline, serOk, keptFill }; }""")
+        check("outline stroke: open path → filled outline (round cap), filled+stroked keeps fill + adds outline, round-trips",
+              ox["gone"] and ox["filledOutline"] and ox["serOk"] and ox["keptFill"], str(ox))
+        of = page.evaluate(r"""() => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240"><rect data-hv-id="r1" x="80" y="80" width="80" height="80" fill="#3399cc"/></svg>','of1');
+            editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false;
+            const w0 = editor.nodeById('r1').getBBox().width;
+            editor.offsetPath(18);
+            const copy = editor.nodeById([...editor.selection][0]);
+            const grew = !!copy && copy.getBBox().width > w0+12 && copy.getAttribute('fill')==='#3399cc' && editor.stage.querySelectorAll('[data-hv-id]').length===2;
+            // shrink the original
+            editor.selection=new Set(['r1']); editor.offsetPath(-15);
+            const shrunk = editor.nodeById([...editor.selection][0]).getBBox().width < w0-8;
+            // over-shrink collapses gracefully (no new object, original count preserved)
+            editor.selection=new Set(['r1']); const before=editor.stage.querySelectorAll('[data-hv-id]').length;
+            editor.offsetPath(-9999);
+            const graceful = editor.stage.querySelectorAll('[data-hv-id]').length===before;
+            return { grew, shrunk, graceful }; }""")
+        check("offset path: grow adds a larger copy (fill kept), shrink smaller, over-shrink collapses cleanly",
+              of["grew"] and of["shrunk"] and of["graceful"], str(of))
+        dv = page.evaluate(r"""() => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="a" x="30" y="60" width="90" height="80" fill="#ee5555"/><rect data-hv-id="b" x="90" y="60" width="90" height="80" fill="#55ee55"/></svg>','dv1');
+            editor.setTool('select'); editor.selection=new Set(['a','b']); editor.artboardSelected=false;
+            editor.pathfinder('divide');
+            const g = editor.nodeById([...editor.selection][0]);
+            const isG = !!g && g.tagName.toLowerCase()==='g';
+            const faces = isG ? g.querySelectorAll('path[data-hv-id]').length : 0;
+            const colours = isG ? new Set([...g.querySelectorAll('path')].map(p=>p.getAttribute('fill'))).size : 0;
+            const origGone = !editor.stage.querySelector('rect[data-hv-id="a"]') && !editor.stage.querySelector('rect[data-hv-id="b"]');
+            editor.undo();
+            const undoOk = !!editor.stage.querySelector('rect[data-hv-id="a"]') && !!editor.stage.querySelector('rect[data-hv-id="b"]');
+            return { isG, faces, colours, origGone, undoOk }; }""")
+        check("pathfinder divide: 2 overlapping rects → grouped 3 faces in 2 colours, originals gone, undo restores",
+              dv["isG"] and dv["faces"]==3 and dv["colours"]==2 and dv["origGone"] and dv["undoOk"], str(dv))
+        pf = page.evaluate(r"""() => {
+            const D2 = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="a" x="30" y="60" width="90" height="80" fill="#ee5555"/><rect data-hv-id="b" x="90" y="60" width="90" height="80" fill="#55ee55"/></svg>';
+            const D3 = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 200" width="220" height="200"><rect data-hv-id="a" x="20" y="60" width="80" height="80" fill="#ee5555"/><rect data-hv-id="b" x="70" y="60" width="80" height="80" fill="#ee5555"/><rect data-hv-id="c" x="120" y="60" width="80" height="80" fill="#55ee55"/></svg>';
+            const run = (doc, sel, op) => { window.mountStageFromText(doc,'pf'); editor.setTool('select'); editor.selection=new Set(sel); editor.artboardSelected=false; editor.pathfinder(op);
+                const ids=[...editor.selection]; const g=editor.nodeById(ids[0]); const isG=!!g&&g.tagName.toLowerCase()==='g';
+                return { isG, paths: isG?g.querySelectorAll('path').length:ids.length,
+                         colours: isG?new Set([...g.querySelectorAll('path')].map(p=>p.getAttribute('fill'))).size:new Set(ids.map(i=>{const n=editor.nodeById(i);return n&&n.getAttribute('fill');})).size,
+                         gone: sel.every(i=>!editor.stage.querySelector('[data-hv-id="'+i+'"]')) }; };
+            const trim = run(D2, ['a','b'], 'trim');            // 2 pieces, 2 colours, grouped
+            const crop = run(D2, ['a','b'], 'crop');            // a∩b, coloured a, single-region group
+            const minusB = run(D2, ['a','b'], 'minus-back');    // b − a, single green path (not a group)
+            const merge = run(D3, ['a','b','c'], 'merge');      // a,b red merge → 2 colours
+            return { trim, crop, minusB, merge }; }""")
+        check("pathfinder trim/crop/minus-back/merge: hidden-removal, front-crop, back-subtract, same-colour-merge",
+              pf["trim"]["isG"] and pf["trim"]["paths"]==2 and pf["trim"]["colours"]==2 and pf["trim"]["gone"]
+              and pf["crop"]["isG"] and pf["crop"]["colours"]==1 and pf["crop"]["gone"]
+              and (not pf["minusB"]["isG"]) and pf["minusB"]["paths"]==1 and pf["minusB"]["colours"]==1 and pf["minusB"]["gone"]
+              and pf["merge"]["isG"] and pf["merge"]["colours"]==2 and pf["merge"]["gone"], str(pf))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)

@@ -2000,11 +2000,13 @@ const editor = {
       }
       const fillable = this._fillableSelection ? this._fillableSelection().length : 0;
       if (fillable >= 2) {
-        const dv = document.createElement("button");
-        dv.type = "button"; dv.className = "insp-action"; dv.textContent = "Divide";
-        dv.title = "Pathfinder Divide — split overlapping shapes into all face regions";
-        dv.addEventListener("click", () => this.pathfinder("divide"));
-        xrows.push(inspRow("Pathfinder", dv));
+        xrows.push(inspBtnRow("Pathfinder", [
+          { glyph: "▦", title: "Divide — split into all face regions", onClick: () => this.pathfinder("divide") },
+          { glyph: "▣", title: "Trim — remove hidden back parts (keep colours)", onClick: () => this.pathfinder("trim") },
+          { glyph: "◳", title: "Merge — unite touching same-colour shapes", onClick: () => this.pathfinder("merge") },
+          { glyph: "⊡", title: "Crop — keep only what's inside the front shape", onClick: () => this.pathfinder("crop") },
+          { glyph: "⊟", title: "Minus Back — front shape minus everything behind", onClick: () => this.pathfinder("minus-back") },
+        ]));
       }
       if (xrows.length) wrap.appendChild(inspGroup("Expand", xrows));
     }
