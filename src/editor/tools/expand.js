@@ -42,18 +42,17 @@ export const expandMixin = {
   // path above it, strip the stroke from the original (removing it if it had no fill). Returns
   // the ids that should now be selected for this node. Shared by outlineStroke + expandSelection.
   _expandStrokeOf(n) {
-    const ids = [];
     const d = this._strokeOutlinePath(n);
+    if (!d) return [n.getAttribute("data-hv-id")];   // couldn't trace (degenerate) → leave the node untouched, never drop it
+    const ids = [];
+    const path = document.createElementNS(SVG_NS, "path");
+    const id = "n" + (++this.idSeq); path.setAttribute("data-hv-id", id);
+    path.setAttribute("d", d); path.setAttribute("fill-rule", "nonzero");
+    path.setAttribute("fill", n.getAttribute("stroke"));
+    for (const [a, dst] of [["stroke-opacity", "fill-opacity"], ["opacity", "opacity"]]) { const v = n.getAttribute(a); if (v) path.setAttribute(dst, v); }
+    n.parentNode.insertBefore(path, n.nextSibling);
+    ids.push(id);
     const hadFill = n.getAttribute("fill") && n.getAttribute("fill") !== "none";
-    if (d) {
-      const path = document.createElementNS(SVG_NS, "path");
-      const id = "n" + (++this.idSeq); path.setAttribute("data-hv-id", id);
-      path.setAttribute("d", d); path.setAttribute("fill-rule", "nonzero");
-      path.setAttribute("fill", n.getAttribute("stroke"));
-      for (const [a, dst] of [["stroke-opacity", "fill-opacity"], ["opacity", "opacity"]]) { const v = n.getAttribute(a); if (v) path.setAttribute(dst, v); }
-      n.parentNode.insertBefore(path, n.nextSibling);
-      ids.push(id);
-    }
     for (const a of ["stroke", "stroke-width", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "data-hv-stroke-align"]) n.removeAttribute(a);
     if (this._removeStrokeClip) this._removeStrokeClip(n);
     if (n.style) { n.style.removeProperty("stroke-width"); n.style.removeProperty("paint-order"); }

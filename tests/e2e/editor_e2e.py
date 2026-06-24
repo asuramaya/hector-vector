@@ -2064,6 +2064,36 @@ def main():
             return { allPaths, noLive, noPrim, strokeGone, serOk }; }""")
         check("expand: live shapes + primitives → plain paths, strokes outlined, no data-hv-shape, round-trips",
               ex["allPaths"] and ex["noLive"] and ex["noPrim"] and ex["strokeGone"] and ex["serOk"], str(ex))
+        # Expand/Pathfinder hardening (stress pass): a dashed stroke outlines to disjoint pieces;
+        # outline undo restores the stroke; pathfinder flattens a GROUPED selection; an evenodd
+        # donut offset keeps its hole; >6 inputs are refused; a no-trace outline never drops the node.
+        xh = page.evaluate(r"""() => {
+            // dashed → multiple subpaths
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 60" width="200" height="60"><path data-hv-id="p" d="M10 30 L190 30" fill="none" stroke="#000000" stroke-width="14" stroke-dasharray="20 16"/></svg>','xh1');
+            editor.setTool('select'); editor.selection=new Set(['p']); editor.artboardSelected=false; editor.outlineStroke();
+            const o = editor.stage.querySelector('path[data-hv-id]');
+            const dashPieces = o ? (o.getAttribute('d').match(/M/gi)||[]).length : 0;
+            // outline undo restores stroke
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r" x="40" y="40" width="100" height="100" fill="none" stroke="#cc0000" stroke-width="10"/></svg>','xh2');
+            editor.selection=new Set(['r']); editor.outlineStroke(); editor.undo();
+            const undoOk = !!editor.nodeById('r') && editor.nodeById('r').getAttribute('stroke')==='#cc0000' && editor.stage.querySelectorAll('[data-hv-id]').length===1;
+            // pathfinder on a GROUPED selection (effective-leaves flatten)
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><g data-hv-id="g0"><rect data-hv-id="a" x="30" y="60" width="90" height="80" fill="#ee5555"/><rect data-hv-id="b" x="90" y="60" width="90" height="80" fill="#55ee55"/></g></svg>','xh3');
+            editor.selection=new Set(['g0']); editor.pathfinder('divide');
+            const g=editor.nodeById([...editor.selection][0]); const groupedOk = !!g && g.tagName.toLowerCase()==='g' && g.querySelectorAll('path').length>=3;
+            // evenodd donut offset keeps the hole
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><path data-hv-id="d" d="M40 40 H160 V160 H40 Z M80 80 H120 V120 H80 Z" fill-rule="evenodd" fill="#3399cc"/></svg>','xh4');
+            editor.selection=new Set(['d']); editor.offsetPath(8);
+            const donutOk = (editor.nodeById([...editor.selection][0]).getAttribute('d').match(/M/gi)||[]).length>=2;
+            // >6 inputs refused
+            let r=''; for (let i=0;i<7;i++) r+='<rect data-hv-id="r'+i+'" x="'+(10+i*8)+'" y="40" width="40" height="40" fill="#999"/>';
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" width="200" height="120">'+r+'</svg>','xh5');
+            editor.selection=new Set(['r0','r1','r2','r3','r4','r5','r6']);
+            const before=editor.stage.querySelectorAll('[data-hv-id]').length; editor.pathfinder('divide');
+            const capOk = editor.stage.querySelectorAll('[data-hv-id]').length===before && editor.stage.querySelectorAll('g[data-hv-id]').length===0;
+            return { dashPieces, undoOk, groupedOk, donutOk, capOk }; }""")
+        check("expand/pathfinder hardening: dashed→pieces, outline-undo, grouped pathfinder, donut-offset hole, >6 refused",
+              xh["dashPieces"]>=4 and xh["undoOk"] and xh["groupedOk"] and xh["donutOk"] and xh["capOk"], str(xh))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)
