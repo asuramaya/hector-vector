@@ -1849,6 +1849,30 @@ def main():
             return { hasBtn, linMounted, remount, serOk, radMounted, exited }; }""")
         check("gradient handles: edit affordance + linear/radial handles mount, re-mount, round-trip, exit",
               gh["hasBtn"] and gh["linMounted"] and gh["remount"] and gh["serOk"] and gh["radMounted"] and gh["exited"], str(gh))
+        # Gradient hardening (stress pass): stroke gradients, no orphan buildup when cycling paint
+        # types, undo/redo restores the def, and a saved→reopened gradient stays editable.
+        gs = page.evaluate(r"""() => {
+            const LIN = {kind:'gradient',spec:{type:'linear',x1:0,y1:0,x2:1,y2:0,stops:[{offset:0,color:'#f00'},{offset:1,color:'#00f'}]}};
+            const RAD = {kind:'gradient',spec:{type:'radial',cx:0.5,cy:0.5,r:0.5,stops:[{offset:0,color:'#fff'},{offset:1,color:'#000'}]}};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="a" x="20" y="20" width="80" height="80" fill="#ccc" stroke="#000" stroke-width="4"/></svg>','gs');
+            editor.selection=new Set(['a']); editor.artboardSelected=false;
+            editor.push('s1'); editor.applyPaint('stroke', LIN);
+            const strokeGrad = editor.paintOf(editor.nodeById('a'),'stroke').kind==='gradient';
+            // cycle fill paint types many times → exactly ONE live gradient remains (no orphan buildup)
+            editor.push('s2');
+            for (let i=0;i<6;i++){ editor.applyPaint('fill',LIN); editor.applyPaint('fill',RAD); editor.applyFill('#123456'); }
+            editor.applyPaint('fill', LIN);
+            const liveFillGrads = editor.stage.querySelectorAll('defs.hv-defs > linearGradient, defs.hv-defs > radialGradient').length; // stroke(1)+fill(1)
+            // undo a fresh solid-fill step → the fill gradient (+ its def) comes back
+            editor.push('s3'); editor.applyFill('#222222'); editor.undo();
+            const undoOk = /url\(#/.test(editor.nodeById('a').getAttribute('fill')||'') && !!editor.stage.querySelector('defs.hv-defs linearGradient');
+            // save → reopen → still an editable gradient
+            window.mountStageFromText(editor.serialize(),'gs2');
+            const node = editor.stage.querySelector('rect:not(.hv-artboard)');
+            const reopenOk = node && editor.paintOf(node,'fill').kind==='gradient';
+            return { strokeGrad, liveFillGrads, undoOk, reopenOk }; }""")
+        check("gradient hardening: stroke gradient, no orphan buildup, undo/redo, reopen-editable",
+              gs["strokeGrad"] and gs["liveFillGrads"]==2 and gs["undoOk"] and gs["reopenOk"], str(gs))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)
