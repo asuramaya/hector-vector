@@ -1733,6 +1733,46 @@ def main():
         page.keyboard.press("Escape"); page.wait_for_timeout(40)
         check("Escape closes the context menu", page.evaluate("!document.querySelector('.context-menu')"))
 
+        section("Defs foundation: store, mint, clone-independence, GC, round-trip (Epic 0)")
+        mount_ctl(page)
+        f = page.evaluate(r"""() => {
+            const NS='http://www.w3.org/2000/svg';
+            const defs = editor._defs();
+            const oneDefs = editor.stage.querySelectorAll('defs.hv-defs').length === 1 && defs === editor._defs();
+            const idA = editor._mintDefId('hvgrad');
+            const g = document.createElementNS(NS,'linearGradient'); g.setAttribute('id', idA);
+            const s = document.createElementNS(NS,'stop'); s.setAttribute('offset','0'); s.setAttribute('stop-color','#f00'); g.appendChild(s);
+            defs.appendChild(g);
+            const r1 = editor.nodeById('r1'); r1.setAttribute('fill','url(#'+idA+')');
+            // duplicate r1 → the clone's fill must repoint to a NEW, deep-copied gradient
+            editor.selection = new Set(['r1']); editor.artboardSelected = false;
+            editor.duplicate();
+            const cloneId = [...editor.selection][0];
+            const clone = editor.nodeById(cloneId);
+            const cgid = (/url\(#([^)]+)\)/.exec(clone.getAttribute('fill')||'')||[])[1];
+            const independent = !!cgid && cgid !== idA && !!editor.stage.querySelector('#'+CSS.escape(cgid));
+            // serialize survival: gradient + its id present, all data-hv-* stripped
+            const ser = editor.serialize();
+            const serOk = ser.includes(idA) && ser.includes('linearGradient') && !ser.includes('data-hv-');
+            // delete the clone → its copied gradient is GC'd; the original (still used by r1) survives
+            editor.selection = new Set([cloneId]); editor.deleteSelection();
+            const gcOk = !editor.stage.querySelector('#'+CSS.escape(cgid)) && !!editor.stage.querySelector('#'+CSS.escape(idA));
+            return { oneDefs, independent, serOk, gcOk }; }""")
+        check("defs store: single .hv-defs; clone deep-copies the gradient (independent)",
+              f["oneDefs"] and f["independent"], str(f))
+        check("defs round-trip: gradient survives serialize (data-hv-* stripped) + orphan GC on delete",
+              f["serOk"] and f["gcOk"], str(f))
+        # reopen a doc whose resource id is high-numbered → idSeq must advance past it (no re-mint collision)
+        rid = page.evaluate(r"""() => {
+            const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">'
+              + '<defs class="hv-defs"><linearGradient id="hvgrad999"><stop offset="0" stop-color="#000"/></linearGradient></defs>'
+              + '<rect data-hv-id="n2" x="1" y="1" width="9" height="9" fill="url(#hvgrad999)"/></svg>';
+            window.mountStageFromText(svg, 'reopen-defs');
+            const fresh = editor._mintDefId('hvgrad');
+            return { n: +((/\d+/.exec(fresh)||[0])[0]), unused: !editor.stage.querySelector('#'+CSS.escape(fresh)), kept: !!editor.stage.querySelector('#hvgrad999') }; }""")
+        check("reopen counts resource ids into idSeq (fresh mint can't collide)",
+              rid["n"] > 999 and rid["unused"] and rid["kept"], str(rid))
+
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)
         page.evaluate("editor.selection=new Set(['r1','r2','r3']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector(); editor.group();")

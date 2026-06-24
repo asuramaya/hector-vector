@@ -147,6 +147,12 @@ const editor = {
       const m = +(/\d+/.exec(n.getAttribute("data-hv-id")) || [0])[0];
       if (m > max) max = m;
     });
+    // <defs> resource ids (hvgrad/hvclip/hvmask/…) share the idSeq space — count them too so a
+    // reopened doc never re-mints an id that an existing gradient/clip/filter already uses.
+    svg.querySelectorAll("defs [id]").forEach((n) => {
+      const m = +(/\d+/.exec(n.getAttribute("id")) || [0])[0];
+      if (m > max) max = m;
+    });
     this.idSeq = max;
     for (const child of Array.from(svg.children)) {
       const tag = child.tagName.toLowerCase();
@@ -179,6 +185,13 @@ const editor = {
   },
   _overlayEl() { return this.stage && this.stage.querySelector("g.hv-overlay"); },
   artboardEl() { return this.stage && this.stage.querySelector("rect.hv-artboard"); },
+  // Mint a unique real id for a <defs> resource (gradient/clip/mask/filter/pattern). Shares the
+  // idSeq counter with node ids ("n{n}") so it's globally unique; the prefix keeps the kind
+  // legible in the markup. Real id (NOT data-hv-*) → serialize() preserves it and url(#…) refs
+  // round-trip. _ensureStructure counts existing resource ids into idSeq on reopen (no re-mint).
+  // The resource HOME is the existing _defs() (the `<defs class="hv-defs">` stroke-align already
+  // uses) — one shared store, not a second <defs>.
+  _mintDefId(prefix) { return `${prefix || "hvres"}${++this.idSeq}`; },
 
   // ---------- serialization ----------
   serialize() {
@@ -584,10 +597,37 @@ const editor = {
   // fill painted OVER the stroke (paint-order) so only the outer half shows. The 2× is an
   // inline `style` so it overrides the attribute without disturbing it. The inside clip
   // uses a live <use> reference, so geometry edits track automatically.
+  // The canonical, lazily-created store for ALL reusable <defs> resources — stroke-align clips
+  // today, plus gradients / clipPaths / masks / filters / patterns as those land. One element,
+  // marked .hv-defs, kept as the stage's first child. No special-casing needed elsewhere: `defs`
+  // is in SKIP_TAGS and carries no data-hv-id, so it's excluded from artwork enumeration, hit-test,
+  // layers, and wrapper-flatten; serialize() drops only the overlay/guides/preview chrome + the
+  // data-hv-* attrs, so a store of real-id resources round-trips untouched. Mint ids via _mintDefId.
   _defs() {
     let d = this.stage.querySelector("defs.hv-defs");
     if (!d) { d = document.createElementNS(SVG_NS, "defs"); d.setAttribute("class", "hv-defs"); this.stage.insertBefore(d, this.stage.firstChild); }
     return d;
+  },
+  // Drop store resources nothing references any more (e.g. a gradient/clip/mask/filter whose only
+  // user was just deleted), so the store doesn't grow unbounded. Conservative: collects EVERY
+  // url(#…)/#href across the live stage — artwork AND other defs, so transitively-used resources
+  // (a gradient used by a still-referenced mask) are kept — and removes only UNreferenced resource
+  // children. Call it AFTER the history snapshot (push) so undo restores the removed resource.
+  _gcDefs() {
+    if (!this.stage) return;
+    const defs = this.stage.querySelector("defs.hv-defs"); if (!defs) return;
+    const used = new Set();
+    const add = (v) => { if (!v) return; let m; const re = /url\(["']?#([^"')]+)["']?\)|^#(.+)$/g; while ((m = re.exec(v))) used.add(m[1] || m[2]); };
+    this.stage.querySelectorAll("*").forEach((n) => {
+      if (!n.getAttribute) return;
+      for (const a of ["fill", "stroke", "clip-path", "mask", "filter", "href", "xlink:href"]) add(n.getAttribute(a));
+      add(n.getAttribute("style"));   // url(#…) can hide in an inline style too
+    });
+    const RES_TAGS = new Set(["lineargradient", "radialgradient", "pattern", "mask", "filter", "clippath"]);
+    for (const c of [...defs.children]) {
+      const id = c.getAttribute("id");
+      if (id && RES_TAGS.has(c.tagName.toLowerCase()) && !used.has(id)) c.remove();
+    }
   },
   _ensureStrokeClip(n) {
     const id = n.getAttribute("data-hv-id"); if (!id) return;
@@ -688,10 +728,32 @@ const editor = {
     const map = new Map();
     const walk = (fn) => roots.forEach((r) => { if (r.getAttribute) fn(r); if (r.querySelectorAll) r.querySelectorAll("*").forEach(fn); });
     walk((n) => { const old = n.getAttribute("id"); if (old && !map.has(old)) { const fresh = "hvid" + (++this.idSeq); n.setAttribute("id", fresh); map.set(old, fresh); } });
-    if (!map.size) return;
+    // EXTERNAL <defs> resources a clone references (gradient/pattern/mask/filter/clipPath that live
+    // outside the cloned subtree) are deep-copied into the store ONCE per clone-batch + repointed,
+    // so editing the duplicate's paint/effect/clip never mutates the original's. Intra-subtree refs
+    // resolve via `map`; stroke-align clips (hvsa-*) are owned by _reanchorStrokeAlign → left alone.
+    const RES_TAGS = new Set(["lineargradient", "radialgradient", "pattern", "mask", "filter", "clippath"]);
+    const extMap = new Map();
+    const resolveRef = (id) => {
+      if (!id) return null;
+      if (map.has(id)) return map.get(id);             // intra-subtree → already re-id'd above
+      if (id.indexOf("hvsa-") === 0) return null;      // stroke-align clip → managed elsewhere
+      if (extMap.has(id)) return extMap.get(id);
+      const src = this.stage.querySelector("#" + CSS.escape(id));
+      if (!src || !RES_TAGS.has(src.tagName.toLowerCase())) return null;   // not a copyable resource
+      const copy = src.cloneNode(true);
+      const fresh = "hvid" + (++this.idSeq);
+      copy.setAttribute("id", fresh);
+      copy.querySelectorAll("[data-hv-id]").forEach((d) => d.removeAttribute("data-hv-id"));
+      this._defs().appendChild(copy);
+      extMap.set(id, fresh);
+      return fresh;
+    };
+    const repointHref = (n, a) => { const v = n.getAttribute(a); if (v && v.charAt(0) === "#") { const t = resolveRef(v.slice(1)); if (t) n.setAttribute(a, "#" + t); } };
+    const repointUrl = (n, a) => { const v = n.getAttribute(a); if (!v) return; const m = /url\(["']?#([^"')]+)["']?\)/.exec(v); if (!m) return; const t = resolveRef(m[1]); if (t) n.setAttribute(a, v.replace(m[0], "url(#" + t + ")")); };
     walk((n) => {
-      for (const a of ["href", "xlink:href"]) { const v = n.getAttribute(a); if (v && v.charAt(0) === "#" && map.has(v.slice(1))) n.setAttribute(a, "#" + map.get(v.slice(1))); }
-      const cp = n.getAttribute("clip-path"); if (cp) { const m = /url\(#([^)]+)\)/.exec(cp); if (m && map.has(m[1])) n.setAttribute("clip-path", "url(#" + map.get(m[1]) + ")"); }
+      repointHref(n, "href"); repointHref(n, "xlink:href");
+      for (const a of ["fill", "stroke", "clip-path", "mask", "filter"]) repointUrl(n, a);
     });
   },
   _cloneSelection(offsetX = 0, offsetY = 0) {

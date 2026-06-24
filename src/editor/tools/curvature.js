@@ -151,6 +151,7 @@ export const curvatureMixin = {
     const nodes = this.selectedNodes(); if (!nodes.length) return;
     this.push("Delete");
     nodes.forEach((n) => n.remove());
+    this._gcDefs();   // reclaim gradients/clips/masks/filters whose only user was just removed
     this.selection = new Set();
     this._renderSelection(); this._renderInspector();
   },
