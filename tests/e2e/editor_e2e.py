@@ -1873,6 +1873,86 @@ def main():
             return { strokeGrad, liveFillGrads, undoOk, reopenOk }; }""")
         check("gradient hardening: stroke gradient, no orphan buildup, undo/redo, reopen-editable",
               gs["strokeGrad"] and gs["liveFillGrads"]==2 and gs["undoOk"] and gs["reopenOk"], str(gs))
+        # Masks & clipping (Epic M): make a clipping mask (top object → <clipPath>, rest grouped),
+        # release it (shape returns as artwork, def GC'd), make an opacity mask (<mask> luminance),
+        # round-trip + clone independence, and the inspector Release / Make affordances.
+        section("Masks & clipping: clip + opacity masks, release, round-trip, clone (Epic M)")
+        mount_ctl(page)
+        mk = page.evaluate(r"""() => {
+            editor.setTool('select');
+            editor.selection = new Set(['r1','r3']); editor.artboardSelected = false;   // r3 is frontmost → the mask
+            editor._renderSelection(); editor._renderInspector();
+            editor.makeClipMask();
+            const gid = [...editor.selection][0];
+            const g = editor.nodeById(gid);
+            const cid = (/url\(#([^)]+)\)/.exec(g && g.getAttribute('clip-path')||'')||[])[1];
+            const cp = cid ? editor.stage.querySelector('#'+CSS.escape(cid)) : null;
+            const isClipGroup = !!(g && g.tagName.toLowerCase()==='g' && cid && cid.indexOf('hvclip')===0);
+            const clipInDefs = !!(cp && cp.tagName.toLowerCase()==='clippath' && cp.closest('defs.hv-defs') && cp.children.length===1);
+            const contentGrouped = g.querySelector('[data-hv-id]') && !editor.stage.querySelector('rect[data-hv-id="r3"]'); // r3 moved into defs (id stripped)
+            const detected = editor._clipGroupOf(g) === g;
+            // round-trip: clipPath id + clip-path attr survive serialize; data-hv-* stripped
+            const ser = editor.serialize();
+            const serOk = ser.includes(cid) && ser.includes('clipPath') && ser.includes('clip-path') && !ser.includes('data-hv-');
+            return { isClipGroup, clipInDefs, contentGrouped: !!contentGrouped, detected, serOk, gid }; }""")
+        check("clip mask: top object → clipPath in defs, content grouped, detected, round-trips",
+              mk["isClipGroup"] and mk["clipInDefs"] and mk["contentGrouped"] and mk["detected"] and mk["serOk"], str(mk))
+        # Release: the masking shape comes back as a normal object inside the (now plain) group; the
+        # clipPath def is GC'd; clone-independence — duplicating a clip group deep-copies the clipPath.
+        rel = page.evaluate(r"""() => {
+            const g = editor.nodeById('%s');
+            const cid = (/url\(#([^)]+)\)/.exec(g.getAttribute('clip-path')||'')||[])[1];
+            // first prove clone independence BEFORE releasing
+            editor.selection = new Set([g.getAttribute('data-hv-id')]); editor.artboardSelected=false;
+            editor.duplicate();
+            const dupId = [...editor.selection][0];
+            const dup = editor.nodeById(dupId);
+            const dcid = (/url\(#([^)]+)\)/.exec(dup.getAttribute('clip-path')||'')||[])[1];
+            const cloneIndep = !!dcid && dcid !== cid && !!editor.stage.querySelector('#'+CSS.escape(dcid));
+            editor.selection = new Set([dupId]); editor.deleteSelection();   // drop the dup → its clipPath GC's
+            const dupGc = !editor.stage.querySelector('#'+CSS.escape(dcid)) && !!editor.stage.querySelector('#'+CSS.escape(cid));
+            // now release the original
+            editor.selection = new Set([g.getAttribute('data-hv-id')]); editor.artboardSelected=false;
+            editor.releaseMask();
+            const released = !g.hasAttribute('clip-path') && !editor.stage.querySelector('#'+CSS.escape(cid));
+            const shapeBack = g.querySelectorAll('[data-hv-id]').length >= 2;   // content + the former mask, now a normal child
+            return { cloneIndep, dupGc, released, shapeBack }; }""" % mk["gid"])
+        check("clip mask: clone deep-copies the clipPath (independent), release returns the shape + GC's the def",
+              rel["cloneIndep"] and rel["dupGc"] and rel["released"] and rel["shapeBack"], str(rel))
+        # Opacity mask via <mask> (luminance); detection + release.
+        mount_ctl(page)
+        om = page.evaluate(r"""() => {
+            editor.setTool('select');
+            editor.selection = new Set(['r1','r3']); editor.artboardSelected=false;
+            editor.makeOpacityMask();
+            const g = editor.nodeById([...editor.selection][0]);
+            const mid = (/url\(#([^)]+)\)/.exec(g.getAttribute('mask')||'')||[])[1];
+            const mk = mid ? editor.stage.querySelector('#'+CSS.escape(mid)) : null;
+            const isMaskGroup = !!(mid && mid.indexOf('hvmask')===0 && mk && mk.tagName.toLowerCase()==='mask' && mk.closest('defs.hv-defs'));
+            const detected = editor._maskGroupOf(g) === g;
+            const ser = editor.serialize(); const serOk = ser.includes(mid) && ser.includes('<mask');
+            editor.selection = new Set([g.getAttribute('data-hv-id')]); editor.releaseMask();
+            const released = !g.hasAttribute('mask') && !editor.stage.querySelector('#'+CSS.escape(mid));
+            return { isMaskGroup, detected, serOk, released }; }""")
+        check("opacity mask: top object → <mask> (luminance) in defs, detected, round-trips, releases",
+              om["isMaskGroup"] and om["detected"] and om["serOk"] and om["released"], str(om))
+        # Inspector affordances (M.4): ≥2 selected with a vector on top → "Make clipping mask";
+        # a selected clip group → "Release".
+        mount_ctl(page)
+        insp = page.evaluate(r"""() => {
+            // assert on the panel BUILDER (_objectPanel) directly — the live inspector is the
+            // right-click context panel, mounted on demand, which the harness doesn't open here.
+            editor.setTool('select');
+            editor.selection = new Set(['r1','r3']); editor.artboardSelected=false;
+            const p1 = editor._objectPanel(editor.selectedNodes()).innerHTML;
+            const makeBtn = /Make clipping mask/.test(p1) && /Make opacity mask/.test(p1);
+            editor.makeClipMask();
+            const g = editor.nodeById([...editor.selection][0]);
+            const p2 = editor._objectPanel([g]).innerHTML;
+            const relBtn = /Clipping mask/.test(p2) && />Release</.test(p2);
+            return { makeBtn, relBtn }; }""")
+        check("mask inspector: Make-clipping-mask on a 2+ selection, Release on a clip group",
+              insp["makeBtn"] and insp["relBtn"], str(insp))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)

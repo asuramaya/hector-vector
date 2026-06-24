@@ -94,6 +94,7 @@ Shape tools are **live shapes** — rect/ellipse keep editable parameters (size,
 - **Transform** — move, **scale** (`Ctrl/Cmd+T`), and rotate; numeric X/Y/W/H/rotation in Properties.
 - **Boolean operations** — **Union**, **Subtract**, **Intersect** on any selection, built on a marching-squares engine (robust for any overlap or winding) that refits results to *minimal cubic béziers* with crisp corners — not heavy polylines.
 - **Invert-space** — punch the selection out of its bounds (same boolean engine; overlaps merge into one hole).
+- **Clipping & opacity masks** (`Ctrl/Cmd+7`, release `+Alt`) — make the **top object clip** everything below it (a real `<clipPath>`), or use its **luminance as an opacity mask** (`<mask>`). Both are non-destructive and **releasable** — the masking shape comes back as a normal object. The clipped/masked group moves and scales as one, round-trips into the SVG, renders in PNG export, and stays independent when you duplicate. Layers tag the group; Properties offers Release.
 - **Align** — left / right / top / bottom / centre / middle, to the selection or to the artboard.
 - **Arrange** — raise / lower / bring-to-front / send-to-back z-ordering.
 - **Layers & groups** — a Layers panel with visibility, lock, rename, drag-reorder, group/ungroup, and merge; **even-odd vs nonzero** fill control.
