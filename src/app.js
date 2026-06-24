@@ -59,7 +59,7 @@ import {
 } from "./ui/docio.js";
 import { configureShortcuts, openShortcutsModal } from "./ui/shortcuts.js";
 import {
-  configureGallery, renderGalleryGrid, loadRasterToCanvas, loadFileToCanvas,
+  configureGallery, renderGalleryGrid, loadRasterToCanvas, loadFileToCanvas, canvasIsEmpty,
   copyToClipboard, downloadBlob, downloadUrl, revealInFileManager,
   copySvgSource, downloadCurrentSvg, openFromFile, revealCurrentFile,
 } from "./ui/gallery.js";
@@ -868,7 +868,7 @@ function buildRasterTools(node) {
   };
   wire("#act-cut", () => editor.cut());
   wire("#act-copy", () => editor.copy());
-  wire("#act-paste", () => editor.paste());
+  wire("#act-paste", () => pasteCommand());
   wire("#act-duplicate", () => editor.duplicate());
   wire("#act-union", () => editor.booleanOp("union"));
   wire("#act-subtract", () => editor.booleanOp("subtract"));
@@ -1052,7 +1052,10 @@ document.addEventListener("keydown", (e) => {
   if (mod && e.key === "[") { e.preventDefault(); editor.reorder(e.shiftKey ? "back" : "backward"); return; }
   if (mod && (e.key === "c" || e.key === "C")) { e.preventDefault(); editor.copy(); return; }
   if (mod && (e.key === "x" || e.key === "X")) { e.preventDefault(); editor.cut(); return; }
-  if (mod && (e.key === "v" || e.key === "V")) { e.preventDefault(); editor.paste(); return; }
+  // Don't preventDefault: let the browser fire its native `paste` event so the document-level
+  // paste handler can route OS-clipboard images/vectors (and fall back to the in-editor clipboard).
+  // The bare return stops Ctrl+V from falling through to the plain-"v" select-tool shortcut below.
+  if (mod && (e.key === "v" || e.key === "V")) { return; }
   if (mod && (e.key === "a" || e.key === "A")) { e.preventDefault(); editor.selectAll(); return; }
   if (mod && (e.key === "t" || e.key === "T")) { e.preventDefault(); editor.enterTransform("scale"); return; }   // Ctrl/Cmd+T — scale mode
   if (mod && (e.key === "r" || e.key === "R")) { e.preventDefault(); const rb = document.querySelector("#vp-rulers"); if (rb) rb.click(); return; }  // Ctrl/Cmd+R — show/hide rulers + guide marks together
@@ -1238,6 +1241,92 @@ window.addEventListener("drop", async (event) => {
     setStatus(error.message, 4000);
   }
 });
+// ---------- paste from OUTSIDE the app (the OS clipboard): images + vectors ----------
+// Pull the first <svg>…</svg> out of pasted markup — design tools (Figma/Illustrator/Inkscape)
+// put SVG on the clipboard as text/html or text/plain. Returns "" when there's no SVG.
+function _extractSvgMarkup(s) {
+  if (!s) return "";
+  const m = String(s).match(/<svg[\s\S]*?<\/svg>/i);
+  return m ? m[0] : "";
+}
+// Strip active/unsafe content from pasted SVG before it touches the document: scripts,
+// foreignObject (can host HTML/JS), inline on* handlers, and javascript: links. Returns a
+// serialized, sanitized <svg> string, or "" if it isn't valid SVG. Pasted markup is untrusted.
+function _sanitizeSvgMarkup(text) {
+  let root;
+  try { root = new DOMParser().parseFromString(text, "image/svg+xml").documentElement; } catch { return ""; }
+  if (!root || root.tagName.toLowerCase() !== "svg" || root.querySelector("parsererror")) return "";
+  root.querySelectorAll("script, foreignObject").forEach((n) => n.remove());
+  const scrub = (el) => {
+    for (const a of [...el.attributes]) {
+      const name = a.name.toLowerCase();
+      const val = (a.value || "").replace(/\s+/g, "").toLowerCase();
+      if (name.startsWith("on")) el.removeAttribute(a.name);
+      else if ((name === "href" || name.endsWith(":href")) && val.startsWith("javascript:")) el.removeAttribute(a.name);
+    }
+    for (const c of [...el.children]) scrub(c);
+  };
+  scrub(root);
+  return new XMLSerializer().serializeToString(root);
+}
+// Place pasted vector markup INTO the working canvas: merge it as a grouped object when there's
+// already artwork, or open it as the document when the canvas is empty (so it sizes to the art).
+async function pasteSvgIntoCanvas(rawSvg, name = "Pasted vector") {
+  const svg = _sanitizeSvgMarkup(rawSvg);
+  if (!svg) { setStatus("That clipboard vector couldn't be read.", 3000); return false; }
+  if (canvasIsEmpty()) { mountStageFromText(svg, name); setStatus(`Pasted ${name}.`, 2200); }
+  else editor.placeSvgMarkup(svg, name);
+  return true;
+}
+// Consume real OS-clipboard content (image or vector from another app) out of a paste event's
+// DataTransfer. Returns true if it handled external content; false → the caller falls back to
+// the in-editor shape clipboard. All DataTransfer reads happen before the first await (the object
+// is only live during the event's synchronous phase).
+async function pasteExternalFromEvent(dt) {
+  if (!dt) return false;
+  // 1) raster image bytes (a screenshot, a copied photo) → place as an <image> on the canvas
+  let file = [...(dt.files || [])].find((f) => f.type && f.type.startsWith("image/") && f.type !== "image/svg+xml");
+  if (!file) { const it = [...(dt.items || [])].find((i) => i.kind === "file" && i.type.startsWith("image/") && i.type !== "image/svg+xml"); if (it) file = it.getAsFile(); }
+  // 2) vector: an .svg file, an image/svg+xml item, or SVG markup inside text/html or text/plain
+  const svgFile = [...(dt.files || [])].find((f) => f.type === "image/svg+xml" || /\.svg$/i.test(f.name || ""));
+  const html = svgFile ? "" : (dt.getData("text/html") || "");
+  const plain = svgFile ? "" : (dt.getData("text/plain") || "");
+  if (file) { await loadFileToCanvas(file); return true; }
+  let svg = "";
+  if (svgFile) svg = await svgFile.text();
+  else svg = _extractSvgMarkup(html) || _extractSvgMarkup(plain);
+  if (svg) { await pasteSvgIntoCanvas(svg, "Pasted vector"); return true; }
+  return false;
+}
+// The single paste entry point for the canvas. External image/vector wins; otherwise it falls
+// back to the in-editor shape clipboard (editor.paste). Text fields and the text-edit overlay
+// keep their native paste — we never hijack those.
+document.addEventListener("paste", async (e) => {
+  const t = e.target;
+  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ""))) return;
+  if (modalRootEl && !modalRootEl.hidden) return;   // a dialog is open → leave its paste alone
+  e.preventDefault();
+  try { if (!(await pasteExternalFromEvent(e.clipboardData))) editor.paste(); }
+  catch (err) { setStatus((err && err.message) || "Paste failed.", 3000); }
+});
+// Menu "Paste": there's no paste event to read, so pull from the async OS clipboard (image or
+// vector) when the browser allows it, falling back to the in-editor shape clipboard.
+async function pasteCommand() {
+  if (navigator.clipboard && navigator.clipboard.read) {
+    try {
+      for (const item of await navigator.clipboard.read()) {
+        const imgType = item.types.find((ty) => ty.startsWith("image/") && ty !== "image/svg+xml");
+        if (imgType) { const blob = await item.getType(imgType); await loadFileToCanvas(new File([blob], "Pasted image", { type: imgType })); return; }
+        if (item.types.includes("image/svg+xml")) { await pasteSvgIntoCanvas(await (await item.getType("image/svg+xml")).text(), "Pasted vector"); return; }
+        if (item.types.includes("text/html")) { const svg = _extractSvgMarkup(await (await item.getType("text/html")).text()); if (svg) { await pasteSvgIntoCanvas(svg, "Pasted vector"); return; } }
+      }
+    } catch { /* permission denied / nothing readable → in-editor clipboard */ }
+  }
+  editor.paste();
+}
+// Test hook (mirrors window.__fonts/__manage): exercise the sanitize + place path deterministically.
+window.__paste = { extractSvg: _extractSvgMarkup, sanitize: _sanitizeSvgMarkup, svgIntoCanvas: pasteSvgIntoCanvas };
+
 fileInputEl.addEventListener("change", async () => {
   const count = fileInputEl.files.length;
   if (!count) return;

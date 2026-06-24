@@ -98,6 +98,7 @@ Shape tools are **live shapes** — rect/ellipse keep editable parameters (size,
 - **Arrange** — raise / lower / bring-to-front / send-to-back z-ordering.
 - **Layers & groups** — a Layers panel with visibility, lock, rename, drag-reorder, group/ungroup, and merge; **even-odd vs nonzero** fill control.
 - **Duplicate** (`Ctrl/Cmd+D`), copy/cut/paste, delete.
+- **Paste from anywhere** (`Ctrl/Cmd+V`) — paste a copied **image** (screenshot, photo) straight onto the canvas as a placed raster, or paste **vector artwork** copied from another app (Figma, Illustrator, Inkscape, or an `.svg`) — it's sanitised (scripts/handlers stripped) and merged in as a grouped object. With nothing external on the clipboard, paste falls back to the in-editor object clipboard.
 
 ### Fill, stroke & colour
 

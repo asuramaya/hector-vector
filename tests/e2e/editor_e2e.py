@@ -1694,6 +1694,22 @@ def main():
         mount_ctl(page)
         page.evaluate("editor.selection=new Set(['r1']); editor.copy(); editor.paste();")
         check("copy + paste adds a selected object", n_nodes(page) == 4 and page.evaluate("editor.selection.size") == 1)
+        # Paste from OUTSIDE the app: pasted SVG markup is sanitized (no script/on*/javascript:) and
+        # merged into the canvas as a grouped, selected object. Exercises the real sanitize+place path.
+        mount_ctl(page)
+        before_paste = n_nodes(page)
+        ext = page.evaluate(r"""() => {
+            const dirty = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">'
+              + '<script>window.__pwn=1<\/script>'
+              + '<rect x="0" y="0" width="20" height="20" fill="#0a0" onclick="alert(1)"/>'
+              + '<a href="javascript:alert(2)"><circle cx="30" cy="30" r="6" fill="#00a"/></a></svg>';
+            const clean = window.__paste.sanitize(dirty);
+            const safe = !/<script/i.test(clean) && !/onclick/i.test(clean) && !/javascript:/i.test(clean) && !window.__pwn;
+            window.__paste.svgIntoCanvas(dirty, 'Pasted vector');
+            return { safe, sel: editor.selection.size }; }""")
+        check("paste external vector sanitizes (script/on*/js:) + places a grouped object",
+              ext["safe"] and n_nodes(page) > before_paste and ext["sel"] == 1, str(ext))
+        mount_ctl(page)   # fresh flat mount: the paste above left a grouped (nested) object
         page.evaluate("editor.selectAll()")
         check("select all selects every artwork node", page.evaluate("editor.selection.size") == n_nodes(page))
         mount_ctl(page)
