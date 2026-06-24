@@ -698,6 +698,15 @@ button:disabled {
 .cp-recent { display: flex; flex-direction: column; gap: 4px; }
 .cp-strip-lab { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--label); font-weight: 600; }
 .cp-recent-row { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; }
+/* gradient editor (Epic G): paint-type tabs + a draggable stop strip */
+.cp-gradient { display: flex; flex-direction: column; gap: 6px; }
+.cp-paint-types { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.cp-ptype { padding: 4px 0; font-size: 10.5px; border: 1px solid var(--hair-2); border-radius: var(--r); background: #fff; color: var(--label); cursor: pointer; }
+.cp-ptype:hover { border-color: var(--ink); color: var(--ink); }
+.cp-ptype.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+.cp-grad-strip { position: relative; height: 18px; border: 1px solid var(--hair-2); border-radius: var(--r); cursor: copy; }
+.cp-grad-stop { position: absolute; top: 50%; width: 12px; height: 12px; transform: translate(-50%, -50%); border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px var(--ink); cursor: grab; }
+.cp-grad-stop.active { box-shadow: 0 0 0 2px var(--ink); width: 14px; height: 14px; }
 .cp-swatches { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; }
 .cp-sw { width: 100%; aspect-ratio: 1 / 1; padding: 0; border: 1px solid var(--hair-2); border-radius: var(--r); cursor: pointer; }
 .cp-sw:hover { box-shadow: 0 0 0 1px var(--ink); }

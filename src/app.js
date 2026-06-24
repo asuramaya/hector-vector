@@ -481,6 +481,9 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
   let colorCtl = null, coalescing = false, commitT = null;
   const scheduleColorCommit = () => { clearTimeout(commitT); commitT = setTimeout(() => { if (coalescing) { editor.commitCoalesce("Colour"); coalescing = false; } }, 280); };
   const colApply = (w, hex, a) => { if (!coalescing) { editor.beginCoalesce(); coalescing = true; } applyPaint(w, hex, a); active = w; refreshSwatches(); scheduleColorCommit(); };
+  // Gradient apply path (Epic G): the picker hands back a full spec; coalesce like a colour edit.
+  const colApplyGradient = (w, spec) => { if (!coalescing) { editor.beginCoalesce(); coalescing = true; } editor.applyPaint(w, { kind: "gradient", spec }); active = w; refreshSwatches(); scheduleColorCommit(); };
+  const curPaint = (which) => { const n = firstSel(); return n ? editor.paintOf(n, which) : null; };
   // Build the live editor into a host element (the Colour panel body). Reused on each
   // selection change (the docks module gates rebuilds to actual selection-set changes).
   const colApplyBg = (hex) => { if (!coalescing) { editor.beginCoalesce(); coalescing = true; } editor.applyArtboardBg(hex); scheduleColorCommit(); };
@@ -511,9 +514,10 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       title: "Colour", allowNone: true, host: hostEl,
       duo: {
         active,
-        fill: { color: cur("fill"), alpha: curAlpha("fill") },
-        stroke: { color: cur("stroke"), alpha: curAlpha("stroke") },
+        fill: { color: cur("fill"), alpha: curAlpha("fill"), paint: curPaint("fill") },
+        stroke: { color: cur("stroke"), alpha: curAlpha("stroke"), paint: curPaint("stroke") },
         apply: colApply,
+        applyGradient: colApplyGradient,   // enables the picker's gradient editor (objects only)
       },
     });
   };

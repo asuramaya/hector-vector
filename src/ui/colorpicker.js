@@ -193,6 +193,15 @@ export function openColorPicker(opts) {
     }
   }
   function emit() {
+    // Gradient mode (objects only): the field edits the ACTIVE stop; apply the whole spec.
+    if (gradCap && duo && mode[active] !== "solid" && !st.none) {
+      saveStop();
+      targets[active] = { a: st.a, none: false, h: st.h, s: st.s, v: st.v };   // keep the side chip plausible
+      duo.applyGradient(active, specOfGrad(grad[active]));
+      paintSide(); renderStrip();
+      if (typeof recordRecent === "function") recordRecent();
+      return;
+    }
     const hex = st.none ? null : curHex();
     if (duo) { targets[active] = { a: st.a, none: st.none, h: st.h, s: st.s, v: st.v }; duo.apply(active, hex, st.a); }
     else if (opts.onChange) opts.onChange(hex, st.a);
@@ -200,23 +209,110 @@ export function openColorPicker(opts) {
     if (typeof recordRecent === "function") recordRecent();   // settle the colour into recents (debounced)
   }
   function changed() { st.none = false; paint(); emit(); }
+  // Apply a target's current paint (solid or gradient) — used by swap so both stay in sync.
+  function applyTarget(which) {
+    if (gradCap && mode[which] !== "solid" && grad[which]) duo.applyGradient(which, specOfGrad(grad[which]));
+    else duo.apply(which, targets[which].none ? null : stHexOf(targets[which]), targets[which].a);
+  }
   // Switch which target the field edits — pure focus change, no colour applied (so it
   // never reads as an undo). Save the live edit back into the outgoing target first.
   function switchTo(which) {
     if (!duo || which === active) return;
+    if (gradCap && mode[active] !== "solid") saveStop();
     targets[active] = { a: st.a, none: st.none, h: st.h, s: st.s, v: st.v };
-    active = which; Object.assign(st, targets[which]); paint(); paintSide();
+    active = which;
+    if (gradCap && mode[which] !== "solid" && grad[which]) loadStop(); else Object.assign(st, targets[which]);
+    if (gradCap) syncGradUI();
+    paint(); paintSide();
   }
   function swapTargets() {
     if (!duo) return;
+    if (gradCap && mode[active] !== "solid") saveStop();
     targets[active] = { a: st.a, none: st.none, h: st.h, s: st.s, v: st.v };
-    const f = targets.fill; targets.fill = targets.stroke; targets.stroke = f;
-    Object.assign(st, targets[active]);
-    duo.apply("fill", targets.fill.none ? null : stHexOf(targets.fill), targets.fill.a);
-    duo.apply("stroke", targets.stroke.none ? null : stHexOf(targets.stroke), targets.stroke.a);
+    const tf = targets.fill; targets.fill = targets.stroke; targets.stroke = tf;
+    if (gradCap) { const mf = mode.fill; mode.fill = mode.stroke; mode.stroke = mf; const gf = grad.fill; grad.fill = grad.stroke; grad.stroke = gf; }
+    if (gradCap && mode[active] !== "solid" && grad[active]) loadStop(); else Object.assign(st, targets[active]);
+    applyTarget("fill"); applyTarget("stroke");
+    if (gradCap) syncGradUI();
     paint(); paintSide();
   }
   buildSide();
+
+  // ---------- gradient editor (Epic G) — active only when the caller wired duo.applyGradient
+  // (the object Colour panel). Per target: `mode` ∈ solid|linear|radial and `grad` holds the
+  // stops in HSV+a so the existing SV/hue/alpha field edits the ACTIVE stop. Geometry (x1y1x2y2 /
+  // cxcyr) is preserved across stop edits so the direction set by the on-canvas handles survives.
+  const gradCap = !!(duo && duo.applyGradient);
+  const toHsvA = (color, alpha) => { const c = hv.hexToRgb(color || "#000000") || { r: 0, g: 0, b: 0 }; return Object.assign({ a: alpha == null ? 1 : clamp01(alpha) }, hv.rgbToHsv(c.r, c.g, c.b)); };
+  const mode = { fill: "solid", stroke: "solid" };
+  const grad = { fill: null, stroke: null };
+  const defGeom = (type) => (type === "radial" ? { cx: 0.5, cy: 0.5, r: 0.5 } : { x1: 0, y1: 0, x2: 1, y2: 0 });
+  const geomOf = (spec) => (spec.type === "radial" ? { cx: spec.cx, cy: spec.cy, r: spec.r, fx: spec.fx, fy: spec.fy } : { x1: spec.x1, y1: spec.y1, x2: spec.x2, y2: spec.y2 });
+  const gradFromPaint = (p) => ({ type: p.spec.type === "radial" ? "radial" : "linear", active: 0, geom: geomOf(p.spec), stops: p.spec.stops.map((s) => Object.assign({ offset: s.offset }, toHsvA(s.color, s.opacity))) });
+  const specOfGrad = (g) => { const stops = g.stops.slice().sort((a, b) => a.offset - b.offset).map((s) => { const c = hv.hsvToRgb(s.h, s.s, s.v); return { offset: s.offset, color: hv.rgbToHex(c.r, c.g, c.b), opacity: s.a }; }); return Object.assign({ type: g.type, stops }, g.geom || defGeom(g.type)); };
+  const ensureGrad = (which, type) => {
+    if (grad[which]) { grad[which].type = type; if (!grad[which].geom) grad[which].geom = defGeom(type); }
+    else grad[which] = { type, active: 0, geom: defGeom(type), stops: [Object.assign({ offset: 0 }, toHsvA(st.none ? "#ffffff" : curHex(), st.none ? 1 : st.a)), Object.assign({ offset: 1 }, toHsvA("#000000", 1))] };
+  };
+  const loadStop = () => { const g = grad[active]; if (!g) return; const s = g.stops[g.active]; st.h = s.h; st.s = s.s; st.v = s.v; st.a = s.a; st.none = false; };
+  const saveStop = () => { const g = grad[active]; if (!g) return; const s = g.stops[g.active]; if (s) { s.h = st.h; s.s = st.s; s.v = st.v; s.a = st.a; } };
+  const sampleStop = (g, off) => { let best = g.stops[0], bd = Infinity; for (const s of g.stops) { const d = Math.abs(s.offset - off); if (d < bd) { bd = d; best = s; } } return { h: best.h, s: best.s, v: best.v, a: best.a }; };
+  let gradStrip = null; const gradTypeBtns = {};
+  if (gradCap) {
+    const box = document.createElement("div"); box.className = "cp-gradient";
+    const tabs = document.createElement("div"); tabs.className = "cp-paint-types";
+    [["none", "None"], ["solid", "Solid"], ["linear", "Linear"], ["radial", "Radial"]].forEach(([k, label]) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "cp-ptype"; b.dataset.t = k; b.textContent = label;
+      b.addEventListener("click", () => setPaintType(k)); tabs.appendChild(b); gradTypeBtns[k] = b;
+    });
+    gradStrip = document.createElement("div"); gradStrip.className = "cp-grad-strip";
+    box.append(tabs, gradStrip);
+    const models = win.querySelector(".cp-models"); models.parentNode.insertBefore(box, models);
+    gradStrip.addEventListener("pointerdown", (e) => {
+      const g = grad[active]; if (!g) return;
+      const r = gradStrip.getBoundingClientRect();
+      const stopEl = e.target.closest(".cp-grad-stop");
+      if (stopEl) {
+        const i = +stopEl.dataset.i; g.active = i; loadStop(); paint(); renderStrip();
+        try { gradStrip.setPointerCapture(e.pointerId); } catch {}
+        const mv = (ev) => { g.stops[i].offset = clamp01((ev.clientX - r.left) / r.width); renderStrip(); emit(); };
+        const up = () => { gradStrip.removeEventListener("pointermove", mv); gradStrip.removeEventListener("pointerup", up); };
+        gradStrip.addEventListener("pointermove", mv); gradStrip.addEventListener("pointerup", up);
+      } else {
+        const off = clamp01((e.clientX - r.left) / r.width);
+        g.stops.push(Object.assign({ offset: off }, sampleStop(g, off))); g.active = g.stops.length - 1;
+        loadStop(); paint(); renderStrip(); emit();
+      }
+    });
+    gradStrip.addEventListener("dblclick", (e) => { const el = e.target.closest(".cp-grad-stop"); if (el) removeStop(+el.dataset.i); });
+  }
+  function setPaintType(k) {
+    if (!gradCap) return;
+    if (k === "none") { mode[active] = "solid"; st.none = true; paint(); emit(); syncGradUI(); return; }
+    if (k === "solid") { if (mode[active] !== "solid") saveStop(); mode[active] = "solid"; st.none = false; paint(); emit(); syncGradUI(); return; }
+    mode[active] = k; ensureGrad(active, k); loadStop(); paint(); renderStrip(); emit(); syncGradUI();
+  }
+  function removeStop(i) { const g = grad[active]; if (!g || g.stops.length <= 2) return; g.stops.splice(i, 1); g.active = Math.max(0, Math.min(g.active, g.stops.length - 1)); loadStop(); paint(); renderStrip(); emit(); }
+  function renderStrip() {
+    if (!gradStrip) return; const g = grad[active]; if (!g) return;
+    const css = g.stops.slice().sort((a, b) => a.offset - b.offset).map((s) => { const c = hv.hsvToRgb(s.h, s.s, s.v); return `${hv.rgbToHex(c.r, c.g, c.b)} ${Math.round(s.offset * 100)}%`; }).join(", ");
+    gradStrip.style.background = `linear-gradient(to right, ${css}), ${checker}`;
+    gradStrip.querySelectorAll(".cp-grad-stop").forEach((n) => n.remove());
+    g.stops.forEach((s, i) => { const h = document.createElement("div"); h.className = "cp-grad-stop" + (i === g.active ? " active" : ""); h.style.left = (s.offset * 100) + "%"; const c = hv.hsvToRgb(s.h, s.s, s.v); h.style.background = hv.rgbToHex(c.r, c.g, c.b); h.dataset.i = i; h.title = "Drag to move · double-click to remove"; gradStrip.appendChild(h); });
+  }
+  function syncGradUI() {
+    if (!gradCap) return;
+    const activeType = st.none ? "none" : mode[active];
+    for (const k in gradTypeBtns) gradTypeBtns[k].classList.toggle("active", k === activeType);
+    const isGrad = mode[active] !== "solid" && !st.none;
+    if (gradStrip) gradStrip.style.display = isGrad ? "" : "none";
+    if (isGrad) renderStrip();
+  }
+  if (gradCap) {
+    for (const w of ["fill", "stroke"]) { const p = duo[w] && duo[w].paint; if (p && p.kind === "gradient") { mode[w] = p.spec.type === "radial" ? "radial" : "linear"; grad[w] = gradFromPaint(p); } }
+    if (mode[active] !== "solid" && grad[active]) loadStop();
+    syncGradUI();
+  }
 
   // --- drag helpers ---
   function bindDrag(el, onMove) {
@@ -303,7 +399,7 @@ export function openColorPicker(opts) {
   };
   if ($(".cp-ok")) $(".cp-ok").addEventListener("click", ok);
   if ($(".cp-cancel")) $(".cp-cancel").addEventListener("click", cancel);
-  if (opts.allowNone && $(".cp-none")) $(".cp-none").addEventListener("click", () => { st.none = true; paint(); emit(); });
+  if (opts.allowNone && $(".cp-none")) $(".cp-none").addEventListener("click", () => { if (gradCap) { setPaintType("none"); } else { st.none = true; paint(); emit(); } });
   if (!host) {
     back.addEventListener("pointerdown", (e) => { if (e.target === back) cancel(); });
     // Movable picker: drag it by the header (the backdrop no longer dims the canvas).

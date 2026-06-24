@@ -1794,6 +1794,27 @@ def main():
             return { isUrl, stops, readOk, serOk, solidOk }; }""")
         check("gradient model: applyPaint writes def+url, paintOf round-trips, solid GC's it",
               gm["isUrl"] and gm["stops"]==2 and gm["readOk"] and gm["serOk"] and gm["solidOk"], str(gm))
+        # Gradient UI (Epic G): the Colour panel exposes paint-type tabs; Linear applies a gradient
+        # fill + a 2-stop strip, Radial swaps the type, Solid returns a flat colour. Panel-summon.
+        mount_ctl(page)
+        page.evaluate("editor.selection=new Set(['r1']); editor.artboardSelected=false; editor._renderInspector(); window.__docks && window.__docks.showColor();")
+        page.wait_for_timeout(300)
+        gu = page.evaluate(r"""() => {
+            const tabs = [...document.querySelectorAll('.cp-ptype')].map(b=>b.dataset.t);
+            const click = (t) => { const b=[...document.querySelectorAll('.cp-ptype')].find(x=>x.dataset.t===t); if (b) b.click(); };
+            click('linear');
+            const r = editor.nodeById('r1'); const m=/url\(#([^)]+)\)/.exec(r.getAttribute('fill')||'');
+            const g = m ? editor.stage.querySelector('#'+CSS.escape(m[1])) : null;
+            const isLinear = !!(g && /linearGradient$/i.test(g.tagName) && g.querySelectorAll('stop').length===2);
+            const handles = document.querySelectorAll('.cp-grad-stop').length;
+            click('radial');
+            const m2=/url\(#([^)]+)\)/.exec(editor.nodeById('r1').getAttribute('fill')||''); const g2=m2?editor.stage.querySelector('#'+CSS.escape(m2[1])):null;
+            const isRadial = !!(g2 && /radialGradient$/i.test(g2.tagName));
+            click('solid');
+            const solidOk = /^#?[0-9a-fA-F]{3,8}$/.test(editor.nodeById('r1').getAttribute('fill')||'');
+            return { tabsOk: tabs.join(',')==='none,solid,linear,radial', isLinear, handles, isRadial, solidOk }; }""")
+        check("gradient UI: Colour panel paint-type tabs apply linear/radial gradient + revert to solid",
+              gu["tabsOk"] and gu["isLinear"] and gu["handles"]==2 and gu["isRadial"] and gu["solidOk"], str(gu))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)
