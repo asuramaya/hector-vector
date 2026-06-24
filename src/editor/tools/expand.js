@@ -2,7 +2,7 @@
 // region set — all built on the proven marching-squares + bézier-refit engine (hv/raster.js
 // + hv/contour.js) the booleans already use, so results come out as minimal cubics with
 // crisp corners, robust for any winding/overlap. Object.assign MIXIN — `this === editor`.
-import { SVG_NS, nfmt, shapeToAbsPath, rasterStroke, rasterMask, marchingSquares } from "../../hv/index.js";
+import { SVG_NS, nfmt, shapeToAbsPath, rasterStroke, rasterMask, marchingSquares, isLiveShape, freezeShape } from "../../hv/index.js";
 import { setStatus } from "../../app.js";
 
 export const expandMixin = {
@@ -38,42 +38,78 @@ export const expandMixin = {
     const mask = rasterStroke(spec, box, px);
     return marchingSquares((x, y) => mask.inside(x, y), box, res);
   },
-  // Outline (expand) the stroke of every selected stroked path: the stroke becomes a
-  // filled path in the stroke's colour; the original keeps its fill (loses the stroke),
-  // or is replaced outright when it had no fill. One undo step. (X.1)
+  // Outline a single node's stroke in place (no history/selection): insert a filled outline
+  // path above it, strip the stroke from the original (removing it if it had no fill). Returns
+  // the ids that should now be selected for this node. Shared by outlineStroke + expandSelection.
+  _expandStrokeOf(n) {
+    const ids = [];
+    const d = this._strokeOutlinePath(n);
+    const hadFill = n.getAttribute("fill") && n.getAttribute("fill") !== "none";
+    if (d) {
+      const path = document.createElementNS(SVG_NS, "path");
+      const id = "n" + (++this.idSeq); path.setAttribute("data-hv-id", id);
+      path.setAttribute("d", d); path.setAttribute("fill-rule", "nonzero");
+      path.setAttribute("fill", n.getAttribute("stroke"));
+      for (const [a, dst] of [["stroke-opacity", "fill-opacity"], ["opacity", "opacity"]]) { const v = n.getAttribute(a); if (v) path.setAttribute(dst, v); }
+      n.parentNode.insertBefore(path, n.nextSibling);
+      ids.push(id);
+    }
+    for (const a of ["stroke", "stroke-width", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "data-hv-stroke-align"]) n.removeAttribute(a);
+    if (this._removeStrokeClip) this._removeStrokeClip(n);
+    if (n.style) { n.style.removeProperty("stroke-width"); n.style.removeProperty("paint-order"); }
+    if (hadFill) ids.push(n.getAttribute("data-hv-id")); else n.remove();
+    return ids;
+  },
+  _isStroked(n) { const s = n.getAttribute("stroke"); const w = parseFloat(n.getAttribute("stroke-width")); return !!(s && s !== "none" && w > 0); },
+  // Outline (expand) the stroke of every selected stroked path. One undo step. (X.1)
   outlineStroke() {
     if (!this.stage) return;
-    const leaves = this._effectiveLeaves().filter((n) => !this.isRaster(n) && shapeToAbsPath(n));
-    const strokers = leaves.filter((n) => {
-      const s = n.getAttribute("stroke"); const w = parseFloat(n.getAttribute("stroke-width"));
-      return s && s !== "none" && w > 0;
-    });
+    const strokers = this._effectiveLeaves().filter((n) => !this.isRaster(n) && shapeToAbsPath(n) && this._isStroked(n));
     if (!strokers.length) { setStatus("Select a stroked path to outline its stroke.", 3000); return; }
     this.push("Outline stroke");
     const keep = [];
-    for (const n of strokers) {
-      const d = this._strokeOutlinePath(n);
-      const hadFill = n.getAttribute("fill") && n.getAttribute("fill") !== "none";
-      if (d) {
-        const path = document.createElementNS(SVG_NS, "path");
-        const id = "n" + (++this.idSeq); path.setAttribute("data-hv-id", id);
-        path.setAttribute("d", d); path.setAttribute("fill-rule", "nonzero");
-        path.setAttribute("fill", n.getAttribute("stroke"));
-        for (const [a, dst] of [["stroke-opacity", "fill-opacity"], ["opacity", "opacity"]]) {
-          const v = n.getAttribute(a); if (v) path.setAttribute(dst, v);
-        }
-        n.parentNode.insertBefore(path, n.nextSibling);   // just above the source
-        keep.push(id);
-      }
-      // strip the stroke from the original
-      for (const a of ["stroke", "stroke-width", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "data-hv-stroke-align"]) n.removeAttribute(a);
-      if (this._removeStrokeClip) this._removeStrokeClip(n);
-      n.style && (n.style.removeProperty("stroke-width"), n.style.removeProperty("paint-order"));
-      if (hadFill) keep.push(n.getAttribute("data-hv-id")); else n.remove();
-    }
+    for (const n of strokers) keep.push(...this._expandStrokeOf(n));
     this.selection = new Set(keep.filter(Boolean)); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector(); this._renderLayers();
     setStatus(`Outlined ${strokers.length} stroke${strokers.length > 1 ? "s" : ""}.`, 2000);
+  },
+  // Convert a primitive (rect/ellipse/line/…) to a plain editable <path>, preserving its
+  // own transform + paint. Live shapes are frozen; <path>s pass through. Returns the node.
+  _primitiveToPath(n) {
+    const tag = n.tagName.toLowerCase();
+    if (tag === "path") return n;
+    const d = shapeToAbsPath(n); if (!d) return n;   // local geometry (transform kept on the node)
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", d);
+    const skip = new Set(["d", "x", "y", "width", "height", "cx", "cy", "r", "rx", "ry", "points", "x1", "y1", "x2", "y2", "data-hv-shape"]);
+    for (const a of n.attributes) { if (!skip.has(a.name)) path.setAttribute(a.name, a.value); }
+    n.parentNode.insertBefore(path, n); n.remove();
+    return path;
+  },
+  // Expand (X.2): bake the selection into plain paths — live shapes & primitives → <path>,
+  // text → outlines (async), and any stroke → a filled outline. One undo step (text reenters).
+  expandSelection() {
+    if (!this.stage) return;
+    if (this.selectedNodes().some((n) => n.tagName.toLowerCase() === "text")) {
+      setStatus("Converting text to outlines first…", 0);
+      this.convertSelectedTextToOutlines().then((ids) => {
+        if (!this.selectedNodes().some((n) => n.tagName.toLowerCase() === "text")) this.expandSelection();
+      }).catch((e) => setStatus(`Couldn't convert the text: ${(e && e.message) || e}`, 5000));
+      return;
+    }
+    const leaves = this._effectiveLeaves().filter((n) => !this.isRaster(n));
+    if (!leaves.length) { setStatus("Select objects to expand.", 3000); return; }
+    this.push("Expand");
+    const keep = [];
+    for (let n of leaves) {
+      if (isLiveShape(n)) freezeShape(n);            // parametric → plain path data
+      n = this._primitiveToPath(n);                  // rect/ellipse/… → <path>
+      if (this._isStroked(n)) keep.push(...this._expandStrokeOf(n));
+      else keep.push(n.getAttribute("data-hv-id"));
+    }
+    this.selection = new Set(keep.filter(Boolean)); this.artboardSelected = false;
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+    setStatus(`Expanded ${leaves.length} object${leaves.length > 1 ? "s" : ""}.`, 2000);
   },
 
   // ---------- Offset Path (X.5) ----------

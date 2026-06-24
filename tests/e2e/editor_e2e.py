@@ -2049,6 +2049,21 @@ def main():
               and pf["crop"]["isG"] and pf["crop"]["colours"]==1 and pf["crop"]["gone"]
               and (not pf["minusB"]["isG"]) and pf["minusB"]["paths"]==1 and pf["minusB"]["colours"]==1 and pf["minusB"]["gone"]
               and pf["merge"]["isG"] and pf["merge"]["colours"]==2 and pf["merge"]["gone"], str(pf))
+        # Expand (X.2): a live-shape <path> + a primitive <circle>, one stroked — expand bakes
+        # all to plain <path> (no data-hv-shape, no primitives), outlining the stroke; round-trips.
+        ex = page.evaluate(r"""() => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 200" width="220" height="200"><path data-hv-id="r1" data-hv-shape="rect" d="M40 40 H140 V140 H40 Z" fill="#ffcc00" stroke="#333333" stroke-width="8"/><circle data-hv-id="c1" cx="180" cy="60" r="22" fill="#00ccff"/></svg>','ex');
+            editor.setTool('select'); editor.selection=new Set(['r1','c1']); editor.artboardSelected=false;
+            editor.expandSelection();
+            const allPaths = [...editor.stage.querySelectorAll('[data-hv-id]')].every(n=>n.tagName.toLowerCase()==='path');
+            const noLive = editor.stage.querySelectorAll('[data-hv-shape]').length===0;
+            const noPrim = editor.stage.querySelectorAll('rect[data-hv-id],circle[data-hv-id],ellipse[data-hv-id]').length===0;
+            const r1 = editor.nodeById('r1');
+            const strokeGone = !!r1 && (r1.getAttribute('stroke')||'none')==='none' && r1.getAttribute('fill')==='#ffcc00';
+            const ser = editor.serialize(); const serOk = !ser.includes('data-hv-') && ser.includes('<path');
+            return { allPaths, noLive, noPrim, strokeGone, serOk }; }""")
+        check("expand: live shapes + primitives → plain paths, strokes outlined, no data-hv-shape, round-trips",
+              ex["allPaths"] and ex["noLive"] and ex["noPrim"] and ex["strokeGone"] and ex["serOk"], str(ex))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)

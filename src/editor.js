@@ -1983,6 +1983,14 @@ const editor = {
     //  on a 2+ overlap. (Live actions; the offset amount prompts via the numeric row.)
     if (!isRaster) {
       const xrows = [];
+      // Expand object: bake live shapes / primitives / text / strokes to plain paths.
+      if (reads.some((n) => isLiveShape(n) || ["rect", "circle", "ellipse", "line", "polygon", "polyline", "text"].includes(n.tagName.toLowerCase()) || this._isStroked(n))) {
+        const ex = document.createElement("button");
+        ex.type = "button"; ex.className = "insp-action"; ex.textContent = "Expand";
+        ex.title = "Bake live shapes / text / strokes into plain editable paths";
+        ex.addEventListener("click", () => this.expandSelection());
+        xrows.push(inspRow("Object", ex));
+      }
       const hasStroke = reads.some((n) => { const s = n.getAttribute("stroke"); const w = parseFloat(n.getAttribute("stroke-width")); return s && s !== "none" && w > 0; });
       if (hasStroke) {
         const ob = document.createElement("button");
