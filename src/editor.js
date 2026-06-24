@@ -52,6 +52,8 @@ const editor = {
   _pen: null,           // in-progress pen path: { node, pts:[{x,y,in,out}], closed, dragging }
   _xform: null,         // transform-tool handle state during a scale/rotate drag
   _xformMode: null,     // select sub-mode: null (plain), "scale" (Ctrl+T) or "rotate" (Ctrl+R)
+  _gradMode: false,     // select sub-mode: edit the selected object's gradient via on-canvas handles
+  _gradTarget: "fill",  // which paint the gradient handles edit ("fill" | "stroke")
   _lastLayerId: null,   // anchor row for Shift-range select in the layers panel
   _nodeSel: new Set(),  // node tool: selected path-anchor keys ("pathId#k")
   _penTempSelect: false,// pen tool: Ctrl/Cmd held → act as Direct-Select (handles mounted)
@@ -393,7 +395,7 @@ const editor = {
     if (this._pen && t !== "pen") this._finishPen(true);   // keep any in-progress path
     if (this._curv && t !== "curvature") this._curvFinish(true);
     if (this._textEdit && t !== "text") this._commitText();   // leaving the text tool finishes the edit in progress
-    if (t !== this.tool) this._xformMode = null;           // leaving select drops the transform sub-mode
+    if (t !== this.tool) { this._xformMode = null; this._gradMode = false; }   // leaving select drops the transform / gradient sub-mode
     if (t !== "node") this._nodeSel = new Set();           // anchor selection is node-tool-only
     this.tool = t;
     document.querySelectorAll(".tool-button").forEach((b) => b.classList.toggle("active", b.dataset.tool === t));
@@ -666,6 +668,78 @@ const editor = {
     return radial
       ? { type: "radial", stops, cx: f("cx", 0.5), cy: f("cy", 0.5), r: f("r", 0.5), fx: f("fx", 0.5), fy: f("fy", 0.5) }
       : { type: "linear", stops, x1: f("x1", 0), y1: f("y1", 0), x2: f("x2", 1), y2: f("y2", 0) };
+  },
+  // ---------- on-canvas gradient handles (G.4) ----------
+  // The gradient element a node's fill/stroke points at, or null.
+  _gradEl(node, target) { const m = /url\(#([^)]+)\)/.exec((node && node.getAttribute(target === "stroke" ? "stroke" : "fill")) || ""); return m ? this.stage.querySelector("#" + CSS.escape(m[1])) : null; },
+  // Toggle the on-canvas gradient editor for the selected object. `which` picks fill/stroke;
+  // defaults to whichever carries a gradient. A select sub-mode (like scale/rotate), mutually
+  // exclusive with the transform handles.
+  enterGradientEdit(which) {
+    const n = this.selectedNodes()[0];
+    if (!n) { this._gradMode = false; this._renderSelection(); return; }
+    const tgt = which || (this.paintOf(n, "fill").kind === "gradient" ? "fill" : "stroke");
+    if (this.paintOf(n, tgt).kind !== "gradient") return;
+    if (this._gradMode && this._gradTarget === tgt) { this._gradMode = false; }
+    else { this._gradMode = true; this._gradTarget = tgt; if (this.tool !== "select") this.setTool("select"); this._xformMode = null; }
+    this._renderSelection(); this._renderInspector(); if (this._showHint) this._showHint();
+  },
+  clearGradMode() { if (this._gradMode) { this._gradMode = false; this._renderSelection(); this._renderInspector(); } },
+  // Mount drag handles for the selected gradient: start/end (linear) or centre/radius (radial),
+  // positioned by mapping the gradient's objectBoundingBox coords (0..1) through the node's
+  // geometry bbox into stage space. Self-heals (clears the mode) if the selection isn't a single
+  // gradient object. Handle geometry is recomputed each render, so a drag just re-renders.
+  _mountGradientHandles() {
+    const ov = this._overlayEl(); if (!ov || !this.stage) return;
+    const sel = this.selectedNodes(); const n = sel.length === 1 ? sel[0] : null;
+    const tgt = this._gradTarget || "fill";
+    if (!n || this.paintOf(n, tgt).kind !== "gradient") { this._gradMode = false; return; }
+    const grad = this._gradEl(n, tgt); if (!grad) { this._gradMode = false; return; }
+    let bb; try { bb = n.getBBox(); } catch { return; }
+    if (!(bb.width > 0) || !(bb.height > 0)) return;
+    const toStage = this.stage.getScreenCTM().inverse().multiply(n.getScreenCTM());
+    const f2s = (fx, fy) => new DOMPoint(bb.x + fx * bb.width, bb.y + fy * bb.height).matrixTransform(toStage);
+    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1; const r = 5 / k;
+    const num = (a, d) => { const v = parseFloat(grad.getAttribute(a)); return isNaN(v) ? d : v; };
+    const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "hv-gradedit");
+    const dot = (p, which) => { const c = document.createElementNS(SVG_NS, "circle"); c.setAttribute("cx", nfmt(p.x)); c.setAttribute("cy", nfmt(p.y)); c.setAttribute("r", nfmt(r)); c.setAttribute("class", "hv-gradedit-handle"); this._bindGradientHandle(c, n, tgt, which); return c; };
+    if (/radialGradient$/i.test(grad.tagName)) {
+      const c = f2s(num("cx", 0.5), num("cy", 0.5)), e = f2s(num("cx", 0.5) + num("r", 0.5), num("cy", 0.5));
+      const ring = document.createElementNS(SVG_NS, "circle"); ring.setAttribute("cx", nfmt(c.x)); ring.setAttribute("cy", nfmt(c.y)); ring.setAttribute("r", nfmt(Math.hypot(e.x - c.x, e.y - c.y))); ring.setAttribute("class", "hv-gradedit-ring");
+      g.append(ring, dot(c, "center"), dot(e, "radius"));
+    } else {
+      const a = f2s(num("x1", 0), num("y1", 0)), b = f2s(num("x2", 1), num("y2", 0));
+      const ln = document.createElementNS(SVG_NS, "line"); ln.setAttribute("x1", nfmt(a.x)); ln.setAttribute("y1", nfmt(a.y)); ln.setAttribute("x2", nfmt(b.x)); ln.setAttribute("y2", nfmt(b.y)); ln.setAttribute("class", "hv-gradedit-line");
+      g.append(ln, dot(a, "start"), dot(b, "end"));
+    }
+    ov.appendChild(g);
+  },
+  // Drag one gradient handle. Listeners live on `document` so the per-move overlay re-render
+  // (which removes the handle element) doesn't abort the drag. Writes objectBoundingBox coords
+  // back onto the gradient element live; one undo step via coalesce.
+  _bindGradientHandle(el, node, target, which) {
+    el.addEventListener("pointerdown", (e) => {
+      e.stopPropagation(); e.preventDefault();
+      let bb; try { bb = node.getBBox(); } catch { return; }
+      const grad = this._gradEl(node, target); if (!grad) return;
+      this._handleDragging = true;
+      const frac = (ev) => {
+        const sp = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(this.stage.getScreenCTM().inverse());
+        const lp = new DOMPoint(sp.x, sp.y).matrixTransform(node.getScreenCTM().inverse().multiply(this.stage.getScreenCTM()));
+        return { fx: (lp.x - bb.x) / bb.width, fy: (lp.y - bb.y) / bb.height };
+      };
+      this.beginCoalesce();
+      const move = (ev) => {
+        const { fx, fy } = frac(ev);
+        if (which === "start") { grad.setAttribute("x1", nfmt(fx)); grad.setAttribute("y1", nfmt(fy)); }
+        else if (which === "end") { grad.setAttribute("x2", nfmt(fx)); grad.setAttribute("y2", nfmt(fy)); }
+        else if (which === "center") { grad.setAttribute("cx", nfmt(fx)); grad.setAttribute("cy", nfmt(fy)); grad.setAttribute("fx", nfmt(fx)); grad.setAttribute("fy", nfmt(fy)); }
+        else if (which === "radius") { const cx = parseFloat(grad.getAttribute("cx")) || 0.5, cy = parseFloat(grad.getAttribute("cy")) || 0.5; grad.setAttribute("r", nfmt(Math.max(0.001, Math.hypot(fx - cx, fy - cy)))); }
+        this._renderSelection();
+      };
+      const up = () => { document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up); this._handleDragging = false; this.commitCoalesce("Gradient geometry"); };
+      document.addEventListener("pointermove", move); document.addEventListener("pointerup", up);
+    });
   },
   // Generic stroke-style setter (cap / join / miterlimit / dasharray); empty value clears.
   setStrokeAttr(attr, value) {
@@ -1857,6 +1931,22 @@ const editor = {
       onp.title = "Flow the selected text along the selected path";
       onp.addEventListener("click", () => this.putTextOnPath());
       wrap.appendChild(inspGroup("Text on path", [inspRow("Bind", onp)]));
+    }
+    // Gradient (G.5): a single gradient-filled/stroked object → type/stop summary + an on-canvas
+    // "Edit" toggle that mounts the direction handles (the Colour panel edits the stops).
+    if (nodes.length === 1 && !isRaster) {
+      const fp = this.paintOf(nodes[0], "fill"), sp = this.paintOf(nodes[0], "stroke");
+      const which = fp.kind === "gradient" ? "fill" : (sp.kind === "gradient" ? "stroke" : null);
+      if (which) {
+        const spec = (which === "fill" ? fp : sp).spec;
+        const btn = document.createElement("button");
+        btn.type = "button"; btn.className = "insp-action" + (this._gradMode ? " active" : "");
+        btn.textContent = this._gradMode && this._gradTarget === which ? "Done" : "Edit on canvas";
+        btn.title = "Drag the on-canvas handles to set the gradient's direction / extent";
+        btn.addEventListener("click", () => this.enterGradientEdit(which));
+        const label = `${spec.type === "radial" ? "Radial" : "Linear"} · ${spec.stops.length} stops`;
+        wrap.appendChild(inspGroup("Gradient", [inspRow(label, btn)]));
+      }
     }
     // (Align → the panel's bottom chin via _alignBar(); Flip + z-order Arrange were removed
     //  — both are global on the action bar.)

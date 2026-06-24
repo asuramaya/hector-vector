@@ -1009,6 +1009,11 @@ button:disabled {
 .hv-xform-handle { fill: #fff; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: all; }
 .hv-xform-handle:hover { fill: var(--accent); }
 .hv-xform-handle.dragging { fill: var(--accent); }
+/* on-canvas gradient editor (G.4): a direction line/ring + draggable endpoint handles */
+.hv-gradedit-line, .hv-gradedit-ring { fill: none; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
+.hv-gradedit-ring { opacity: 0.7; }
+.hv-gradedit-handle { fill: #fff; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: all; cursor: grab; }
+.hv-gradedit-handle:hover { fill: var(--accent); }
 .hv-xform-nw, .hv-xform-se { cursor: nwse-resize; }
 .hv-xform-ne, .hv-xform-sw { cursor: nesw-resize; }
 .hv-xform-n,  .hv-xform-s  { cursor: ns-resize; }

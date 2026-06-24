@@ -1096,7 +1096,8 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "l" || e.key === "L") { editor.setTool("line"); return; }
   if (e.key === "t" || e.key === "T") { editor.setTool("text"); return; }
   if (e.key === "Escape" && editor.stage) {
-    if (editor._xformMode) { editor.clearXform(); return; }   // first Esc exits scale/rotate
+    if (editor._gradMode) { editor.clearGradMode(); return; }   // first Esc exits the gradient editor
+    if (editor._xformMode) { editor.clearXform(); return; }     // …or scale/rotate
     editor.selection = new Set(); editor.artboardSelected = false; editor._renderSelection(); editor._renderInspector(); editor._showHint();
   }
 });

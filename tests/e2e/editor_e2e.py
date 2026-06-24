@@ -1826,6 +1826,29 @@ def main():
             const m=/url\(#([^)]+)\)/.exec(res?res.getAttribute('fill')||'':''); const g=m?editor.stage.querySelector('#'+CSS.escape(m[1])):null;
             return !!(g && /gradient$/i.test(g.tagName)); }""")
         check("gradient survives a boolean op (union keeps the url() fill)", bg is True)
+        # On-canvas gradient handles (G.4) + inspector (G.5): a gradient object exposes an "Edit on
+        # canvas" affordance; entering mounts start/end (linear) or centre/radius (radial) handles
+        # that re-mount as the geometry changes and round-trip through serialize; Escape/clear exits.
+        gh = page.evaluate(r"""() => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="40" y="40" width="120" height="120" fill="#888"/></svg>','gh');
+            editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false;
+            editor.push('g'); editor.applyPaint('fill',{kind:'gradient',spec:{type:'linear',x1:0,y1:0,x2:1,y2:0,stops:[{offset:0,color:'#f00'},{offset:1,color:'#00f'}]}});
+            editor._renderInspector();
+            const hasBtn = [...document.querySelectorAll('.insp-action')].some(b=>/Edit on canvas/.test(b.textContent||''));
+            editor.enterGradientEdit('fill');
+            const linMounted = editor._gradMode && document.querySelectorAll('.hv-gradedit-handle').length===2 && document.querySelectorAll('.hv-gradedit-line').length===1;
+            const g = editor._gradEl(editor.nodeById('r1'),'fill');
+            editor.beginCoalesce(); g.setAttribute('x2','0.5'); g.setAttribute('y2','1'); editor._renderSelection(); editor.commitCoalesce('grad');
+            const remount = document.querySelectorAll('.hv-gradedit-handle').length===2;
+            const serOk = /x2="0.5"/.test(editor.serialize());
+            editor.applyPaint('fill',{kind:'gradient',spec:{type:'radial',cx:0.5,cy:0.5,r:0.5,stops:[{offset:0,color:'#fff'},{offset:1,color:'#000'}]}});
+            editor._gradMode=true; editor._renderSelection();
+            const radMounted = document.querySelectorAll('.hv-gradedit-ring').length===1 && document.querySelectorAll('.hv-gradedit-handle').length===2;
+            editor.clearGradMode();
+            const exited = !editor._gradMode && document.querySelectorAll('.hv-gradedit-handle').length===0;
+            return { hasBtn, linMounted, remount, serOk, radMounted, exited }; }""")
+        check("gradient handles: edit affordance + linear/radial handles mount, re-mount, round-trip, exit",
+              gh["hasBtn"] and gh["linMounted"] and gh["remount"] and gh["serOk"] and gh["radMounted"] and gh["exited"], str(gh))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)

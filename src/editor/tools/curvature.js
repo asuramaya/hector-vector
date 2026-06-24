@@ -182,6 +182,8 @@ export const curvatureMixin = {
     }
     // Transform is a SELECT sub-mode now (Ctrl+T scale / Ctrl+R rotate), not a tool.
     if (this.tool === "select" && this._xformMode && this.selection.size && !this.artboardSelected) this._mountTransformHandles();
+    // On-canvas gradient editor (G.4): handles for the selected gradient object (self-heals if N/A).
+    if (this.tool === "select" && this._gradMode && this.selection.size === 1 && !this.artboardSelected) this._mountGradientHandles();
     // Pen tool: show the selected object's anchors so add/remove is obvious (read-only —
     // the actual add/delete is the pen's hover+click affordance).
     if (this.tool === "pen") this._renderPenPoints();
