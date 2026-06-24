@@ -8,7 +8,7 @@
 
 import {
   SVG_NS, MAX_HANDLES, SKIP_TAGS, SHAPE_TOOLS,
-  nfmt, penPathD, toHexColor, marchingSquares, rasterMask,
+  nfmt, penPathD, toHexColor, marchingSquares, rasterMask, rasterStroke,
   currentTranslate, setTranslate, matForOp, bakeMatrixInto, transformShapeGeometry,
   shapeToAbsPath, makeShapeNode, sizeShape, shapeMeaningful, collectAnchors, pathNodes, pathToAnchors,
   nearestOnPaths, splitCubicInsert, catmullRomAnchors,
@@ -28,6 +28,7 @@ import { nodeMixin } from "./editor/tools/node.js";
 import { transformMixin } from "./editor/tools/transform.js";
 import { textMixin } from "./editor/tools/text.js";
 import { masksMixin } from "./editor/tools/masks.js";
+import { expandMixin } from "./editor/tools/expand.js";
 import { snap45 } from "./editor/snap.js";
 import {
   CAP_GLYPH, JOIN_GLYPH, DASH_GLYPH, ALIGN_ICON, AB_FIT_ICON, BLEND_MODES,
@@ -1977,6 +1978,36 @@ const editor = {
       rows.push(inspRow("Opacity", maskBtn));
       wrap.appendChild(inspGroup("Mask", rows));
     }
+    // Expand & Pathfinder (Epic X): contextual path ops. Outline-stroke when any selected
+    //  leaf carries a paintable stroke; Offset-path on any fillable vector; Pathfinder Divide
+    //  on a 2+ overlap. (Live actions; the offset amount prompts via the numeric row.)
+    if (!isRaster) {
+      const xrows = [];
+      const hasStroke = reads.some((n) => { const s = n.getAttribute("stroke"); const w = parseFloat(n.getAttribute("stroke-width")); return s && s !== "none" && w > 0; });
+      if (hasStroke) {
+        const ob = document.createElement("button");
+        ob.type = "button"; ob.className = "insp-action"; ob.textContent = "Outline stroke";
+        ob.title = "Convert the stroke into a filled path (expand)";
+        ob.addEventListener("click", () => this.outlineStroke());
+        xrows.push(inspRow("Stroke", ob));
+      }
+      if (reads.some((n) => shapeToAbsPath(n))) {
+        const off = document.createElement("button");
+        off.type = "button"; off.className = "insp-action"; off.textContent = "Offset path…";
+        off.title = "Grow or shrink the path outline by a set amount";
+        off.addEventListener("click", () => this._promptOffsetPath());
+        xrows.push(inspRow("Offset", off));
+      }
+      const fillable = this._fillableSelection ? this._fillableSelection().length : 0;
+      if (fillable >= 2) {
+        const dv = document.createElement("button");
+        dv.type = "button"; dv.className = "insp-action"; dv.textContent = "Divide";
+        dv.title = "Pathfinder Divide — split overlapping shapes into all face regions";
+        dv.addEventListener("click", () => this.pathfinder("divide"));
+        xrows.push(inspRow("Pathfinder", dv));
+      }
+      if (xrows.length) wrap.appendChild(inspGroup("Expand", xrows));
+    }
     // (Align → the panel's bottom chin via _alignBar(); Flip + z-order Arrange were removed
     //  — both are global on the action bar.)
 
@@ -2324,7 +2355,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 
