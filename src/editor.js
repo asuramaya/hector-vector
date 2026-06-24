@@ -563,7 +563,7 @@ const editor = {
     }
     return false;
   },
-  applyFill(color) { this.style.fill = color || "none"; this._eachSel((n) => { if (this.isRaster(n)) return; n.setAttribute("fill", color || "none"); }); },
+  applyFill(color) { this.style.fill = color || "none"; this.style.fillPaint = null; this._eachSel((n) => { if (this.isRaster(n)) return; n.setAttribute("fill", color || "none"); }); this._gcDefs(); },
   applyStroke(color, width) {
     this.style.stroke = width > 0 ? color : "none"; this.style.strokeWidth = width > 0 ? width : 0;
     this._eachSel((n) => {
@@ -586,6 +586,87 @@ const editor = {
   applyOpacity(v) { this._eachSel((n) => { if (v >= 1) n.removeAttribute("opacity"); else n.setAttribute("opacity", nfmt(v)); }); },
   applyFillOpacity(a) { this._eachSel((n) => { if (this.isRaster(n)) return; if (a == null || a >= 1) n.removeAttribute("fill-opacity"); else n.setAttribute("fill-opacity", nfmt(Math.max(0, a))); }); },
   applyStrokeOpacity(a) { this._eachSel((n) => { if (this.isRaster(n)) return; if (a == null || a >= 1) n.removeAttribute("stroke-opacity"); else n.setAttribute("stroke-opacity", nfmt(Math.max(0, a))); }); },
+  // ---------- gradients (Epic G) ----------
+  // Build a <linearGradient>/<radialGradient> from a spec. Geometry is in the SVG default
+  // objectBoundingBox space (0..1) so the gradient scales/moves WITH the object and stays portable.
+  // spec: { type:"linear"|"radial", stops:[{offset,color,opacity}], x1,y1,x2,y2 | cx,cy,r,fx,fy }.
+  _gradientFromSpec(spec, id) {
+    const radial = spec.type === "radial";
+    const el = document.createElementNS(SVG_NS, radial ? "radialGradient" : "linearGradient");
+    el.setAttribute("id", id);
+    const num = (v, d) => nfmt(v == null ? d : v);
+    if (radial) {
+      el.setAttribute("cx", num(spec.cx, 0.5)); el.setAttribute("cy", num(spec.cy, 0.5)); el.setAttribute("r", num(spec.r, 0.5));
+      el.setAttribute("fx", num(spec.fx, spec.cx == null ? 0.5 : spec.cx)); el.setAttribute("fy", num(spec.fy, spec.cy == null ? 0.5 : spec.cy));
+    } else {
+      el.setAttribute("x1", num(spec.x1, 0)); el.setAttribute("y1", num(spec.y1, 0));
+      el.setAttribute("x2", num(spec.x2, 1)); el.setAttribute("y2", num(spec.y2, 0));
+    }
+    const stops = (spec.stops && spec.stops.length) ? spec.stops : [{ offset: 0, color: "#ffffff" }, { offset: 1, color: "#000000" }];
+    for (const s of stops) {
+      const stop = document.createElementNS(SVG_NS, "stop");
+      stop.setAttribute("offset", nfmt(Math.max(0, Math.min(1, s.offset == null ? 0 : s.offset))));
+      stop.setAttribute("stop-color", s.color || "#000000");
+      if (s.opacity != null && s.opacity < 1) stop.setAttribute("stop-opacity", nfmt(Math.max(0, s.opacity)));
+      el.appendChild(stop);
+    }
+    return el;
+  },
+  // Write a gradient onto node `n`'s fill/stroke: reuse the node's OWN gradient id if it already
+  // has one (live edits stay stable + leave no orphan), else mint a fresh one. Returns the id.
+  _writeGradient(n, attr, spec) {
+    const m = /url\(#([^)]+)\)/.exec(n.getAttribute(attr) || "");
+    let reuse = null;
+    if (m) { const g = this.stage.querySelector("#" + CSS.escape(m[1])); if (g && /gradient$/i.test(g.tagName)) reuse = m[1]; }
+    const el = this._gradientFromSpec(spec, reuse || this._mintDefId("hvgrad"));
+    if (reuse) this.stage.querySelector("#" + CSS.escape(reuse)).replaceWith(el);
+    else this._defs().appendChild(el);
+    return el.getAttribute("id");
+  },
+  // Apply a paint to the selection + remember it as last-used. paint:
+  //   {kind:"none"} | {kind:"solid", color, opacity?} | {kind:"gradient", spec}.
+  // Callers own history (push / beginCoalesce). Gradients mint per-node (independent); orphans GC'd.
+  applyPaint(target, paint) {
+    const attr = target === "stroke" ? "stroke" : "fill";
+    const opAttr = target === "stroke" ? "stroke-opacity" : "fill-opacity";
+    const paintKey = target === "stroke" ? "strokePaint" : "fillPaint";
+    this._eachSel((n) => {
+      if (this.isRaster(n)) return;
+      if (!paint || paint.kind === "none") { n.setAttribute(attr, "none"); n.removeAttribute(opAttr); }
+      else if (paint.kind === "gradient") { n.setAttribute(attr, "url(#" + this._writeGradient(n, attr, paint.spec) + ")"); n.removeAttribute(opAttr); }
+      else { n.setAttribute(attr, paint.color || "#000000"); if (paint.opacity != null && paint.opacity < 1) n.setAttribute(opAttr, nfmt(Math.max(0, paint.opacity))); else n.removeAttribute(opAttr); }
+    });
+    if (paint && paint.kind === "gradient") {
+      // last-used: keep this.style[attr] a sane SOLID fallback (first stop) for makeShapeNode, stash the spec
+      const first = paint.spec.stops && paint.spec.stops[0];
+      if (first && first.color) this.style[attr] = first.color;
+      this.style[paintKey] = paint.spec;
+    } else { this.style[attr] = (paint && paint.kind === "solid") ? (paint.color || "none") : "none"; this.style[paintKey] = null; }
+    this._gcDefs();
+  },
+  // Read a node's current fill/stroke back to a paint descriptor (for the colour panel / inspector).
+  paintOf(node, target) {
+    const attr = target === "stroke" ? "stroke" : "fill";
+    const v = (node.getAttribute(attr) || "").trim();
+    if (!v || v === "none") return { kind: "none" };
+    const m = /url\(#([^)]+)\)/.exec(v);
+    if (m) { const g = this.stage && this.stage.querySelector("#" + CSS.escape(m[1])); if (g && /gradient$/i.test(g.tagName)) return { kind: "gradient", spec: this._specFromGradient(g) }; return { kind: "none" }; }
+    const op = parseFloat(node.getAttribute(target === "stroke" ? "stroke-opacity" : "fill-opacity"));
+    return { kind: "solid", color: v, opacity: isNaN(op) ? 1 : op };
+  },
+  // Parse a gradient element back to a spec.
+  _specFromGradient(g) {
+    const radial = /radialGradient$/i.test(g.tagName);
+    const stops = [...g.querySelectorAll("stop")].map((s) => ({
+      offset: parseFloat(s.getAttribute("offset")) || 0,
+      color: s.getAttribute("stop-color") || "#000000",
+      opacity: s.hasAttribute("stop-opacity") ? (parseFloat(s.getAttribute("stop-opacity")) || 0) : 1,
+    }));
+    const f = (a, d) => { const x = parseFloat(g.getAttribute(a)); return isNaN(x) ? d : x; };
+    return radial
+      ? { type: "radial", stops, cx: f("cx", 0.5), cy: f("cy", 0.5), r: f("r", 0.5), fx: f("fx", 0.5), fy: f("fy", 0.5) }
+      : { type: "linear", stops, x1: f("x1", 0), y1: f("y1", 0), x2: f("x2", 1), y2: f("y2", 0) };
+  },
   // Generic stroke-style setter (cap / join / miterlimit / dasharray); empty value clears.
   setStrokeAttr(attr, value) {
     this._eachSel((n) => { if (this.isRaster(n)) return; if (value === "" || value == null) n.removeAttribute(attr); else n.setAttribute(attr, String(value)); });
@@ -615,7 +696,7 @@ const editor = {
   // children. Call it AFTER the history snapshot (push) so undo restores the removed resource.
   _gcDefs() {
     if (!this.stage) return;
-    const defs = this.stage.querySelector("defs.hv-defs"); if (!defs) return;
+    const defs = this.stage.querySelector("defs.hv-defs"); if (!defs || !defs.children.length) return;
     const used = new Set();
     const add = (v) => { if (!v) return; let m; const re = /url\(["']?#([^"')]+)["']?\)|^#(.+)$/g; while ((m = re.exec(v))) used.add(m[1] || m[2]); };
     this.stage.querySelectorAll("*").forEach((n) => {

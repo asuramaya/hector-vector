@@ -1772,6 +1772,28 @@ def main():
             return { n: +((/\d+/.exec(fresh)||[0])[0]), unused: !editor.stage.querySelector('#'+CSS.escape(fresh)), kept: !!editor.stage.querySelector('#hvgrad999') }; }""")
         check("reopen counts resource ids into idSeq (fresh mint can't collide)",
               rid["n"] > 999 and rid["unused"] and rid["kept"], str(rid))
+        # Gradient paint model (Epic G core): applyPaint writes a gradient def + url(), paintOf reads
+        # it back to a spec, it round-trips through serialize, and switching to solid GC's the gradient.
+        mount_ctl(page)
+        gm = page.evaluate(r"""() => {
+            const spec = { type:'linear', x1:0,y1:0,x2:1,y2:0, stops:[{offset:0,color:'#ff0000'},{offset:1,color:'#0000ff',opacity:0.5}] };
+            editor.selection = new Set(['r1']); editor.artboardSelected = false;
+            editor.push('grad'); editor.applyPaint('fill', { kind:'gradient', spec });
+            const r1 = editor.nodeById('r1');
+            const isUrl = /^url\(#hvgrad\d+\)$/.test(r1.getAttribute('fill')||'');
+            const gid = (/url\(#([^)]+)\)/.exec(r1.getAttribute('fill')||'')||[])[1];
+            const grad = gid ? editor.stage.querySelector('#'+CSS.escape(gid)) : null;
+            const stops = grad ? grad.querySelectorAll('stop').length : 0;
+            const back = editor.paintOf(r1, 'fill');
+            const readOk = back.kind==='gradient' && back.spec.type==='linear' && back.spec.stops.length===2
+                          && back.spec.stops[0].color==='#ff0000' && Math.abs(back.spec.stops[1].opacity-0.5)<0.01;
+            const ser = editor.serialize();
+            const serOk = ser.includes('linearGradient') && ser.includes(gid);
+            editor.applyPaint('fill', { kind:'solid', color:'#00ff00' });   // switch to solid → gradient GC'd
+            const solidOk = r1.getAttribute('fill')==='#00ff00' && !editor.stage.querySelector('#'+CSS.escape(gid));
+            return { isUrl, stops, readOk, serOk, solidOk }; }""")
+        check("gradient model: applyPaint writes def+url, paintOf round-trips, solid GC's it",
+              gm["isUrl"] and gm["stops"]==2 and gm["readOk"] and gm["serOk"] and gm["solidOk"], str(gm))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)
