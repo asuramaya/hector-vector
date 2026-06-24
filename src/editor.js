@@ -27,6 +27,7 @@ import { marqueeMixin } from "./editor/tools/marquee.js";
 import { nodeMixin } from "./editor/tools/node.js";
 import { transformMixin } from "./editor/tools/transform.js";
 import { textMixin } from "./editor/tools/text.js";
+import { masksMixin } from "./editor/tools/masks.js";
 import { snap45 } from "./editor/snap.js";
 import {
   CAP_GLYPH, JOIN_GLYPH, DASH_GLYPH, ALIGN_ICON, AB_FIT_ICON, BLEND_MODES,
@@ -1948,6 +1949,34 @@ const editor = {
         wrap.appendChild(inspGroup("Gradient", [inspRow(label, btn)]));
       }
     }
+    // Masks (M.4): a single clipped/masked group → Release; ≥2 objects with a vector on top
+    //  → offer Make clipping mask / Make opacity mask (the top object becomes the mask).
+    if (nodes.length === 1 && (this._clipGroupOf(nodes[0]) === nodes[0] || this._maskGroupOf(nodes[0]) === nodes[0])) {
+      const clipped = this._clipGroupOf(nodes[0]) === nodes[0];
+      const rel = document.createElement("button");
+      rel.type = "button"; rel.className = "insp-action"; rel.textContent = "Release";
+      rel.title = "Release the mask — the masking shape returns as a normal object";
+      rel.addEventListener("click", () => this.releaseMask());
+      wrap.appendChild(inspGroup(clipped ? "Clipping mask" : "Opacity mask", [inspRow(clipped ? "Clips its contents" : "Luminance modulates alpha", rel)]));
+    } else if (this._topSelection(nodes).filter((n) => n.hasAttribute && n.hasAttribute("data-hv-id")).length >= 2) {
+      const top = this._topSelection(nodes);
+      const all = [...this.stage.querySelectorAll("[data-hv-id]")];
+      top.sort((a, b) => all.indexOf(a) - all.indexOf(b));
+      const front = top[top.length - 1];
+      const rows = [];
+      const clipBtn = document.createElement("button");
+      clipBtn.type = "button"; clipBtn.className = "insp-action"; clipBtn.textContent = "Make clipping mask";
+      clipBtn.title = "Clip the lower objects to the top object's shape";
+      clipBtn.disabled = this.isRaster(front);
+      clipBtn.addEventListener("click", () => this.makeClipMask());
+      rows.push(inspRow("Clip", clipBtn));
+      const maskBtn = document.createElement("button");
+      maskBtn.type = "button"; maskBtn.className = "insp-action"; maskBtn.textContent = "Make opacity mask";
+      maskBtn.title = "Use the top object's luminance as an opacity mask for the rest";
+      maskBtn.addEventListener("click", () => this.makeOpacityMask());
+      rows.push(inspRow("Opacity", maskBtn));
+      wrap.appendChild(inspGroup("Mask", rows));
+    }
     // (Align → the panel's bottom chin via _alignBar(); Flip + z-order Arrange were removed
     //  — both are global on the action bar.)
 
@@ -2295,7 +2324,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 

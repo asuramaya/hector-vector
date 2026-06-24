@@ -877,6 +877,11 @@ function buildRasterTools(node) {
   wire("#act-union", () => editor.booleanOp("union"));
   wire("#act-subtract", () => editor.booleanOp("subtract"));
   wire("#act-intersect", () => editor.booleanOp("intersect"));
+  wire("#act-clip", () => {
+    const s = editor.selectedNodes();
+    const masked = s.length === 1 && (editor._clipGroupOf(s[0]) === s[0] || editor._maskGroupOf(s[0]) === s[0]);
+    if (masked) editor.releaseMask(); else editor.makeClipMask();
+  });
   wire("#act-rotate-cw", () => editor.transform("rotateCW"));
   wire("#act-rotate-ccw", () => editor.transform("rotateCCW"));
   wire("#act-flip-h", () => editor.transform("flipH"));
@@ -903,6 +908,16 @@ function buildRasterTools(node) {
     set("#act-cut", hasSel); set("#act-copy", hasSel); set("#act-duplicate", hasSel);
     set("#act-paste", has && hasClip);
     set("#act-union", fillable); set("#act-subtract", fillable); set("#act-intersect", fillable);
+    // Clip: release when a single clipped/masked group is selected (button flips to ↺ / "Release"),
+    // else make-clip when ≥2 objects are selected with a vector on top.
+    const clipGroup = hasSel && n === 1 && (editor._clipGroupOf(sel[0]) === sel[0] || editor._maskGroupOf(sel[0]) === sel[0]);
+    const canMakeClip = editor._topSelection(sel).filter((s) => s.hasAttribute && s.hasAttribute("data-hv-id")).length >= 2;
+    const clipBtn = document.querySelector("#act-clip");
+    if (clipBtn) {
+      clipBtn.disabled = !(clipGroup || canMakeClip);
+      clipBtn.textContent = clipGroup ? "↺" : "⛶";
+      clipBtn.title = clipGroup ? "Release mask (Ctrl/Cmd+Alt+7)" : "Make clipping mask (Ctrl/Cmd+7) — top object clips the rest";
+    }
     // rotate/flip act on the selection, or on the artboard itself when it's selected;
     // grey when nothing is selected (no objects, no artboard).
     const isRaster = hasSel && editor._selectionIsRaster();
@@ -1051,6 +1066,7 @@ document.addEventListener("keydown", (e) => {
   if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); editor.redoAction(); return; }
   if (mod && (e.key === "d" || e.key === "D")) { e.preventDefault(); editor.duplicate(); return; }
   if (mod && (e.key === "g" || e.key === "G")) { e.preventDefault(); if (e.shiftKey) editor.ungroup(); else editor.group(); return; }
+  if (mod && e.key === "7") { e.preventDefault(); if (e.altKey) editor.releaseMask(); else editor.makeClipMask(); return; }   // Ctrl/Cmd+7 make clip · +Alt release (Illustrator parity)
   if (mod && (e.key === "j" || e.key === "J")) { e.preventDefault(); editor.joinNodes(); return; }
   if (mod && e.key === "]") { e.preventDefault(); editor.reorder(e.shiftKey ? "front" : "forward"); return; }
   if (mod && e.key === "[") { e.preventDefault(); editor.reorder(e.shiftKey ? "back" : "backward"); return; }

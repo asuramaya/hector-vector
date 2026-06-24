@@ -127,7 +127,13 @@ export const layersMixin = {
 
     const swatch = document.createElement("span");
     swatch.className = "layer-swatch" + (isGroup ? " group" : "");
-    if (isGroup) { swatch.textContent = "▤"; swatch.title = "Group"; }
+    if (isGroup) {
+      const clipped = this._clipGroupOf && this._clipGroupOf(n) === n;
+      const masked = this._maskGroupOf && this._maskGroupOf(n) === n;
+      if (clipped) { swatch.textContent = "⛶"; swatch.title = "Clipping mask group"; }
+      else if (masked) { swatch.textContent = "◑"; swatch.title = "Opacity mask group"; }
+      else { swatch.textContent = "▤"; swatch.title = "Group"; }
+    }
     else if (this.isRaster(n)) {
       // Rasters have no fill — show a small thumbnail of the image instead of a colour chip.
       const href = n.getAttribute("href") || n.getAttribute("xlink:href") || "";
