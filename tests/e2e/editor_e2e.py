@@ -1953,6 +1953,33 @@ def main():
             return { makeBtn, relBtn }; }""")
         check("mask inspector: Make-clipping-mask on a 2+ selection, Release on a clip group",
               insp["makeBtn"] and insp["relBtn"], str(insp))
+        # Mask hardening (stress pass): undo fully restores the un-masked objects; deleting a clip
+        # group GC's its def; masks NEST; a clip shape's own gradient is NOT GC'd while it clips;
+        # release works after save→reopen (DOM-only); a raster on top is refused as a clip shape.
+        mh = page.evaluate(r"""() => {
+            const reset = () => { window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="20" y="20" width="40" height="40" fill="#36c"/><rect data-hv-id="r2" x="120" y="20" width="40" height="40" fill="#c33"/><rect data-hv-id="r3" x="70" y="120" width="40" height="40" fill="#3a5"/></svg>','mh'); editor.setTool('select'); };
+            reset(); editor.selection=new Set(['r1','r3']); editor.artboardSelected=false; editor.makeClipMask(); editor.undo();
+            const undoOk = editor.stage.querySelectorAll('rect[data-hv-id]').length===3 && editor.stage.querySelectorAll('g[data-hv-id]').length===0 && editor.stage.querySelectorAll('defs.hv-defs clipPath').length===0;
+            reset(); editor.selection=new Set(['r1','r3']); editor.makeClipMask();
+            let g = editor.nodeById([...editor.selection][0]); editor.selection=new Set([g.getAttribute('data-hv-id')]); editor.deleteSelection();
+            const delGc = editor.stage.querySelectorAll('defs.hv-defs clipPath').length===0;
+            reset(); editor.selection=new Set(['r1','r3']); editor.makeClipMask();
+            const gid=[...editor.selection][0]; editor.selection=new Set([gid,'r2']); editor.makeClipMask();
+            const outer=editor.nodeById([...editor.selection][0]);
+            const nested = editor.stage.querySelectorAll('defs.hv-defs clipPath').length===2 && !!outer.querySelector('g[clip-path]');
+            reset();
+            editor.selection=new Set(['r3']); editor.push('g'); editor.applyPaint('fill',{kind:'gradient',spec:{type:'linear',x1:0,y1:0,x2:1,y2:0,stops:[{offset:0,color:'#f00'},{offset:1,color:'#00f'}]}});
+            const grId=(/url\(#([^)]+)\)/.exec(editor.nodeById('r3').getAttribute('fill'))||[])[1];
+            editor.selection=new Set(['r1','r3']); editor.makeClipMask(); editor._gcDefs();
+            const gradKept = !!editor.stage.querySelector('#'+CSS.escape(grId));
+            reset(); editor.selection=new Set(['r1','r3']); editor.makeClipMask();
+            window.mountStageFromText(editor.serialize(),'mh2');
+            g=[...editor.stage.querySelectorAll('g[data-hv-id]')].find(x=>editor._clipGroupOf(x)===x);
+            editor.selection=new Set([g.getAttribute('data-hv-id')]); editor.releaseMask();
+            const reopenRel = !g.hasAttribute('clip-path') && editor.stage.querySelectorAll('defs.hv-defs clipPath').length===0;
+            return { undoOk, delGc, nested, gradKept, reopenRel }; }""")
+        check("mask hardening: undo restores, delete GC's, masks nest, clip-shape gradient kept, reopen-release",
+              mh["undoOk"] and mh["delGc"] and mh["nested"] and mh["gradKept"] and mh["reopenRel"], str(mh))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)
