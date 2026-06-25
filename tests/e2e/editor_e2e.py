@@ -2276,6 +2276,40 @@ def main():
         check("isolation: enter (dim+keep+crumb), scoped scope/select-all, new objects parent inside, serialize+undo clean, exit selects group, reconcile on delete",
               iso["entered"] and iso["scope"] and iso["selAll"] and iso["newInside"] and iso["serClean"]
               and iso["afterUndo"] and iso["exited"] and iso["reconcileGone"], str(iso))
+        # Symbols & instances (Epic Y): selection → a <g class=hv-symbol> master in defs + a <use>
+        # instance; duplicate shares the master; edit-master (surface+isolate, Epic I) propagates to
+        # all instances; break-link makes an independent copy; <symbol>/<use> round-trip in serialize.
+        section("Symbols & instances (Epic Y)")
+        sym = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 200" width="300" height="200"><rect data-hv-id="a" x="20" y="20" width="30" height="30" fill="#e55"/><circle data-hv-id="b" cx="65" cy="35" r="12" fill="#5e5"/></svg>','sy');
+            editor.setTool('select'); editor.selection=new Set(['a','b']); editor.artboardSelected=false;
+            editor.makeSymbol();
+            const use = editor.nodeById([...editor.selection][0]);
+            const symId = (/#(.+)$/.exec(use.getAttribute('href'))||[])[1];
+            const master = editor.stage.querySelector('#'+CSS.escape(symId));
+            o.made = !!use && use.tagName.toLowerCase()==='use' && /#hvsym/.test(use.getAttribute('href')||'') && use.getBBox().width>20;
+            o.master = !!master && master.classList.contains('hv-symbol') && master.closest('defs')!==null && master.querySelectorAll('rect,circle').length===2;
+            o.origGone = !editor.stage.querySelector('rect[data-hv-id="a"]') && !editor.stage.querySelector('circle[data-hv-id="b"]');
+            editor.duplicate();
+            const uses = editor.stage.querySelectorAll('use[data-hv-id]');
+            o.dupShares = uses.length===2 && uses[0].getAttribute('href')===uses[1].getAttribute('href');
+            // edit master: surface+isolate, recolor a child, exit → propagates to instances
+            editor.selection=new Set([use.getAttribute('data-hv-id')]); editor.editSymbol(use);
+            o.editing = editor.isIsolated() && !!editor._symEdit && editor.stage.querySelector('#'+CSS.escape(symId)).closest('defs')===null;
+            editor.push('edit'); editor.stage.querySelector('#'+CSS.escape(symId)).querySelector('rect').setAttribute('fill','#0000ff');
+            editor.exitIsolation();
+            const after = editor.stage.querySelector('#'+CSS.escape(symId));
+            o.returned = !!after && after.closest('defs')!==null && !editor.isIsolated() && !editor._symEdit;
+            o.propagated = after.querySelector('rect').getAttribute('fill')==='#0000ff';
+            o.serOk = editor.serialize().includes('hv-symbol') && editor.serialize().includes('<use') && !editor.serialize().includes('data-hv-');
+            const firstUse = editor.stage.querySelector('use[data-hv-id]'); editor.breakSymbolLink(firstUse);
+            const broke = editor.nodeById([...editor.selection][0]);
+            o.broke = !!broke && broke.tagName.toLowerCase()==='g' && broke.querySelectorAll('rect,circle').length===2 && editor.stage.querySelectorAll('use[data-hv-id]').length===1;
+            return o; }""")
+        check("symbols: make (master in defs + <use>), originals gone, duplicate shares master, edit-master propagates, break-link copies, round-trips",
+              sym["made"] and sym["master"] and sym["origGone"] and sym["dupShares"] and sym["editing"]
+              and sym["returned"] and sym["propagated"] and sym["serOk"] and sym["broke"], str(sym))
         # Appearance / live effects (Epic E): a per-object effect stack (drop shadow / blur / glow)
         # rendered to a chained <filter> in defs; live param edits; serialize strips the working
         # JSON but keeps the filter; reopen RECONSTRUCTS the editable spec; clone-independent; GC.
