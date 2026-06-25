@@ -2157,6 +2157,60 @@ def main():
             return { groupOk, undoOk, sameType, boolGc, appendOk }; }""")
         check("effects hardening: group filter, undo drops it, same-type stack chains, boolean leaves no orphan, reopen+append",
               eh["groupOk"] and eh["undoOk"] and eh["sameType"] and eh["boolGc"] and eh["appendOk"], str(eh))
+        # Transforms & Repeat (Epic T): reflect (+copy), shear, transform-each (own centre),
+        # transform-again, and parametric repeat (grid/radial/mirror) with live count + expand.
+        section("Transforms & Repeat: reflect / shear / each / again / repeat (Epic T)")
+        tr = page.evaluate(r"""() => {
+            const R = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400"><rect data-hv-id="r1" x="40" y="40" width="60" height="40" fill="#3399cc"/></svg>';
+            const fresh = (d)=>{ window.mountStageFromText(d||R,'tr'); editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false; };
+            fresh(); const n0=editor.stage.querySelectorAll('[data-hv-id]').length; editor.reflectSelection('vertical',{copy:true});
+            const reflectCopy = editor.stage.querySelectorAll('[data-hv-id]').length===n0+1;
+            fresh(); editor.shearSelection(20,0); const sheared=/matrix/.test(editor.nodeById('r1').getAttribute('transform')||'');
+            // transform-each rotates each about its own centre (centres stay put)
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300"><rect data-hv-id="a" x="20" y="20" width="40" height="40" fill="#e55"/><rect data-hv-id="b" x="220" y="220" width="40" height="40" fill="#5e5"/></svg>','tre');
+            editor.selection=new Set(['a','b']); editor.artboardSelected=false;
+            const ca=editor._nodeBBoxUser(editor.nodeById('a')); editor.transformEach({deg:45});
+            const a2=editor._nodeBBoxUser(editor.nodeById('a')); const eachOk=Math.abs((a2.x0+a2.x1)/2-(ca.x0+ca.x1)/2)<2;
+            // transform-again replays the last transform
+            fresh(); editor.shearSelection(10,0); const t1=editor.nodeById('r1').getAttribute('transform'); editor.transformAgain();
+            const againOk = editor.nodeById('r1').getAttribute('transform')!==t1;
+            // repeat grid: parametric group, live count
+            fresh(); editor.repeat('grid'); let g=editor.nodeById([...editor.selection][0]);
+            const gridOk = editor.isRepeatGroup(g) && g.children.length===9;   // 3x3 = unit + 8 clones
+            editor.setRepeatParam(g,'rows',4); editor.setRepeatParam(g,'cols',2); const gridLive = g.children.length===8;   // 4x2
+            // radial live count
+            fresh(); editor.repeat('radial'); g=editor.nodeById([...editor.selection][0]); editor.setRepeatParam(g,'count',8);
+            const radialOk = g.children.length===8;
+            // expand drops the parametric markers
+            fresh(); editor.repeat('mirror'); g=editor.nodeById([...editor.selection][0]); const mirrorOk=g.children.length===2;
+            editor.expandRepeat(g); const expandOk = !editor.isRepeatGroup(g) && !g.querySelector('[data-hv-repeat-unit]');
+            return { reflectCopy, sheared, eachOk, againOk, gridOk, gridLive, radialOk, mirrorOk, expandOk }; }""")
+        check("transforms: reflect-copy, shear, transform-each(own centre), transform-again, grid/radial/mirror repeat + live count + expand",
+              tr["reflectCopy"] and tr["sheared"] and tr["eachOk"] and tr["againOk"] and tr["gridOk"] and tr["gridLive"] and tr["radialOk"] and tr["mirrorOk"] and tr["expandOk"], str(tr))
+        # Transforms/Repeat hardening (stress): repeat serialize→reopen bakes clones to real geometry;
+        # repeat undo restores the single original; repeat a GROUP (nested clones); count 1×1 → master
+        # only; reflect-copy of a gradient object stays independent.
+        th = page.evaluate(r"""() => {
+            const R='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300"><rect data-hv-id="r1" x="40" y="40" width="50" height="40" fill="#3399cc"/></svg>';
+            window.mountStageFromText(R,'th1'); editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false; editor.repeat('grid');
+            const ser=editor.serialize(); const noParams=!ser.includes('data-hv-');
+            window.mountStageFromText(ser,'th1b'); const reopenBakes = noParams && editor.stage.querySelectorAll('rect').length>=9;
+            window.mountStageFromText(R,'th2'); editor.selection=new Set(['r1']); editor.repeat('radial'); editor.undo();
+            const undoOk = !!editor.nodeById('r1') && editor.stage.querySelectorAll('g[data-hv-id]').length===0;
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300"><g data-hv-id="g0"><rect data-hv-id="a" x="30" y="30" width="30" height="30" fill="#e55"/><circle data-hv-id="b" cx="75" cy="45" r="12" fill="#5e5"/></g></svg>','th3');
+            editor.selection=new Set(['g0']); editor.repeat('grid'); let g=editor.nodeById([...editor.selection][0]);
+            const nested = editor.isRepeatGroup(g) && g.children.length===9 && g.querySelectorAll('circle').length===9;
+            window.mountStageFromText(R,'th4'); editor.selection=new Set(['r1']); editor.repeat('grid'); g=editor.nodeById([...editor.selection][0]);
+            editor.setRepeatParam(g,'rows',1); editor.setRepeatParam(g,'cols',1); const count1 = g.children.length===1;
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300"><rect data-hv-id="r1" x="40" y="40" width="80" height="80" fill="#888"/></svg>','th5');
+            editor.selection=new Set(['r1']); editor.push('g'); editor.applyPaint('fill',{kind:'gradient',spec:{type:'linear',x1:0,y1:0,x2:1,y2:0,stops:[{offset:0,color:'#f00'},{offset:1,color:'#00f'}]}});
+            const gid=(/url\(#([^)]+)\)/.exec(editor.nodeById('r1').getAttribute('fill'))||[])[1];
+            editor.reflectSelection('vertical',{copy:true}); const cp=editor.nodeById([...editor.selection][0]);
+            const cgid=(/url\(#([^)]+)\)/.exec(cp.getAttribute('fill'))||[])[1];
+            const reflectIndep = !!cgid && cgid!==gid && !!editor.stage.querySelector('#'+CSS.escape(cgid));
+            return { reopenBakes, undoOk, nested, count1, reflectIndep }; }""")
+        check("transforms/repeat hardening: reopen bakes clones, repeat-undo, nested group repeat, 1x1→master, reflect-copy gradient independent",
+              th["reopenBakes"] and th["undoOk"] and th["nested"] and th["count1"] and th["reflectIndep"], str(th))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)
