@@ -2191,6 +2191,33 @@ def main():
         check("shape builder merge+undo / alt-remove, scissors close→open & open→two+undo, knife two pieces, eraser splits+undo",
               bld["merge"] and bld["mergeUndo"] and bld["remove"] and bld["scClosed"] and bld["scOpen"] and bld["scUndo"]
               and bld["knife"] and bld["erase"] and bld["eraseUndo"], str(bld))
+        # Blend tool (Epic L): interpolate N shapes between two objects → a parametric
+        # <g data-hv-blend> (endpoints + generated steps), morphing geometry + colour. Steps
+        # param regen, reverse, Expand+undo; serialize bakes to a plain group (no data-hv-*).
+        section("Blend tool: interpolate between two shapes (Epic L)")
+        bn = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 200" width="400" height="200"><circle data-hv-id="a" cx="50" cy="100" r="30" fill="#ff3333"/><circle data-hv-id="b" cx="350" cy="100" r="30" fill="#3333ff"/></svg>','bn');
+            editor.setTool('select'); editor.selection=new Set(['a','b']); editor.artboardSelected=false;
+            editor.makeBlend();
+            const g = editor.nodeById([...editor.selection][0]);
+            o.group = !!g && g.tagName.toLowerCase()==='g' && g.hasAttribute('data-hv-blend');
+            o.origGone = !editor.stage.querySelector('circle[data-hv-id]');
+            const spec = editor._blendSpec(g);
+            o.childCount = g.querySelectorAll('path[data-hv-id]').length === spec.steps + 2;
+            const kids=[...g.querySelectorAll('path[data-hv-id]')]; const mid=kids[Math.floor(kids.length/2)]; const mbb=mid.getBBox();
+            o.midPlaced = mbb.x > 60 && mbb.x < 340;                         // a step sits between the endpoints
+            const mf=(mid.getAttribute('fill')||'').toLowerCase();
+            o.midColour = /^#/.test(mf) && mf!=='#ff3333' && mf!=='#3333ff';  // colour interpolated
+            editor.setBlendParam(g, 'steps', 3); o.regen = g.querySelectorAll('path[data-hv-id]').length === 5;
+            editor.setBlendParam(g, 'reverse', true); o.reverse = editor._blendSpec(g).reverse===true && g.querySelectorAll('path[data-hv-id]').length===5;
+            const ser = editor.serialize(); o.serOk = ser.includes('<g') && ser.includes('<path') && !ser.includes('data-hv-') && !ser.includes('blend');
+            editor.expandBlend(g); o.expanded = !g.hasAttribute('data-hv-blend') && g.querySelectorAll('path').length===5;
+            editor.undo(); o.undoOk = editor.stage.querySelector('[data-hv-blend]')!==null;
+            return o; }""")
+        check("blend: 2 shapes → parametric group (endpoints+steps), colour+shape interp, steps regen, reverse, expand+undo, round-trips",
+              bn["group"] and bn["origGone"] and bn["childCount"] and bn["midPlaced"] and bn["midColour"]
+              and bn["regen"] and bn["reverse"] and bn["serOk"] and bn["expanded"] and bn["undoOk"], str(bn))
         # Appearance / live effects (Epic E): a per-object effect stack (drop shadow / blur / glow)
         # rendered to a chained <filter> in defs; live param edits; serialize strips the working
         # JSON but keeps the filter; reopen RECONSTRUCTS the editable spec; clone-independent; GC.
