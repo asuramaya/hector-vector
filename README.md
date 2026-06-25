@@ -114,6 +114,8 @@ Shape tools are **live shapes** — rect/ellipse keep editable parameters (size,
 
 - **Fill & stroke** with a live colour picker (the **Colour** panel hosts an embedded duo editor — swap fill/stroke with `X`).
 - **Gradients** — fill or stroke with a **linear or radial gradient**: pick the type in the Colour panel, then add/drag/remove colour stops on the gradient strip (each stop edits through the same picker). Gradients scale with the object, save into the SVG, render in PNG export, survive boolean ops, and stay independent when you duplicate.
+- **Pattern fills** — turn the top selected object into a **tiling `<pattern>`** and fill the shapes below it with it, then scale / rotate the tile in Properties. Patterns live in the SVG `<defs>`, so they save, render in export, and stay independent on duplicate.
+- **Recolor Artwork** — Properties harvests every distinct solid colour in the selection into a swatch grid: click one to **remap** all its uses through the picker, or shift **Hue / Saturation / Lightness** across the whole palette at once.
 - **Stroke** width and **alignment** (centre / inside / outside).
 - **Opacity** and **blend mode** per object.
 - Edits are live — drag a swatch and the canvas updates immediately.

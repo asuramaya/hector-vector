@@ -2218,6 +2218,36 @@ def main():
         check("blend: 2 shapes → parametric group (endpoints+steps), colour+shape interp, steps regen, reverse, expand+undo, round-trips",
               bn["group"] and bn["origGone"] and bn["childCount"] and bn["midPlaced"] and bn["midColour"]
               and bn["regen"] and bn["reverse"] and bn["serOk"] and bn["expanded"] and bn["undoOk"], str(bn))
+        # Colour systems (Epic C): Pattern fills (top object → <pattern> in defs applied below;
+        # tile scale/rotate via patternTransform; round-trips) + Recolor Artwork (harvest distinct
+        # solid colours, remap one exactly, Hue/Sat/Light shift over all). (Global colours deferred.)
+        section("Colour systems: Pattern fills + Recolor Artwork (Epic C)")
+        cl = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="bg" x="20" y="20" width="160" height="160" fill="#dddddd"/><circle data-hv-id="dot" cx="40" cy="40" r="8" fill="#cc3366"/></svg>','cl1');
+            editor.setTool('select'); editor.selection=new Set(['bg','dot']); editor.artboardSelected=false;
+            editor.fillWithPattern();
+            const bg = editor.nodeById('bg'); const fill = bg?bg.getAttribute('fill'):'';
+            o.patApplied = /url\(#hvpat/.test(fill||'') && editor.nodeById('dot')===null;
+            const pid = (/#([^)]+)\)/.exec(fill)||[])[1]; const pat = pid && editor.stage.querySelector('#'+CSS.escape(pid));
+            o.patDef = !!pat && pat.tagName.toLowerCase()==='pattern' && !!pat.querySelector('circle');
+            editor.setPatternParam(bg,'scale',2); editor.setPatternParam(bg,'rotate',30);
+            o.patXform = /scale\(2/.test(pat.getAttribute('patternTransform')||'') && /rotate\(30/.test(pat.getAttribute('patternTransform')||'');
+            const ser = editor.serialize(); o.patSer = ser.includes('<pattern') && ser.includes('url(#'+pid+')') && !ser.includes('data-hv-');
+            editor.undo(); editor.undo(); editor.undo(); o.patUndo = !!editor.nodeById('dot') && editor.nodeById('bg').getAttribute('fill')==='#dddddd';
+            // Recolor
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="a" x="10" y="10" width="50" height="50" fill="#ff0000"/><rect data-hv-id="b" x="70" y="10" width="50" height="50" fill="#ff0000"/><rect data-hv-id="c" x="130" y="10" width="50" height="50" fill="#0000ff"/></svg>','cl2');
+            editor.selection=new Set(['a','b','c']); editor.artboardSelected=false;
+            const h = editor._harvestColors(editor.selectedNodes());
+            o.harvest = h.size===2 && (h.get('#ff0000')||[]).length===2;
+            editor.push('Recolor'); editor.recolorApply(h.get('#ff0000'),'#00aa00');
+            o.remap = editor.nodeById('a').getAttribute('fill')==='#00aa00' && editor.nodeById('c').getAttribute('fill')==='#0000ff';
+            editor._recolorClearBase(); editor.beginCoalesce(); editor.recolorShift(60,0,0); editor.commitCoalesce('Recolor'); editor._recolorClearBase();
+            const fa = editor.nodeById('a').getAttribute('fill'); o.shift = /^#[0-9a-f]{6}$/i.test(fa) && fa.toLowerCase()!=='#00aa00';
+            return o; }""")
+        check("pattern fill: top→<pattern> applied below, tile scale/rotate, round-trips, undo · recolor: harvest 2, remap exact, HSL shift",
+              cl["patApplied"] and cl["patDef"] and cl["patXform"] and cl["patSer"] and cl["patUndo"]
+              and cl["harvest"] and cl["remap"] and cl["shift"], str(cl))
         # Appearance / live effects (Epic E): a per-object effect stack (drop shadow / blur / glow)
         # rendered to a chained <filter> in defs; live param edits; serialize strips the working
         # JSON but keeps the filter; reopen RECONSTRUCTS the editable spec; clone-independent; GC.
