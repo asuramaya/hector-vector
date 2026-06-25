@@ -2211,6 +2211,60 @@ def main():
             return { reopenBakes, undoOk, nested, count1, reflectIndep }; }""")
         check("transforms/repeat hardening: reopen bakes clones, repeat-undo, nested group repeat, 1x1→master, reflect-copy gradient independent",
               th["reopenBakes"] and th["undoOk"] and th["nested"] and th["count1"] and th["reflectIndep"], str(th))
+        # Multiple artboards (Epic A): extra named artboards grow the canvas viewBox to the union,
+        # persist in <metadata> (chrome frames stripped on export), round-trip (primary geom +
+        # extras restored), stay OUT of the artwork/layers, and delete back to a single artboard.
+        section("Multiple artboards: add / persist / reopen / per-artboard export (Epic A)")
+        aa = page.evaluate(r"""() => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="400" height="300"><rect data-hv-id="r1" x="40" y="40" width="120" height="120" fill="#3399cc"/></svg>','aa');
+            editor.setTool('select'); editor.artboardSelected=true; editor.selection=new Set();
+            const vb0 = editor.stage.getAttribute('viewBox');
+            editor.addArtboard();
+            const grew = editor.stage.getAttribute('viewBox')!==vb0 && parseFloat(editor.stage.getAttribute('viewBox').split(' ')[2])>400;
+            const two = editor.allArtboards().length===2;
+            const framed = editor.stage.querySelectorAll('g.hv-ablayer .hv-abframe').length===1;
+            // serialize: metadata persists, chrome stripped, artwork untouched
+            const ser = editor.serialize();
+            const metaKept = ser.includes('hv-artboards') && ser.includes('"extras"');
+            const chromeStripped = !ser.includes('hv-ablayer') && !ser.includes('hv-abframe');
+            // reopen: primary geom + extras restored; chrome stays OUT of artwork/layers
+            window.mountStageFromText(ser,'aa2');
+            const reTwo = editor.allArtboards().length===2;
+            const rePrimary = editor.allArtboards()[0].w===400;
+            const cleanArt = editor._artworkNodes().length===1 && [...editor.stage.querySelectorAll('[data-hv-id]')].every(n=>n.tagName.toLowerCase()==='rect');
+            // per-artboard SVG export crops the viewBox to that artboard
+            const ab2 = editor.allArtboards()[1];
+            // delete the extra → single artboard, viewBox back to the primary
+            editor.artboardSelected=true; editor.deleteArtboard(0);
+            const single = editor.allArtboards().length===1 && editor.stage.getAttribute('viewBox')==='0 0 400 300' && !editor.stage.querySelector('g.hv-ablayer rect');
+            return { grew, two, framed, metaKept, chromeStripped, reTwo, rePrimary, cleanArt, single }; }""")
+        check("artboards: add grows canvas + frames, metadata persists (chrome stripped), reopen restores primary+extras, artwork clean, delete→single",
+              aa["grew"] and aa["two"] and aa["framed"] and aa["metaKept"] and aa["chromeStripped"] and aa["reTwo"] and aa["rePrimary"] and aa["cleanArt"] and aa["single"], str(aa))
+        # Artboard hardening (stress): three extras grow the union; resize reflows; fit changes the
+        # viewport; art in an extra region isn't clipped; per-artboard SVG export crops the viewBox;
+        # undo-add restores single; a plain doc stays single (back-compat).
+        ah = page.evaluate(r"""() => {
+            const R='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="400" height="300"><rect data-hv-id="r1" x="40" y="40" width="120" height="120" fill="#39c"/></svg>';
+            const fresh=()=>{ window.mountStageFromText(R,'ah'); editor.setTool('select'); editor.artboardSelected=true; editor.selection=new Set(); };
+            fresh(); editor.addArtboard(); editor.addArtboard(); editor.addArtboard();
+            const multi = editor.allArtboards().length===4 && parseFloat(editor.stage.getAttribute('viewBox').split(' ')[2])>1600;
+            fresh(); editor.addArtboard(); const w0=parseFloat(editor.stage.getAttribute('viewBox').split(' ')[2]); editor.resizeArtboard(0,900,300);
+            const resize = parseFloat(editor.stage.getAttribute('viewBox').split(' ')[2])>w0;
+            fresh(); editor.addArtboard(); const vp=viewports.output, s0=vp.scale, x0=vp.x; editor.fitToArtboard(editor.allArtboards()[1]);
+            const fit = vp.scale!==s0 || vp.x!==x0;
+            fresh(); editor.addArtboard(); const ab=editor.allArtboards()[1]; const vb=editor.stage.viewBox.baseVal;
+            const noClip = (ab.x+ab.w/2)>=vb.x && (ab.x+ab.w/2)<=vb.x+vb.width;
+            fresh(); editor.addArtboard();
+            let svgText=''; const _B=window.Blob; window.Blob=function(parts,opts){ if(opts&&/svg/.test(opts.type)) svgText=parts.join(''); return new _B(parts,opts); };
+            const _ca=document.createElement.bind(document); document.createElement=(t)=>{ const el=_ca(t); if(t==='a') el.click=()=>{}; return el; };
+            editor.exportArtboardSVG(editor.allArtboards()[1],'ab2'); window.Blob=_B; document.createElement=_ca;
+            const m=/viewBox="([^"]+)"/.exec(svgText); const exportCrop=!!m && Math.abs(parseFloat(m[1].split(' ')[2])-editor.allArtboards()[1].w)<1;
+            fresh(); editor.addArtboard(); editor.undo(); const undoOk=editor.allArtboards().length===1;
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 250" width="250" height="250"><circle data-hv-id="c1" cx="125" cy="125" r="80" fill="#c33"/></svg>','ahb');
+            const backcompat = editor.allArtboards().length===1 && !editor.stage.querySelector('g.hv-ablayer') && editor.stage.getAttribute('viewBox')==='0 0 250 250';
+            return { multi, resize, fit, noClip, exportCrop, undoOk, backcompat }; }""")
+        check("artboard hardening: 3 extras grow union, resize reflows, fit moves viewport, no-clip, export-crop, undo-add, back-compat single",
+              ah["multi"] and ah["resize"] and ah["fit"] and ah["noClip"] and ah["exportCrop"] and ah["undoOk"] and ah["backcompat"], str(ah))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)
