@@ -32,6 +32,7 @@ import { expandMixin } from "./editor/tools/expand.js";
 import { widthMixin } from "./editor/tools/width.js";
 import { builderMixin } from "./editor/tools/builder.js";
 import { blendMixin } from "./editor/tools/blend.js";
+import { colorsMixin } from "./editor/tools/colors.js";
 import { effectsMixin } from "./editor/tools/effects.js";
 import { repeatMixin } from "./editor/tools/repeat.js";
 import { artboardsMixin } from "./editor/tools/artboards.js";
@@ -2189,6 +2190,21 @@ const editor = {
       mb.addEventListener("click", () => this.makeBlend());
       wrap.appendChild(inspGroup("Blend", [inspRow("", mb)]));
     }
+    // COLOUR SYSTEMS (Epic C). Pattern fill: a selected pattern-filled object gets tile
+    //  scale/rotate; 2+ objects get "Pattern fill" (top = tile). Recolor: a selection with 2+
+    //  distinct solid colours gets a swatch remap grid + Hue/Sat/Light shift.
+    if (!isRaster) {
+      const pat = nodes.length === 1 ? this._patternOf(nodes[0]) : null;
+      if (pat) wrap.appendChild(inspGroup("Pattern", this._patternPanel(nodes[0], pat)));
+      else if (nodes.length >= 2) {
+        const pb = document.createElement("button"); pb.type = "button"; pb.className = "insp-action"; pb.textContent = "Pattern fill";
+        pb.title = "Tile the top object into the fill of the shapes below it";
+        pb.addEventListener("click", () => this.fillWithPattern());
+        wrap.appendChild(inspGroup("Pattern", [inspRow("Tile", pb)]));
+      }
+      const colours = this._harvestColors(nodes);
+      if (colours.size >= 2) wrap.appendChild(inspGroup("Recolor", this._recolorPanel(colours)));
+    }
     // TRANSFORMS+ / REPEAT (Epic T). A selected repeat group gets its param editor + Expand;
     //  any selection gets reflect / shear / transform-again + the repeat generators.
     if (nodes.length === 1 && this.isRepeatGroup(nodes[0])) {
@@ -2267,6 +2283,39 @@ const editor = {
     const a = parseFloat(raw);
     if (!isFinite(a)) { setStatus("Enter a number of degrees.", 2500); return; }
     this._lastShear = a; this.shearSelection(a, 0);
+  },
+  // Pattern-fill tile editor (Epic C): scale + rotate the tile via patternTransform.
+  _patternPanel(n, pat) {
+    const x = this._patternXform(pat);
+    return [
+      numRow("Scale", Math.round((x.scale || 1) * 100) / 100, 0.05, 0.1,
+        (v) => { this.beginCoalesce(); this.setPatternParam(n, "scale", Math.max(0.05, v)); }, null,
+        () => { this.commitCoalesce("Pattern scale"); }),
+      numRow("Rotate", Math.round(x.rotate || 0), null, 1,
+        (v) => { this.beginCoalesce(); this.setPatternParam(n, "rotate", v); }, null,
+        () => { this.commitCoalesce("Pattern rotate"); }),
+    ];
+  },
+  // Recolor Artwork (Epic C): a swatch grid (click → remap that exact colour via the picker)
+  //  + Hue/Sat/Light shift over every harvested colour (coalesced, absolute from a base snapshot).
+  _recolorPanel(colours) {
+    const rows = [], grid = document.createElement("div"); grid.className = "insp-recolor-grid";
+    for (const [hex, list] of colours) {
+      const sw = document.createElement("button"); sw.type = "button"; sw.className = "insp-recolor-sw";
+      sw.style.background = hex; sw.title = `${hex} — click to remap (${list.length})`;
+      sw.addEventListener("click", () => {
+        const targets = this._harvestColors(this.selectedNodes()).get(hex) || []; if (!targets.length) return;
+        this.push("Recolor"); this._recolorClearBase();
+        this.pickColor({ title: "Recolor " + hex, color: hex, host: sw, allowNone: false, onChange: (h) => this.recolorApply(targets, h || hex) });
+      });
+      grid.appendChild(sw);
+    }
+    rows.push(inspRow("Colours", grid));
+    const shift = (label, kind) => numRow(label, 0, null, 1,
+      (v) => { this.beginCoalesce(); this.recolorShift(kind === "h" ? v : 0, kind === "s" ? v : 0, kind === "l" ? v : 0); }, null,
+      () => { this.commitCoalesce("Recolor"); this._recolorClearBase(); this._renderInspector(); });
+    rows.push(shift("Hue", "h")); rows.push(shift("Sat", "s")); rows.push(shift("Light", "l"));
+    return rows;
   },
   // Repeat-group param editor (E.3-style live rows). (T.6)
   _repeatPanel(g) {
@@ -2557,7 +2606,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, effectsMixin, repeatMixin, artboardsMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, colorsMixin, effectsMixin, repeatMixin, artboardsMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 

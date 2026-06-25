@@ -998,6 +998,10 @@ button:disabled {
 .hv-btrail-build { stroke: var(--accent); stroke-width: 2.5; opacity: 0.6; }
 .stage-wrap[data-tool="shapebuilder"] svg, .stage-wrap[data-tool="knife"] svg, .stage-wrap[data-tool="eraser"] svg { cursor: crosshair; }
 .stage-wrap[data-tool="scissors"] svg { cursor: crosshair; }
+/* Epic C — Recolor swatch grid */
+.insp-recolor-grid { display: flex; flex-wrap: wrap; gap: 4px; }
+.insp-recolor-sw { width: 20px; height: 20px; padding: 0; border: 1px solid var(--hair); border-radius: 3px; cursor: pointer; }
+.insp-recolor-sw:hover { outline: 1px solid var(--accent); }
 /* Pen-tool anchor markers (while a path is being drawn) */
 .hv-pen-anchor { fill: #fff; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
 .hv-pen-anchor.first { fill: var(--accent); }
