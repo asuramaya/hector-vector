@@ -30,6 +30,7 @@ import { textMixin } from "./editor/tools/text.js";
 import { masksMixin } from "./editor/tools/masks.js";
 import { expandMixin } from "./editor/tools/expand.js";
 import { effectsMixin } from "./editor/tools/effects.js";
+import { repeatMixin } from "./editor/tools/repeat.js";
 import { snap45 } from "./editor/snap.js";
 import {
   CAP_GLYPH, JOIN_GLYPH, DASH_GLYPH, ALIGN_ICON, AB_FIT_ICON, BLEND_MODES,
@@ -2124,6 +2125,26 @@ const editor = {
     // EFFECTS (Epic E): live drop shadow / blur / glow via an SVG <filter> stack. The detailed
     //  per-effect editor shows for a single object; a multi-selection just gets the add buttons.
     if (!isRaster && nodes.length >= 1) wrap.appendChild(inspGroup("Effects", this._effectsPanel(nodes)));
+    // TRANSFORMS+ / REPEAT (Epic T). A selected repeat group gets its param editor + Expand;
+    //  any selection gets reflect / shear / transform-again + the repeat generators.
+    if (nodes.length === 1 && this.isRepeatGroup(nodes[0])) {
+      wrap.appendChild(inspGroup("Repeat", this._repeatPanel(nodes[0])));
+    } else if (nodes.length >= 1) {
+      const trows = [];
+      trows.push(inspBtnRow("Reflect", [
+        { glyph: "⇋", title: "Reflect across the vertical axis", onClick: () => this.reflectSelection("vertical") },
+        { glyph: "⥯", title: "Reflect across the horizontal axis", onClick: () => this.reflectSelection("horizontal") },
+        { glyph: "⇋＋", title: "Reflect a copy (vertical)", onClick: () => this.reflectSelection("vertical", { copy: true }) },
+        { glyph: "∠", title: "Shear / skew…", onClick: () => this._promptShear() },
+        { glyph: "↻", title: "Transform again", onClick: () => this.transformAgain() },
+      ]));
+      trows.push(inspBtnRow("Repeat", [
+        { glyph: "▦", title: "Repeat as a grid", onClick: () => this.repeat("grid") },
+        { glyph: "❋", title: "Repeat radially", onClick: () => this.repeat("radial") },
+        { glyph: "◧", title: "Mirror repeat", onClick: () => this.repeat("mirror") },
+      ]));
+      wrap.appendChild(inspGroup("Transform+", trows));
+    }
     // PROCESS — a single raster gets the pipeline stages (upscale / remove-bg /
     // vectorize) inline. app.js owns the jobs + live trace, so it's injected via a
     // hook; the editor stays vector-pure and just hosts the returned DOM.
@@ -2173,6 +2194,44 @@ const editor = {
         rows.push(colorRow(e.color, i));
       }
     });
+    return rows;
+  },
+  // Shear prompt (one-shot; live re-shear would compound). (T.2)
+  _promptShear() {
+    const raw = (typeof window !== "undefined" && window.prompt) ? window.prompt("Shear angle in degrees (horizontal):", String(this._lastShear || 15)) : null;
+    if (raw == null) return;
+    const a = parseFloat(raw);
+    if (!isFinite(a)) { setStatus("Enter a number of degrees.", 2500); return; }
+    this._lastShear = a; this.shearSelection(a, 0);
+  },
+  // Repeat-group param editor (E.3-style live rows). (T.6)
+  _repeatPanel(g) {
+    const p = this.repeatParamsOf(g);
+    const rows = [];
+    const num = (label, key, val, min, step) => numRow(label, val, min, step,
+      (v) => { this.beginCoalesce(); this.setRepeatParam(g, key, v); }, null,
+      () => { this.commitCoalesce("Repeat"); this._renderInspector(); });
+    if (p.kind === "grid") {
+      rows.push(numPairRow(
+        ["Rows", p.rows || 3, 1, 1, (v) => { this.beginCoalesce(); this.setRepeatParam(g, "rows", Math.round(v)); }, null, () => { this.commitCoalesce("Repeat"); this._renderInspector(); }],
+        ["Cols", p.cols || 3, 1, 1, (v) => { this.beginCoalesce(); this.setRepeatParam(g, "cols", Math.round(v)); }, null, () => { this.commitCoalesce("Repeat"); this._renderInspector(); }]));
+      const ub = this._nodeBBoxUser([...g.children].find((c) => c.getAttribute("data-hv-repeat-unit")));
+      rows.push(numPairRow(
+        ["DX", p.dx != null ? p.dx : Math.round((ub.x1 - ub.x0) * 1.15), null, 1, (v) => { this.beginCoalesce(); this.setRepeatParam(g, "dx", v); }, null, () => this.commitCoalesce("Repeat")],
+        ["DY", p.dy != null ? p.dy : Math.round((ub.y1 - ub.y0) * 1.15), null, 1, (v) => { this.beginCoalesce(); this.setRepeatParam(g, "dy", v); }, null, () => this.commitCoalesce("Repeat")]));
+    } else if (p.kind === "radial") {
+      rows.push(num("Count", "count", p.count || 6, 2, 1));
+      const ub = this._nodeBBoxUser([...g.children].find((c) => c.getAttribute("data-hv-repeat-unit")));
+      rows.push(num("Radius", "radius", p.radius != null ? p.radius : Math.round(Math.max(ub.x1 - ub.x0, ub.y1 - ub.y0) * 1.5), 0, 1));
+    } else if (p.kind === "mirror") {
+      const ub = this._nodeBBoxUser([...g.children].find((c) => c.getAttribute("data-hv-repeat-unit")));
+      rows.push(num("Gap", "gap", p.gap != null ? p.gap : Math.round((ub.x1 - ub.x0) * 0.15), null, 1));
+    }
+    const ex = document.createElement("button");
+    ex.type = "button"; ex.className = "insp-action"; ex.textContent = "Expand";
+    ex.title = "Bake the repeat into a plain group";
+    ex.addEventListener("click", () => this.expandRepeat(g));
+    rows.push(inspRow(`${(p.kind || "repeat")}`, ex));
     return rows;
   },
   // Parametric editor for ONE live shape: a Type switch (rect/poly/star), the kind's
@@ -2412,7 +2471,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, effectsMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, effectsMixin, repeatMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 

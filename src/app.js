@@ -1064,7 +1064,7 @@ document.addEventListener("keydown", (e) => {
   if (mod && (e.key === "s" || e.key === "S")) { e.preventDefault(); if (modalRootEl.hidden) { if (e.shiftKey) saveAsDocument(); else saveDocument(); } return; }
   if (mod && (e.key === "z" || e.key === "Z")) { e.preventDefault(); if (e.shiftKey) editor.redoAction(); else editor.undo(); return; }
   if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); editor.redoAction(); return; }
-  if (mod && (e.key === "d" || e.key === "D")) { e.preventDefault(); editor.duplicate(); return; }
+  if (mod && (e.key === "d" || e.key === "D")) { e.preventDefault(); if (e.shiftKey) editor.transformAgain(); else editor.duplicate(); return; }   // Ctrl/Cmd+D duplicate · +Shift Transform Again (Illustrator's Ctrl+D, kept off Duplicate)
   if (mod && (e.key === "g" || e.key === "G")) { e.preventDefault(); if (e.shiftKey) editor.ungroup(); else editor.group(); return; }
   if (mod && e.key === "7") { e.preventDefault(); if (e.altKey) editor.releaseMask(); else editor.makeClipMask(); return; }   // Ctrl/Cmd+7 make clip · +Alt release (Illustrator parity)
   if (mod && (e.key === "j" || e.key === "J")) { e.preventDefault(); editor.joinNodes(); return; }
