@@ -29,6 +29,7 @@ import { transformMixin } from "./editor/tools/transform.js";
 import { textMixin } from "./editor/tools/text.js";
 import { masksMixin } from "./editor/tools/masks.js";
 import { expandMixin } from "./editor/tools/expand.js";
+import { effectsMixin } from "./editor/tools/effects.js";
 import { snap45 } from "./editor/snap.js";
 import {
   CAP_GLYPH, JOIN_GLYPH, DASH_GLYPH, ALIGN_ICON, AB_FIT_ICON, BLEND_MODES,
@@ -2119,6 +2120,9 @@ const editor = {
       blendRow,
       this._sliderRow("Opacity", opC.value == null ? 1 : opC.value, (v) => { this.beginCoalesce(); this.applyOpacity(v); }, () => this.commitCoalesce("Opacity"), !!opC.mixed),
     ]));
+    // EFFECTS (Epic E): live drop shadow / blur / glow via an SVG <filter> stack. The detailed
+    //  per-effect editor shows for a single object; a multi-selection just gets the add buttons.
+    if (!isRaster && nodes.length >= 1) wrap.appendChild(inspGroup("Effects", this._effectsPanel(nodes)));
     // PROCESS — a single raster gets the pipeline stages (upscale / remove-bg /
     // vectorize) inline. app.js owns the jobs + live trace, so it's injected via a
     // hook; the editor stays vector-pure and just hosts the returned DOM.
@@ -2127,6 +2131,48 @@ const editor = {
       if (tools) wrap.appendChild(tools);
     }
     return wrap;
+  },
+  // Effects panel (E.3): add-buttons + a live editor per stacked effect (single selection).
+  _effectsPanel(nodes) {
+    const rows = [];
+    rows.push(inspBtnRow("Add", [
+      { glyph: "▥", title: "Drop shadow", onClick: () => this.addEffect("shadow") },
+      { glyph: "◌", title: "Blur", onClick: () => this.addEffect("blur") },
+      { glyph: "✶", title: "Glow", onClick: () => this.addEffect("glow") },
+    ]));
+    if (nodes.length !== 1) {
+      const fxAny = nodes.some((n) => this.effectsOf(n).length);
+      if (fxAny) rows.push(inspRow("", Object.assign(document.createElement("span"), { className: "insp-note", textContent: "Select one object to edit its effects." })));
+      return rows;
+    }
+    const n = nodes[0];
+    const fx = this.effectsOf(n);
+    const FXL = { blur: "Blur", shadow: "Drop shadow", glow: "Glow" };
+    const liveNum = (label, val, min, step, key, i) => numRow(label, val, min, step,
+      (v) => { this.beginCoalesce(); this.updateEffect(n, i, { [key]: v }); }, null,
+      () => { this.commitCoalesce("Effect"); });
+    const colorRow = (val, i) => {
+      const inp = document.createElement("input"); inp.type = "color"; inp.value = (val || "#000000").slice(0, 7); inp.className = "insp-color";
+      inp.addEventListener("input", () => { this.beginCoalesce(); this.updateEffect(n, i, { color: inp.value }); });
+      inp.addEventListener("change", () => this.commitCoalesce("Effect colour"));
+      return inspRow("Colour", inp);
+    };
+    fx.forEach((e, i) => {
+      const rm = document.createElement("button");
+      rm.type = "button"; rm.className = "insp-iconbtn"; rm.textContent = "✕"; rm.title = "Remove effect";
+      rm.addEventListener("click", () => this.removeEffect(n, i));
+      const head = inspRow(FXL[e.type] || "Effect", rm); head.classList.add("insp-fx-head"); rows.push(head);
+      if (e.type === "blur") rows.push(liveNum("Amount", e.amount, 0, 0.5, "amount", i));
+      else {
+        if (e.type === "shadow") rows.push(numPairRow(
+          ["X", e.dx, null, 1, (v) => { this.beginCoalesce(); this.updateEffect(n, i, { dx: v }); }, null, () => this.commitCoalesce("Effect")],
+          ["Y", e.dy, null, 1, (v) => { this.beginCoalesce(); this.updateEffect(n, i, { dy: v }); }, null, () => this.commitCoalesce("Effect")]));
+        rows.push(liveNum("Blur", e.blur, 0, 0.5, "blur", i));
+        rows.push(this._sliderRow("Opacity", e.opacity == null ? 0.5 : e.opacity, (v) => { this.beginCoalesce(); this.updateEffect(n, i, { opacity: v }); }, () => this.commitCoalesce("Effect")));
+        rows.push(colorRow(e.color, i));
+      }
+    });
+    return rows;
   },
   // Parametric editor for ONE live shape: a Type switch (rect/poly/star), the kind's
   // params, and Expand-to-path. Param edits coalesce into one undo (begin on live, commit
@@ -2365,7 +2411,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, effectsMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 

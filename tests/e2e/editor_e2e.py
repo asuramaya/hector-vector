@@ -2094,6 +2094,40 @@ def main():
             return { dashPieces, undoOk, groupedOk, donutOk, capOk }; }""")
         check("expand/pathfinder hardening: dashed→pieces, outline-undo, grouped pathfinder, donut-offset hole, >6 refused",
               xh["dashPieces"]>=4 and xh["undoOk"] and xh["groupedOk"] and xh["donutOk"] and xh["capOk"], str(xh))
+        # Appearance / live effects (Epic E): a per-object effect stack (drop shadow / blur / glow)
+        # rendered to a chained <filter> in defs; live param edits; serialize strips the working
+        # JSON but keeps the filter; reopen RECONSTRUCTS the editable spec; clone-independent; GC.
+        section("Appearance: live effects — drop shadow / blur / glow (Epic E)")
+        ef = page.evaluate(r"""() => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="60" y="60" width="80" height="80" fill="#3399cc"/></svg>','ef');
+            editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false;
+            editor.addEffect('shadow'); editor.addEffect('blur');
+            const fidOf = (id)=>{ const n=editor.nodeById(id); return (/url\(#([^)]+)\)/.exec(n&&n.getAttribute('filter')||'')||[])[1]; };
+            const fid = fidOf('r1'); const filt = editor.stage.querySelector('#'+CSS.escape(fid));
+            const prims = [...filt.children].map(c=>c.tagName.replace(/^.*:/,''));
+            const chained = prims.length===2 && filt.children[1].getAttribute('in')==='fx1';   // blur reads the shadow's result
+            const stackOk = fid.indexOf('hvfilt')===0 && prims[0].toLowerCase()==='fedropshadow' && prims[1].toLowerCase()==='fegaussianblur';
+            // live edit: move the shadow → the (rebuilt) filter's feDropShadow updates
+            editor.updateEffect(editor.nodeById('r1'), 0, { dx: 13, dy: 9 });
+            const fresh = editor.stage.querySelector('#'+CSS.escape(fidOf('r1')));
+            const editOk = fresh.querySelector('feDropShadow').getAttribute('dx')==='13';
+            // serialize strips data-hv-effects but keeps the filter; reopen reconstructs the spec
+            const ser = editor.serialize();
+            const serOk = ser.includes('feDropShadow') && ser.includes('feGaussianBlur') && !ser.includes('data-hv-');
+            window.mountStageFromText(ser,'ef2');
+            const rn = editor.stage.querySelector('rect:not(.hv-artboard)');
+            const reFx = editor.effectsOf(rn); const reopenOk = reFx.length===2 && reFx[0].type==='shadow' && reFx[1].type==='blur' && Math.round(reFx[0].dx)===13;
+            // clone-independence: duplicate → its own filter id
+            editor.selection=new Set([rn.getAttribute('data-hv-id')]); editor.artboardSelected=false; editor.duplicate();
+            const dup = editor.nodeById([...editor.selection][0]); const dfid = (/url\(#([^)]+)\)/.exec(dup.getAttribute('filter')||'')||[])[1];
+            const indep = !!dfid && dfid !== fidOf(rn.getAttribute('data-hv-id')) && !!editor.stage.querySelector('#'+CSS.escape(dfid));
+            // remove all effects → filter dropped + GC'd
+            editor.selection=new Set([rn.getAttribute('data-hv-id')]);
+            editor.removeEffect(rn, 0); editor.removeEffect(rn, 0);
+            const cleared = !rn.hasAttribute('filter');
+            return { stackOk, chained, editOk, serOk, reopenOk, indep, cleared }; }""")
+        check("effects: shadow+blur chain to one filter, live edit, serialize strips JSON keeps filter, reopen-editable, clone-independent, removable",
+              ef["stackOk"] and ef["chained"] and ef["editOk"] and ef["serOk"] and ef["reopenOk"] and ef["indep"] and ef["cleared"], str(ef))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)
