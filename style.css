@@ -988,6 +988,9 @@ button:disabled {
 .hv-node-handle { fill: var(--accent); stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: all; cursor: grab; }
 .hv-node-handle:hover { fill: #000; }
 .hv-node-handle.dragging { fill: #000; cursor: grabbing; }
+.hv-whandles { pointer-events: none; }
+.hv-whandle { fill: #fff; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.stage-wrap[data-tool="width"] svg { cursor: crosshair; }
 /* Pen-tool anchor markers (while a path is being drawn) */
 .hv-pen-anchor { fill: #fff; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
 .hv-pen-anchor.first { fill: var(--accent); }

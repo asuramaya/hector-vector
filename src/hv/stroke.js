@@ -102,54 +102,65 @@ function lineX(P, dP, Q, dQ) {
   const a = ((Q.x - P.x) * dQ.y - (Q.y - P.y) * dQ.x) / den;
   return { x: P.x + a * dP.x, y: P.y + a * dP.y };
 }
+// Join at vertex V. `hw` is { l, r } half-widths at V (left/right of the travel
+// direction) — equal for a uniform stroke, unequal for a variable/asymmetric one.
 function addJoin(V, Pp, Pn, hw, join, miterLimit, out) {
   const inDir = unit(Pp, V), outDir = unit(V, Pn);
   const turn = inDir.x * outDir.y - inDir.y * outDir.x;
   if (Math.abs(turn) < 1e-7) return;                 // collinear → quads already meet flush
-  if (join === "round") { addDisc(V, hw, out); return; }   // disc ⊆ stroke; covers the convex gap exactly
+  if (join === "round") { addDisc(V, Math.max(hw.l, hw.r), out); return; }   // disc ⊆ stroke; covers the convex gap
   const s = turn > 0 ? -1 : 1;                        // sign putting the wedge on the CONVEX (gap) side
+  const sw = s > 0 ? hw.l : hw.r;                     // +leftN is the left side → use hw.l
   const lin = leftN(inDir), lou = leftN(outDir);
-  const Pin = { x: V.x + s * hw * lin.x, y: V.y + s * hw * lin.y };
-  const Pout = { x: V.x + s * hw * lou.x, y: V.y + s * hw * lou.y };
+  const Pin = { x: V.x + s * sw * lin.x, y: V.y + s * sw * lin.y };
+  const Pout = { x: V.x + s * sw * lou.x, y: V.y + s * sw * lou.y };
   if (join === "miter") {
     const apex = lineX(Pin, inDir, Pout, outDir);
-    if (apex && Math.hypot(apex.x - V.x, apex.y - V.y) / hw <= miterLimit) { pushPoly(out, [V, Pin, apex, Pout]); return; }
+    if (apex && Math.hypot(apex.x - V.x, apex.y - V.y) / Math.max(sw, 1e-6) <= miterLimit) { pushPoly(out, [V, Pin, apex, Pout]); return; }
   }
   pushPoly(out, [V, Pin, Pout]);                      // bevel (also the miter-limit fallback)
 }
 function addCap(E, outDir, hw, cap, out) {
   if (cap === "butt") return;
-  const l = leftN(outDir);
-  const c1 = { x: E.x + hw * l.x, y: E.y + hw * l.y }, c2 = { x: E.x - hw * l.x, y: E.y - hw * l.y };
-  if (cap === "square") { pushPoly(out, [c1, { x: c1.x + hw * outDir.x, y: c1.y + hw * outDir.y }, { x: c2.x + hw * outDir.x, y: c2.y + hw * outDir.y }, c2]); return; }
+  const l = leftN(outDir), R = Math.max(hw.l, hw.r);
+  const c1 = { x: E.x + hw.l * l.x, y: E.y + hw.l * l.y }, c2 = { x: E.x - hw.r * l.x, y: E.y - hw.r * l.y };
+  if (cap === "square") { pushPoly(out, [c1, { x: c1.x + R * outDir.x, y: c1.y + R * outDir.y }, { x: c2.x + R * outDir.x, y: c2.y + R * outDir.y }, c2]); return; }
   if (cap === "round") {
     const K = 10, a0 = Math.atan2(l.y, l.x), pts = [c1];
-    for (let k = 1; k < K; k++) { const a = a0 - (k * Math.PI) / K; pts.push({ x: E.x + hw * Math.cos(a), y: E.y + hw * Math.sin(a) }); }   // sweep through +outDir
+    for (let k = 1; k < K; k++) { const a = a0 - (k * Math.PI) / K; pts.push({ x: E.x + R * Math.cos(a), y: E.y + R * Math.sin(a) }); }   // sweep through +outDir
     pts.push(c2); pushPoly(out, pts);
   }
 }
-// Emit every band piece for one (already flattened) polyline. `hw` is the half-width;
-// kept a scalar here, but the quads are built corner-by-corner so a per-vertex hw (the
-// Width tool) is a one-line change. Closed polylines wrap (join at every vertex, no caps).
-function strokePieces(pts, closed, hw, cap, join, miterLimit, out) {
-  const P = [];
-  for (const p of pts) { const q = P[P.length - 1]; if (!q || Math.hypot(p.x - q.x, p.y - q.y) > 1e-7) P.push(p); }
-  if (closed && P.length > 1 && Math.hypot(P[0].x - P[P.length - 1].x, P[0].y - P[P.length - 1].y) <= 1e-7) P.pop();
+// Emit every band piece for one CLEAN polyline (dedup + close handled by the caller).
+// `hwAt(i)` → { l, r } half-widths at point i — a constant for Epic S, a profile sample
+// for the Width tool (Epic W). Quads are trapezoids so width may differ per endpoint.
+function strokePieces(P, closed, hwAt, cap, join, miterLimit, out) {
   const n = P.length;
-  if (n < 2) { if (n === 1 && cap === "round") addDisc(P[0], hw, out); return; }
+  if (n < 2) { if (n === 1 && cap === "round") { const h = hwAt(0); addDisc(P[0], Math.max(h.l, h.r), out); } return; }
   const segCount = closed ? n : n - 1;
   for (let i = 0; i < segCount; i++) {
     const A = P[i], B = P[(i + 1) % n], d = unit(A, B);
     if (!d.x && !d.y) continue;
-    const nx = -d.y * hw, ny = d.x * hw;
-    pushPoly(out, [{ x: A.x + nx, y: A.y + ny }, { x: B.x + nx, y: B.y + ny }, { x: B.x - nx, y: B.y - ny }, { x: A.x - nx, y: A.y - ny }]);
+    const a = hwAt(i), b = hwAt((i + 1) % n), nx = -d.y, ny = d.x;
+    pushPoly(out, [
+      { x: A.x + nx * a.l, y: A.y + ny * a.l }, { x: B.x + nx * b.l, y: B.y + ny * b.l },   // left side (+leftN)
+      { x: B.x - nx * b.r, y: B.y - ny * b.r }, { x: A.x - nx * a.r, y: A.y - ny * a.r },   // right side (−leftN)
+    ]);
   }
   const jStart = closed ? 0 : 1, jEnd = closed ? n : n - 1;
-  for (let i = jStart; i < jEnd; i++) addJoin(P[i % n], P[(i - 1 + n) % n], P[(i + 1) % n], hw, join, miterLimit, out);
+  for (let i = jStart; i < jEnd; i++) addJoin(P[i % n], P[(i - 1 + n) % n], P[(i + 1) % n], hwAt(i % n), join, miterLimit, out);
   if (!closed) {
-    addCap(P[0], unit(P[1], P[0]), hw, cap, out);          // start: outward points back off the path
-    addCap(P[n - 1], unit(P[n - 2], P[n - 1]), hw, cap, out);
+    addCap(P[0], unit(P[1], P[0]), flipLR(hwAt(0)), cap, out);              // start: outward back off the path (L/R swap)
+    addCap(P[n - 1], unit(P[n - 2], P[n - 1]), hwAt(n - 1), cap, out);
   }
+}
+const flipLR = (h) => ({ l: h.r, r: h.l });   // the start cap faces the opposite way, so its left/right swap
+// Dedup a flattened polyline + drop the closing-duplicate vertex of a closed loop.
+function cleanPolyline(pts, closed) {
+  const P = [];
+  for (const p of pts) { const q = P[P.length - 1]; if (!q || Math.hypot(p.x - q.x, p.y - q.y) > 1e-7) P.push(p); }
+  if (closed && P.length > 1 && Math.hypot(P[0].x - P[P.length - 1].x, P[0].y - P[P.length - 1].y) <= 1e-7) P.pop();
+  return P;
 }
 
 // ---- dashing: split a polyline into the painted dash runs (each an open polyline) ----
@@ -206,23 +217,59 @@ function windingField(polys) {
   return { inside, bbox: { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad } };
 }
 
+// Subdivide each segment so no edge is longer than `maxSeg` — keeps original vertices
+// (corners/joins intact) but adds interior points so a width PROFILE sampled per-vertex
+// varies smoothly along otherwise-straight runs (a plain line has only 2 vertices).
+function densify(P, closed, maxSeg) {
+  const n = P.length, out = [], last = closed ? n : n - 1;
+  for (let i = 0; i < last; i++) {
+    const A = P[i], B = P[(i + 1) % n]; out.push(A);
+    const L = Math.hypot(B.x - A.x, B.y - A.y), steps = Math.max(1, Math.ceil(L / maxSeg));
+    for (let k = 1; k < steps; k++) out.push({ x: A.x + (B.x - A.x) * (k / steps), y: A.y + (B.y - A.y) * (k / steps) });
+  }
+  if (!closed) out.push(P[n - 1]);
+  return out;
+}
+// Arc-length parameter t∈[0,1] for each point of a clean polyline (perimeter for closed).
+function arcParams(P, closed) {
+  const n = P.length, L = new Array(n); L[0] = 0; let tot = 0;
+  for (let i = 1; i < n; i++) { tot += Math.hypot(P[i].x - P[i - 1].x, P[i].y - P[i - 1].y); L[i] = tot; }
+  if (closed) tot += Math.hypot(P[0].x - P[n - 1].x, P[0].y - P[n - 1].y);
+  return L.map((l) => (tot > 0 ? l / tot : 0));
+}
+
 // Stroke `d` (absolute, in the same space as `width`) → the filled outline path `d`
-// (minimal cubics, nonzero). `opts`: { width, cap, join, miter, dash:[…], dashOffset, res }.
+// (minimal cubics, nonzero). `opts`: { width, cap, join, miter, dash:[…], dashOffset, res,
+//   widthAt }. `widthAt(t)` (t = arc length along each subpath, 0..1) returns either a full
+// width number or { l, r } half-widths — the Width tool's variable/asymmetric profile; when
+// present, `width` is just the fallback/peak and dashing is ignored (a width-stroke is solid).
 // Returns "" when there's nothing to paint. Pure — usable in Node.
 export function strokeOutline(d, opts = {}) {
-  const width = +opts.width, hw = width / 2;
-  if (!d || !(hw > 0)) return "";
+  const width = +opts.width || 0, hw = width / 2;
+  const widthAt = typeof opts.widthAt === "function" ? opts.widthAt : null;
+  if (!d || (!(hw > 0) && !widthAt)) return "";
   const cap = opts.cap || "butt", join = opts.join || "miter", miter = opts.miter > 0 ? opts.miter : 4;
-  const dash = opts.dash && opts.dash.some((v) => v > 0) ? opts.dash : null, dashOffset = opts.dashOffset || 0;
-  const tol = Math.max(0.12, hw * 0.04);
+  const dash = !widthAt && opts.dash && opts.dash.some((v) => v > 0) ? opts.dash : null, dashOffset = opts.dashOffset || 0;
+  const norm = (v) => (typeof v === "number" ? { l: v / 2, r: v / 2 } : { l: +v.l || 0, r: +v.r || 0 });
+  const peak = widthAt ? Math.max(hw, 0.5) : hw;     // resolution driver (thinnest meaningful feature)
+  const tol = Math.max(0.12, peak * 0.04);
   const polys = [];
   for (const sub of flattenSubpaths(d, tol)) {
     if (sub.pts.length < (sub.closed ? 1 : 2)) continue;
-    if (dash) for (const run of dashPolyline(sub.pts, sub.closed, dash, dashOffset)) strokePieces(run.pts, false, hw, cap, join, miter, polys);
-    else strokePieces(sub.pts, sub.closed, hw, cap, join, miter, polys);
+    if (dash) {
+      for (const run of dashPolyline(sub.pts, sub.closed, dash, dashOffset)) strokePieces(cleanPolyline(run.pts, false), false, () => ({ l: hw, r: hw }), cap, join, miter, polys);
+    } else if (widthAt) {
+      let P = cleanPolyline(sub.pts, sub.closed);
+      let tot = 0; for (let i = 1; i < P.length; i++) tot += Math.hypot(P[i].x - P[i - 1].x, P[i].y - P[i - 1].y);
+      P = densify(P, sub.closed, Math.max(0.5, Math.min(8, tot / 160)));   // ~160 samples so the profile reads smoothly
+      const ts = arcParams(P, sub.closed);
+      strokePieces(P, sub.closed, (i) => norm(widthAt(ts[i])), cap, join, miter, polys);
+    } else {
+      strokePieces(cleanPolyline(sub.pts, sub.closed), sub.closed, () => ({ l: hw, r: hw }), cap, join, miter, polys);
+    }
   }
   const field = windingField(polys); if (!field) return "";
   const bb = field.bbox, big = Math.max(bb.x1 - bb.x0, bb.y1 - bb.y0);
-  const res = opts.res || Math.max(240, Math.min(2000, Math.round((2.6 * big) / Math.max(hw, 0.4))));
+  const res = opts.res || Math.max(240, Math.min(2000, Math.round((2.6 * big) / Math.max(peak, 0.4))));
   return marchingSquares(field.inside, bb, res);
 }

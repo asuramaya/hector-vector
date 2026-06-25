@@ -29,6 +29,7 @@ import { transformMixin } from "./editor/tools/transform.js";
 import { textMixin } from "./editor/tools/text.js";
 import { masksMixin } from "./editor/tools/masks.js";
 import { expandMixin } from "./editor/tools/expand.js";
+import { widthMixin } from "./editor/tools/width.js";
 import { effectsMixin } from "./editor/tools/effects.js";
 import { repeatMixin } from "./editor/tools/repeat.js";
 import { artboardsMixin } from "./editor/tools/artboards.js";
@@ -243,6 +244,7 @@ const editor = {
     if (this.tool === "pen") { this._penDown(e); return; }
     if (this.tool === "curvature") { this._curvDown(e); return; }
     if (this.tool === "text") { this._textDown(e); return; }
+    if (this.tool === "width") { this._widthDown(e); return; }
     if (SHAPE_TOOLS.has(this.tool)) {
       if (e.button !== 0) return;
       e.stopPropagation(); e.preventDefault();   // draw, don't pan
@@ -398,7 +400,7 @@ const editor = {
   // creation sub-tools. Marquee + transform are folded into select (empty-drag
   // rubber-bands; Ctrl+T/Ctrl+R toggle the scale/rotate sub-mode).
   setTool(t) {
-    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "text" && !SHAPE_TOOLS.has(t)) return;
+    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "text" && t !== "width" && !SHAPE_TOOLS.has(t)) return;
     if (this._pen && t !== "pen") this._finishPen(true);   // keep any in-progress path
     if (this._curv && t !== "curvature") this._curvFinish(true);
     if (this._textEdit && t !== "text") this._commitText();   // leaving the text tool finishes the edit in progress
@@ -416,6 +418,7 @@ const editor = {
       this._penHit = null; this._renderPenHint(null); this._setPenCursor(null); this.exitPenTempSelect();
     }
     if (t === "node") this.mountNodeHandles(); else this.unmountNodeHandles();
+    if (t === "width") this._mountWidthHandles(); else this._unmountWidthHandles();
     if (this.stage) this._renderSelection();   // show/hide the transform bbox handles
     this._showHint();
   },
@@ -430,6 +433,7 @@ const editor = {
       return "Select (V) — click a shape · drag to marquee (Alt = lasso) · Space-drag pans · A edits points";
     }
     if (t === "node") return "Points (A) — drag anchors/handles · Shift multi-selects · Alt converts · drag a segment to reshape · ⌫ deletes";
+    if (t === "width") return "Width (W) — drag a stroke ⊥ to swell/pinch it · Alt = one side · Uniform/Release/Expand in Properties";
     if (t === "pen") return "Pen (P) — click for corners, drag for curves · over a path + adds / − removes · click the first point to close · Enter finishes";
     if (t === "curvature") return "Curvature (C) — click for smooth points · Alt = corner · Shift = 45° · drag a point to move · ⌫ removes the last · click the first to close · Enter finishes";
     if (t === "rect") return "Rectangle (R) — drag on the canvas · Shift = square";
@@ -442,6 +446,7 @@ const editor = {
   onViewportChanged() {
     if (this._handleDragging) return;   // a zoom/pan mid-drag must not re-mount and yank the dragged handle
     if (this.tool === "node" && this.stage) this.mountNodeHandles();
+    if (this.tool === "width" && this.stage) this._mountWidthHandles();   // width-stop diamonds stay constant-screen-size
     if (this.tool === "select" && this._xformMode && this.stage) this._renderSelection();   // handles are constant-screen-size
     if (this.tool === "pen" && !this._pen && this.stage) this._renderPenPoints();   // anchor dots stay constant-screen-size
     if (this._pen) { this._redrawPen(); this._renderPenMarks(); }
@@ -2024,6 +2029,28 @@ const editor = {
         ]));
       }
       if (xrows.length) wrap.appendChild(inspGroup("Expand", xrows));
+      // Width (Epic W): vary stroke width. A selected width-stroke group gets a uniform-width
+      //  scrub + Uniform reset + Release + Expand; a plain stroked path gets a "Vary width" make.
+      const wsGroup = nodes.length === 1 ? this._wsGroupOf(nodes[0]) : null;
+      if (wsGroup) {
+        const spec = this._wsSpec(wsGroup); const wrows = [];
+        wrows.push(numRow("Width", Math.round((spec.w || 0) * 100) / 100, 0.25, 1,
+          (v) => { this.beginCoalesce(); this.setWidthBase(wsGroup, Math.max(0.25, v)); }, null,
+          () => { this.commitCoalesce("Width"); this._renderSelection(); this._mountWidthHandles(); }));
+        const uni = document.createElement("button"); uni.type = "button"; uni.className = "insp-action"; uni.textContent = "Uniform";
+        uni.title = "Reset to a constant width"; uni.addEventListener("click", () => this.resetWidthUniform(wsGroup));
+        const rel = document.createElement("button"); rel.type = "button"; rel.className = "insp-action"; rel.textContent = "Release";
+        rel.title = "Back to a normal stroked path"; rel.addEventListener("click", () => this.releaseWidthStroke(wsGroup));
+        const exp = document.createElement("button"); exp.type = "button"; exp.className = "insp-action"; exp.textContent = "Expand";
+        exp.title = "Bake into plain filled paths"; exp.addEventListener("click", () => this.expandWidthStroke(wsGroup));
+        wrows.push(inspRow("", uni)); wrows.push(inspRow("", rel)); wrows.push(inspRow("", exp));
+        wrap.appendChild(inspGroup("Width", wrows));
+      } else if (reads.some((n) => this._isStroked(n)) && !nodes.some((n) => this._wsGroupOf(n))) {
+        const mk = document.createElement("button"); mk.type = "button"; mk.className = "insp-action"; mk.textContent = "Vary width";
+        mk.title = "Make a variable-width stroke (then drag it with the Width tool)";
+        mk.addEventListener("click", () => { this.makeWidthStroke(); this.setTool("width"); });
+        wrap.appendChild(inspGroup("Width", [inspRow("Stroke", mk)]));
+      }
     }
     // (Align → the panel's bottom chin via _alignBar(); Flip + z-order Arrange were removed
     //  — both are global on the action bar.)
@@ -2497,7 +2524,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, effectsMixin, repeatMixin, artboardsMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, effectsMixin, repeatMixin, artboardsMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 

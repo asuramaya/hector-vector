@@ -1111,6 +1111,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "e" || e.key === "E") { editor.setTool("ellipse"); return; }
   if (e.key === "l" || e.key === "L") { editor.setTool("line"); return; }
   if (e.key === "t" || e.key === "T") { editor.setTool("text"); return; }
+  if (e.key === "w" || e.key === "W") { editor.setTool("width"); return; }
   if (e.key === "Escape" && editor.stage) {
     if (editor._gradMode) { editor.clearGradMode(); return; }   // first Esc exits the gradient editor
     if (editor._xformMode) { editor.clearXform(); return; }     // …or scale/rotate
