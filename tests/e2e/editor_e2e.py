@@ -2128,6 +2128,35 @@ def main():
             return { stackOk, chained, editOk, serOk, reopenOk, indep, cleared }; }""")
         check("effects: shadow+blur chain to one filter, live edit, serialize strips JSON keeps filter, reopen-editable, clone-independent, removable",
               ef["stackOk"] and ef["chained"] and ef["editOk"] and ef["serOk"] and ef["reopenOk"] and ef["indep"] and ef["cleared"], str(ef))
+        # Effects hardening (stress pass): effect on a GROUP; undo drops the filter; same-type effects
+        # stack as chained primitives; a boolean of an effected shape leaves NO orphan filter; reopen
+        # then APPEND another effect (reconstruct + add).
+        eh = page.evaluate(r"""() => {
+            const fid=(id)=>{const n=editor.nodeById(id);return (/url\(#([^)]+)\)/.exec(n&&n.getAttribute('filter')||'')||[])[1];};
+            // group
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><g data-hv-id="g0"><rect data-hv-id="a" x="40" y="40" width="60" height="60" fill="#e55"/><rect data-hv-id="b" x="90" y="90" width="60" height="60" fill="#5e5"/></g></svg>','eh1');
+            editor.setTool('select'); editor.selection=new Set(['g0']); editor.artboardSelected=false; editor.addEffect('shadow');
+            const groupOk = !!fid('g0') && fid('g0').indexOf('hvfilt')===0;
+            // undo
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="60" y="60" width="80" height="80" fill="#39c"/></svg>','eh2');
+            editor.selection=new Set(['r1']); editor.addEffect('blur'); editor.undo();
+            const undoOk = !editor.nodeById('r1').hasAttribute('filter');
+            // same-type stack
+            editor.selection=new Set(['r1']); editor.addEffect('blur'); editor.addEffect('blur');
+            const f=editor.stage.querySelector('#'+CSS.escape(fid('r1'))); const sameType = f.children.length===2 && f.children[1].getAttribute('in')==='fx1';
+            // boolean leaves no orphan filter
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="a" x="40" y="40" width="80" height="80" fill="#888"/><rect data-hv-id="b" x="80" y="80" width="80" height="80" fill="#888"/></svg>','eh3');
+            editor.selection=new Set(['a']); editor.addEffect('shadow'); editor.selection=new Set(['a','b']); editor.booleanOp('union');
+            const boolGc = editor.stage.querySelectorAll('defs.hv-defs filter').length===0;
+            // reopen + append
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="60" y="60" width="80" height="80" fill="#39c"/></svg>','eh4');
+            editor.selection=new Set(['r1']); editor.addEffect('blur');
+            window.mountStageFromText(editor.serialize(),'eh5'); const rn=editor.stage.querySelector('rect:not(.hv-artboard)');
+            editor.selection=new Set([rn.getAttribute('data-hv-id')]); editor.addEffect('shadow');
+            const fx=editor.effectsOf(rn); const appendOk = fx.length===2 && fx[0].type==='blur' && fx[1].type==='shadow';
+            return { groupOk, undoOk, sameType, boolGc, appendOk }; }""")
+        check("effects hardening: group filter, undo drops it, same-type stack chains, boolean leaves no orphan, reopen+append",
+              eh["groupOk"] and eh["undoOk"] and eh["sameType"] and eh["boolGc"] and eh["appendOk"], str(eh))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)

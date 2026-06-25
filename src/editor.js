@@ -1601,6 +1601,7 @@ const editor = {
     if (src) ["stroke", "stroke-width", "vector-effect", "stroke-linejoin", "stroke-linecap", "opacity"].forEach((a) => { const v = src.getAttribute(a); if (v) path.setAttribute(a, v); });
     (anchor.parentNode || this.stage).insertBefore(path, anchor);   // land beside the inputs (inside their group if grouped)
     nodes.forEach((n) => n.remove());
+    this._gcDefs();   // inputs' effects/masks/unused gradients are now orphaned (the result carries only fill) → reclaim
     this.selection = new Set([id]); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector(); this._renderLayers();
     setStatus(msg, 2000);
