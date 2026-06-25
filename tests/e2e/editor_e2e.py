@@ -2118,6 +2118,39 @@ def main():
             return { precise, hole, hairline, miterApex }; }""")
         check("geometric stroker (Epic S): precise annulus bbox+hole, hairline-relative outline, miter apex reached",
               sg["precise"] and sg["hole"] and sg["hairline"] and sg["miterApex"], str(sg))
+        # Width tool (Epic W): a stroked path → a parametric <g data-hv-wstroke> with a generated
+        # variable ribbon (the stroker's per-vertex width). Make / swell-profile / uniform-base
+        # scale / Release / Expand; serialize bakes to a plain path (no data-hv-*); no errors.
+        section("Width tool: variable-width strokes (Epic W)")
+        wv = page.evaluate(r"""() => {
+            const out = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><path data-hv-id="p1" d="M30 100 L170 100" fill="none" stroke="#cc3333" stroke-width="12"/></svg>','wv1');
+            editor.setTool('width'); editor.selection=new Set(['p1']); editor.artboardSelected=false;
+            const ids = editor.makeWidthStroke(['p1']); const g = editor.nodeById(ids[0]);
+            out.made = !!g && g.tagName.toLowerCase()==='g' && g.hasAttribute('data-hv-wstroke') && editor.nodeById('p1')===null;
+            const rb = g && g.querySelector('path[data-hv-wribbon]');
+            out.ribbon = !!rb && rb.getAttribute('fill')==='#cc3333' && (rb.getAttribute('d')||'').length>20 && Math.abs(rb.getBBox().height-12)<3;
+            // swell the middle → ribbon grows tall there (variable width really renders)
+            const spec = editor._wsSpec(g); spec.profile=[{t:0,l:6,r:6},{t:0.5,l:30,r:30},{t:1,l:6,r:6}];
+            editor._wsSet(g, spec); editor._regenWidthStroke(g);
+            out.swell = g.querySelector('path[data-hv-wribbon]').getBBox().height > 50;
+            // base-width scrub scales the whole profile; uniform reset flattens it
+            editor.setWidthBase(g, 24); out.scaled = editor._wsSpec(g).profile[1].l > 55;
+            editor.resetWidthUniform(g); out.uniform = editor._wsSpec(g).profile.every(s=>Math.abs(s.l-12)<0.01);
+            // serialize → plain path, no data-hv-* / wstroke
+            const ser = editor.serialize(); out.serOk = ser.includes('<path') && !ser.includes('data-hv-') && !ser.includes('wstroke');
+            // release → stroked path again
+            editor.releaseWidthStroke(g);
+            const rp = editor.stage.querySelector('path[data-hv-id]');
+            out.released = !!rp && rp.getAttribute('stroke')==='#cc3333' && editor.stage.querySelector('[data-hv-wstroke]')===null;
+            // remake + expand → plain filled path, group gone, undo restores the group
+            const ids2 = editor.makeWidthStroke([rp.getAttribute('data-hv-id')]);
+            editor.expandWidthStroke(editor.nodeById(ids2[0]));
+            out.expanded = editor.stage.querySelector('[data-hv-wstroke]')===null && editor.stage.querySelector('path[data-hv-id][fill="#cc3333"]')!==null;
+            editor.undo(); out.undoOk = editor.stage.querySelector('[data-hv-wstroke]')!==null;
+            return out; }""")
+        check("width tool: make→variable ribbon, swell renders, base-scale, uniform reset, release, expand+undo, round-trips",
+              wv["made"] and wv["ribbon"] and wv["swell"] and wv["scaled"] and wv["uniform"] and wv["serOk"] and wv["released"] and wv["expanded"] and wv["undoOk"], str(wv))
         # Appearance / live effects (Epic E): a per-object effect stack (drop shadow / blur / glow)
         # rendered to a chained <filter> in defs; live param edits; serialize strips the working
         # JSON but keeps the filter; reopen RECONSTRUCTS the editable spec; clone-independent; GC.

@@ -96,6 +96,7 @@ Shape tools are **live shapes** — rect/ellipse keep editable parameters (size,
 - **Invert-space** — punch the selection out of its bounds (same boolean engine; overlaps merge into one hole).
 - **Pathfinder** — **Divide** (split overlapping shapes into every face region), **Trim** / **Merge** (remove hidden parts; Merge unites touching same-colour pieces), **Crop** (keep what's inside the front shape), **Minus Back** — the full set, each face coloured by the topmost shape, all on the same crisp-cubic engine.
 - **Outline stroke & Offset path** — convert a stroke into a filled path (honouring width / caps / joins / dashes) via an **analytic geometric stroker** (exact miter / bevel / round joins and butt / square / round caps, with no bitmap quantization — hairlines relative to the artwork stay crisp), or grow/shrink a path's outline by any amount (negative shrinks). **Expand** bakes live shapes, text, and strokes down to plain editable paths in one step.
+- **Width tool (`W`)** — drag a stroke perpendicular to swell or pinch it at that point (**Alt** = one-sided/asymmetric); the variable-width profile renders to a crisp filled ribbon through the same geometric stroker. Set a **uniform** width, **Release** back to a normal stroked path, or **Expand** to plain filled paths in Properties.
 - **Multiple artboards** — add named artboards beside the first; the canvas grows to fit them all, each frame **fits-to-view** and **exports** on its own (cropped SVG). Artboards persist in the saved file (in `<metadata>`, invisible to export) and old single-artboard documents open unchanged.
 - **Reflect / Shear / Transform Each** — mirror a selection (or a copy) across its axis, skew by an angle, or transform every object about its *own* centre; **Transform Again** (`Ctrl/Cmd+Shift+D`) replays the last one.
 - **Repeat** — turn a selection into a live **grid**, **radial**, or **mirror** repeat: edit the count / spacing / radius in Properties and the copies regenerate, then **Expand** to a plain group.
@@ -183,7 +184,7 @@ Heavily *bilinear*-resampled art is genuinely ambiguous; set **Native size (cell
 
 | | |
 |---|---|
-| **Tools** | `V` select · `A` node · `P` pen · `C` curvature · `R` rect · `E` ellipse · `L` line |
+| **Tools** | `V` select · `A` node · `P` pen · `C` curvature · `R` rect · `E` ellipse · `L` line · `T` text · `W` width |
 | **Edit** | `Ctrl/Cmd+Z` undo · `Ctrl/Cmd+Shift+Z` / `Ctrl/Cmd+Y` redo · `Ctrl/Cmd+D` duplicate · `Ctrl/Cmd+C/X/V` copy/cut/paste · `Delete` remove |
 | **Object** | `Ctrl/Cmd+G` group · `Ctrl/Cmd+Shift+G` ungroup · `Ctrl/Cmd+J` join nodes · `Ctrl/Cmd+T` scale · `Ctrl/Cmd+A` select all |
 | **Colour** | `X` swap fill/stroke · `D` default fill/stroke (in the Colour panel) |
