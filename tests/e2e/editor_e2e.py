@@ -2248,6 +2248,34 @@ def main():
         check("pattern fill: top→<pattern> applied below, tile scale/rotate, round-trips, undo · recolor: harvest 2, remap exact, HSL shift",
               cl["patApplied"] and cl["patDef"] and cl["patXform"] and cl["patSer"] and cl["patUndo"]
               and cl["harvest"] and cl["remap"] and cl["shift"], str(cl))
+        # Isolation mode (Epic I): double-click a group to edit inside it — dim outside, scope
+        # selection/marquee/new-objects to the group's children, breadcrumb + Esc exit. The dim is
+        # editor-only (stripped from serialize + history; re-synced by id after undo).
+        section("Isolation mode: edit inside a group (Epic I)")
+        iso = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><g data-hv-id="g"><rect data-hv-id="c1" x="20" y="20" width="40" height="40" fill="#e55"/><rect data-hv-id="c2" x="80" y="20" width="40" height="40" fill="#5e5"/></g><rect data-hv-id="out" x="20" y="120" width="60" height="40" fill="#55e"/></svg>','iso');
+            editor.setTool('select');
+            editor.enterIsolation(editor.nodeById('g'));
+            o.entered = editor.isIsolated() && editor.stage.classList.contains('hv-iso') && editor.nodeById('g').classList.contains('hv-iso-keep') && !!document.querySelector('.hv-iso-crumb');
+            o.scope = JSON.stringify(editor._artScope().map(n=>n.getAttribute('data-hv-id')))==='["c1","c2"]';
+            editor.selectAll(); o.selAll = editor.selection.has('c1') && editor.selection.has('c2') && !editor.selection.has('out');
+            const before = editor.nodeById('g').children.length;
+            const node = document.createElementNS('http://www.w3.org/2000/svg','rect');
+            node.setAttribute('data-hv-id','n'+(++editor.idSeq)); node.setAttribute('x','130'); node.setAttribute('y','20'); node.setAttribute('width','20'); node.setAttribute('height','20'); node.setAttribute('fill','#999');
+            editor._artHome().insertBefore(node, editor._artBefore());
+            o.newInside = editor.nodeById('g').children.length === before+1;
+            o.serClean = !editor.serialize().includes('hv-iso');
+            editor.selection=new Set(['c1']); editor.push('move'); editor.nodeById('c1').setAttribute('x','25'); editor.undo();
+            o.afterUndo = editor.isIsolated() && editor.stage.classList.contains('hv-iso') && editor.nodeById('g').classList.contains('hv-iso-keep');
+            editor.exitIsolation();
+            o.exited = !editor.isIsolated() && !editor.stage.classList.contains('hv-iso') && !document.querySelector('.hv-iso-crumb') && editor.selection.has('g');
+            editor.enterIsolation(editor.nodeById('g')); editor.nodeById('g').remove(); editor._reconcileIsolation();
+            o.reconcileGone = !editor.isIsolated();
+            return o; }""")
+        check("isolation: enter (dim+keep+crumb), scoped scope/select-all, new objects parent inside, serialize+undo clean, exit selects group, reconcile on delete",
+              iso["entered"] and iso["scope"] and iso["selAll"] and iso["newInside"] and iso["serClean"]
+              and iso["afterUndo"] and iso["exited"] and iso["reconcileGone"], str(iso))
         # Appearance / live effects (Epic E): a per-object effect stack (drop shadow / blur / glow)
         # rendered to a chained <filter> in defs; live param edits; serialize strips the working
         # JSON but keeps the filter; reopen RECONSTRUCTS the editable spec; clone-independent; GC.
