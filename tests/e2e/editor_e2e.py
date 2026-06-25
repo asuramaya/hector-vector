@@ -2151,6 +2151,46 @@ def main():
             return out; }""")
         check("width tool: make→variable ribbon, swell renders, base-scale, uniform reset, release, expand+undo, round-trips",
               wv["made"] and wv["ribbon"] and wv["swell"] and wv["scaled"] and wv["uniform"] and wv["serOk"] and wv["released"] and wv["expanded"] and wv["undoOk"], str(wv))
+        # Path-construction tools (Epic B): Shape Builder / Scissors / Knife / Eraser — driven via
+        # their pure cores (shapeBuilderPaint / scissorsCut / knifeCut / eraseSweep). Each ends in
+        # plain editable paths on the same raster+marching engine the booleans use; undo restores.
+        section("Path tools: Shape Builder / Scissors / Knife / Eraser (Epic B)")
+        bld = page.evaluate(r"""() => {
+            const out = {};
+            const two = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="a" x="40" y="70" width="80" height="60" fill="#ee5555"/><rect data-hv-id="b" x="90" y="70" width="80" height="60" fill="#55ee55"/></svg>';
+            // Shape Builder merge: paint across both → one path, rects gone, undo restores both rects
+            window.mountStageFromText(two,'b1'); editor.setTool('shapebuilder'); editor.selection=new Set(['a','b']); editor.artboardSelected=false;
+            editor.shapeBuilderPaint([{x:60,y:100},{x:100,y:100},{x:150,y:100}], false);
+            out.merge = editor.stage.querySelectorAll('path[data-hv-id]').length===1 && editor.stage.querySelectorAll('rect[data-hv-id]').length===0;
+            editor.undo(); out.mergeUndo = editor.stage.querySelectorAll('rect[data-hv-id]').length===2;
+            // Shape Builder Alt-remove: paint just the overlap → it's removed (result present)
+            window.mountStageFromText(two,'b2'); editor.selection=new Set(['a','b']);
+            editor.shapeBuilderPaint([{x:105,y:100}], true);
+            out.remove = editor.stage.querySelectorAll('path[data-hv-id]').length>=1 && editor.stage.querySelectorAll('rect[data-hv-id]').length===0;
+            // Scissors on a CLOSED rect path → reopens (no Z), still one object
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><path data-hv-id="c" d="M50 50 H150 V150 H50 Z" fill="#39c"/></svg>','b3'); editor.setTool('scissors');
+            editor.scissorsCut(100, 50, 6);
+            const cp = editor.stage.querySelector('path[data-hv-id]');
+            out.scClosed = !!cp && !/[zZ]/.test(cp.getAttribute('d')||'') && editor.stage.querySelectorAll('path[data-hv-id]').length===1;
+            // Scissors on an OPEN path → two objects; undo restores one
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><path data-hv-id="o" d="M30 100 L170 100" fill="none" stroke="#000" stroke-width="6"/></svg>','b4');
+            editor.scissorsCut(100, 100, 6);
+            out.scOpen = editor.stage.querySelectorAll('path[data-hv-id]').length===2;
+            editor.undo(); out.scUndo = editor.stage.querySelectorAll('path[data-hv-id]').length===1;
+            // Knife straight cut through a rect → two pieces, original gone
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="k" x="60" y="60" width="80" height="80" fill="#c84"/></svg>','b5'); editor.setTool('knife'); editor.selection=new Set();
+            editor.knifeCut([{x:100,y:40},{x:100,y:160}], true);
+            out.knife = editor.stage.querySelectorAll('path[data-hv-id]').length===2 && editor.stage.querySelectorAll('rect[data-hv-id]').length===0;
+            // Eraser sweep across a rect → splits into 2 lobes (a hole through the middle); undo restores
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="e" x="40" y="40" width="120" height="120" fill="#7a3"/></svg>','b6'); editor.setTool('eraser'); editor.selection=new Set();
+            editor.eraseSweep([{x:40,y:100},{x:80,y:100},{x:120,y:100},{x:160,y:100}], 16);
+            const ep = editor.stage.querySelector('path[data-hv-id]');
+            out.erase = !!ep && (ep.getAttribute('d').match(/M/gi)||[]).length>=2;
+            editor.undo(); out.eraseUndo = !!editor.stage.querySelector('rect[data-hv-id="e"]');
+            return out; }""")
+        check("shape builder merge+undo / alt-remove, scissors close→open & open→two+undo, knife two pieces, eraser splits+undo",
+              bld["merge"] and bld["mergeUndo"] and bld["remove"] and bld["scClosed"] and bld["scOpen"] and bld["scUndo"]
+              and bld["knife"] and bld["erase"] and bld["eraseUndo"], str(bld))
         # Appearance / live effects (Epic E): a per-object effect stack (drop shadow / blur / glow)
         # rendered to a chained <filter> in defs; live param edits; serialize strips the working
         # JSON but keeps the filter; reopen RECONSTRUCTS the editable spec; clone-independent; GC.
