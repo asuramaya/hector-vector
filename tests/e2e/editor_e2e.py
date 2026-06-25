@@ -2094,6 +2094,30 @@ def main():
             return { dashPieces, undoOk, groupedOk, donutOk, capOk }; }""")
         check("expand/pathfinder hardening: dashed→pieces, outline-undo, grouped pathfinder, donut-offset hole, >6 refused",
               xh["dashPieces"]>=4 and xh["undoOk"] and xh["groupedOk"] and xh["donutOk"] and xh["capOk"], str(xh))
+        # Geometric stroker (Epic S): the analytic outline replaces the raster route in
+        # _strokeOutlinePath — exact joins/caps, no bitmap quantization. Guards: a closed
+        # stroke gives a precise annulus bbox WITH a hole; a hairline relative to a big bbox
+        # still outlines (the raster route lost thin coverage); a miter corner reaches its apex.
+        sg = page.evaluate(r"""() => {
+            // 1. closed square stroke w=16 → outer bbox exactly 100+16, inner hole present
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r" x="50" y="50" width="100" height="100" fill="none" stroke="#225588" stroke-width="16" stroke-linejoin="miter"/></svg>','sg1');
+            editor.setTool('select'); editor.selection=new Set(['r']); editor.artboardSelected=false; editor.outlineStroke();
+            const o=editor.stage.querySelector('path[data-hv-id]'); const bb=o?o.getBBox():{width:0,height:0};
+            const precise = Math.abs(bb.width-116)<2 && Math.abs(bb.height-116)<2;
+            const hole = o ? (o.getAttribute('d').match(/M/gi)||[]).length>=2 : false;
+            // 2. hairline relative to a large bbox (w/big ≈ 1/330) still produces an outline
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 200" width="2000" height="200"><path data-hv-id="h" d="M20 100 L1980 140" fill="none" stroke="#c33" stroke-width="6" stroke-linecap="butt"/></svg>','sg2');
+            editor.selection=new Set(['h']); editor.outlineStroke();
+            const oh=editor.stage.querySelector('path[data-hv-id]');
+            const hairline = !!oh && oh.getAttribute('fill')==='#c33' && (oh.getAttribute('d')||'').length>20 && oh.getBBox().width>1900;
+            // 3. miter join reaches its apex: an L outline extends to the outer corner (bbox 120+hw)
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><path data-hv-id="l" d="M30 30 L150 30 L150 150" fill="none" stroke="#000" stroke-width="20" stroke-linejoin="miter" stroke-linecap="butt"/></svg>','sg3');
+            editor.selection=new Set(['l']); editor.outlineStroke();
+            const ol=editor.stage.querySelector('path[data-hv-id]'); const bl=ol?ol.getBBox():{x:0,width:0};
+            const miterApex = !!ol && (bl.x+bl.width) > 158;   // 150 + hw(10) outer corner
+            return { precise, hole, hairline, miterApex }; }""")
+        check("geometric stroker (Epic S): precise annulus bbox+hole, hairline-relative outline, miter apex reached",
+              sg["precise"] and sg["hole"] and sg["hairline"] and sg["miterApex"], str(sg))
         # Appearance / live effects (Epic E): a per-object effect stack (drop shadow / blur / glow)
         # rendered to a chained <filter> in defs; live param edits; serialize strips the working
         # JSON but keeps the filter; reopen RECONSTRUCTS the editable spec; clone-independent; GC.
