@@ -263,6 +263,22 @@ export function fitVp(vp) {
   applyViewportState(vp);
   if (vp === viewports.output) editor.onViewportChanged();
 }
+// Frame a sub-rectangle (in media/stage coords) to fill the viewport — fit-to-artboard.
+export function frameRect(vp, x, y, w, h) {
+  const frame = vp.el; const media = frame.querySelector("img, svg");
+  if (!media || !(w > 0) || !(h > 0)) return;
+  const cs = getComputedStyle(frame);
+  const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+  const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+  const fw = Math.max(0, frame.clientWidth - padX), fh = Math.max(0, frame.clientHeight - padY);
+  const { w: mw, h: mh } = mediaNaturalSize(media);
+  if (mw <= 0 || mh <= 0 || fw <= 0 || fh <= 0) return;
+  vp.scale = Math.max(0.02, Math.min(40, Math.min(fw / w, fh / h) * 0.92));
+  vp.x = (mw / 2 - (x + w / 2)) * vp.scale;   // pan so the rect's centre lands at the media centre (frame-centred content)
+  vp.y = (mh / 2 - (y + h / 2)) * vp.scale;
+  applyViewportState(vp);
+  if (vp === viewports.output) editor.onViewportChanged();
+}
 export function actualVp(vp) {
   if (!vp.el.querySelector(".viewport-content")) return;
   vp.scale = 1; vp.x = 0; vp.y = 0;

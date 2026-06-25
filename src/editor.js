@@ -31,6 +31,7 @@ import { masksMixin } from "./editor/tools/masks.js";
 import { expandMixin } from "./editor/tools/expand.js";
 import { effectsMixin } from "./editor/tools/effects.js";
 import { repeatMixin } from "./editor/tools/repeat.js";
+import { artboardsMixin } from "./editor/tools/artboards.js";
 import { snap45 } from "./editor/snap.js";
 import {
   CAP_GLYPH, JOIN_GLYPH, DASH_GLYPH, ALIGN_ICON, AB_FIT_ICON, BLEND_MODES,
@@ -122,6 +123,7 @@ const editor = {
   _install(svgEl) {
     this.stage = svgEl;
     this._ensureStructure(svgEl);
+    this._loadArtboards(svgEl);   // parse <metadata> extras (restores primary geom) — back-compat: none → single artboard
     svgEl.classList.add("hv-pickable");
     if (!svgEl._hvBound) {
       svgEl.addEventListener("pointerdown", (e) => this._onPointerDown(e));
@@ -129,6 +131,7 @@ const editor = {
       svgEl._hvBound = true;
     }
     this.renderGuides();   // re-create the (data-backed) guides layer on this fresh stage
+    if (this.artboards && this.artboards.length) this._reflowCanvas();   // grow the canvas to the union + draw extra-artboard frames
   },
   _ensureStructure(svg) {
     let vb = svg.viewBox && svg.viewBox.baseVal;
@@ -163,7 +166,7 @@ const editor = {
     for (const child of Array.from(svg.children)) {
       const tag = child.tagName.toLowerCase();
       if (SKIP_TAGS.has(tag)) continue;
-      if (child.classList.contains("hv-artboard") || child.classList.contains("hv-overlay") || child.classList.contains("hv-guideslayer") || child.classList.contains("hv-preview")) continue;
+      if (child.classList.contains("hv-artboard") || child.classList.contains("hv-overlay") || child.classList.contains("hv-guideslayer") || child.classList.contains("hv-ablayer") || child.classList.contains("hv-preview")) continue;
       if (!child.hasAttribute("data-hv-id")) child.setAttribute("data-hv-id", "n" + (++this.idSeq));
     }
     let ov = svg.querySelector("g.hv-overlay");
@@ -175,7 +178,7 @@ const editor = {
   _flattenWrapper(svg) {
     const art = [...svg.children].filter((c) => {
       const t = c.tagName.toLowerCase();
-      return !SKIP_TAGS.has(t) && !c.classList.contains("hv-artboard") && !c.classList.contains("hv-overlay") && !c.classList.contains("hv-guideslayer");
+      return !SKIP_TAGS.has(t) && !c.classList.contains("hv-artboard") && !c.classList.contains("hv-overlay") && !c.classList.contains("hv-guideslayer") && !c.classList.contains("hv-ablayer");
     });
     if (art.length !== 1) return;
     const g = art[0];
@@ -203,7 +206,7 @@ const editor = {
   serialize() {
     if (!this.stage) return "";
     const c = this.stage.cloneNode(true);
-    c.querySelectorAll("g.hv-overlay, g.hv-guideslayer, g.hv-preview").forEach((g) => g.remove());
+    c.querySelectorAll("g.hv-overlay, g.hv-guideslayer, g.hv-ablayer, g.hv-preview").forEach((g) => g.remove());
     c.querySelectorAll(".hv-raster-hidden").forEach((n) => { n.classList.remove("hv-raster-hidden"); if (!n.getAttribute("class")) n.removeAttribute("class"); });
     c.classList.remove("hv-pickable");
     // Strip ALL editor metadata, including parametric live-shape params (data-hv-shape,
@@ -859,6 +862,7 @@ const editor = {
     this.stage.setAttribute("viewBox", `0 0 ${nfmt(w)} ${nfmt(h)}`);
     this.stage.setAttribute("width", nfmt(w)); this.stage.setAttribute("height", nfmt(h));
     ab.setAttribute("x", 0); ab.setAttribute("y", 0); ab.setAttribute("width", nfmt(w)); ab.setAttribute("height", nfmt(h));
+    if (this.artboards && this.artboards.length) this._reflowCanvas();   // re-grow the union so extras aren't clipped by the primary's new size
     this._renderSelection(); measureFit(viewports.output);
   },
 
@@ -1811,7 +1815,7 @@ const editor = {
     const GRAPHIC = new Set(["path", "rect", "circle", "ellipse", "line", "polygon", "polyline", "image", "text", "g"]);
     const walk = (parent) => {
       for (const c of parent.children) {
-        if (c === ov || (c.classList && (c.classList.contains("hv-artboard") || c.classList.contains("hv-guideslayer") || c.classList.contains("hv-preview")))) continue;
+        if (c === ov || (c.classList && (c.classList.contains("hv-artboard") || c.classList.contains("hv-guideslayer") || c.classList.contains("hv-ablayer") || c.classList.contains("hv-preview")))) continue;
         const tag = c.tagName.toLowerCase();
         if (!GRAPHIC.has(tag)) continue;
         if (!c.hasAttribute("data-hv-id")) c.setAttribute("data-hv-id", "n" + (++this.idSeq));
@@ -2451,6 +2455,28 @@ const editor = {
     const swatchRow = inspRow("Fill", sw);
     const transRow = checkRow("None", bgNone, (v) => { this.push("Artboard background"); this.applyArtboardBg(v ? null : "#ffffff"); this._renderInspector(); });
     wrap.appendChild(inspGroup("Background", [swatchRow, transRow]));
+
+    // ARTBOARDS (Epic A): list every artboard with fit / export / rename / delete + Add.
+    const abRows = [];
+    for (const a of this.allArtboards()) {
+      const row = document.createElement("div"); row.className = "insp-row insp-ab-row";
+      if (a.primary) { const lab = document.createElement("span"); lab.className = "insp-ab-name"; lab.textContent = a.name; row.appendChild(lab); }
+      else {
+        const nm = document.createElement("input"); nm.type = "text"; nm.className = "insp-ab-name"; nm.value = a.name;
+        nm.addEventListener("change", () => this.renameArtboard(a.index, nm.value));
+        row.appendChild(nm);
+      }
+      const btns = document.createElement("div"); btns.className = "insp-btns";
+      const mk = (glyph, title, fn) => { const b = document.createElement("button"); b.type = "button"; b.className = "insp-iconbtn"; b.textContent = glyph; b.title = title; b.addEventListener("click", fn); btns.appendChild(b); };
+      mk("⊕", "Fit this artboard in view", () => this.fitToArtboard(a));
+      mk("⤓", "Export this artboard as SVG", () => this.exportArtboardSVG(a, a.name));
+      if (!a.primary) mk("✕", "Delete artboard", () => this.deleteArtboard(a.index));
+      row.appendChild(btns); abRows.push(row);
+    }
+    const addBtn = document.createElement("button"); addBtn.type = "button"; addBtn.className = "insp-action"; addBtn.textContent = "Add artboard";
+    addBtn.addEventListener("click", () => this.addArtboard());
+    abRows.push(inspRow("", addBtn));
+    wrap.appendChild(inspGroup("Artboards", abRows));
     return wrap;
   },
 
@@ -2471,7 +2497,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, effectsMixin, repeatMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, effectsMixin, repeatMixin, artboardsMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 

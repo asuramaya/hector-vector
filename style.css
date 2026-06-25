@@ -1024,6 +1024,11 @@ button:disabled {
 /* Persistent ruler guides: a thin cyan line plus a wide transparent hit target. */
 .hv-guideobj { stroke: #18b6c9; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
 .hv-guidehit { stroke: transparent; stroke-width: 9; vector-effect: non-scaling-stroke; pointer-events: stroke; }
+/* Extra-artboard chrome frames + labels (Epic A) — visual only, stripped on export. */
+.hv-abframe { fill: none; stroke: #4a90d9; stroke-width: 1.5; stroke-dasharray: 5 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.hv-ablabel { fill: #4a90d9; font: 12px var(--ui-font, system-ui, sans-serif); pointer-events: none; }
+.insp-ab-row .insp-ab-name { flex: 1; min-width: 0; }
+input.insp-ab-name { background: var(--field-bg, #2a2a2e); color: inherit; border: 1px solid var(--border, #3a3a3e); border-radius: 4px; padding: 2px 6px; }
 .xform-readout { position: fixed; z-index: 1100; background: rgba(0, 0, 0, 0.82); color: #fff; font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 3px 7px; pointer-events: none; white-space: nowrap; }
 .xform-readout[hidden] { display: none; }
 

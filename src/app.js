@@ -66,7 +66,7 @@ import {
 import {
   configureViewport, viewports, cycleBg, measureFit, drawRulers,
   applyViewportState, mountViewport, clearViewport, bindRulerGuides,
-  zoomVp, fitVp, actualVp, bindViewportDragging, bindViewportZoom,
+  zoomVp, fitVp, actualVp, frameRect, bindViewportDragging, bindViewportZoom,
 } from "./ui/viewport.js";
 import {
   configureDataSync, workspace, refreshAll, refreshExceptCanvas, loadOutputs, uploadFiles,
@@ -2493,7 +2493,7 @@ document.addEventListener("visibilitychange", () => {
 // current selectedOutput); writes route through a setter since ESM imports
 // are read-only.
 // =========================================================================
-export { setStatus, api, refreshAll, viewports, measureFit, outputPreviewEl, selectedOutput, setManualOutputName, inlineSvgImages, serializeForSave };
+export { setStatus, api, refreshAll, viewports, measureFit, frameRect, outputPreviewEl, selectedOutput, setManualOutputName, inlineSvgImages, serializeForSave };
 
 // =========================================================================
 // Window bridge — exposes the library, the editor, and a small mutable app
