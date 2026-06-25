@@ -7,6 +7,7 @@ export * from "./path.js";
 export * from "./color.js";
 export * from "./fitcurve.js";
 export * from "./contour.js";
+export * from "./stroke.js";
 export * from "./raster.js";
 export * from "./transform.js";
 export * from "./shapes.js";

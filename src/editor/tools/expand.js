@@ -2,14 +2,16 @@
 // region set — all built on the proven marching-squares + bézier-refit engine (hv/raster.js
 // + hv/contour.js) the booleans already use, so results come out as minimal cubics with
 // crisp corners, robust for any winding/overlap. Object.assign MIXIN — `this === editor`.
-import { SVG_NS, nfmt, shapeToAbsPath, rasterStroke, rasterMask, marchingSquares, isLiveShape, freezeShape } from "../../hv/index.js";
+import { SVG_NS, nfmt, shapeToAbsPath, strokeOutline, rasterStroke, rasterMask, marchingSquares, isLiveShape, freezeShape } from "../../hv/index.js";
 import { setStatus } from "../../app.js";
 
 export const expandMixin = {
   // A node's stroke band, traced to a filled outline path `d` (outer + inner loops, wound
-  // for nonzero fill). Honours width / cap / join / miter / dashes via Canvas2D's stroker.
-  // Resolution adapts to the stroke's thinness so hairlines relative to the bbox survive
-  // the marching grid. Returns null when the node has no paintable stroke.
+  // for nonzero fill). Honours width / cap / join / miter / dashes. The GEOMETRIC stroker
+  // (hv/stroke.js, Epic S) builds the band analytically — exact joins/caps, no bitmap
+  // quantization, so hairlines relative to the bbox survive — and the raster stroker
+  // (hv/raster.js) stays as a fallback for any pathological case the analytic path misses.
+  // Returns null when the node has no paintable stroke.
   _strokeOutlinePath(node) {
     const d = shapeToAbsPath(node, node.getCTM()); if (!d) return null;
     const stroke = node.getAttribute("stroke");
@@ -20,19 +22,22 @@ export const expandMixin = {
     const w = sw * scale;
     const dash = (node.getAttribute("stroke-dasharray") || "").split(/[\s,]+/).map(parseFloat).filter((v) => v >= 0);
     const spec = {
-      d, w,
+      d, width: w, w,
       cap: node.getAttribute("stroke-linecap") || "butt",
       join: node.getAttribute("stroke-linejoin") || "miter",
       miter: parseFloat(node.getAttribute("stroke-miterlimit")) || 4,
       dash: dash.length ? dash.map((v) => v * scale) : null,
       dashOffset: (parseFloat(node.getAttribute("stroke-dashoffset")) || 0) * scale,
     };
+    let out = "";
+    try { out = strokeOutline(d, spec); } catch { out = ""; }   // analytic (Epic S)
+    if (out) return out;
+    // fallback: raster the band into a coverage bitmap and trace it (no analytic result)
     const bb = this._nodeBBoxUser(node);
     const big0 = Math.max(bb.x1 - bb.x0, bb.y1 - bb.y0) || 1;
     const pad = w / 2 + big0 * 0.01 + 2;
     const box = { x0: bb.x0 - pad, y0: bb.y0 - pad, x1: bb.x1 + pad, y1: bb.y1 + pad };
     const big = Math.max(box.x1 - box.x0, box.y1 - box.y0);
-    // grid cell must be a fraction of the band width or a thin stroke falls between lines
     const res = Math.max(220, Math.min(1500, Math.round(2.6 * big / Math.max(w, 0.5))));
     const px = Math.max(640, Math.min(2400, Math.round(res * 1.4)));
     const mask = rasterStroke(spec, box, px);
