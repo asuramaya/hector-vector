@@ -31,6 +31,7 @@ import { masksMixin } from "./editor/tools/masks.js";
 import { expandMixin } from "./editor/tools/expand.js";
 import { widthMixin } from "./editor/tools/width.js";
 import { builderMixin } from "./editor/tools/builder.js";
+import { blendMixin } from "./editor/tools/blend.js";
 import { effectsMixin } from "./editor/tools/effects.js";
 import { repeatMixin } from "./editor/tools/repeat.js";
 import { artboardsMixin } from "./editor/tools/artboards.js";
@@ -2170,6 +2171,24 @@ const editor = {
     // EFFECTS (Epic E): live drop shadow / blur / glow via an SVG <filter> stack. The detailed
     //  per-effect editor shows for a single object; a multi-selection just gets the add buttons.
     if (!isRaster && nodes.length >= 1) wrap.appendChild(inspGroup("Effects", this._effectsPanel(nodes)));
+    // BLEND (Epic L). A selected blend group gets steps + reverse + Expand; exactly 2 fillable
+    //  shapes get a "Make blend" button. (Object > Blend > Make, also Ctrl/Cmd+Alt+B.)
+    if (nodes.length === 1 && this.isBlendGroup(nodes[0])) {
+      const g = nodes[0], spec = this._blendSpec(g), brows = [];
+      brows.push(numRow("Steps", spec.steps || 6, 1, 1,
+        (v) => { this.beginCoalesce(); this.setBlendParam(g, "steps", Math.max(1, Math.min(60, Math.round(v)))); }, null,
+        () => { this.commitCoalesce("Blend steps"); this._renderInspector(); }));
+      brows.push(checkRow("Reverse", !!spec.reverse, (v) => this.setBlendParam(g, "reverse", v)));
+      const bx = document.createElement("button"); bx.type = "button"; bx.className = "insp-action"; bx.textContent = "Expand";
+      bx.title = "Bake the blend into a plain group"; bx.addEventListener("click", () => this.expandBlend(g));
+      brows.push(inspRow("", bx));
+      wrap.appendChild(inspGroup("Blend", brows));
+    } else if (!isRaster && this._fillableSelection().length === 2) {
+      const mb = document.createElement("button"); mb.type = "button"; mb.className = "insp-action"; mb.textContent = "Make blend";
+      mb.title = "Interpolate steps between the two shapes (Ctrl/Cmd+Alt+B)";
+      mb.addEventListener("click", () => this.makeBlend());
+      wrap.appendChild(inspGroup("Blend", [inspRow("", mb)]));
+    }
     // TRANSFORMS+ / REPEAT (Epic T). A selected repeat group gets its param editor + Expand;
     //  any selection gets reflect / shear / transform-again + the repeat generators.
     if (nodes.length === 1 && this.isRepeatGroup(nodes[0])) {
@@ -2538,7 +2557,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, effectsMixin, repeatMixin, artboardsMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, effectsMixin, repeatMixin, artboardsMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 
