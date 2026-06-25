@@ -30,6 +30,7 @@ import { textMixin } from "./editor/tools/text.js";
 import { masksMixin } from "./editor/tools/masks.js";
 import { expandMixin } from "./editor/tools/expand.js";
 import { widthMixin } from "./editor/tools/width.js";
+import { builderMixin } from "./editor/tools/builder.js";
 import { effectsMixin } from "./editor/tools/effects.js";
 import { repeatMixin } from "./editor/tools/repeat.js";
 import { artboardsMixin } from "./editor/tools/artboards.js";
@@ -38,6 +39,10 @@ import {
   CAP_GLYPH, JOIN_GLYPH, DASH_GLYPH, ALIGN_ICON, AB_FIT_ICON, BLEND_MODES,
   inspGroup, inspRow, inspBtnRow, selectRow, numPairRow, numHalfRow, numRow, checkRow, ghostBtn,
 } from "./editor/ui-rows.js";
+
+// Epic B path-construction tools — each drives its own pointer handler, none take the
+// select/shape draw path. (Set lives here, the handlers in editor/tools/builder.js.)
+const BUILDER_TOOLS = new Set(["shapebuilder", "scissors", "knife", "eraser"]);
 
 function editorSvgEl() {
   return outputPreviewEl.querySelector("svg.inline-svg");
@@ -245,6 +250,10 @@ const editor = {
     if (this.tool === "curvature") { this._curvDown(e); return; }
     if (this.tool === "text") { this._textDown(e); return; }
     if (this.tool === "width") { this._widthDown(e); return; }
+    if (this.tool === "shapebuilder") { this._builderDown(e); return; }
+    if (this.tool === "scissors") { this._scissorsDown(e); return; }
+    if (this.tool === "knife") { this._knifeDown(e); return; }
+    if (this.tool === "eraser") { this._eraserDown(e); return; }
     if (SHAPE_TOOLS.has(this.tool)) {
       if (e.button !== 0) return;
       e.stopPropagation(); e.preventDefault();   // draw, don't pan
@@ -400,7 +409,7 @@ const editor = {
   // creation sub-tools. Marquee + transform are folded into select (empty-drag
   // rubber-bands; Ctrl+T/Ctrl+R toggle the scale/rotate sub-mode).
   setTool(t) {
-    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "text" && t !== "width" && !SHAPE_TOOLS.has(t)) return;
+    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "text" && t !== "width" && !BUILDER_TOOLS.has(t) && !SHAPE_TOOLS.has(t)) return;
     if (this._pen && t !== "pen") this._finishPen(true);   // keep any in-progress path
     if (this._curv && t !== "curvature") this._curvFinish(true);
     if (this._textEdit && t !== "text") this._commitText();   // leaving the text tool finishes the edit in progress
@@ -419,6 +428,7 @@ const editor = {
     }
     if (t === "node") this.mountNodeHandles(); else this.unmountNodeHandles();
     if (t === "width") this._mountWidthHandles(); else this._unmountWidthHandles();
+    if (!BUILDER_TOOLS.has(t)) this._bTrail(null);   // clear any leftover knife/eraser trail
     if (this.stage) this._renderSelection();   // show/hide the transform bbox handles
     this._showHint();
   },
@@ -434,6 +444,10 @@ const editor = {
     }
     if (t === "node") return "Points (A) — drag anchors/handles · Shift multi-selects · Alt converts · drag a segment to reshape · ⌫ deletes";
     if (t === "width") return "Width (W) — drag a stroke ⊥ to swell/pinch it · Alt = one side · Uniform/Release/Expand in Properties";
+    if (t === "shapebuilder") return "Shape Builder — paint across 2+ selected overlapping shapes to merge regions · Alt-paint removes them";
+    if (t === "scissors") return "Scissors — click a path to cut it (closed → opens · open → splits in two)";
+    if (t === "knife") return "Knife — drag across filled shapes to cut them · Alt = straight cut";
+    if (t === "eraser") return `Eraser (${this._eraserR}px) — drag over filled shapes to erase · [ / ] resize`;
     if (t === "pen") return "Pen (P) — click for corners, drag for curves · over a path + adds / − removes · click the first point to close · Enter finishes";
     if (t === "curvature") return "Curvature (C) — click for smooth points · Alt = corner · Shift = 45° · drag a point to move · ⌫ removes the last · click the first to close · Enter finishes";
     if (t === "rect") return "Rectangle (R) — drag on the canvas · Shift = square";
@@ -2524,7 +2538,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, effectsMixin, repeatMixin, artboardsMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, effectsMixin, repeatMixin, artboardsMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 

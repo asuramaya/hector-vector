@@ -1103,6 +1103,13 @@ document.addEventListener("keydown", (e) => {
     if (editor.selection.size) { e.preventDefault(); editor.deleteSelection(); }
     return;
   }
+  // Shift-modified tool shortcuts (Epic B path tools) — checked BEFORE the plain-letter
+  // tools below so Shift+E/Shift+C don't fall through to ellipse/curvature.
+  if (e.shiftKey && e.key === "M") { editor.setTool("shapebuilder"); return; }   // Shift+M (Illustrator parity)
+  if (e.shiftKey && e.key === "E") { editor.setTool("eraser"); return; }         // Shift+E
+  if (e.shiftKey && e.key === "C") { editor.setTool("scissors"); return; }       // Shift+C
+  if (e.shiftKey && e.key === "K") { editor.setTool("knife"); return; }          // Shift+K
+  if (editor.tool === "eraser" && (e.key === "[" || e.key === "]")) { e.preventDefault(); editor.adjustEraser(e.key === "]" ? 3 : -3); editor._showHint(); return; }
   if (e.key === "v" || e.key === "V") { editor.setTool("select"); editor.clearXform(); return; }
   if (e.key === "a" || e.key === "A") { editor.setTool("node"); return; }
   if (e.key === "p" || e.key === "P") { editor.setTool("pen"); return; }

@@ -991,6 +991,13 @@ button:disabled {
 .hv-whandles { pointer-events: none; }
 .hv-whandle { fill: #fff; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .stage-wrap[data-tool="width"] svg { cursor: crosshair; }
+/* Epic B path-construction tools: live drag trail + cursors */
+.hv-btrail { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
+.hv-btrail-knife { stroke: #e23; stroke-dasharray: 4 3; }
+.hv-btrail-erase { stroke: #888; stroke-width: 2; opacity: 0.7; }
+.hv-btrail-build { stroke: var(--accent); stroke-width: 2.5; opacity: 0.6; }
+.stage-wrap[data-tool="shapebuilder"] svg, .stage-wrap[data-tool="knife"] svg, .stage-wrap[data-tool="eraser"] svg { cursor: crosshair; }
+.stage-wrap[data-tool="scissors"] svg { cursor: crosshair; }
 /* Pen-tool anchor markers (while a path is being drawn) */
 .hv-pen-anchor { fill: #fff; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
 .hv-pen-anchor.first { fill: var(--accent); }
