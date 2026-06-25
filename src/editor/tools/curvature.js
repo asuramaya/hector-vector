@@ -19,7 +19,7 @@ export const curvatureMixin = {
       const node = document.createElementNS(SVG_NS, "path");
       node.setAttribute("fill", "none"); node.setAttribute("stroke", "#1d1d1f"); node.setAttribute("stroke-width", "1.5");
       node.setAttribute("vector-effect", "non-scaling-stroke");
-      this.stage.insertBefore(node, this._overlayEl());
+      this._artHome().insertBefore(node, this._artBefore());   // into the isolation when isolated (Epic I)
       this._curv = { node, pts: [], closed: false };
       this._curvLastClick = null;
       this._curvHoverBound = (ev) => this._curvHover(ev);

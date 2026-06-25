@@ -1123,6 +1123,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && editor.stage) {
     if (editor._gradMode) { editor.clearGradMode(); return; }   // first Esc exits the gradient editor
     if (editor._xformMode) { editor.clearXform(); return; }     // …or scale/rotate
+    if (editor.isIsolated && editor.isIsolated()) { editor.exitIsolation(); return; }   // …or isolation mode (Epic I)
     editor.selection = new Set(); editor.artboardSelected = false; editor._renderSelection(); editor._renderInspector(); editor._showHint();
   }
 });

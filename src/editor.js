@@ -33,6 +33,7 @@ import { widthMixin } from "./editor/tools/width.js";
 import { builderMixin } from "./editor/tools/builder.js";
 import { blendMixin } from "./editor/tools/blend.js";
 import { colorsMixin } from "./editor/tools/colors.js";
+import { isolationMixin } from "./editor/tools/isolation.js";
 import { effectsMixin } from "./editor/tools/effects.js";
 import { repeatMixin } from "./editor/tools/repeat.js";
 import { artboardsMixin } from "./editor/tools/artboards.js";
@@ -140,6 +141,7 @@ const editor = {
     }
     this.renderGuides();   // re-create the (data-backed) guides layer on this fresh stage
     if (this.artboards && this.artboards.length) this._reflowCanvas();   // grow the canvas to the union + draw extra-artboard frames
+    this._reconcileIsolation();   // re-apply (or drop) isolation dim against this fresh DOM (Epic I)
   },
   _ensureStructure(svg) {
     let vb = svg.viewBox && svg.viewBox.baseVal;
@@ -216,7 +218,8 @@ const editor = {
     const c = this.stage.cloneNode(true);
     c.querySelectorAll("g.hv-overlay, g.hv-guideslayer, g.hv-ablayer, g.hv-preview").forEach((g) => g.remove());
     c.querySelectorAll(".hv-raster-hidden").forEach((n) => { n.classList.remove("hv-raster-hidden"); if (!n.getAttribute("class")) n.removeAttribute("class"); });
-    c.classList.remove("hv-pickable");
+    c.querySelectorAll(".hv-iso-keep").forEach((n) => { n.classList.remove("hv-iso-keep"); if (!n.getAttribute("class")) n.removeAttribute("class"); });   // isolation dim is editor-only (Epic I)
+    c.classList.remove("hv-pickable", "hv-iso");
     // Strip ALL editor metadata, including parametric live-shape params (data-hv-shape,
     // data-hv-bx, …): the `d` is the rendering truth, so exported SVG stays standard.
     c.querySelectorAll("[data-hv-id], [data-hv-shape]").forEach((n) => {
@@ -287,10 +290,13 @@ const editor = {
     }
     if (this.tool !== "select") return;
     let hit = e.target.closest && e.target.closest("[data-hv-id]");
-    // Clicking a shape inside a group selects/moves the WHOLE group — ascend to the
-    // top-level object (the stage's direct child). Reach individual children via the
-    // layers panel. (Was selecting the leaf, so dragging a group only moved one child.)
-    if (hit && this.stage.contains(hit)) { let top = hit; while (top.parentNode && top.parentNode !== this.stage) top = top.parentNode; if (top.nodeType === 1 && top.hasAttribute && top.hasAttribute("data-hv-id")) hit = top; }
+    // Clicking a shape inside a group selects/moves the WHOLE group — ascend to the top-level
+    // object (a direct child of the artwork root). In isolation the root is the isolated group,
+    // so its CHILDREN are individually selectable; otherwise the root is the stage. Reach deeper
+    // levels via the layers panel or by isolating (double-click).
+    const _root = this._artRoot();
+    if (this.isIsolated() && hit && !_root.contains(hit)) hit = null;   // outside the isolation → not selectable
+    if (hit && _root.contains(hit)) { let top = hit; while (top.parentNode && top.parentNode !== _root) top = top.parentNode; if (top.nodeType === 1 && top.hasAttribute && top.hasAttribute("data-hv-id")) hit = top; }
     if (hit && hit.getAttribute("data-hv-locked") === "1") hit = null;   // locked → not selectable
     if (hit && this.stage.contains(hit)) {
       e.stopPropagation();
@@ -373,9 +379,8 @@ const editor = {
     const start = new DOMPoint(startEvent.clientX, startEvent.clientY).matrixTransform(inv());
     this.beginCoalesce();                         // snapshot the document before the shape exists
     this.selection = new Set(); this.artboardSelected = false; this._renderSelection();
-    const ov = this._overlayEl();
     const node = makeShapeNode(tool, start, this.style);
-    this.stage.insertBefore(node, ov);
+    this._artHome().insertBefore(node, this._artBefore());   // into the isolated group when isolated (Epic I)
     let moved = false;
     const a = { x: start.x, y: start.y };          // shape anchor (mutable so Space can reposition)
     let lastP = { x: start.x, y: start.y };
@@ -947,7 +952,7 @@ const editor = {
       const id = "n" + (++this.idSeq); c.setAttribute("data-hv-id", id);
       this._reidSubtree(c);           // fresh ids for group descendants (no duplicate-id collisions)
       if (offsetX || offsetY) { const t = currentTranslate(c); setTranslate(c, t.x + offsetX, t.y + offsetY); }
-      this.stage.insertBefore(c, ov);
+      this._artHome().insertBefore(c, this.isIsolated() ? null : ov);   // Epic I: clones land inside the isolation
       this._reanchorStrokeAlign(c);   // rebuild any stroke-align clip against the clone's new id
       clones.push(c); ids.push(id);
     }
@@ -985,7 +990,7 @@ const editor = {
       const id = "n" + (++this.idSeq); el.setAttribute("data-hv-id", id);
       this._reidSubtree(el);           // fresh ids for group descendants (no duplicate-id collisions)
       const t = currentTranslate(el); setTranslate(el, t.x + 12, t.y + 12);
-      this.stage.insertBefore(el, ov);
+      this._artHome().insertBefore(el, this.isIsolated() ? null : ov);   // Epic I: paste into the isolation
       this._reanchorStrokeAlign(el);   // rebuild any stroke-align clip against the paste's new id
       pasted.push(el); ids.push(id);
     }
@@ -1035,7 +1040,7 @@ const editor = {
       bakeMatrixInto(node, m, 0, 0);     // fit-scale + centre baked in (stays translate-only)
       g.appendChild(node);
     }
-    this.stage.insertBefore(g, ov);
+    this._artHome().insertBefore(g, this.isIsolated() ? null : ov);
     this.commitCoalesce("Place");
     this.selection = new Set([gid]); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector(); this._renderLayers();
@@ -1071,7 +1076,7 @@ const editor = {
     // namespace on the stage <svg> makes the serialized markup fail to parse
     // ("Namespace prefix xlink for href on image is not defined").
     img.setAttribute("href", href);
-    this.stage.insertBefore(img, ov);
+    this._artHome().insertBefore(img, this.isIsolated() ? null : ov);
     this.commitCoalesce("Load image");
     this.selection = new Set([id]); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector(); this._renderLayers();
@@ -1165,7 +1170,8 @@ const editor = {
 
   selectAll() {
     if (!this.stage) return;
-    const ids = this._artworkNodes().filter((n) => n.getAttribute("data-hv-locked") !== "1").map((n) => n.getAttribute("data-hv-id"));
+    const pool = this.isIsolated() ? this._artScope() : this._artworkNodes();   // scope to the isolation (Epic I)
+    const ids = pool.filter((n) => n.getAttribute("data-hv-locked") !== "1").map((n) => n.getAttribute("data-hv-id"));
     this.selection = new Set(ids); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector(); this._renderLayers();
   },
@@ -2606,7 +2612,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, colorsMixin, effectsMixin, repeatMixin, artboardsMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, colorsMixin, isolationMixin, effectsMixin, repeatMixin, artboardsMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 

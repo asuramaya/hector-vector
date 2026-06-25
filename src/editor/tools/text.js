@@ -94,7 +94,7 @@ export const textMixin = {
     this._applyTextStyleAttrs(t, ts);
     t.removeAttribute("text-anchor");   // area text is left-flowed
     t.setAttribute("fill", this.style.fill && this.style.fill !== "none" ? this.style.fill : "#000000");
-    this.stage.insertBefore(t, this._overlayEl());
+    this._artHome().insertBefore(t, this._artBefore());   // into the isolation when isolated (Epic I)
     this.selection = new Set([id]); this.artboardSelected = false;
     this._editText(t, true);
   },
@@ -103,10 +103,11 @@ export const textMixin = {
   _onDblClick(e) {
     if (e.button !== 0 || !this.stage) return;
     const hit = e.target.closest && e.target.closest("text[data-hv-id]");
-    if (!hit || !this.stage.contains(hit) || hit.getAttribute("data-hv-locked") === "1") return;
-    e.stopPropagation(); e.preventDefault();
-    this.setTool("text");
-    this._editText(hit, false);
+    if (hit && this.stage.contains(hit) && hit.getAttribute("data-hv-locked") !== "1") {
+      e.stopPropagation(); e.preventDefault();
+      this.setTool("text"); this._editText(hit, false); return;
+    }
+    if (this._isoDblClick) this._isoDblClick(e);   // not text → enter/exit isolation (Epic I)
   },
   _textStagePoint(e) {
     const m = this.stage.getScreenCTM();
@@ -124,7 +125,7 @@ export const textMixin = {
     t.setAttribute("xml:space", "preserve");
     this._applyTextStyleAttrs(t, ts);
     t.setAttribute("fill", this.style.fill && this.style.fill !== "none" ? this.style.fill : "#000000");
-    this.stage.insertBefore(t, this._overlayEl());
+    this._artHome().insertBefore(t, this._artBefore());   // into the isolation when isolated (Epic I)
     this.selection = new Set([id]); this.artboardSelected = false;
     this._editText(t, true);
   },

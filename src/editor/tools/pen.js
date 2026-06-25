@@ -36,7 +36,7 @@ export const penMixin = {
       node.setAttribute("fill", "none");
       node.setAttribute("stroke", "#1d1d1f"); node.setAttribute("stroke-width", "1.5");
       node.setAttribute("vector-effect", "non-scaling-stroke");
-      this.stage.insertBefore(node, this._overlayEl());
+      this._artHome().insertBefore(node, this._artBefore());   // into the isolation when isolated (Epic I)
       this._pen = { node, pts: [], closed: false, dragging: false };
       this._penHoverBound = (ev) => this._penHover(ev);
       window.addEventListener("pointermove", this._penHoverBound);

@@ -136,7 +136,9 @@ export const marqueeMixin = {
     window.addEventListener("pointerup", up);
   },
   _selectableNodes() {
-    return this._artworkNodes().filter((n) => n.getAttribute("data-hv-locked") !== "1" && n.getAttribute("display") !== "none");
+    // In isolation, marquee only reaches the isolated group's children (Epic I).
+    const pool = this.isIsolated && this.isIsolated() ? this._artScope() : this._artworkNodes();
+    return pool.filter((n) => n.getAttribute("data-hv-locked") !== "1" && n.getAttribute("display") !== "none");
   },
   _nodesInRect(a, b) {
     const r = { x0: Math.min(a.x, b.x), y0: Math.min(a.y, b.y), x1: Math.max(a.x, b.x), y1: Math.max(a.y, b.y) };
