@@ -30,6 +30,7 @@ export const isolationMixin = {
   exitIsolation() {
     const wasId = this._isolatedId; this._isolatedId = null;
     this._applyIsoClasses(); this._renderBreadcrumb();
+    if (this._symEdit) { this._symFinishEdit(); return; }   // a symbol edit returns the master to <defs> + selects the instance (Epic Y)
     if (wasId && this.nodeById(wasId)) { this.selection = new Set([wasId]); this.artboardSelected = false; }
     this._renderSelection(); this._renderInspector(); this._renderLayers();
   },
@@ -67,6 +68,9 @@ export const isolationMixin = {
     }
     if (!hit) return;
     let top = hit; while (top.parentNode && top.parentNode !== this.stage) top = top.parentNode;
-    if (top && top.nodeType === 1 && top.tagName.toLowerCase() === "g" && top.hasAttribute("data-hv-id") && top.getAttribute("data-hv-locked") !== "1") { e.stopPropagation(); e.preventDefault(); this.enterIsolation(top); }
+    if (!top || top.nodeType !== 1 || top.getAttribute("data-hv-locked") === "1") return;
+    const tag = top.tagName.toLowerCase();
+    if (tag === "use" && this.isSymbolInstance && this.isSymbolInstance(top)) { e.stopPropagation(); e.preventDefault(); this.editSymbol(top); return; }   // edit the symbol master (Epic Y)
+    if (tag === "g" && top.hasAttribute("data-hv-id")) { e.stopPropagation(); e.preventDefault(); this.enterIsolation(top); }
   },
 };

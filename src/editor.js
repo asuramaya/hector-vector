@@ -34,6 +34,7 @@ import { builderMixin } from "./editor/tools/builder.js";
 import { blendMixin } from "./editor/tools/blend.js";
 import { colorsMixin } from "./editor/tools/colors.js";
 import { isolationMixin } from "./editor/tools/isolation.js";
+import { symbolsMixin } from "./editor/tools/symbols.js";
 import { effectsMixin } from "./editor/tools/effects.js";
 import { repeatMixin } from "./editor/tools/repeat.js";
 import { artboardsMixin } from "./editor/tools/artboards.js";
@@ -1839,7 +1840,7 @@ const editor = {
   _ensureIds() {
     if (!this.stage) return;
     const ov = this._overlayEl();
-    const GRAPHIC = new Set(["path", "rect", "circle", "ellipse", "line", "polygon", "polyline", "image", "text", "g"]);
+    const GRAPHIC = new Set(["path", "rect", "circle", "ellipse", "line", "polygon", "polyline", "image", "text", "g", "use"]);   // `use` = symbol instances (Epic Y) — tag reloaded ones
     const walk = (parent) => {
       for (const c of parent.children) {
         if (c === ov || (c.classList && (c.classList.contains("hv-artboard") || c.classList.contains("hv-guideslayer") || c.classList.contains("hv-ablayer") || c.classList.contains("hv-preview")))) continue;
@@ -2210,6 +2211,20 @@ const editor = {
       }
       const colours = this._harvestColors(nodes);
       if (colours.size >= 2) wrap.appendChild(inspGroup("Recolor", this._recolorPanel(colours)));
+    }
+    // SYMBOLS (Epic Y). A selected instance gets Edit-master + Break-link; other artwork gets
+    //  "Make symbol" (a reusable <symbol>/<use> — duplicate an instance to place more).
+    if (nodes.length === 1 && this.isSymbolInstance(nodes[0])) {
+      const u = nodes[0];
+      const ed = document.createElement("button"); ed.type = "button"; ed.className = "insp-action"; ed.textContent = "Edit master";
+      ed.title = "Edit the symbol — changes apply to every instance (double-click also works)"; ed.addEventListener("click", () => this.editSymbol(u));
+      const bl = document.createElement("button"); bl.type = "button"; bl.className = "insp-action"; bl.textContent = "Break link";
+      bl.title = "Make this instance an independent copy"; bl.addEventListener("click", () => this.breakSymbolLink(u));
+      wrap.appendChild(inspGroup("Symbol", [inspRow("", ed), inspRow("", bl)]));
+    } else if (!isRaster && nodes.length >= 1 && !nodes.some((n) => this.isSymbolInstance(n))) {
+      const ms = document.createElement("button"); ms.type = "button"; ms.className = "insp-action"; ms.textContent = "Make symbol";
+      ms.title = "Turn the selection into a reusable symbol (F8)"; ms.addEventListener("click", () => this.makeSymbol());
+      wrap.appendChild(inspGroup("Symbol", [inspRow("", ms)]));
     }
     // TRANSFORMS+ / REPEAT (Epic T). A selected repeat group gets its param editor + Expand;
     //  any selection gets reflect / shear / transform-again + the repeat generators.
@@ -2612,7 +2627,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, colorsMixin, isolationMixin, effectsMixin, repeatMixin, artboardsMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, colorsMixin, isolationMixin, symbolsMixin, effectsMixin, repeatMixin, artboardsMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 

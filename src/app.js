@@ -1068,6 +1068,7 @@ document.addEventListener("keydown", (e) => {
   if (mod && (e.key === "g" || e.key === "G")) { e.preventDefault(); if (e.shiftKey) editor.ungroup(); else editor.group(); return; }
   if (mod && e.key === "7") { e.preventDefault(); if (e.altKey) editor.releaseMask(); else editor.makeClipMask(); return; }   // Ctrl/Cmd+7 make clip · +Alt release (Illustrator parity)
   if (mod && e.altKey && (e.key === "b" || e.key === "B")) { e.preventDefault(); editor.makeBlend(); return; }   // Ctrl/Cmd+Alt+B — Make Blend (Illustrator parity)
+  if (e.key === "F8") { e.preventDefault(); editor.makeSymbol(); return; }   // F8 — New Symbol (Illustrator parity)
   if (mod && (e.key === "j" || e.key === "J")) { e.preventDefault(); editor.joinNodes(); return; }
   if (mod && e.key === "]") { e.preventDefault(); editor.reorder(e.shiftKey ? "front" : "forward"); return; }
   if (mod && e.key === "[") { e.preventDefault(); editor.reorder(e.shiftKey ? "back" : "backward"); return; }
