@@ -1006,9 +1006,10 @@ svg.hv-iso > .hv-ablayer, svg.hv-iso > rect.hv-artboard { opacity: 0.4; }
 .hv-iso-back { font: inherit; font-size: 12px; line-height: 1; cursor: pointer; border: 1px solid var(--hair); border-radius: 3px; background: #fff; color: var(--ink); padding: 3px 7px; }
 .hv-iso-back:hover { border-color: var(--accent); color: var(--accent); }
 .hv-iso-name { font-size: 12px; color: var(--muted); }
-/* Epic C — Recolor swatch grid */
-.insp-recolor-grid { display: flex; flex-wrap: wrap; gap: 4px; }
-.insp-recolor-sw { width: 20px; height: 20px; padding: 0; border: 1px solid var(--hair); border-radius: 3px; cursor: pointer; }
+/* Epic C — Recolor swatch grid. `flex: 0 0 20px` + min/max + align-self pin each swatch to a
+   fixed 20×20 box so no flex stretch/shrink (from any ancestor) can collapse them into thin tall bars. */
+.insp-recolor-grid { display: flex; flex-wrap: wrap; align-items: flex-start; align-content: flex-start; gap: 4px; }
+.insp-recolor-sw { flex: 0 0 20px; box-sizing: border-box; width: 20px; height: 20px; min-width: 20px; max-width: 20px; min-height: 20px; max-height: 20px; align-self: center; padding: 0; border: 1px solid var(--hair); border-radius: 3px; cursor: pointer; }
 .insp-recolor-sw:hover { outline: 1px solid var(--accent); }
 /* Pen-tool anchor markers (while a path is being drawn) */
 .hv-pen-anchor { fill: #fff; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }

@@ -1020,6 +1020,10 @@ function buildRasterTools(node) {
   // ---- PWA install (surfaced as a File-menu item; one-click path to WCO) ----
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch(() => {});
+    // Self-heal: the current sw.js is passthrough (never caches), but an EARLIER caching service
+    // worker could still be serving stale style.css/JS from Cache Storage and survive a reload —
+    // wipe any leftover caches so the live server's no-store assets always win. Harmless when empty.
+    if (window.caches && caches.keys) caches.keys().then((ks) => ks.forEach((k) => caches.delete(k))).catch(() => {});
   }
   window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); setPwaInstallPrompt(e); if (appSettingsOpen) openAppSettings(); });
   window.addEventListener("appinstalled", () => { setPwaInstallPrompt(null); if (appSettingsOpen) openAppSettings(); });
