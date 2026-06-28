@@ -2257,6 +2257,9 @@ def main():
             window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="a" x="10" y="10" width="50" height="50" fill="#cc8844" stroke="#333333" stroke-width="6"/><circle data-hv-id="b" cx="120" cy="40" r="20" fill="#3377cc" stroke="#aa2255" stroke-width="6"/></svg>','rcui');
             editor.setTool('select'); editor.selection=new Set(['a','b']); editor.artboardSelected=false;
             editor._renderSelection(); editor._renderInspector();
+            // Recolor is default-collapsed; expand it so its swatch is visible to measure/click.
+            const rg = document.querySelector('.insp-group[data-group="Recolor"]');
+            if (rg && rg.classList.contains('collapsed')) rg.querySelector('.insp-title').click();
             const sw = document.querySelector('.insp-recolor-sw');
             o.hasSwatch = !!sw && Math.round(sw.getBoundingClientRect().width)===20;
             if (sw) sw.click();
@@ -2276,6 +2279,27 @@ def main():
         check("recolor swatch click → contextual dock Colour panel (Recolor mode, not modal/embedded), live-applies, Done returns to duo",
               rcui["hasSwatch"] and rcui["targetSet"] and rcui["noModal"] and rcui["notEmbedded"] and rcui["inDockColour"]
               and rcui["hasDoneBar"] and rcui["fieldWide"] and rcui["swIntact"] and rcui["liveApply"] and rcui["doneClears"], str(rcui))
+        # Inspector property groups are collapsible (caret in the title), fold on click, hide their
+        # rows when collapsed, and remember open/closed across the full panel rebuild (localStorage).
+        section("Inspector: collapsible property groups")
+        icol = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="a" x="10" y="10" width="120" height="120" fill="#cc8844" stroke="#333" stroke-width="6"/></svg>','icol');
+            editor.setTool('select'); editor.selection=new Set(['a']); editor.artboardSelected=false;
+            editor._renderSelection(); editor._renderInspector();
+            const grp = t => document.querySelector('.insp-group[data-group="'+t+'"]');
+            const rowsVis = g => g && [...g.children].filter(c=>!c.classList.contains('insp-title')).some(c=>c.getBoundingClientRect().height>0);
+            o.caret = !!(grp('Transform') && grp('Transform').querySelector('.insp-title.is-collapsible')) && grp('Transform').querySelector('.insp-title').textContent === 'Transform';
+            o.openByDefault = !!grp('Transform') && !grp('Transform').classList.contains('collapsed') && rowsVis(grp('Transform'));
+            grp('Transform').querySelector('.insp-title').click();
+            o.foldHidesRows = grp('Transform').classList.contains('collapsed') && !rowsVis(grp('Transform'));
+            editor._renderInspector();
+            o.persists = grp('Transform').classList.contains('collapsed');
+            grp('Transform').querySelector('.insp-title').click();   // restore open for later sections
+            o.reopen = !grp('Transform').classList.contains('collapsed') && rowsVis(grp('Transform'));
+            return o; }""")
+        check("inspector groups: caret folds on title click, collapsed hides rows, state persists across re-render",
+              icol["caret"] and icol["openByDefault"] and icol["foldHidesRows"] and icol["persists"] and icol["reopen"], str(icol))
         # Isolation mode (Epic I): double-click a group to edit inside it — dim outside, scope
         # selection/marquee/new-objects to the group's children, breadcrumb + Esc exit. The dim is
         # editor-only (stripped from serialize + history; re-synced by id after undo).

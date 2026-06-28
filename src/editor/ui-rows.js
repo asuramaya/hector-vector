@@ -41,9 +41,35 @@ export const BLEND_MODES = [
   ["hard-light", "Hard light"], ["soft-light", "Soft light"], ["difference", "Difference"], ["exclusion", "Exclusion"],
   ["hue", "Hue"], ["saturation", "Saturation"], ["color", "Colour"], ["luminosity", "Luminosity"],
 ];
-export function inspGroup(title, rows) {
+// Collapsible inspector groups: clicking the title folds the group. Open/closed state is keyed
+// by title and persisted, so it survives the full panel rebuild on every _renderInspector.
+const COLLAPSE_KEY = "hv-insp-collapsed";
+const DEFAULT_COLLAPSED = ["Effects", "Recolor", "Pattern", "Width", "Repeat", "Blend", "Symbol", "Mask"];
+let _collapsed = null;
+function collapsedSet() {
+  if (_collapsed) return _collapsed;
+  try { const raw = localStorage.getItem(COLLAPSE_KEY); _collapsed = new Set(raw ? JSON.parse(raw) : DEFAULT_COLLAPSED); }
+  catch (_) { _collapsed = new Set(DEFAULT_COLLAPSED); }
+  return _collapsed;
+}
+function saveCollapsed() { try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsedSet()])); } catch (_) {} }
+export function inspGroup(title, rows, opts = {}) {
   const g = document.createElement("div"); g.className = "insp-group";
-  const t = document.createElement("div"); t.className = "insp-title"; t.textContent = title; g.appendChild(t);
+  // Keep textContent == title (the caret is a CSS ::before, NOT a child node) so callers/tests
+  // that locate a group by `.insp-title.textContent === 'Stroke'` keep working.
+  const t = document.createElement("div"); t.className = "insp-title"; t.textContent = title;
+  if (opts.collapsible !== false && title) {
+    g.dataset.group = title;
+    if (collapsedSet().has(title)) g.classList.add("collapsed");
+    t.classList.add("is-collapsible");
+    t.addEventListener("click", () => {
+      const s = collapsedSet(), open = s.has(title);
+      if (open) s.delete(title); else s.add(title);
+      g.classList.toggle("collapsed", !open);
+      saveCollapsed();
+    });
+  }
+  g.appendChild(t);
   rows.forEach((r) => g.appendChild(r));
   return g;
 }
