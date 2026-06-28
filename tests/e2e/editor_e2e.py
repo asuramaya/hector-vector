@@ -2248,6 +2248,26 @@ def main():
         check("pattern fill: top→<pattern> applied below, tile scale/rotate, round-trips, undo · recolor: harvest 2, remap exact, HSL shift",
               cl["patApplied"] and cl["patDef"] and cl["patXform"] and cl["patSer"] and cl["patUndo"]
               and cl["harvest"] and cl["remap"] and cl["shift"], str(cl))
+        # Recolor swatch → clicking it must open a FLOATING picker, NOT embed the whole picker
+        # into the 20px swatch button (regression: host:sw collapsed .cp-field to ~2px → the picker
+        # showed only its 14px hue strip as a thin rainbow column). Renders the real inspector + clicks.
+        rcui = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="a" x="10" y="10" width="50" height="50" fill="#cc8844" stroke="#333333" stroke-width="6"/><circle data-hv-id="b" cx="120" cy="40" r="20" fill="#3377cc" stroke="#aa2255" stroke-width="6"/></svg>','rcui');
+            editor.setTool('select'); editor.selection=new Set(['a','b']); editor.artboardSelected=false;
+            editor._renderSelection(); editor._renderInspector();
+            const sw = document.querySelector('.insp-recolor-sw');
+            o.hasSwatch = !!sw && Math.round(sw.getBoundingClientRect().width)===20;
+            if (sw) sw.click();
+            o.notEmbedded = !document.querySelector('.insp-recolor-sw .cp-window');
+            o.floats = !!document.querySelector('.cp-backdrop .cp-window');
+            const f = document.querySelector('.cp-field');
+            o.fieldWide = !!f && f.getBoundingClientRect().width > 80;
+            o.swIntact = !!sw && Math.round(sw.getBoundingClientRect().width)===20;
+            const bd = document.querySelector('.cp-backdrop'); if (bd) bd.remove();
+            return o; }""")
+        check("recolor swatch click → floating picker (not embedded in the swatch), field keeps full width, swatch stays 20px",
+              rcui["hasSwatch"] and rcui["notEmbedded"] and rcui["floats"] and rcui["fieldWide"] and rcui["swIntact"], str(rcui))
         # Isolation mode (Epic I): double-click a group to edit inside it — dim outside, scope
         # selection/marquee/new-objects to the group's children, breadcrumb + Esc exit. The dim is
         # editor-only (stripped from serialize + history; re-synced by id after undo).

@@ -2327,7 +2327,7 @@ const editor = {
       sw.addEventListener("click", () => {
         const targets = this._harvestColors(this.selectedNodes()).get(hex) || []; if (!targets.length) return;
         this.push("Recolor"); this._recolorClearBase();
-        this.pickColor({ title: "Recolor " + hex, color: hex, host: sw, allowNone: false, onChange: (h) => this.recolorApply(targets, h || hex) });
+        this.pickColor({ title: "Recolor " + hex, color: hex, allowNone: false, onChange: (h) => this.recolorApply(targets, h || hex) });
       });
       grid.appendChild(sw);
     }
