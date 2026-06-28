@@ -1913,6 +1913,63 @@ const editor = {
     const ns = this.selectedNodes();
     return ns.length > 0 && ns.every((n) => this.isRaster(n));
   },
+  // Object COMMANDS surfaced via the "Actions ▾" menu button (built in _objectPanel) instead of
+  // always-on inspector groups. Context-gated so only applicable verbs appear — mirrors the
+  // conditions the inline Expand/Width/Blend/Pattern/Symbol/Transform+ groups used before.
+  _objectActions(nodes) {
+    if (!nodes || !nodes.length) return [];
+    const reads = (() => { const l = this._effectiveLeaves(nodes); return l.length ? l : nodes; })();
+    if (reads.every((n) => this.isRaster(n))) return [];
+    const tag = (n) => n.tagName.toLowerCase();
+    const single = nodes.length === 1 ? nodes[0] : null;
+    const expandable = reads.some((n) => isLiveShape(n) || ["rect", "circle", "ellipse", "line", "polygon", "polyline", "text"].includes(tag(n)) || this._isStroked(n));
+    const hasStroke = reads.some((n) => { const s = n.getAttribute("stroke"); const w = parseFloat(n.getAttribute("stroke-width")); return s && s !== "none" && w > 0; });
+    const hasPath = reads.some((n) => shapeToAbsPath(n));
+    const fillable = this._fillableSelection ? this._fillableSelection().length : 0;
+    const anyWs = nodes.some((n) => this._wsGroupOf(n));
+    const isBlend = single && this.isBlendGroup(single);
+    const isRepeat = single && this.isRepeatGroup(single);
+    const anyInstance = nodes.some((n) => this.isSymbolInstance(n));
+    const items = [];
+    if (expandable) items.push({ label: "Expand object", onClick: () => this.expandSelection() });
+    if (hasStroke) items.push({ label: "Outline stroke", onClick: () => this.outlineStroke() });
+    if (hasPath) items.push({ label: "Offset path…", onClick: () => this._promptOffsetPath() });
+    if (fillable >= 2) {
+      items.push({ type: "sep" });
+      for (const [op, lab] of [["divide", "Divide"], ["trim", "Trim"], ["merge", "Merge"], ["crop", "Crop"], ["minus-back", "Minus Back"]])
+        items.push({ label: "Pathfinder: " + lab, onClick: () => this.pathfinder(op) });
+    }
+    const makes = [];
+    if (reads.some((n) => this._isStroked(n)) && !anyWs) makes.push({ label: "Vary width", onClick: () => { this.makeWidthStroke(); this.setTool("width"); } });
+    if (fillable === 2 && !isBlend) makes.push({ label: "Make blend", onClick: () => this.makeBlend() });
+    if (nodes.length >= 2) makes.push({ label: "Pattern fill", onClick: () => this.fillWithPattern() });
+    if (!anyInstance) makes.push({ label: "Make symbol", onClick: () => this.makeSymbol() });
+    if (makes.length) { items.push({ type: "sep" }, ...makes); }
+    if (!isRepeat) {
+      items.push({ type: "sep" },
+        { label: "Reflect — vertical axis", onClick: () => this.reflectSelection("vertical") },
+        { label: "Reflect — horizontal axis", onClick: () => this.reflectSelection("horizontal") },
+        { label: "Reflect a copy", onClick: () => this.reflectSelection("vertical", { copy: true }) },
+        { label: "Shear / skew…", onClick: () => this._promptShear() },
+        { label: "Transform again", onClick: () => this.transformAgain() },
+        { type: "sep" },
+        { label: "Repeat — grid", onClick: () => this.repeat("grid") },
+        { label: "Repeat — radial", onClick: () => this.repeat("radial") },
+        { label: "Repeat — mirror", onClick: () => this.repeat("mirror") });
+    }
+    // Collapse leading / trailing / doubled separators.
+    const clean = [];
+    for (const it of items) { if (it.type === "sep" && (!clean.length || clean[clean.length - 1].type === "sep")) continue; clean.push(it); }
+    while (clean.length && clean[clean.length - 1].type === "sep") clean.pop();
+    return clean;
+  },
+  // Open the Actions menu anchored under its button.
+  _openObjectActions(anchorEl) {
+    const items = this._objectActions(this.selectedNodes());
+    if (!items.length || typeof this.showMenu !== "function") return;
+    const r = anchorEl.getBoundingClientRect();
+    this.showMenu(r.left, r.bottom + 2, items);
+  },
   _objectPanel(nodes) {
     // Read style from the leaf shapes (a selected group carries none of its own), and
     // detect mismatches: `common(read)` returns {value} when every leaf agrees, else
@@ -1925,6 +1982,19 @@ const editor = {
     const tags = new Set(reads.map((n) => n.tagName.toLowerCase()));
     const isRaster = reads.every((n) => this.isRaster(n));   // no fill/stroke/shape
     const r2 = (v) => Math.round(v * 100) / 100;
+
+    // Object COMMANDS (Expand / Outline / Offset / Pathfinder / make-symbol·blend·pattern·width /
+    // Reflect / Repeat) live in an Actions menu now, not as always-on inspector groups — that's
+    // what kept Properties bloated. The menu is context-gated (only applicable verbs appear).
+    if (!isRaster) {
+      const acts = this._objectActions(nodes);
+      if (acts.length) {
+        const ab = document.createElement("button"); ab.type = "button"; ab.className = "insp-actions-btn"; ab.textContent = "Actions ▾";
+        ab.title = "Object commands — expand, outline, offset, pathfinder, reflect, repeat, symbol…";
+        ab.addEventListener("click", () => this._openObjectActions(ab));
+        wrap.appendChild(ab);
+      }
+    }
 
     // Fill / stroke COLOUR live in the persistent Colour panel now (summoned from the
     // toolstrip swatches), so the object panel only carries the non-colour style below.
@@ -2017,41 +2087,7 @@ const editor = {
     //  leaf carries a paintable stroke; Offset-path on any fillable vector; Pathfinder Divide
     //  on a 2+ overlap. (Live actions; the offset amount prompts via the numeric row.)
     if (!isRaster) {
-      const xrows = [];
-      // Expand object: bake live shapes / primitives / text / strokes to plain paths.
-      if (reads.some((n) => isLiveShape(n) || ["rect", "circle", "ellipse", "line", "polygon", "polyline", "text"].includes(n.tagName.toLowerCase()) || this._isStroked(n))) {
-        const ex = document.createElement("button");
-        ex.type = "button"; ex.className = "insp-action"; ex.textContent = "Expand";
-        ex.title = "Bake live shapes / text / strokes into plain editable paths";
-        ex.addEventListener("click", () => this.expandSelection());
-        xrows.push(inspRow("Object", ex));
-      }
-      const hasStroke = reads.some((n) => { const s = n.getAttribute("stroke"); const w = parseFloat(n.getAttribute("stroke-width")); return s && s !== "none" && w > 0; });
-      if (hasStroke) {
-        const ob = document.createElement("button");
-        ob.type = "button"; ob.className = "insp-action"; ob.textContent = "Outline stroke";
-        ob.title = "Convert the stroke into a filled path (expand)";
-        ob.addEventListener("click", () => this.outlineStroke());
-        xrows.push(inspRow("Stroke", ob));
-      }
-      if (reads.some((n) => shapeToAbsPath(n))) {
-        const off = document.createElement("button");
-        off.type = "button"; off.className = "insp-action"; off.textContent = "Offset path…";
-        off.title = "Grow or shrink the path outline by a set amount";
-        off.addEventListener("click", () => this._promptOffsetPath());
-        xrows.push(inspRow("Offset", off));
-      }
-      const fillable = this._fillableSelection ? this._fillableSelection().length : 0;
-      if (fillable >= 2) {
-        xrows.push(inspBtnRow("Pathfinder", [
-          { glyph: "▦", title: "Divide — split into all face regions", onClick: () => this.pathfinder("divide") },
-          { glyph: "▣", title: "Trim — remove hidden back parts (keep colours)", onClick: () => this.pathfinder("trim") },
-          { glyph: "◳", title: "Merge — unite touching same-colour shapes", onClick: () => this.pathfinder("merge") },
-          { glyph: "⊡", title: "Crop — keep only what's inside the front shape", onClick: () => this.pathfinder("crop") },
-          { glyph: "⊟", title: "Minus Back — front shape minus everything behind", onClick: () => this.pathfinder("minus-back") },
-        ]));
-      }
-      if (xrows.length) wrap.appendChild(inspGroup("Expand", xrows));
+      // Expand / Outline / Offset / Pathfinder moved to the Actions menu (_objectActions).
       // Width (Epic W): vary stroke width. A selected width-stroke group gets a uniform-width
       //  scrub + Uniform reset + Release + Expand; a plain stroked path gets a "Vary width" make.
       const wsGroup = nodes.length === 1 ? this._wsGroupOf(nodes[0]) : null;
@@ -2068,12 +2104,7 @@ const editor = {
         exp.title = "Bake into plain filled paths"; exp.addEventListener("click", () => this.expandWidthStroke(wsGroup));
         wrows.push(inspRow("", uni)); wrows.push(inspRow("", rel)); wrows.push(inspRow("", exp));
         wrap.appendChild(inspGroup("Width", wrows));
-      } else if (reads.some((n) => this._isStroked(n)) && !nodes.some((n) => this._wsGroupOf(n))) {
-        const mk = document.createElement("button"); mk.type = "button"; mk.className = "insp-action"; mk.textContent = "Vary width";
-        mk.title = "Make a variable-width stroke (then drag it with the Width tool)";
-        mk.addEventListener("click", () => { this.makeWidthStroke(); this.setTool("width"); });
-        wrap.appendChild(inspGroup("Width", [inspRow("Stroke", mk)]));
-      }
+      }   // "Vary width" (make) moved to the Actions menu (_objectActions)
     }
     // (Align → the panel's bottom chin via _alignBar(); Flip + z-order Arrange were removed
     //  — both are global on the action bar.)
@@ -2191,24 +2222,14 @@ const editor = {
       bx.title = "Bake the blend into a plain group"; bx.addEventListener("click", () => this.expandBlend(g));
       brows.push(inspRow("", bx));
       wrap.appendChild(inspGroup("Blend", brows));
-    } else if (!isRaster && this._fillableSelection().length === 2) {
-      const mb = document.createElement("button"); mb.type = "button"; mb.className = "insp-action"; mb.textContent = "Make blend";
-      mb.title = "Interpolate steps between the two shapes (Ctrl/Cmd+Alt+B)";
-      mb.addEventListener("click", () => this.makeBlend());
-      wrap.appendChild(inspGroup("Blend", [inspRow("", mb)]));
-    }
+    }   // "Make blend" moved to the Actions menu (_objectActions)
     // COLOUR SYSTEMS (Epic C). Pattern fill: a selected pattern-filled object gets tile
     //  scale/rotate; 2+ objects get "Pattern fill" (top = tile). Recolor: a selection with 2+
     //  distinct solid colours gets a swatch remap grid + Hue/Sat/Light shift.
     if (!isRaster) {
       const pat = nodes.length === 1 ? this._patternOf(nodes[0]) : null;
       if (pat) wrap.appendChild(inspGroup("Pattern", this._patternPanel(nodes[0], pat)));
-      else if (nodes.length >= 2) {
-        const pb = document.createElement("button"); pb.type = "button"; pb.className = "insp-action"; pb.textContent = "Pattern fill";
-        pb.title = "Tile the top object into the fill of the shapes below it";
-        pb.addEventListener("click", () => this.fillWithPattern());
-        wrap.appendChild(inspGroup("Pattern", [inspRow("Tile", pb)]));
-      }
+      // "Pattern fill" (make) moved to the Actions menu (_objectActions)
       const colours = this._harvestColors(nodes);
       if (colours.size >= 2) wrap.appendChild(inspGroup("Recolor", this._recolorPanel(colours)));
     }
@@ -2221,31 +2242,12 @@ const editor = {
       const bl = document.createElement("button"); bl.type = "button"; bl.className = "insp-action"; bl.textContent = "Break link";
       bl.title = "Make this instance an independent copy"; bl.addEventListener("click", () => this.breakSymbolLink(u));
       wrap.appendChild(inspGroup("Symbol", [inspRow("", ed), inspRow("", bl)]));
-    } else if (!isRaster && nodes.length >= 1 && !nodes.some((n) => this.isSymbolInstance(n))) {
-      const ms = document.createElement("button"); ms.type = "button"; ms.className = "insp-action"; ms.textContent = "Make symbol";
-      ms.title = "Turn the selection into a reusable symbol (F8)"; ms.addEventListener("click", () => this.makeSymbol());
-      wrap.appendChild(inspGroup("Symbol", [inspRow("", ms)]));
-    }
+    }   // "Make symbol" moved to the Actions menu (_objectActions)
     // TRANSFORMS+ / REPEAT (Epic T). A selected repeat group gets its param editor + Expand;
     //  any selection gets reflect / shear / transform-again + the repeat generators.
     if (nodes.length === 1 && this.isRepeatGroup(nodes[0])) {
       wrap.appendChild(inspGroup("Repeat", this._repeatPanel(nodes[0])));
-    } else if (nodes.length >= 1) {
-      const trows = [];
-      trows.push(inspBtnRow("Reflect", [
-        { glyph: "⇋", title: "Reflect across the vertical axis", onClick: () => this.reflectSelection("vertical") },
-        { glyph: "⥯", title: "Reflect across the horizontal axis", onClick: () => this.reflectSelection("horizontal") },
-        { glyph: "⇋＋", title: "Reflect a copy (vertical)", onClick: () => this.reflectSelection("vertical", { copy: true }) },
-        { glyph: "∠", title: "Shear / skew…", onClick: () => this._promptShear() },
-        { glyph: "↻", title: "Transform again", onClick: () => this.transformAgain() },
-      ]));
-      trows.push(inspBtnRow("Repeat", [
-        { glyph: "▦", title: "Repeat as a grid", onClick: () => this.repeat("grid") },
-        { glyph: "❋", title: "Repeat radially", onClick: () => this.repeat("radial") },
-        { glyph: "◧", title: "Mirror repeat", onClick: () => this.repeat("mirror") },
-      ]));
-      wrap.appendChild(inspGroup("Transform+", trows));
-    }
+    }   // Reflect / Shear / Transform-again / Repeat moved to the Actions menu (_objectActions)
     // PROCESS — a single raster gets the pipeline stages (upscale / remove-bg /
     // vectorize) inline. app.js owns the jobs + live trace, so it's injected via a
     // hook; the editor stays vector-pure and just hosts the returned DOM.

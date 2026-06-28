@@ -2300,6 +2300,29 @@ def main():
             return o; }""")
         check("inspector groups: caret folds on title click, collapsed hides rows, state persists across re-render",
               icol["caret"] and icol["openByDefault"] and icol["foldHidesRows"] and icol["persists"] and icol["reopen"], str(icol))
+        # Object COMMANDS (Expand/Outline/Offset/Pathfinder, Vary-width/Make-blend/Pattern-fill/
+        # Make-symbol, Reflect/Shear/Transform-again, Repeat) moved OUT of always-on inspector
+        # groups into a context-gated "Actions ▾" menu — the inline Expand/Transform+ groups are
+        # gone. Clicking a menu item runs the command.
+        section("Inspector: object Actions menu (commands moved out of Properties)")
+        oam = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="a" data-hv-shape="rect" x="20" y="20" width="80" height="60" fill="#cc8844" stroke="#333" stroke-width="6"/></svg>','oam');
+            editor.setTool('select'); editor.selection=new Set(['a']); editor.artboardSelected=false;
+            editor._renderSelection(); editor._renderInspector();
+            o.hasBtn = !!document.querySelector('.insp-actions-btn');
+            o.noInlineCmdGroups = ![...document.querySelectorAll('.insp-group')].some(g=>{const t=g.querySelector('.insp-title');return t&&['Expand','Transform+'].includes(t.textContent);});
+            document.querySelector('.insp-actions-btn').click();
+            o.menuOpen = !!document.querySelector('.context-menu');
+            o.labels = [...document.querySelectorAll('.context-menu *')].map(e=>e.childNodes.length===1?e.textContent.trim():'').filter(Boolean);
+            const exp = [...document.querySelectorAll('.context-menu *')].find(e=>e.textContent.trim()==='Expand object'); if (exp) exp.click();
+            o.ranExpand = editor.nodeById('a') ? editor.nodeById('a').tagName.toLowerCase()==='path' : !!editor.stage.querySelector('path');
+            const m = document.querySelector('.context-menu'); if (m) m.remove();
+            return o; }""")
+        check("Actions menu: button present, no inline Expand/Transform+ groups, opens gated items (Expand/Reflect/Repeat), runs the command",
+              oam["hasBtn"] and oam["noInlineCmdGroups"] and oam["menuOpen"]
+              and "Expand object" in oam["labels"] and "Reflect — vertical axis" in oam["labels"] and "Repeat — grid" in oam["labels"]
+              and oam["ranExpand"], str(oam))
         # Isolation mode (Epic I): double-click a group to edit inside it — dim outside, scope
         # selection/marquee/new-objects to the group's children, breadcrumb + Esc exit. The dim is
         # editor-only (stripped from serialize + history; re-synced by id after undo).

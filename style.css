@@ -1852,6 +1852,9 @@ text.hv-text-editing { visibility: hidden; }
 .font-pick:hover { border-color: var(--ink); }
 .insp-action { width: 100%; padding: 5px 8px; border: 1px solid var(--hair); background: var(--bg); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer; }
 .insp-action:hover { border-color: var(--ink); }
+/* "Actions ▾" — the object-commands menu trigger at the top of the Properties panel. */
+.insp-actions-btn { width: 100%; padding: 6px 8px; margin-bottom: 14px; border: 1px solid var(--hair); border-radius: var(--r); background: var(--bg); color: var(--fg); font: inherit; font-size: 12px; font-weight: 600; letter-spacing: 0.02em; cursor: pointer; }
+.insp-actions-btn:hover { border-color: var(--ink); background: var(--panel); }
 
 .font-browser { position: fixed; z-index: 1300; width: 304px; max-height: 384px; display: flex; flex-direction: column;
   border: 1px solid var(--ink); background: var(--bg); box-shadow: 0 8px 30px rgba(0, 0, 0, 0.28); }

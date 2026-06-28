@@ -572,6 +572,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
   editor.pickColor = openColorPicker;   // single-target callers (artboard bg, object rows) reuse the same modal
   editor.pickPaint = pickFor;           // duo fill/stroke picker (the "main" colour picker + X)
   editor.openContextPanel = showContextPanel;   // layers-row right-click → same object panel as the canvas
+  editor.showMenu = showContextMenu;            // inspector "Actions ▾" menu (object commands)
   editor.rasterTools = buildRasterTools;         // raster panel: inline pipeline stages + live vectorize
   // Prefetch so the Process panels render without a flash. Deferred to a microtask:
   // this block runs during top-level module eval, but engineSchemas/rasterOpSchemas are
