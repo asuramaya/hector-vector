@@ -86,6 +86,24 @@ export const colorsMixin = {
   },
   // Remap every use of one exact colour to a new one (one undo). targets captured by the caller.
   recolorApply(targets, hex) { for (const t of targets) t.el.setAttribute(t.attr, hex); },
+  // Edit a harvested colour through the CONTEXTUAL dock Colour panel (not a popup modal):
+  // set a transient recolor target, summon the panel, and render it in "Recolor" mode (a solo
+  // picker that live-applies via recolorApply). The target is cleared on selection change
+  // (docks.renderColor) or via the panel's Done button. Falls back to the modal if no dock panel.
+  _recolorEditViaPanel(hex, targets) {
+    this.push("Recolor"); this._recolorClearBase();
+    // Summon FIRST: showing the panel runs docks.renderColor, which would clear a freshly-set
+    // target on its first key change. Set the target AFTER, then render directly (renderColor
+    // then same-key early-returns and leaves us in Recolor mode until selection change / Done).
+    if (this._summonColor) this._summonColor();
+    const body = document.querySelector(".rail-section.color .section-body");
+    if (body && typeof this._renderColorPanel === "function") {
+      this._recolorTarget = { hex, targets };
+      this._renderColorPanel(body);
+      return;
+    }
+    this.pickColor({ title: "Recolor " + hex, color: hex, allowNone: false, onChange: (h) => this.recolorApply(targets, h || hex) });
+  },
   // H/S/L shift over ALL harvested colours, re-applied from a base snapshot each scrub so the
   // slider is absolute (coalesced into one undo). `kind` ∈ "h"|"s"|"l".
   _recolorEnsureBase() {

@@ -491,6 +491,22 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     if (colorCtl) { colorCtl.destroy(); colorCtl = null; }
     const sect = hostEl.closest && hostEl.closest(".rail-section");
     const ftitle = sect && sect.querySelector(".fp-title");
+    // Recolor mode (Epic C): a swatch in the inspector's Recolor group routes here instead of
+    // popping a modal — a solo picker that live-remaps one harvested colour across the selection.
+    if (editor._recolorTarget) {
+      const { hex, targets } = editor._recolorTarget;
+      if (ftitle) ftitle.textContent = "Recolor";
+      hostEl.innerHTML = "";
+      const bar = document.createElement("div"); bar.className = "cp-recolor-bar";
+      const done = document.createElement("button"); done.type = "button"; done.className = "ghost-button cp-recolor-done"; done.textContent = "‹ Done";
+      done.addEventListener("click", () => { editor._recolorTarget = null; editor._renderColorPanel(hostEl); });
+      const lab = document.createElement("span"); lab.className = "cp-recolor-lab"; lab.textContent = "Remapping " + hex;
+      bar.append(done, lab); hostEl.appendChild(bar);
+      const pickerHost = document.createElement("div"); pickerHost.className = "cp-recolor-host"; hostEl.appendChild(pickerHost);
+      colorCtl = openColorPicker({ title: "Recolor", host: pickerHost, color: hex, allowNone: false,
+        onChange: (h) => editor.recolorApply(targets, h || hex) });
+      return;
+    }
     // Nothing selected → an empty state, NOT the full (tall) duo picker. Rendering the
     // picker with no target made the panel overflow when expanded-but-empty.
     if (!editor.artboardSelected && (!editor.selection || editor.selection.size === 0)) {

@@ -1011,6 +1011,10 @@ svg.hv-iso > .hv-ablayer, svg.hv-iso > rect.hv-artboard { opacity: 0.4; }
 .insp-recolor-grid { display: flex; flex-wrap: wrap; align-items: flex-start; align-content: flex-start; gap: 4px; }
 .insp-recolor-sw { flex: 0 0 20px; box-sizing: border-box; width: 20px; height: 20px; min-width: 20px; max-width: 20px; min-height: 20px; max-height: 20px; align-self: center; padding: 0; border: 1px solid var(--hair); border-radius: 3px; cursor: pointer; }
 .insp-recolor-sw:hover { outline: 1px solid var(--accent); }
+/* Recolor mode in the dock Colour panel: a back/Done bar above the solo picker. */
+.cp-recolor-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+.cp-recolor-bar .cp-recolor-lab { font-size: 11px; color: var(--label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-recolor-done { flex: 0 0 auto; }
 /* Pen-tool anchor markers (while a path is being drawn) */
 .hv-pen-anchor { fill: #fff; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
 .hv-pen-anchor.first { fill: var(--accent); }

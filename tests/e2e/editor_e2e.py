@@ -2248,9 +2248,10 @@ def main():
         check("pattern fill: top→<pattern> applied below, tile scale/rotate, round-trips, undo · recolor: harvest 2, remap exact, HSL shift",
               cl["patApplied"] and cl["patDef"] and cl["patXform"] and cl["patSer"] and cl["patUndo"]
               and cl["harvest"] and cl["remap"] and cl["shift"], str(cl))
-        # Recolor swatch → clicking it must open a FLOATING picker, NOT embed the whole picker
-        # into the 20px swatch button (regression: host:sw collapsed .cp-field to ~2px → the picker
-        # showed only its 14px hue strip as a thin rainbow column). Renders the real inspector + clicks.
+        # Recolor swatch → clicking it edits the harvested colour CONTEXTUALLY in the dock Colour
+        # panel (a solo "Recolor" picker with a Done bar), NOT a popup modal and NOT embedded into
+        # the 20px swatch (the host:sw regression collapsed .cp-field to ~2px → a thin rainbow
+        # column). Live-applies via recolorApply; Done returns to the duo fill/stroke picker.
         rcui = page.evaluate(r"""() => {
             const o = {};
             window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="a" x="10" y="10" width="50" height="50" fill="#cc8844" stroke="#333333" stroke-width="6"/><circle data-hv-id="b" cx="120" cy="40" r="20" fill="#3377cc" stroke="#aa2255" stroke-width="6"/></svg>','rcui');
@@ -2259,15 +2260,22 @@ def main():
             const sw = document.querySelector('.insp-recolor-sw');
             o.hasSwatch = !!sw && Math.round(sw.getBoundingClientRect().width)===20;
             if (sw) sw.click();
+            o.targetSet = !!editor._recolorTarget;
+            o.noModal = !document.querySelector('.cp-backdrop');
             o.notEmbedded = !document.querySelector('.insp-recolor-sw .cp-window');
-            o.floats = !!document.querySelector('.cp-backdrop .cp-window');
-            const f = document.querySelector('.cp-field');
+            o.inDockColour = !!document.querySelector('.rail-section.color .section-body .cp-window');
+            o.hasDoneBar = !!document.querySelector('.rail-section.color .cp-recolor-done');
+            const f = document.querySelector('.rail-section.color .cp-field');
             o.fieldWide = !!f && f.getBoundingClientRect().width > 80;
             o.swIntact = !!sw && Math.round(sw.getBoundingClientRect().width)===20;
-            const bd = document.querySelector('.cp-backdrop'); if (bd) bd.remove();
+            if (editor._recolorTarget) editor.recolorApply(editor._recolorTarget.targets, '#00ff00');
+            o.liveApply = editor.nodeById('a').getAttribute('fill')==='#00ff00';
+            const done = document.querySelector('.rail-section.color .cp-recolor-done'); if (done) done.click();
+            o.doneClears = !editor._recolorTarget && !!document.querySelector('.rail-section.color .cp-side');
             return o; }""")
-        check("recolor swatch click → floating picker (not embedded in the swatch), field keeps full width, swatch stays 20px",
-              rcui["hasSwatch"] and rcui["notEmbedded"] and rcui["floats"] and rcui["fieldWide"] and rcui["swIntact"], str(rcui))
+        check("recolor swatch click → contextual dock Colour panel (Recolor mode, not modal/embedded), live-applies, Done returns to duo",
+              rcui["hasSwatch"] and rcui["targetSet"] and rcui["noModal"] and rcui["notEmbedded"] and rcui["inDockColour"]
+              and rcui["hasDoneBar"] and rcui["fieldWide"] and rcui["swIntact"] and rcui["liveApply"] and rcui["doneClears"], str(rcui))
         # Isolation mode (Epic I): double-click a group to edit inside it — dim outside, scope
         # selection/marquee/new-objects to the group's children, breadcrumb + Esc exit. The dim is
         # editor-only (stripped from serialize + history; re-synced by id after undo).
