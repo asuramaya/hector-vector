@@ -141,13 +141,18 @@ def mount_ctl(page):
     page.wait_for_timeout(150)
 
 def open_ctx_panel(page):
-    """Open the right-click style+actions panel for the current selection/artboard."""
+    """Show the Properties panel for the current selection/artboard. (Right-clicking an OBJECT
+    now opens the Actions command menu, so summon the style panel directly rather than via the
+    contextmenu gesture; the empty-canvas case still routes through the gesture for the artboard.)"""
     page.evaluate("""() => {
         const sw = document.querySelector('.stage-wrap');
         const sel = [...editor.selection];
-        let x = 12, y = 12, target = sw;
-        if (sel.length) { const n = editor.nodeById(sel[0]); const r = n.getBoundingClientRect(); x = r.left + r.width/2; y = r.top + r.height/2; target = n; }
-        target.dispatchEvent(new MouseEvent('contextmenu', { clientX: x, clientY: y, bubbles: true, cancelable: true }));
+        if (sel.length) {
+            const n = editor.nodeById(sel[0]); const r = n.getBoundingClientRect();
+            if (editor.openContextPanel) editor.openContextPanel(r.left + r.width/2, r.top + r.height/2);
+        } else {
+            sw.dispatchEvent(new MouseEvent('contextmenu', { clientX: 12, clientY: 12, bubbles: true, cancelable: true }));
+        }
     }""")
 
 def set_inspector_input(page, kind, index, value, event):
@@ -2323,6 +2328,20 @@ def main():
               oam["hasBtn"] and oam["noInlineCmdGroups"] and oam["menuOpen"]
               and "Expand object" in oam["labels"] and "Reflect — vertical axis" in oam["labels"] and "Repeat — grid" in oam["labels"]
               and oam["ranExpand"], str(oam))
+        # Right-clicking an OBJECT on the canvas opens the same Actions commands (+ an "Open
+        # Properties…" fallback), not just the Properties panel.
+        rcm = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="a" data-hv-shape="rect" x="40" y="40" width="100" height="80" fill="#cc8844" stroke="#333" stroke-width="6"/></svg>','rcm');
+            editor.setTool('select'); editor.selection=new Set(['a']); editor.artboardSelected=false; editor._renderSelection();
+            const n = editor.nodeById('a'); const r = n.getBoundingClientRect();
+            n.dispatchEvent(new MouseEvent('contextmenu', { clientX: r.left+r.width/2, clientY: r.top+r.height/2, bubbles: true, cancelable: true }));
+            o.menuOpen = !!document.querySelector('.context-menu');
+            o.labels = [...document.querySelectorAll('.context-menu *')].map(e=>e.childNodes.length===1?e.textContent.trim():'').filter(Boolean);
+            const m = document.querySelector('.context-menu'); if (m) m.remove();
+            return o; }""")
+        check("right-click an object → Actions command menu (Expand object + Open Properties…)",
+              rcm["menuOpen"] and "Expand object" in rcm["labels"] and "Open Properties…" in rcm["labels"], str(rcm))
         # Isolation mode (Epic I): double-click a group to edit inside it — dim outside, scope
         # selection/marquee/new-objects to the group's children, breadcrumb + Esc exit. The dim is
         # editor-only (stripped from serialize + history; re-synced by id after undo).

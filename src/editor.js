@@ -2088,8 +2088,8 @@ const editor = {
     //  on a 2+ overlap. (Live actions; the offset amount prompts via the numeric row.)
     if (!isRaster) {
       // Expand / Outline / Offset / Pathfinder moved to the Actions menu (_objectActions).
-      // Width (Epic W): vary stroke width. A selected width-stroke group gets a uniform-width
-      //  scrub + Uniform reset + Release + Expand; a plain stroked path gets a "Vary width" make.
+      // Width (Epic W): a selected width-stroke group gets its uniform-width scrub + Uniform
+      //  reset + Release + Expand. ("Vary width" — making one — is in the Actions menu.)
       const wsGroup = nodes.length === 1 ? this._wsGroupOf(nodes[0]) : null;
       if (wsGroup) {
         const spec = this._wsSpec(wsGroup); const wrows = [];
@@ -2210,8 +2210,8 @@ const editor = {
     // EFFECTS (Epic E): live drop shadow / blur / glow via an SVG <filter> stack. The detailed
     //  per-effect editor shows for a single object; a multi-selection just gets the add buttons.
     if (!isRaster && nodes.length >= 1) wrap.appendChild(inspGroup("Effects", this._effectsPanel(nodes)));
-    // BLEND (Epic L). A selected blend group gets steps + reverse + Expand; exactly 2 fillable
-    //  shapes get a "Make blend" button. (Object > Blend > Make, also Ctrl/Cmd+Alt+B.)
+    // BLEND (Epic L). A selected blend group gets steps + reverse + Expand. ("Make blend" — from
+    //  exactly 2 fillable shapes — is in the Actions menu, also Ctrl/Cmd+Alt+B.)
     if (nodes.length === 1 && this.isBlendGroup(nodes[0])) {
       const g = nodes[0], spec = this._blendSpec(g), brows = [];
       brows.push(numRow("Steps", spec.steps || 6, 1, 1,

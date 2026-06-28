@@ -1236,7 +1236,19 @@ function pointMenuItems() {
         editor.selection = new Set([id]); editor.artboardSelected = false;
         editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
       }
-      showContextPanel(e.clientX, e.clientY, "object");
+      // Right-click an object → the same context-gated Actions commands as the inspector's
+      // "Actions ▾" button, plus a fallback to open the full Properties panel. Rasters (no
+      // vector commands) fall straight through to Properties.
+      const acts = editor._objectActions ? editor._objectActions(editor.selectedNodes()) : [];
+      if (acts.length) {
+        showContextMenu(e.clientX, e.clientY, [
+          ...acts,
+          { type: "sep" },
+          { label: "Open Properties…", onClick: () => showContextPanel(e.clientX, e.clientY, "object") },
+        ]);
+      } else {
+        showContextPanel(e.clientX, e.clientY, "object");
+      }
     } else {
       editor.selection = new Set(); editor.artboardSelected = true;
       editor._renderSelection(); editor._renderInspector();
