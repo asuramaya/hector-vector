@@ -117,7 +117,7 @@ Shape tools are **live shapes** — rect/ellipse keep editable parameters (size,
 - **Fill & stroke** with a live colour picker (the **Colour** panel hosts an embedded duo editor — swap fill/stroke with `X`).
 - **Gradients** — fill or stroke with a **linear or radial gradient**: pick the type in the Colour panel, then add/drag/remove colour stops on the gradient strip (each stop edits through the same picker). Gradients scale with the object, save into the SVG, render in PNG export, survive boolean ops, and stay independent when you duplicate.
 - **Pattern fills** — turn the top selected object into a **tiling `<pattern>`** and fill the shapes below it with it, then scale / rotate the tile in Properties. Patterns live in the SVG `<defs>`, so they save, render in export, and stay independent on duplicate.
-- **Recolor Artwork** — Properties harvests every distinct solid colour in the selection into a swatch grid: click one to **remap** all its uses through the picker, or shift **Hue / Saturation / Lightness** across the whole palette at once.
+- **Recolor Artwork** — Properties harvests every distinct solid colour in the selection into a swatch grid: click one to **remap** all its uses right in the **Colour** panel (it switches to a Recolor editor — *Done* returns to fill/stroke), or shift **Hue / Saturation / Lightness** across the whole palette at once.
 - **Stroke** width and **alignment** (centre / inside / outside).
 - **Opacity** and **blend mode** per object.
 - Edits are live — drag a swatch and the canvas updates immediately.
@@ -129,6 +129,7 @@ A fully dockable, panel-based workspace (`window.__docks`):
 - **Panels** — Properties, Colour, Layers, History, Library, Processor, Jobs, Info.
 - **Dock / float / group / shelf** — dock panels left or right, tear them off to **float**, snap floats into **locking-bezel groups** that resize and move together (double-click a bezel to split), or park any panel on a **shelf** in the header as a square.
 - **Contextual panels** — Processor and Colour **auto-appear when relevant** (a raster selected, an object selected) and tuck themselves back onto the shelf when there's nothing to act on. A panel you place by hand stays put.
+- **Lean Properties** — each property group has a **collapsible header** (your open/closed choices are remembered), and one-shot object commands (Expand, Outline stroke, Offset path, Pathfinder, Vary width, Make blend / symbol / pattern fill, Reflect, Repeat) live in a context-gated **Actions ▾** menu at the top of the panel rather than as always-on rows.
 - **Memory** — panels remember their last position/size; fresh floats get an ideal, non-overlapping placement.
 - Right-click a panel header to shelve it; right-click a shelf square for open / float / dock options.
 
