@@ -15,7 +15,7 @@ It began as a batch "image studio" and grew a real editor — and now the canvas
 - [Screenshots](#screenshots)
 - [Quick start](#quick-start)
 - [Features](#features)
-  - [Canvas & document](#canvas--document) · [Drawing tools](#drawing-tools) · [Path & node editing](#path--node-editing) · [Object operations](#object-operations) · [Fill, stroke & colour](#fill-stroke--colour) · [Workspace & panels](#workspace--panels) · [Raster→vector pipeline](#rastervector-pipeline) · [Vectorize engines](#vectorize-engines) · [Pixel Art → SVG](#pixel-art--svg) · [Library & export](#library--export) · [Platform](#platform)
+  - [Canvas & document](#canvas--document) · [Drawing tools](#drawing-tools) · [Path & node editing](#path--node-editing) · [Text & fonts](#text--fonts) · [Object operations](#object-operations) · [Fill, stroke & colour](#fill-stroke--colour) · [Workspace & panels](#workspace--panels) · [Raster→vector pipeline](#rastervector-pipeline) · [Vectorize engines](#vectorize-engines) · [Pixel Art → SVG](#pixel-art--svg) · [Library & export](#library--export) · [Platform](#platform)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Requirements](#requirements)
 - [Roadmap & status](#roadmap--status)
@@ -193,8 +193,9 @@ Heavily *bilinear*-resampled art is genuinely ambiguous; set **Native size (cell
 |---|---|
 | **Tools** | `V` select · `A` node · `P` pen · `C` curvature · `R` rect · `E` ellipse · `L` line · `T` text · `W` width · `⇧M` shape builder · `⇧C` scissors · `⇧K` knife · `⇧E` eraser |
 | **Edit** | `Ctrl/Cmd+Z` undo · `Ctrl/Cmd+Shift+Z` / `Ctrl/Cmd+Y` redo · `Ctrl/Cmd+D` duplicate · `Ctrl/Cmd+C/X/V` copy/cut/paste · `Delete` remove |
-| **Object** | `Ctrl/Cmd+G` group · `Ctrl/Cmd+Shift+G` ungroup · `Ctrl/Cmd+J` join nodes · `Ctrl/Cmd+T` scale · `Ctrl/Cmd+A` select all · `Ctrl/Cmd+7` clip · `Ctrl/Cmd+Alt+B` blend |
-| **Colour** | `X` swap fill/stroke · `D` default fill/stroke (in the Colour panel) |
+| **Object** | `Ctrl/Cmd+G` group · `Ctrl/Cmd+Shift+G` ungroup · `Ctrl/Cmd+J` join nodes · `Ctrl/Cmd+T` scale · `Ctrl/Cmd+A` select all · `Ctrl/Cmd+7` clip · `Ctrl/Cmd+Alt+B` blend · `F8` symbol · `Ctrl/Cmd+Shift+D` transform again |
+| **Object actions** | **Right-click** an object (or the **Actions ▾** button in Properties) for Expand · Outline stroke · Offset path · Pathfinder · Vary width · Make blend / symbol · Reflect · Repeat |
+| **Colour** | `X` swap fill/stroke · `D` default fill/stroke (in the Colour panel) · `/` none |
 | **Document** | `Ctrl/Cmd+S` save · `Ctrl/Cmd+Shift+S` save as · `Ctrl/Cmd+R` rulers/guides · `Esc` clear selection / exit transform |
 
 ## Requirements
@@ -241,6 +242,17 @@ The deep research behind pipeline picks — every category, the OSS SOTA, and th
 - [x] **Auto pipeline** — classical analyzer → suggested compose with *why* + one-click Apply; outcome→model router driven by a capability registry.
 - [x] **Pixel Art → SVG**, **client-side PNG export**, **`.hv` projects**, **Library**, in-app **self-update**, **app-window** mode with tied server lifecycle.
 - [x] **Text & fonts** — point / box / on-path text, multi-source font discovery (Fontsource / Fontshare / Google / Bunny) with an Installed library, and **Convert to outlines** with browser-faithful shaping (HarfBuzz) and curve-following on-path outlines.
+- [x] **Gradients, patterns & recolor** — linear/radial gradient fill or stroke with an on-strip stop editor; tiling `<pattern>` fills; **Recolor Artwork** (harvest distinct colours → remap one, or HSL-shift the whole palette). All live in `<defs>` and round-trip through save + PNG export.
+- [x] **Clipping & opacity masks** — top object as a `<clipPath>` or luminance `<mask>`, non-destructive and **releasable**.
+- [x] **Pathfinder & path conversion** — Divide / Trim / Merge / Crop / Minus-Back, plus **Outline stroke** / **Offset path** / **Expand**, all on an **analytic geometric stroker** (exact miter / bevel / round joins and caps, no bitmap quantization).
+- [x] **Width tool** — variable-width strokes dragged on-canvas and rendered to crisp filled ribbons through the same stroker.
+- [x] **Shape Builder · Scissors · Knife · Eraser** — interactive path construction / cutting / carving on the boolean engine.
+- [x] **Blend** — interpolate a chain of shapes between two objects, morphing geometry *and* colour (live step count / reverse / expand).
+- [x] **Live effects** — non-destructive drop-shadow / blur / glow as real SVG `<filter>`s, editable in Properties and **reconstructable** on reopen.
+- [x] **Transforms & repeat** — Reflect / Shear / Transform-Each / Transform-Again, plus parametric **grid / radial / mirror** Repeat groups.
+- [x] **Multiple artboards** — named artboards with per-frame fit-to-view + cropped SVG export, persisted invisibly in `<metadata>`.
+- [x] **Isolation mode & Symbols** — double-click into a group to edit it in place; reusable `<symbol>`/`<use>` instances with live **edit-master** and **break-link**.
+- [x] **Lean inspector** — collapsible property groups (remembered) and one-shot object commands in a context-gated **Actions** menu (toolbar button **and** object right-click), with the Recolor editor reusing the dock Colour panel.
 
 ### In progress / open edges
 
@@ -250,7 +262,11 @@ The deep research behind pipeline picks — every category, the OSS SOTA, and th
 
 ### Planned
 
-- [ ] **Distribute** spacing + **multi-object transform handles** (group rotate/scale) + **multiple artboards**.
+- [ ] **Brushes** — art / scatter / pattern strokes along a path.
+- [ ] **Distort & warp** — envelope / mesh / free-distort deformations.
+- [ ] **Type systems** — character / paragraph styles and threaded text frames.
+- [ ] **More export formats** — PDF / EPS.
+- [ ] **Distribute** spacing + group transform handles (rotate/scale a multi-selection as one).
 - [ ] **Vectorize "quality" tier** — VTracer is the only viable OSS colour vectorizer; closed engines (Vectorizer.ai) are meaningfully better on photos. Optional paid-API fallback is on the table.
 
 ### Known limitations
@@ -266,8 +282,8 @@ No build step anywhere — the frontend is hand-written ES modules served as-is.
 
 - **`src/`** — the dependency-free vanilla-JS frontend:
   - **`src/hv/`** — a pure, side-effect-free library: geometry & path math (`path`, `transform`, `shapes`, `shapegen`), colour (`color`), raster sampling (`raster`), and the marching-squares boolean/contour engine with its shared curve-fit core (`contour`, `fitcurve`).
-  - **`src/editor.js`** — the live-SVG editing core: selection, the tools, snapshot undo, layers, and the boolean operations.
-  - **`src/app.js`** — the app shell: the dockable-panels system (`window.__docks`), the Library, the Processor pipeline UI, Info, and client-side PNG export.
+  - **`src/editor.js`** + **`src/editor/`** — the live-SVG editing core (selection, snapshot undo, layers, boolean ops) plus per-feature **tool mixins** under `src/editor/tools/` (`pen`, `text`, `width`, `builder`, `blend`, `colors`, `masks`, `expand`, `effects`, `repeat`, `isolation`, `symbols`, `artboards`, `viewport`, …) `Object.assign`-ed onto one editor object, and inspector row builders in `src/editor/ui-rows.js`.
+  - **`src/app.js`** + **`src/ui/`** — the app shell and UI modules: the dockable-panels system (`ui/docks`, `window.__docks`), the unified colour picker (`ui/colorpicker`), menus (`ui/menus`), the font browser (`ui/fonts`), the Library, the Manage screen, the Processor pipeline UI, Info, and client-side PNG export.
 - **`server.py`** — a single-file backend on Python's stdlib `http.server`, with a threaded job queue and a JSON API (`/api/run/pipeline`, `/api/vectorize/engines`, `/api/raster-ops`, `/api/capabilities`, `/api/plan`, `/api/work-items`, `/api/install/*`, `/api/heartbeat`, …). It's organized around pluggable registries: **vectorize engines** (`clean` / `vtracer` / `pixel`), **raster ops** (`upscale` / `removebg` / restoration), and a **capability registry** (outcome→model routing) — adding a model is a registry entry that surfaces in the UI automatically. A heartbeat watchdog spins the server down when the UI closes. No web framework.
 - **`engine.py`, `mask_trace_prep.py`** — classical mask/cutout image ops.
 - **`tools/`** — worker scripts: `pixelvec.py`, `svg_render.py`, `simplify_svg.py` (vector), `ai_cutout.py` (rembg), `upscale_spandrel.py`, `face_restore.py` + `detect_faces.py` (GFPGAN), `inpaint_lama.py` (object removal), and `analyze.py` (the offline analyzer behind the Auto plan). External binaries/weights land here / in `./.venv` / `~/.u2net` at runtime.
