@@ -32,6 +32,7 @@ import {
 import { openColorPicker, activeColorPicker, configureColorPicker } from "./ui/colorpicker.js";
 import { configurePlatform } from "./ui/platform.js";
 import { CLOUD } from "./ui/env.js";
+import { cloudFontCatalog, cloudLoadFont, cloudInstalledFonts } from "./ui/cloud-fonts.js";
 import {
   configureWidgets, fieldRow, sectionTitle, fmtBytes,
   makeSelect, makeSelectRaw, makeNumberRaw, makeRange, makeNumber,
@@ -316,9 +317,10 @@ configureColorPicker({ floatingInput, showContextMenu });
 // adapters until the real client ones land (C4 fonts-from-CDN, C5 WASM/degraded shaping). The
 // editor code is identical either way — it only ever calls platform.*.
 configurePlatform(CLOUD ? {
-  fontCatalog: async () => ({ fonts: [], total: 0 }),
-  installedFonts: async () => ({ families: [] }),
-  loadFont: async () => { throw new Error("Web fonts are coming to the cloud editor soon — for now, use the desktop app."); },
+  // Cloud: fonts from the Google Fonts CSS2 API directly (no backend), text→outlines still deferred.
+  fontCatalog: cloudFontCatalog,
+  installedFonts: cloudInstalledFonts,
+  loadFont: cloudLoadFont,
   textOutline: async () => { throw new Error("Text → outlines is coming to the cloud editor soon — for now, use the desktop app."); },
 } : {
   fontCatalog: (qs) => api(`/api/fonts/catalog?${qs}`),
@@ -435,6 +437,17 @@ const MENU_ITEMS = {
   },
   // Everything that used to be separate header buttons, rolled into one menu.
   "file": () => {
+    // Cloud build: no server/Library — file ops are browser-native (open a file, download the
+    // .svg, export PNG). openFromFile + downloadCurrentSvg are already fully client-side.
+    if (CLOUD) return [
+      { label: "New blank canvas…", onClick: newBlankDoc },
+      { type: "sep" },
+      { label: "Open (.svg)…", onClick: openFromFile },
+      { label: "Download (.svg)", onClick: downloadCurrentSvg },
+      { type: "sep" },
+      { label: "Export PNG…", onClick: exportFlow },
+      { label: "Copy SVG markup", onClick: copySvgSource },
+    ];
     const canReveal = !!(selectedOutput && selectedOutput.path);
     const items = [
       { label: "New blank canvas…", onClick: newBlankDoc },
@@ -1101,7 +1114,7 @@ document.addEventListener("keydown", (e) => {
   const tag = (e.target && e.target.tagName || "").toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select" || (e.target && e.target.isContentEditable)) return;
   const mod = e.metaKey || e.ctrlKey;
-  if (mod && (e.key === "s" || e.key === "S")) { e.preventDefault(); if (modalRootEl.hidden) { if (e.shiftKey) saveAsDocument(); else saveDocument(); } return; }
+  if (mod && (e.key === "s" || e.key === "S")) { e.preventDefault(); if (modalRootEl.hidden) { if (CLOUD) downloadCurrentSvg(); else if (e.shiftKey) saveAsDocument(); else saveDocument(); } return; }
   if (mod && (e.key === "z" || e.key === "Z")) { e.preventDefault(); if (e.shiftKey) editor.redoAction(); else editor.undo(); return; }
   if (mod && (e.key === "y" || e.key === "Y")) { e.preventDefault(); editor.redoAction(); return; }
   if (mod && (e.key === "d" || e.key === "D")) { e.preventDefault(); if (e.shiftKey) editor.transformAgain(); else editor.duplicate(); return; }   // Ctrl/Cmd+D duplicate · +Shift Transform Again (Illustrator's Ctrl+D, kept off Duplicate)

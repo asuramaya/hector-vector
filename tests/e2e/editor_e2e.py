@@ -4172,6 +4172,10 @@ def main():
               cloud["cloudClass"] and cloud["panelsGone"] and cloud["manageHidden"] and cloud["ctaShown"], str(cloud))
         check("cloud mode: draw + boolean + SVG export work fully client-side",
               cloud2["boolean"] and cloud2["export"], str(cloud2))
+        # Web-font discovery is served from a bundled Google-Fonts catalog client-side (the actual
+        # woff2 loads from the Google CDN at use-time; the catalog itself needs no network).
+        cfont = page.evaluate("""async () => { const f = await window.__fonts.searchCatalog('mont'); return f.length > 0 && f.every(x => x.source === 'google'); }""")
+        check("cloud mode: web-font catalog served client-side (Google Fonts, no backend)", cfont is True)
         check("cloud mode: ZERO /api traffic (anti-drift guard — no server dependency on the editor path)",
               not cloud_api_hits, str(cloud_api_hits[:5]))
 

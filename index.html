@@ -3,6 +3,17 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+      // Deploy-target auto-detect (runs before the app module). On a Cloudflare Pages host
+      // (*.pages.dev) or the production domain, run the SERVERLESS build — pipeline / library /
+      // batch are gated behind a "download the desktop app" CTA. Local desktop (served from
+      // localhost by the Python app) stays the full app. Same file both ways, no build step.
+      // `?cloud` / `?nocloud` override for testing (handled in src/ui/env.js).
+      (function () {
+        var h = location.hostname;
+        if (/\.pages\.dev$/.test(h) /* || h === "your-domain.app" */) window.__HV_CLOUD__ = true;
+      })();
+    </script>
     <title>hector-vector</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="/assets/hv_logo.svg" />
