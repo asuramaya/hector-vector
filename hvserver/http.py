@@ -50,6 +50,17 @@ class Handler(SimpleHTTPRequestHandler):
             # from a stale one that predates this endpoint). Cheap + no-store.
             self.send_json({"ok": True})
             return
+        if parsed.path == "/companion/ping":
+            # Discovery handshake for the cloud→companion bridge. The public editor probes this
+            # with fetch(..., {targetAddressSpace:"local"}); if it answers (+ the user grants
+            # Chrome's Local Network Access), the cloud UI un-gates the pipeline and routes to us.
+            origin = self._companion_origin()
+            self.send_json(
+                {"ok": True, "app": "hector-vector", "role": "companion",
+                 "companionApi": 1, "caps": ["pipeline", "jobs"]},
+                cors_origin=origin,
+            )
+            return
         if parsed.path == "/api/status":
             self.send_json(tool_status())
             return
@@ -176,6 +187,37 @@ class Handler(SimpleHTTPRequestHandler):
         if origin is not None:
             return self._host_is_loopback(origin)
         return self._host_is_loopback(self.headers.get("Referer"))
+
+    def _companion_origin(self) -> str | None:
+        """The cloud origin allowed to reach this server as a COMPANION, or None.
+
+        This is the ONLY door that lets a public web origin talk to the local server, so it's
+        OFF by default and opt-in with an EXACT origin match — never a wildcard:
+            HV_COMPANION=1  HV_COMPANION_ORIGIN=https://your-domain  ./run.sh
+        The desktop app doesn't set these, so its behaviour + the CSRF guard are unchanged. The
+        public origin also needs Chrome's Local Network Access permission (targetAddressSpace:
+        "local" + the user's one-time grant) — CORS alone can't reach loopback from a public site.
+        """
+        if os.environ.get("HV_COMPANION") != "1":
+            return None
+        allowed = os.environ.get("HV_COMPANION_ORIGIN", "").strip()
+        origin = (self.headers.get("Origin") or "").strip()
+        return origin if (allowed and origin and origin == allowed) else None
+
+    def do_OPTIONS(self) -> None:
+        # CORS + Private-Network preflight for the companion bridge only (scoped origin).
+        parsed = urllib.parse.urlparse(self.path)
+        origin = self._companion_origin()
+        if origin and parsed.path.startswith("/companion/"):
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Allow-Private-Network", "true")   # PNA/LNA preflight
+            self.send_header("Vary", "Origin")
+            self.end_headers()
+            return
+        self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -320,11 +362,14 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(path.read_bytes())
 
-    def send_json(self, payload: object, status: HTTPStatus = HTTPStatus.OK) -> None:
+    def send_json(self, payload: object, status: HTTPStatus = HTTPStatus.OK, cors_origin: str | None = None) -> None:
         encoded = json.dumps(payload, indent=2).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(encoded)))
+        if cors_origin:   # companion-bridge responses only (see _companion_origin) — never the general API
+            self.send_header("Access-Control-Allow-Origin", cors_origin)
+            self.send_header("Vary", "Origin")
         self.end_headers()
         self.wfile.write(encoded)
 
