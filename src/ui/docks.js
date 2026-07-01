@@ -11,6 +11,7 @@
 // Behaviour-identical to the original inline block (reconcile() still runs before
 // the control object is published, exactly as before).
 import { showContextMenu } from "./menus.js";   // shelf-square right-click options menu
+import { CLOUD } from "./env.js";
 
 export function createDocks({ editor, measureFit, viewports, renderProcessorPanel, renderLibrary, renderJobsPanel, processorRelevant, cycleBg }) {
   function wireSectionCollapse(section) {
@@ -40,7 +41,13 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
     const grid = document.querySelector(".editor-grid");
     const railToggle = document.querySelector("#rail-toggle");
     const DOCKS_KEY = "hector-vector:docks", FOLD_KEY = "hector-vector:sides-folded";
-    const ORDER = ["history", "layers", "library", "processor", "properties", "color", "info", "jobs"];   // home identity order
+    // Cloud build (no backend): the server-dependent panels don't exist. Drop their static
+    // sections from the DOM up front and filter them out of the home order so the dock never
+    // tries to manage/dock them. (Their render fns already no-op on missing DOM.)
+    const SERVER_PANELS = new Set(["library", "processor", "jobs", "info"]);
+    if (CLOUD) for (const n of SERVER_PANELS) document.querySelector(`.rail-section[data-section="${n}"]`)?.remove();
+    const ORDER = ["history", "layers", "library", "processor", "properties", "color", "info", "jobs"]   // home identity order
+      .filter((n) => !(CLOUD && SERVER_PANELS.has(n)));
     const dockElFor = (side) => (side === "left" ? leftDock : rightDock);
     let folded = localStorage.getItem(FOLD_KEY) === "1";
 
@@ -548,6 +555,7 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
     function borrowSections(names) {
       const out = [];
       for (const n of names) {
+        if (!state[n]) continue;   // cloud build: server panels (library/processor/jobs/info) don't exist
         removeFromGroup(n);
         detachWinKeepSection(n);   // floating → bare section in the body
         if (state[n].loc !== "left" && state[n].loc !== "right") state[n].loc = DEFAULT_LOC[n] === "left" ? "left" : "right";

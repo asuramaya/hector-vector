@@ -4,7 +4,12 @@
 // thrown Error carrying the server's `error` message when present.
 //
 // Extracted from app.js (#26). No app/DOM/editor dependencies — pure fetch.
+import { CLOUD } from "./env.js";
 export async function api(url, method = "GET", payload) {
+  // Cloud build has no backend. Fail fast + clean so a stray server call can't 404-storm the UI
+  // into a render loop (the exact class of bug the stale-server incident caused). Editor features
+  // route through platform.js adapters; the server-only panels are gated off — this is the net.
+  if (CLOUD) throw new Error("This needs the hector-vector desktop app.");
   const res = await fetch(url, {
     method,
     headers: payload ? { "Content-Type": "application/json" } : undefined,

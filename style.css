@@ -276,6 +276,14 @@ button:disabled {
 /* Ableton-style view swap: two icon boxes, the active view highlighted. Lifted
    above the modal (z 50) so you can swap back to Edit while Process is open. */
 .view-swap { display: inline-flex; gap: 0; position: relative; z-index: 60; }
+/* Cloud build: no Manage station (its Library/Processor/Jobs panels don't exist); show the
+   download-the-desktop-app CTA instead. `.cloud` is set on <html> by env.js. */
+.get-desktop { display: none; }
+.cloud .view-swap { display: none; }
+.cloud .get-desktop { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; margin-left: 4px;
+  font-size: 12px; font-weight: 600; color: var(--fg); background: var(--panel); border: 1px solid var(--hair);
+  border-radius: var(--r); text-decoration: none; white-space: nowrap; }
+.cloud .get-desktop:hover { border-color: var(--ink); background: var(--bg); }
 .view-btn {
   position: relative; box-sizing: border-box; min-width: 34px; height: 30px;
   padding: 0 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg);

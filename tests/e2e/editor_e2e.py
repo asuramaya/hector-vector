@@ -4141,6 +4141,40 @@ def main():
         page.wait_for_function("typeof editor !== 'undefined'")
         check("normal load stays windowed", page.evaluate("!document.querySelector('.app.editor').classList.contains('app-window') && getComputedStyle(document.querySelector('.topbar')).getPropertyValue('-webkit-app-region') !== 'drag'") is True)
 
+        section("Cloud mode (serverless build — no backend)")
+        # ?cloud gates the app to the pure-client editor: server panels removed, api() backstop
+        # armed, the download-the-desktop-app CTA shown. The ANTI-DRIFT guard is the zero-/api
+        # assertion — if a new server dependency ever sneaks into an editor-path feature, this
+        # fails. Draw + boolean + SVG export must still work fully client-side.
+        cloud_api_hits = []
+        _cloud_listener = lambda r: (cloud_api_hits.append(r.url) if "/api/" in r.url else None)
+        page.on("request", _cloud_listener)
+        page.goto(BASE + "/?cloud", wait_until="networkidle")
+        page.wait_for_function("typeof editor !== 'undefined' && typeof window.mountStageFromText === 'function'")
+        page.wait_for_timeout(300)
+        cloud = page.evaluate(r"""() => ({
+            cloudClass: document.documentElement.classList.contains('cloud'),
+            panelsGone: ['library','processor','jobs'].every(n => !document.querySelector('.rail-section[data-section="'+n+'"]')),
+            manageHidden: (() => { const t=document.getElementById('view-manage'); return !t || t.offsetParent===null; })(),
+            ctaShown: (() => { const a=document.getElementById('get-desktop'); return !!a && a.offsetParent!==null; })(),
+        })""")
+        page.evaluate("() => window.mountStageFromText('<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 200 200\" width=\"200\" height=\"200\"><rect data-hv-id=\"a\" data-hv-shape=\"rect\" x=\"20\" y=\"20\" width=\"90\" height=\"90\" fill=\"#e55\"/><circle data-hv-id=\"b\" data-hv-shape=\"circle\" cx=\"120\" cy=\"120\" r=\"55\" fill=\"#5af\"/></svg>','c')")
+        page.wait_for_function("() => !!(window.editor && editor.nodeById && editor.nodeById('a'))", timeout=5000)
+        cloud2 = page.evaluate(r"""() => {
+            editor.setTool('select'); editor.selection=new Set(['a','b']); editor.artboardSelected=false;
+            editor.booleanOp('union');
+            const svg = editor.serialize();
+            return { boolean: editor.stage.querySelectorAll('path[data-hv-id]').length >= 1, export: typeof svg==='string' && svg.includes('<svg') };
+        }""")
+        page.wait_for_timeout(120)
+        page.remove_listener("request", _cloud_listener)
+        check("cloud mode: .cloud set, server panels removed, Manage hidden + download CTA shown",
+              cloud["cloudClass"] and cloud["panelsGone"] and cloud["manageHidden"] and cloud["ctaShown"], str(cloud))
+        check("cloud mode: draw + boolean + SVG export work fully client-side",
+              cloud2["boolean"] and cloud2["export"], str(cloud2))
+        check("cloud mode: ZERO /api traffic (anti-drift guard — no server dependency on the editor path)",
+              not cloud_api_hits, str(cloud_api_hits[:5]))
+
         browser.close()
 
     n_fail = sum(1 for _, ok, _ in results if not ok)

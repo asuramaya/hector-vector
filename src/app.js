@@ -31,6 +31,7 @@ import {
 } from "./ui/processor.js";
 import { openColorPicker, activeColorPicker, configureColorPicker } from "./ui/colorpicker.js";
 import { configurePlatform } from "./ui/platform.js";
+import { CLOUD } from "./ui/env.js";
 import {
   configureWidgets, fieldRow, sectionTitle, fmtBytes,
   makeSelect, makeSelectRaw, makeNumberRaw, makeRange, makeNumber,
@@ -310,10 +311,16 @@ configureJobs({ setStatus, renderJobsPanel, revealPanel, canReplaceStatus });
 // Colour picker lives in src/ui/colorpicker.js; inject the two shell helpers it needs
 // (both are hoisted top-level fns, so they're in scope at module-eval time).
 configureColorPicker({ floatingInput, showContextMenu });
-// Desktop platform adapters: route the editor's server-touching features (fonts, text→outlines)
-// through the Python backend. A cloud build would call configurePlatform with client adapters
-// (CDN/bundled fonts, WASM/degraded shaping) instead — the editor code is identical either way.
-configurePlatform({
+// Platform adapters for the editor's server-touching features (fonts, text→outlines). Desktop
+// routes them through the Python backend; the cloud build has no backend, so it gets stub
+// adapters until the real client ones land (C4 fonts-from-CDN, C5 WASM/degraded shaping). The
+// editor code is identical either way — it only ever calls platform.*.
+configurePlatform(CLOUD ? {
+  fontCatalog: async () => ({ fonts: [], total: 0 }),
+  installedFonts: async () => ({ families: [] }),
+  loadFont: async () => { throw new Error("Web fonts are coming to the cloud editor soon — for now, use the desktop app."); },
+  textOutline: async () => { throw new Error("Text → outlines is coming to the cloud editor soon — for now, use the desktop app."); },
+} : {
   fontCatalog: (qs) => api(`/api/fonts/catalog?${qs}`),
   loadFont: (spec) => api("/api/fonts/load", "POST", spec),
   installedFonts: () => api("/api/fonts/installed"),
@@ -1032,7 +1039,9 @@ function buildRasterTools(node) {
 
   // ---- Manage screen: A/Bs with the workbench; borrows Library/Processor/Jobs into a
   //      roomy grid (extracted → src/ui/manage.js). ----
-  window.__manage = createManage({ docks: window.__docks, measureFit, viewports });
+  // Manage borrows the Library/Processor/Jobs panels into a browse+batch grid — all server-only,
+  // so there's nothing to manage in the cloud build.
+  window.__manage = CLOUD ? null : createManage({ docks: window.__docks, measureFit, viewports });
   window.__fonts = fonts;   // text inspector's font browser + save-embed/export hooks
   fonts.hydrateInstalled();   // re-register cached fonts after a reload (Installed list + save-embed)
 
@@ -1042,7 +1051,7 @@ function buildRasterTools(node) {
   // server for the next launch to reuse). We ping on a timer; closing the window
   // stops the pings and the server's watchdog takes it down after a grace window.
   // Any normal request also counts as a beat, so this is just the idle backstop.
-  setInterval(() => { fetch("/api/heartbeat", { cache: "no-store" }).catch(() => {}); }, 15000);
+  if (!CLOUD) setInterval(() => { fetch("/api/heartbeat", { cache: "no-store" }).catch(() => {}); }, 15000);
 
   // ---- PWA install (surfaced as a File-menu item; one-click path to WCO) ----
   if ("serviceWorker" in navigator) {
