@@ -33,6 +33,7 @@ import { openColorPicker, activeColorPicker, configureColorPicker } from "./ui/c
 import { configurePlatform } from "./ui/platform.js";
 import { CLOUD } from "./ui/env.js";
 import { cloudFontCatalog, cloudLoadFont, cloudInstalledFonts } from "./ui/cloud-fonts.js";
+import { cloudTextOutline } from "./ui/cloud-text.js";
 import {
   configureWidgets, fieldRow, sectionTitle, fmtBytes,
   makeSelect, makeSelectRaw, makeNumberRaw, makeRange, makeNumber,
@@ -317,11 +318,11 @@ configureColorPicker({ floatingInput, showContextMenu });
 // adapters until the real client ones land (C4 fonts-from-CDN, C5 WASM/degraded shaping). The
 // editor code is identical either way — it only ever calls platform.*.
 configurePlatform(CLOUD ? {
-  // Cloud: fonts from the Google Fonts CSS2 API directly (no backend), text→outlines still deferred.
+  // Cloud: fonts from Google Fonts CSS2, text→outlines via opentype.js + jsDelivr Fontsource TTF.
   fontCatalog: cloudFontCatalog,
   installedFonts: cloudInstalledFonts,
   loadFont: cloudLoadFont,
-  textOutline: async () => { throw new Error("Text → outlines is coming to the cloud editor soon — for now, use the desktop app."); },
+  textOutline: cloudTextOutline,
 } : {
   fontCatalog: (qs) => api(`/api/fonts/catalog?${qs}`),
   loadFont: (spec) => api("/api/fonts/load", "POST", spec),
