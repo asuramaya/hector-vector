@@ -7,7 +7,7 @@
 //
 // No editor/DOM-graph coupling here (pure UI + fetch); app.js exposes it as window.__fonts and
 // the text inspector calls openFontBrowser(). System stacks render instantly + offline.
-import { api } from "./api.js";
+import { platform } from "./platform.js";
 
 // Always-available stacks (no download) shown atop the browser. Value = the font-family the
 // <text> gets; label = what the user sees. Mirrors the curated list in editor/tools/text.js.
@@ -51,7 +51,7 @@ export function primaryFamily(stack) {
 export async function searchCatalog(q = "", source = "") {
   try {
     const qs = `q=${encodeURIComponent(q)}` + (source ? `&source=${encodeURIComponent(source)}` : "");
-    return (await api(`/api/fonts/catalog?${qs}`)).fonts || [];
+    return (await platform.fontCatalog(qs)).fonts || [];
   } catch { return []; }
 }
 
@@ -61,7 +61,7 @@ export async function loadWebFont(family, weight = 400, italic = false, source =
   const vk = variantKey(weight, italic);
   const have = loaded.get(family);
   if (have && have.variants[vk]) return have.variants[vk];
-  const res = await api("/api/fonts/load", "POST", { family, weight, italic, source });
+  const res = await platform.loadFont({ family, weight, italic, source });
   if (!res || !res.url) throw new Error("Font load failed");
   if (typeof FontFace === "function" && document.fonts) {
     try {
@@ -90,7 +90,7 @@ export function isWebFontLoaded(family, weight = 400, italic = false) {
 // renders in its real face again. Idempotent + best-effort (never throws).
 export async function hydrateInstalled() {
   let res;
-  try { res = await api("/api/fonts/installed"); } catch { return; }
+  try { res = await platform.installedFonts(); } catch { return; }
   for (const f of (res && res.families) || []) {
     if (!f.family) continue;
     const slot = _slot(f.family);
@@ -274,7 +274,7 @@ export function openFontBrowser(anchorEl, current, onPick) {
       const q = input.value.trim();
       const lim = q ? 500 : 150;
       const qs = `q=${encodeURIComponent(q)}&limit=${lim}` + (srcFilter ? `&source=${encodeURIComponent(srcFilter)}` : "");
-      const r = await api(`/api/fonts/catalog?${qs}`);
+      const r = await platform.fontCatalog(qs);
       web = r.fonts || []; total = r.total || web.length;
     } catch { failed = true; }
     if (mine === seq && openEl === pop) render(web, failed, total);

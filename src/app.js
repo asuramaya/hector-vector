@@ -30,6 +30,7 @@ import {
   startRasterOpLive, endRasterOpLive, scheduleRasterOpLive, commitRasterOpLive,
 } from "./ui/processor.js";
 import { openColorPicker, activeColorPicker, configureColorPicker } from "./ui/colorpicker.js";
+import { configurePlatform } from "./ui/platform.js";
 import {
   configureWidgets, fieldRow, sectionTitle, fmtBytes,
   makeSelect, makeSelectRaw, makeNumberRaw, makeRange, makeNumber,
@@ -309,6 +310,15 @@ configureJobs({ setStatus, renderJobsPanel, revealPanel, canReplaceStatus });
 // Colour picker lives in src/ui/colorpicker.js; inject the two shell helpers it needs
 // (both are hoisted top-level fns, so they're in scope at module-eval time).
 configureColorPicker({ floatingInput, showContextMenu });
+// Desktop platform adapters: route the editor's server-touching features (fonts, text→outlines)
+// through the Python backend. A cloud build would call configurePlatform with client adapters
+// (CDN/bundled fonts, WASM/degraded shaping) instead — the editor code is identical either way.
+configurePlatform({
+  fontCatalog: (qs) => api(`/api/fonts/catalog?${qs}`),
+  loadFont: (spec) => api("/api/fonts/load", "POST", spec),
+  installedFonts: () => api("/api/fonts/installed"),
+  textOutline: (payload) => api("/api/text-outline", "POST", payload),
+});
 // Form primitives (src/ui/widgets.js): inject the live settings object (assigned once
 // at boot, mutated in place) + persistSettings so makeSelect/makeRange/makeNumber bind.
 configureWidgets({ settings, persistSettings });

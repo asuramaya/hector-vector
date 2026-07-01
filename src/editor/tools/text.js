@@ -13,7 +13,7 @@
 // all early-return on isContentEditable), so typing "v" inserts a letter, not the select tool.
 import { SVG_NS, bakeMatrixInto } from "../../hv/index.js";
 import { setStatus } from "../../app.js";
-import { api } from "../../ui/api.js";
+import { platform } from "../../ui/platform.js";
 import { numRow, selectRow, inspRow } from "../ui-rows.js";
 
 // Curated font stacks for the MVP picker (T6). The real registry + Google-Fonts search
@@ -695,7 +695,7 @@ export const textMixin = {
     if (!jobs.length) return;
     setStatus("Converting text to outlines…", 0);
     let results;
-    try { results = await Promise.all(jobs.map((j) => api("/api/text-outline", "POST", j.payload))); }
+    try { results = await Promise.all(jobs.map((j) => platform.textOutline(j.payload))); }
     catch (e) { setStatus(`Couldn't outline this text — it needs a web font (pick one from the font browser). ${e.message}`, 6000); this._showHint(); return; }
     this.push("Text to outlines");
     const newIds = [];
