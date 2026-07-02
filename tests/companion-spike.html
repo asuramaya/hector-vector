@@ -1,0 +1,73 @@
+<!doctype html>
+<!--
+  LNA SPIKE — verifies the ONE assumption the cloud→companion bridge rests on:
+  can a PUBLIC https origin reach the local companion via Chrome's Local Network Access?
+
+  HOW TO RUN (needs a real, headed Chrome — the wall only engages public-origin → localhost):
+    1. Start the companion (the normal server, companion mode on, origin = where you'll serve THIS page):
+         HV_COMPANION=1 HV_COMPANION_ORIGIN=https://<where-this-page-is-served> PORT=2002 ./run.sh
+       (HV_COMPANION_ORIGIN must EXACTLY match this page's origin — scheme + host, no path.)
+    2. Serve this file from a PUBLIC https origin — NOT localhost (localhost→localhost never triggers LNA):
+         • quickest: `cloudflared tunnel --url http://localhost:8000` over a `python -m http.server 8000`, or
+         • drop it in your Cloudflare Pages deploy and open the .pages.dev URL.
+    3. Open that public URL in Chrome/Edge (142+), set the port below, click Connect.
+       Chrome should show: "…wants to look for and connect to any device on your local network."
+    4. Click Allow. You should see the companion's JSON.
+    5. THE TWO THINGS WE NEED TO KNOW:
+       (a) PERSISTENCE — reload the page and click Connect again. Prompt again, or silent? (silent = remembered per-origin = one-time)
+       (b) HEADERS — it already works with just CORS + the preflight this build sends; note if Chrome demanded anything more.
+    Report (a) and (b) back.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>hector-vector — LNA companion spike</title>
+  <style>
+    body { font: 14px/1.5 system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; color: #222; }
+    h1 { font-size: 18px; } code { background: #f2f2f2; padding: 1px 5px; border-radius: 4px; }
+    .row { display: flex; gap: 8px; align-items: center; margin: 14px 0; }
+    input { font: inherit; padding: 6px 8px; border: 1px solid #ccc; border-radius: 6px; }
+    button { font: inherit; font-weight: 600; padding: 8px 16px; border: 1px solid #333; border-radius: 6px; background: #fff; cursor: pointer; }
+    button:hover { background: #f6f6f6; }
+    pre { background: #111; color: #d6ffd6; padding: 12px; border-radius: 8px; overflow: auto; white-space: pre-wrap; }
+    .muted { color: #777; } .ok { color: #187a18; } .err { color: #b00020; }
+  </style>
+</head>
+<body>
+  <h1>LNA companion spike</h1>
+  <p class="muted">This page's origin: <code id="origin"></code> — the companion must be started with
+    <code>HV_COMPANION_ORIGIN</code> set to exactly this.</p>
+  <div class="row">
+    <label>Companion port <input id="port" value="2002" size="6" /></label>
+    <button id="connect">Connect to local companion</button>
+  </div>
+  <p id="status" class="muted">Idle. (Serve this from a public https origin in Chrome/Edge, then click Connect.)</p>
+  <pre id="out" hidden></pre>
+  <script>
+    document.getElementById("origin").textContent = location.origin;
+    const $ = (id) => document.getElementById(id);
+    const status = (msg, cls) => { const s = $("status"); s.textContent = msg; s.className = cls || "muted"; };
+    const show = (obj) => { const o = $("out"); o.hidden = false; o.textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2); };
+    $("connect").addEventListener("click", async () => {
+      const port = ($("port").value || "2002").trim();
+      const url = `http://127.0.0.1:${port}/companion/ping`;
+      status("Requesting local network access…", "muted");
+      const t0 = performance.now();
+      try {
+        // targetAddressSpace:"local" is what makes Chrome treat this as a local-network request
+        // (→ the LNA permission prompt) rather than silently blocking it as mixed content.
+        const res = await fetch(url, { targetAddressSpace: "local" });
+        const dt = Math.round(performance.now() - t0);
+        if (!res.ok) { status(`Reached it but got HTTP ${res.status}.`, "err"); return; }
+        const data = await res.json();
+        status(`✅ Connected in ${dt}ms. Now RELOAD + click again — was there a second permission prompt? (that's the persistence answer)`, "ok");
+        show(data);
+      } catch (e) {
+        status(`❌ Blocked/failed: ${e.name}: ${e.message}. If no permission prompt appeared, LNA didn't engage — check you're on a PUBLIC origin (not localhost) in Chrome 142+, and the companion's HV_COMPANION_ORIGIN matches ${location.origin}.`, "err");
+        show(String(e));
+      }
+    });
+  </script>
+</body>
+</html>

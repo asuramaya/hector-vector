@@ -1,0 +1,7 @@
+# Cloudflare Pages headers for the serverless (cloud) build.
+# No build step ⇒ no content-hashed filenames, so don't let the browser hold stale JS/CSS/HTML
+# (this is the stale-asset class of bug). Revalidate every load; the files are tiny.
+/*
+  Cache-Control: no-cache
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
