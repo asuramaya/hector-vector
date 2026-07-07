@@ -10,7 +10,7 @@ cd "$(dirname "$0")"
 
 DIST="dist"
 rm -rf "$DIST"; mkdir -p "$DIST"
-cp index.html compare.html style.css sw.js manifest.webmanifest _headers "$DIST"/
+cp index.html compare.html style.css sw.js manifest.webmanifest _headers robots.txt llms.txt "$DIST"/
 cp -r assets src "$DIST"/
 cp tests/companion-spike.html "$DIST"/companion-spike.html   # LNA bridge spike, run from the public origin
 

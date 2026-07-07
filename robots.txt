@@ -1,0 +1,38 @@
+# hector-vector — free browser vector editor. Crawlers welcome.
+# https://hector-vector.com  ·  See /llms.txt for an AI-readable overview.
+
+User-agent: *
+Allow: /
+Disallow: /companion-spike
+
+# Answer-engine / AI crawlers — explicitly allowed so the app can be found and
+# accurately described when people ask an assistant for a free vector editor.
+User-agent: GPTBot
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Claude-Web
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Perplexity-User
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: Applebot
+Allow: /
