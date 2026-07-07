@@ -11,7 +11,7 @@
       // `?cloud` / `?nocloud` override for testing (handled in src/ui/env.js).
       (function () {
         var h = location.hostname;
-        if (/\.pages\.dev$/.test(h) /* || h === "your-domain.app" */) window.__HV_CLOUD__ = true;
+        if (/\.pages\.dev$/.test(h) || h === "hector-vector.com" || h === "www.hector-vector.com") window.__HV_CLOUD__ = true;
       })();
     </script>
     <title>hector-vector</title>
