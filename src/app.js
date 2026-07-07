@@ -1307,9 +1307,19 @@ window.addEventListener("blur", () => editor.exitPenTempSelect());
 // Always swallow window-level drags so the browser never navigates the app away on a
 // drop (a tab-dragged image/link carries text/uri-list, not Files — previously that
 // fell through and the browser opened the URL, destroying the unsaved canvas).
-window.addEventListener("dragover", (event) => {
-  event.preventDefault();
-});
+// A raster image to place on the canvas. OS/browser file-drags DON'T always set a MIME type,
+// so fall back to the extension — otherwise a perfectly good reference PNG misses this filter,
+// falls through to the (server) importer, and dies on the cloud build's missing backend.
+const IMG_EXT = /\.(png|jpe?g|gif|webp|bmp|avif|tiff?|ico)$/i;
+function isRasterFile(f) {
+  const t = (f.type || "").toLowerCase();
+  if (t === "image/svg+xml") return false;
+  return t.startsWith("image/") || (!t && IMG_EXT.test(f.name || ""));
+}
+// preventDefault on dragenter+dragover marks the whole window a valid drop target, so the browser
+// places the file into the app instead of navigating away to open it.
+window.addEventListener("dragenter", (event) => { if (event.dataTransfer?.types?.includes("Files")) event.preventDefault(); });
+window.addEventListener("dragover", (event) => { event.preventDefault(); });
 window.addEventListener("drop", async (event) => {
   event.preventDefault();
   // A library drag carries our custom type and is handled on #output-preview; never
@@ -1317,23 +1327,24 @@ window.addEventListener("drop", async (event) => {
   if (event.dataTransfer?.types?.includes("application/x-hv-lib")) return;
   const files = event.dataTransfer?.files;
   if (!files?.length) return;   // non-file drop: swallowed above, nothing to import
-  // Route by where it landed. A drop ON the Library panel imports (that's its job).
-  // Anywhere else — the canvas, the editor chrome — places raster images straight onto
-  // the working canvas (mint-if-empty) so a drag isn't "eaten" into the library. Files
-  // the canvas can't take as pixels (SVG/PDF/…) still import.
-  const onLibrary = !!(event.target?.closest && event.target.closest(".rail-section.library"));
   const all = [...files];
-  const rasters = all.filter((f) => f.type && f.type.startsWith("image/") && f.type !== "image/svg+xml");
+  const rasters = all.filter(isRasterFile);
   const others = all.filter((f) => !rasters.includes(f));
   try {
-    if (onLibrary || rasters.length === 0) {
-      setStatus(`Importing ${all.length} file(s)…`);
-      await uploadFiles(files);
+    // Place raster images straight onto the working canvas (mint-if-empty) — a reference layer
+    // to trace over. This path is pure client-side (FileReader → data URL → <image>).
+    for (const f of rasters) await loadFileToCanvas(f);
+    if (CLOUD) {
+      // No backend to import other formats into a library. Place what we can; be clear about the rest.
+      if (rasters.length) setStatus(`Placed ${rasters.length} image${rasters.length === 1 ? "" : "s"} on the canvas`, 2500);
+      else setStatus("The cloud editor places images and opens .svg files — other formats need the desktop app.", 4500);
       return;
     }
-    for (const f of rasters) await loadFileToCanvas(f);
-    if (others.length) await uploadFiles(others);
-    setStatus(`Placed ${rasters.length} image${rasters.length === 1 ? "" : "s"} on the canvas`
+    // Desktop: a drop ON the Library imports everything there; other non-raster files import too.
+    const onLibrary = !!(event.target?.closest && event.target.closest(".rail-section.library"));
+    if (onLibrary) { setStatus(`Importing ${all.length} file(s)…`); await uploadFiles(files); return; }
+    if (others.length) await uploadFiles(others);   // uploadFiles sets its own status on success
+    if (rasters.length) setStatus(`Placed ${rasters.length} image${rasters.length === 1 ? "" : "s"} on the canvas`
       + (others.length ? `, imported ${others.length} other file(s)` : ""), 2500);
   } catch (error) {
     setStatus(error.message, 4000);
