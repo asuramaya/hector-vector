@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- viewport-fit=cover exposes env(safe-area-inset-*) for the notch + home indicator;
+         maximum-scale/user-scalable lock page zoom so pinching zooms the CANVAS, not the page
+         (the editor drives its own touch zoom — see src/ui/viewport.js). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
     <script>
       // Deploy-target auto-detect (runs before the app module). On a Cloudflare Pages host
       // (*.pages.dev) or the production domain, run the SERVERLESS build — pipeline / library /

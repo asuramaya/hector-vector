@@ -35,6 +35,8 @@ button, select, input, a { font: inherit; }
 
 .app {
   height: 100vh;
+  height: 100dvh;   /* iOS Safari: 100vh is the TALL viewport (ignores the toolbars) so the bottom
+                       bar hides under Safari's UI. 100dvh tracks the live viewport — bars stay in reach. */
   display: grid;
   grid-template-rows: auto auto 1fr auto;
   gap: 10px;
@@ -2065,6 +2067,16 @@ text.hv-text-editing { visibility: hidden; }
 }
 
 @media (max-width: 720px), (pointer: coarse) and (max-width: 1024px) {
+  /* reclaim every pixel: drop the 10px frame + gap, and hug the safe-area (notch/home indicator)
+     instead. The bottom inset is applied to whatever bar sits last (below). */
+  .app.editor {
+    gap: 0;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  }
+  /* the status strip ("Ready." / transient messages) is a whole band we can't spare on a phone —
+     feedback still fires; it's just not a permanent row here. */
+  .app.editor > .status-bar { display: none; }
+
   /* --- shell: single column, canvas on top, the two bars beneath --- */
   /* minmax(0,1fr) NOT 1fr: a bare 1fr track still resolves to its widest item's min-content,
      and grid items default to min-width:auto, so the wide horizontal tool bars would blow the
@@ -2097,6 +2109,8 @@ text.hv-text-editing { visibility: hidden; }
   .editor-grid > .actionbar::-webkit-scrollbar { display: none; }
   .editor-grid > .toolstrip .tool-button,
   .editor-grid > .actionbar .tool-button { width: 44px; height: 44px; font-size: 19px; flex: 0 0 auto; }
+  /* toolstrip is the last band → pad past the home indicator */
+  .editor-grid > .toolstrip { padding-bottom: calc(7px + env(safe-area-inset-bottom)); }
   .editor-grid > .toolstrip .tool-button.tool-primary { width: 48px; height: 48px; font-size: 21px; }
   /* separators were horizontal hairlines in the vertical bars → make them vertical */
   .editor-grid > .toolstrip .tool-sep,
@@ -2133,7 +2147,7 @@ text.hv-text-editing { visibility: hidden; }
      FAB spot). The fill/stroke swatches move LEFT below so they don't sit under it. */
   .mobile-fab {
     display: grid; place-items: center;
-    position: fixed; right: 14px; bottom: 190px;
+    position: fixed; right: 14px; bottom: calc(190px + env(safe-area-inset-bottom));
     width: 50px; height: 50px; border-radius: 50%;
     background: var(--ink); color: #fff; border: 0;
     font-size: 21px; line-height: 1; cursor: pointer;
@@ -2181,6 +2195,8 @@ text.hv-text-editing { visibility: hidden; }
   }
   .editor-grid > .toolstrip { border-width: 0 1px 0 0; }
   .editor-grid > .actionbar { border-width: 0 0 0 1px; }
+  .editor-grid > .toolstrip,
+  .editor-grid > .actionbar { padding-bottom: calc(6px + env(safe-area-inset-bottom)); }
   .editor-grid > .toolstrip::-webkit-scrollbar,
   .editor-grid > .actionbar::-webkit-scrollbar { display: none; }
   .editor-grid > .toolstrip .tool-button,
@@ -2190,7 +2206,7 @@ text.hv-text-editing { visibility: hidden; }
   .editor-grid > .toolstrip .tool-sep,
   .editor-grid > .actionbar .tool-sep { width: 24px; height: 1px; margin: 3px 0; align-self: center; }
   /* no bottom bars now → the FAB drops to the free bottom-right corner */
-  .mobile-fab { bottom: 16px; }
+  .mobile-fab { bottom: calc(16px + env(safe-area-inset-bottom)); right: calc(16px + env(safe-area-inset-right)); }
   .stage-wrap .panel-foot { padding-right: 64px; }
   /* the sheet shouldn't swallow the whole short screen */
   .editor-grid > .rightdock { height: min(88vh, 340px); }
