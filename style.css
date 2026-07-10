@@ -882,6 +882,9 @@ button:disabled {
   flex: 1 1 auto;
   padding: 10px;
   overflow: hidden;
+  /* Touch drawing must reach the tools, not scroll/zoom the page. The editor drives its own
+     pan/zoom (one finger = tool, two fingers = pinch/pan via bindViewportTouch). */
+  touch-action: none;
 }
 
 .empty-frame {
@@ -2037,4 +2040,158 @@ text.hv-text-editing { visibility: hidden; }
 .app-window.wco .topbar {
   padding-left: calc(12px + var(--wco-left-inset, 0px));
   padding-right: calc(12px + var(--wco-right-inset, 0px));
+}
+
+/* ============================================================================
+   MOBILE / TOUCH — phone-first reflow of the editor shell.
+   Triggered on narrow windows (≤720px) OR any coarse-pointer device up to a
+   tablet (≤1024px). Layout + input only — NOT a capability change (the cloud
+   vs desktop split stays platform.js). The 5-column picture-frame grid folds
+   into: canvas (fills) · object-action strip · tool strip, all stacked; the
+   right dock (History/Layers/Properties/Colour) becomes a slide-up bottom sheet
+   toggled by a floating Panels button. See src/ui/viewport.js bindViewportTouch
+   for the matching pinch-zoom / two-finger-pan gesture.
+   ============================================================================ */
+.mobile-fab { display: none; }
+.mobile-scrim { display: none; }
+
+/* Any touch device — including large tablets (iPad landscape ≥1025px) that keep the roomy
+   desktop rails — gets finger-friendlier toolbar targets. The width-scoped reflow blocks below
+   are more specific, so they still win where they apply (phones/portrait tablets). */
+@media (pointer: coarse) {
+  .toolstrip .tool-button,
+  .actionbar .tool-button { width: 38px; height: 38px; font-size: 16px; }
+  .toolstrip .tool-button.tool-primary { width: 40px; height: 40px; font-size: 18px; }
+}
+
+@media (max-width: 720px), (pointer: coarse) and (max-width: 1024px) {
+  /* --- shell: single column, canvas on top, the two bars beneath --- */
+  /* minmax(0,1fr) NOT 1fr: a bare 1fr track still resolves to its widest item's min-content,
+     and grid items default to min-width:auto, so the wide horizontal tool bars would blow the
+     column past the viewport (canvas pushed off-screen). minmax(0,…) + min-width:0 lets the
+     column stay at viewport width and the bars scroll INSIDE it. */
+  .app.editor .editor-grid {
+    grid-template-columns: minmax(0, 1fr) !important;   /* beat docks.js's inline column track */
+    grid-template-rows: minmax(0, 1fr) auto auto;
+  }
+  .editor-grid > .leftdock { display: none !important; }
+  .editor-grid > .stage-wrap { grid-row: 1; grid-column: 1; min-width: 0; }
+  .editor-grid > .actionbar  { grid-row: 2; grid-column: 1; min-width: 0; }
+  .editor-grid > .toolstrip  { grid-row: 3; grid-column: 1; min-width: 0; }
+
+  /* --- tools + object actions become horizontal, thumb-reachable scroll bars --- */
+  .editor-grid > .toolstrip,
+  .editor-grid > .actionbar {
+    flex-direction: row;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-width: 1px 0 0 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .editor-grid > .toolstrip::-webkit-scrollbar,
+  .editor-grid > .actionbar::-webkit-scrollbar { display: none; }
+  .editor-grid > .toolstrip .tool-button,
+  .editor-grid > .actionbar .tool-button { width: 44px; height: 44px; font-size: 19px; flex: 0 0 auto; }
+  .editor-grid > .toolstrip .tool-button.tool-primary { width: 48px; height: 48px; font-size: 21px; }
+  /* separators were horizontal hairlines in the vertical bars → make them vertical */
+  .editor-grid > .toolstrip .tool-sep,
+  .editor-grid > .actionbar .tool-sep {
+    width: 1px; height: 26px; margin: 0 3px; align-self: center; flex: 0 0 auto;
+  }
+
+  /* --- right dock → slide-up bottom sheet --- */
+  .editor-grid > .rightdock {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    width: auto; margin: 0;
+    height: min(66vh, 480px);
+    border: 1px solid var(--line); border-bottom: 0;
+    border-radius: 16px 16px 0 0;
+    transform: translateY(102%);
+    transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 60;
+    box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.18);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .app.sheet-open .editor-grid > .rightdock { transform: translateY(0); }
+  .editor-grid > .rightdock .dock-resizer,
+  .editor-grid > .rightdock .dock-vresizer { display: none; }
+  /* grab handle at the top of the sheet */
+  .editor-grid > .rightdock::before {
+    content: ""; display: block;
+    width: 42px; height: 4px; margin: 8px auto 4px;
+    border-radius: 3px; background: var(--line); flex: 0 0 auto;
+  }
+
+  /* --- floating Panels toggle + dismiss scrim --- */
+  /* Floats clear ABOVE the two bottom bars over the lower-right canvas (the standard bottom-right
+     FAB spot). The fill/stroke swatches move LEFT below so they don't sit under it. */
+  .mobile-fab {
+    display: grid; place-items: center;
+    position: fixed; right: 14px; bottom: 190px;
+    width: 50px; height: 50px; border-radius: 50%;
+    background: var(--ink); color: #fff; border: 0;
+    font-size: 21px; line-height: 1; cursor: pointer;
+    z-index: 55; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  }
+  .app.sheet-open .mobile-fab { display: none; }   /* tap the scrim to dismiss */
+  .app.sheet-open .mobile-scrim { display: block; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); z-index: 58; }
+  .stage-body .tool-swatches { left: 12px; right: auto; }
+  /* the canvas's own zoom/fit/rulers strip: left-align + scroll, and reserve the right edge
+     for the FAB so no control sits under it (pinch-zoom also covers zoom/pan now). */
+  .stage-wrap .panel-foot { justify-content: flex-start; overflow-x: auto; padding-right: 72px; }
+  .stage-wrap .panel-foot::-webkit-scrollbar { display: none; }
+
+  /* --- topbar: tighten so it doesn't crowd the canvas --- */
+  .topbar.editor-bar { padding: 6px 8px; }
+  .editor-bar .doc-title { display: none; }   /* selection name is non-essential on a phone */
+  .cloud .get-desktop { font-size: 12px; padding: 5px 9px; }
+}
+
+/* ---- Short LANDSCAPE (phones held sideways) ----
+   A phone in landscape has ~360–430px of HEIGHT — the stacked-bars portrait layout eats all of
+   it and the canvas becomes a sliver. Vertical space is scarce but HORIZONTAL space is plentiful,
+   so fold back to side rails (tools left · canvas · actions right) — the desktop frame, touch-sized
+   — and keep the dock as a bottom sheet. Height-gated so tablets (taller) never hit this. */
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 500px) {
+  .app.editor .editor-grid {
+    grid-template-columns: auto minmax(0, 1fr) auto !important;
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .editor-grid > .leftdock { display: none !important; }
+  .editor-grid > .toolstrip { grid-row: 1; grid-column: 1; min-width: 0; }
+  .editor-grid > .stage-wrap { grid-row: 1; grid-column: 2; min-width: 0; }
+  .editor-grid > .actionbar  { grid-row: 1; grid-column: 3; min-width: 0; }
+  /* rails: vertical again, scrolling on the Y this time */
+  .editor-grid > .toolstrip,
+  .editor-grid > .actionbar {
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 5px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  .editor-grid > .toolstrip { border-width: 0 1px 0 0; }
+  .editor-grid > .actionbar { border-width: 0 0 0 1px; }
+  .editor-grid > .toolstrip::-webkit-scrollbar,
+  .editor-grid > .actionbar::-webkit-scrollbar { display: none; }
+  .editor-grid > .toolstrip .tool-button,
+  .editor-grid > .actionbar .tool-button { width: 40px; height: 40px; font-size: 17px; }
+  .editor-grid > .toolstrip .tool-button.tool-primary { width: 42px; height: 42px; font-size: 19px; }
+  /* separators back to horizontal hairlines inside the vertical rails */
+  .editor-grid > .toolstrip .tool-sep,
+  .editor-grid > .actionbar .tool-sep { width: 24px; height: 1px; margin: 3px 0; align-self: center; }
+  /* no bottom bars now → the FAB drops to the free bottom-right corner */
+  .mobile-fab { bottom: 16px; }
+  .stage-wrap .panel-foot { padding-right: 64px; }
+  /* the sheet shouldn't swallow the whole short screen */
+  .editor-grid > .rightdock { height: min(88vh, 340px); }
 }

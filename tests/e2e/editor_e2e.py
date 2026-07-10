@@ -4179,6 +4179,84 @@ def main():
         check("cloud mode: ZERO /api traffic (anti-drift guard — no server dependency on the editor path)",
               not cloud_api_hits, str(cloud_api_hits[:5]))
 
+        # ---- Mobile / touch (phone-first reflow + pinch-zoom + bottom-sheet dock) ----
+        # A fresh emulated-phone context: the shell folds to a single column (canvas + two
+        # horizontal bars), the right dock becomes a slide-up sheet, and the whole editor
+        # drives its own touch pan/zoom (one finger = tool, two = pinch/pan). See
+        # src/ui/viewport.js:bindViewportTouch and the mobile @media block in style.css.
+        if section("Mobile / touch — phone reflow, pinch-zoom, bottom sheet"):
+            MR = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">'
+                  '<rect data-hv-id="r1" x="40" y="40" width="120" height="90" fill="#3399cc"/></svg>')
+            mctx = browser.new_context(viewport={"width": 390, "height": 800}, has_touch=True, is_mobile=True, device_scale_factor=2)
+            mp = mctx.new_page()
+            set_page(mp)   # failing checks screenshot the phone view
+            try:
+                mp.goto(BASE, wait_until="domcontentloaded")
+                mp.wait_for_function("typeof editor!=='undefined' && typeof mountStageFromText==='function'", timeout=20000)
+                mp.evaluate("([s]) => window.mountStageFromText(s, 'mobile.svg')", [MR])
+                mp.wait_for_timeout(200)
+                check("mobile: tool strip reflows to a horizontal bar",
+                      mp.evaluate("getComputedStyle(document.querySelector('.toolstrip')).flexDirection === 'row'"))
+                check("mobile: canvas frame has touch-action:none (touch draws, not scrolls)",
+                      mp.evaluate("getComputedStyle(document.querySelector('#output-preview')).touchAction === 'none'"))
+                check("mobile: tool buttons are >=44px touch targets",
+                      mp.evaluate("document.querySelector('.toolstrip .tool-button').getBoundingClientRect().height >= 44"))
+                check("mobile: right dock starts off-screen; Panels FAB slides it up; scrim dismisses it",
+                      mp.evaluate("""async () => {
+                          const app = document.querySelector('main.app'), dock = document.querySelector('#rightdock');
+                          const fabVisible = getComputedStyle(document.querySelector('#mobile-panels')).display !== 'none';
+                          const startOff = dock.getBoundingClientRect().top >= window.innerHeight - 2;
+                          document.querySelector('#mobile-panels').click();
+                          await new Promise(r => setTimeout(r, 400));
+                          const opened = app.classList.contains('sheet-open') && dock.getBoundingClientRect().top < window.innerHeight - 40;
+                          document.querySelector('#mobile-scrim').dispatchEvent(new MouseEvent('click', {bubbles:true}));
+                          await new Promise(r => setTimeout(r, 300));
+                          const closed = !app.classList.contains('sheet-open');
+                          return fabVisible && startOff && opened && closed;
+                      }"""))
+                pinch = mp.evaluate("""() => {
+                    const vp = viewports.output, el = vp.el, rc = el.getBoundingClientRect();
+                    const cy = rc.top + rc.height/2, s0 = vp.scale;
+                    const pe = (t,id,x) => el.dispatchEvent(new PointerEvent(t,{pointerId:id,pointerType:'touch',clientX:x,clientY:cy,bubbles:true,cancelable:true}));
+                    pe('pointerdown',1,rc.left+rc.width*0.4); pe('pointerdown',2,rc.left+rc.width*0.6);
+                    pe('pointermove',1,rc.left+rc.width*0.05); pe('pointermove',2,rc.left+rc.width*0.95);
+                    const s1 = vp.scale;
+                    pe('pointerup',1,rc.left+rc.width*0.05); pe('pointerup',2,rc.left+rc.width*0.95);
+                    return {grew: s1 > s0*1.5, cleared: !editor._touchGesture};
+                }""")
+                check("mobile: two-finger pinch zooms the canvas, and the gesture flag clears on release",
+                      pinch["grew"] and pinch["cleared"], str(pinch))
+                draw = mp.evaluate("""() => {
+                    editor.setTool('rect');
+                    const stage = editor.stage, rc = viewports.output.el.getBoundingClientRect();
+                    const before = stage.querySelectorAll('[data-hv-id]').length;
+                    const sx = rc.left+rc.width*0.3, sy = rc.top+rc.height*0.3;
+                    const pe = (tg,t,x,y) => tg.dispatchEvent(new PointerEvent(t,{pointerId:9,pointerType:'touch',button:0,clientX:x,clientY:y,bubbles:true,cancelable:true}));
+                    pe(stage,'pointerdown',sx,sy); pe(window,'pointermove',sx+70,sy+55); pe(window,'pointerup',sx+70,sy+55);
+                    return stage.querySelectorAll('[data-hv-id]').length > before;
+                }""")
+                check("mobile: one-finger touch still draws (single pointer = tool)", draw is True)
+            finally:
+                set_page(page)   # hand the screenshot target back to the desktop page
+                mctx.close()
+            # Short landscape (phone held sideways): the stacked bars would eat all the height, so
+            # the shell folds to side rails (tools | canvas | actions) — verify that switch.
+            lctx = browser.new_context(viewport={"width": 844, "height": 390}, has_touch=True, is_mobile=True, device_scale_factor=2)
+            lp = lctx.new_page()
+            set_page(lp)
+            try:
+                lp.goto(BASE, wait_until="domcontentloaded")
+                lp.wait_for_function("typeof editor!=='undefined' && typeof mountStageFromText==='function'", timeout=20000)
+                lp.wait_for_timeout(150)
+                check("mobile landscape: folds to side rails (3 columns, vertical tool rail), not stacked bars",
+                      lp.evaluate("""() => {
+                          const cols = getComputedStyle(document.querySelector('.editor-grid')).gridTemplateColumns.trim().split(/\\s+/).length;
+                          return cols === 3 && getComputedStyle(document.querySelector('.toolstrip')).flexDirection === 'column';
+                      }"""))
+            finally:
+                set_page(page)
+                lctx.close()
+
         browser.close()
 
     n_fail = sum(1 for _, ok, _ in results if not ok)

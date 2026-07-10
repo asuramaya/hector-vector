@@ -291,6 +291,7 @@ export function bindViewportDragging(vp) {
   let lastX = 0;
   let lastY = 0;
   vp.el.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "touch") return;   // touch pan/zoom is the two-finger gesture (bindViewportTouch)
     if (event.button !== 0) return;   // right/middle: leave for the context menu (capturing would retarget it)
     if (!vp.el.querySelector(".viewport-content")) return;
     dragging = true;
@@ -299,7 +300,7 @@ export function bindViewportDragging(vp) {
     vp.el.setPointerCapture(event.pointerId);
   });
   vp.el.addEventListener("pointermove", (event) => {
-    if (!dragging) return;
+    if (!dragging || editor._touchGesture) return;
     vp.x += event.clientX - lastX;
     vp.y += event.clientY - lastY;
     lastX = event.clientX;
@@ -325,4 +326,76 @@ export function bindViewportZoom(vp) {
     const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15;
     zoomVp(vp, factor);
   }, { passive: false });
+}
+
+// Multi-touch pinch-zoom + two-finger pan (mobile). ONE finger is left entirely to the
+// tools (draw / select / move) — it works already because the whole editor is pointer-event
+// based. The SECOND finger enters a navigation gesture: we intercept it at the CAPTURE phase
+// (so the stage tools never see it), end the first finger's in-progress op with a synthetic
+// zero-delta pointerup (its own up-handler tears down cleanly — _beginMove/_beginDraw commit
+// nothing on a sub-threshold delta), and drive zoom+pan from the two contact points. Desktop
+// pans with Space-drag; touch has no Space, so two fingers are the pan. The content transform
+// is `translate(x,y) scale(s)` about the frame centre, so we zoom about the gesture centroid
+// by re-solving the translate that keeps the centroid's world point fixed (T' = (1-k)·u + k·T).
+export function bindViewportTouch(vp) {
+  const pts = new Map();              // active touch pointers over the frame: id -> {x, y}
+  let g = null;                       // live gesture: {dist, c:{x,y}, scale, x, y, ox, oy}
+  const twoPts = () => { const a = [...pts.values()]; return a.length >= 2 ? [a[0], a[1]] : null; };
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+
+  vp.el.addEventListener("pointerdown", (event) => {
+    if (event.pointerType !== "touch") return;
+    if (!vp.el.querySelector(".viewport-content")) return;
+    const firstId = pts.size ? [...pts.keys()][0] : null;
+    pts.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pts.size !== 2) return;
+    // Second finger → own the navigation gesture. Keep this pointer off the stage tools…
+    event.preventDefault();
+    event.stopPropagation();
+    editor._touchGesture = true;
+    // …and cleanly end the first finger's op. A pointerup dispatched on document bubbles to
+    // window too, so both document- and window-level drag loops finalize and unbind.
+    if (firstId != null) {
+      const fp = pts.get(firstId);
+      try {
+        document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: firstId, clientX: fp.x, clientY: fp.y }));
+      } catch { /* older engines: the loop just rides through; harmless */ }
+    }
+    const [a, b] = twoPts();
+    const rect = vp.el.getBoundingClientRect();
+    g = { dist: dist(a, b), c: mid(a, b), scale: vp.scale, x: vp.x, y: vp.y, ox: rect.left + rect.width / 2, oy: rect.top + rect.height / 2 };
+  }, true);
+
+  vp.el.addEventListener("pointermove", (event) => {
+    if (event.pointerType !== "touch" || !pts.has(event.pointerId)) return;
+    pts.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (!g) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const two = twoPts(); if (!two) return;
+    const d = dist(two[0], two[1]);
+    const c = mid(two[0], two[1]);
+    const nextScale = Math.max(0.02, Math.min(40, g.dist > 0 ? g.scale * (d / g.dist) : g.scale));
+    const k = g.scale > 0 ? nextScale / g.scale : 1;   // applied ratio (after clamp)
+    // Zoom about the initial centroid (u = centroid − frame-centre), then translate by how far
+    // the centroid itself has moved → pinch and two-finger pan compose in one gesture.
+    const ux = g.c.x - g.ox, uy = g.c.y - g.oy;
+    vp.scale = nextScale;
+    vp.x = (1 - k) * ux + k * g.x + (c.x - g.c.x);
+    vp.y = (1 - k) * uy + k * g.y + (c.y - g.c.y);
+    applyViewportState(vp);
+  }, true);
+
+  const end = (event) => {
+    if (!pts.has(event.pointerId)) return;
+    pts.delete(event.pointerId);
+    if (g && pts.size < 2) {
+      g = null;
+      if (vp === viewports.output) editor.onViewportChanged();   // re-cull node handles to the new view
+    }
+    if (pts.size === 0) editor._touchGesture = false;
+  };
+  vp.el.addEventListener("pointerup", end, true);
+  vp.el.addEventListener("pointercancel", end, true);
 }

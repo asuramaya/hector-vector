@@ -250,6 +250,7 @@ const editor = {
     this._renderSelection(); this._renderInspector();
   },
   _onPointerDown(e) {
+    if (this._touchGesture) return;   // two-finger pinch/pan in progress → the viewport owns this touch
     if (this._spacePan) return;   // spacebar held → let the viewport pan the drag (don't select/draw)
     if (e.button !== 0) return;   // right/middle clicks are for the context menu, not draw/select
     if (this.tool === "pen") { this._penDown(e); return; }

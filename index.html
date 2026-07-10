@@ -264,6 +264,11 @@
         </aside>
       </section>
 
+      <!-- Mobile only (shown by CSS on coarse-pointer / narrow screens): floats over the
+           canvas to slide the right dock up as a bottom sheet; the scrim dismisses it. -->
+      <button id="mobile-panels" class="mobile-fab" type="button" aria-label="Panels" aria-expanded="false" title="Panels — Properties, Colour, Layers, History">☰</button>
+      <div id="mobile-scrim" class="mobile-scrim" aria-hidden="true"></div>
+
       <!-- The standalone Process view was dissolved into dock panels: Library (pick an
            image) → Processor (compose + run the pipeline) → Jobs (watch). -->
 

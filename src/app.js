@@ -70,7 +70,7 @@ import {
 import {
   configureViewport, viewports, cycleBg, measureFit, drawRulers,
   applyViewportState, mountViewport, clearViewport, bindRulerGuides,
-  zoomVp, fitVp, actualVp, frameRect, bindViewportDragging, bindViewportZoom,
+  zoomVp, fitVp, actualVp, frameRect, bindViewportDragging, bindViewportZoom, bindViewportTouch,
 } from "./ui/viewport.js";
 import {
   configureDataSync, workspace, refreshAll, refreshExceptCanvas, loadOutputs, uploadFiles,
@@ -369,6 +369,19 @@ function stem_(n) { return n.replace(/\.[^.]+$/, ""); }
 
 Object.values(viewports).forEach(bindViewportDragging);
 Object.values(viewports).forEach(bindViewportZoom);
+Object.values(viewports).forEach(bindViewportTouch);
+
+// Mobile: the floating Panels button slides the right dock up as a bottom sheet; the scrim
+// dismisses it. The controls are display:none off mobile, so these listeners never fire there.
+(() => {
+  const appEl = document.querySelector("main.app");
+  const fab = document.querySelector("#mobile-panels");
+  const scrim = document.querySelector("#mobile-scrim");
+  if (!appEl || !fab) return;
+  const setSheet = (open) => { appEl.classList.toggle("sheet-open", open); fab.setAttribute("aria-expanded", open ? "true" : "false"); };
+  fab.addEventListener("click", () => setSheet(!appEl.classList.contains("sheet-open")));
+  scrim?.addEventListener("click", () => setSheet(false));
+})();
 
 document.querySelectorAll("[data-vp]").forEach((button) => {
   button.addEventListener("click", () => {
