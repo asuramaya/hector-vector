@@ -72,6 +72,7 @@ import {
   applyViewportState, mountViewport, clearViewport, bindRulerGuides,
   zoomVp, fitVp, actualVp, frameRect, bindViewportDragging, bindViewportZoom, bindViewportTouch,
 } from "./ui/viewport.js";
+import { initTouchDebug } from "./ui/touchdebug.js";
 import {
   configureDataSync, workspace, refreshAll, refreshExceptCanvas, loadOutputs, uploadFiles,
   latestOutputsFor, itemIsProcessed, renderPreviews, refreshLibrary,
@@ -370,6 +371,7 @@ function stem_(n) { return n.replace(/\.[^.]+$/, ""); }
 Object.values(viewports).forEach(bindViewportDragging);
 Object.values(viewports).forEach(bindViewportZoom);
 Object.values(viewports).forEach(bindViewportTouch);
+initTouchDebug();   // opt-in ?touchdebug overlay for the iOS touch-coordinate bug — no-op otherwise
 
 // Mobile: the floating Panels button slides the right dock up as a bottom sheet; the scrim
 // dismisses it. The controls are display:none off mobile, so these listeners never fire there.
