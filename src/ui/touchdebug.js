@@ -8,13 +8,16 @@
 // The overlay drops a real <circle> into the live stage SVG at the mapped touch point and reads
 // back its ACTUAL painted screen position — not a tautological CTM round-trip (inverse then
 // forward through the same matrix is always ~0 and can't show a visual/layout-viewport bug).
+// Measures TWICE per touch: once through the raw stage.getScreenCTM() (blue dot — shows whether
+// the underlying browser bug is present at all) and once through editor.stageCTM() (green dot —
+// the corrected transform the tools actually draw with, shows whether the fix works). If blue is
+// off but green lands on the red raw-touch dot, the bug exists and the fix handles it.
 const NS = "http://www.w3.org/2000/svg";
 
 let lastSnapshot = null;
 let visual = null; // { root, hud, dots: Map<pointerId, {raw, mapped}> }
 
-function measureRendered(stage, clientX, clientY) {
-  const ctm = stage && stage.getScreenCTM && stage.getScreenCTM();
+function measureRendered(stage, clientX, clientY, ctm) {
   if (!ctm) return null;
   const stagePt = new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
   const scale = Math.hypot(ctm.a, ctm.b) || 1;
@@ -30,14 +33,24 @@ function measureRendered(stage, clientX, clientY) {
   return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 }
 
+// Measures with BOTH the raw getScreenCTM() (what a naive implementation would use — shows
+// whether the underlying browser bug is present at all) AND editor.stageCTM() (the corrected
+// transform the tools actually draw with — shows whether the fix closes the gap). Two numbers,
+// one screenshot: is the bug present, and does the fix work.
 function snapshotFor(e) {
-  const stage = window.editor && window.editor.stage;
-  const rendered = measureRendered(stage, e.clientX, e.clientY);
+  const ed = window.editor;
+  const stage = ed && ed.stage;
+  const rawCTM = stage && stage.getScreenCTM && stage.getScreenCTM();
+  const correctedCTM = ed && ed.stageCTM ? ed.stageCTM() : rawCTM;
+  const rendered = measureRendered(stage, e.clientX, e.clientY, rawCTM);
+  const corrected = measureRendered(stage, e.clientX, e.clientY, correctedCTM);
   const vv = window.visualViewport;
   return {
     client: { x: e.clientX, y: e.clientY },
     rendered,
     diff: rendered ? Math.hypot(rendered.x - e.clientX, rendered.y - e.clientY) : null,
+    corrected,
+    correctedDiff: corrected ? Math.hypot(corrected.x - e.clientX, corrected.y - e.clientY) : null,
     visualViewport: vv ? { scale: vv.scale, offsetLeft: vv.offsetLeft, offsetTop: vv.offsetTop, width: vv.width, height: vv.height } : null,
     devicePixelRatio: window.devicePixelRatio,
     inner: { w: window.innerWidth, h: window.innerHeight },
@@ -54,8 +67,10 @@ export function formatTouchDebugSnapshot(s) {
   return [
     `recorded: ${new Date(s.when).toLocaleTimeString()}`,
     `raw client: ${s.client.x.toFixed(1)}, ${s.client.y.toFixed(1)}`,
-    s.rendered ? `rendered probe: ${s.rendered.x.toFixed(1)}, ${s.rendered.y.toFixed(1)}` : "rendered probe: n/a (no stage)",
-    s.diff !== null ? `diff: ${s.diff.toFixed(1)}px${s.diff > 3 ? "  <-- MISMATCH" : "  (ok)"}` : "diff: n/a",
+    s.rendered ? `raw CTM probe: ${s.rendered.x.toFixed(1)}, ${s.rendered.y.toFixed(1)}` : "raw CTM probe: n/a (no stage)",
+    s.diff !== null ? `raw diff: ${s.diff.toFixed(1)}px${s.diff > 3 ? "  <-- bug present" : "  (ok)"}` : "raw diff: n/a",
+    s.corrected ? `corrected probe: ${s.corrected.x.toFixed(1)}, ${s.corrected.y.toFixed(1)}` : "corrected probe: n/a",
+    s.correctedDiff !== null ? `corrected diff: ${s.correctedDiff.toFixed(1)}px${s.correctedDiff > 3 ? "  <-- FIX NOT WORKING" : "  (fix OK)"}` : "corrected diff: n/a",
     vv
       ? `visualViewport scale:${vv.scale.toFixed(3)} offset:${vv.offsetLeft.toFixed(1)},${vv.offsetTop.toFixed(1)} size:${vv.width.toFixed(0)}x${vv.height.toFixed(0)}`
       : "visualViewport: n/a",
@@ -94,15 +109,16 @@ function mkOverlay() {
     root,
     update(e, snap) {
       let entry = dots.get(e.pointerId);
-      if (!entry) { entry = { raw: mkDot("#f22"), mapped: mkDot("#2af") }; dots.set(e.pointerId, entry); }
+      if (!entry) { entry = { raw: mkDot("#f22"), mapped: mkDot("#2af"), corrected: mkDot("#2e2") }; dots.set(e.pointerId, entry); }
       place(entry.raw, snap.client.x, snap.client.y);
       if (snap.rendered) place(entry.mapped, snap.rendered.x, snap.rendered.y);
-      hud.textContent = `touchdebug — pointers:${dots.size}  (red=raw touch, blue=rendered probe)\n` + formatTouchDebugSnapshot(snap);
+      if (snap.corrected) place(entry.corrected, snap.corrected.x, snap.corrected.y);
+      hud.textContent = `touchdebug — pointers:${dots.size}  (red=raw touch, blue=raw-CTM probe, green=corrected probe)\n` + formatTouchDebugSnapshot(snap);
     },
     clear(e) {
       const entry = dots.get(e.pointerId);
       if (!entry) return;
-      entry.raw.remove(); entry.mapped.remove();
+      entry.raw.remove(); entry.mapped.remove(); entry.corrected.remove();
       dots.delete(e.pointerId);
     },
   };

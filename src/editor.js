@@ -52,14 +52,13 @@ function editorSvgEl() {
   return outputPreviewEl.querySelector("svg.inline-svg");
 }
 
-// iOS Safari ignores `user-scalable=no` (an accessibility guarantee since iOS 10), so the page
-// can still get pinch-zoomed — and getScreenCTM() does NOT account for that page-level zoom (it
-// stays anchored to the unzoomed layout viewport), while touch clientX/Y DOES reflect it. Any
-// stage.getScreenCTM() call site that maps a raw client/touch coordinate is silently wrong by
-// the zoom's scale+translate once that happens. getBoundingClientRect() has no such bug (it's
-// real paint geometry), so measure the TRUE stage->screen affine transform from three probe
-// points instead of trusting the CTM. Only worth doing when a page zoom is actually in effect —
-// stageCTM() below fast-paths straight back to the raw CTM otherwise.
+// On mobile, getScreenCTM() can silently disagree with where things actually paint — confirmed
+// on real devices under at least two different mechanisms (an iOS Safari page pinch-zoom that
+// survives `user-scalable=no`, and separately a Chrome-iOS/OS-level zoom that doesn't even show
+// up in window.visualViewport). getBoundingClientRect() has no such bug — it's real paint
+// geometry — so measure the TRUE stage->screen affine transform from three probe points instead
+// of trusting the CTM. stageCTM() below calls this unconditionally (time-throttled, not gated on
+// any signal that predicts when it's needed — that heuristic has already been wrong once).
 function measureStageAffine(stage) {
   const probe = (x, y) => {
     const c = document.createElementNS(SVG_NS, "circle");
@@ -1558,24 +1557,31 @@ const editor = {
     const ov = this._overlayEl();
     if (g && ov && g.nextSibling !== ov) this.stage.insertBefore(g, ov);
   },
-  // The screen<->stage transform, corrected for an active iOS Safari page pinch-zoom (see
-  // measureStageAffine above). Every touch/pointer coordinate mapping should call this instead
-  // of this.stage.getScreenCTM() directly — EXCEPT where a raw stage CTM is being composed
-  // against another element's raw CTM in the same expression (that cancels the zoom error by
-  // construction; correcting only one side would reintroduce it — see editor.js's own node<->
-  // stage transforms). Cached by a key of the inputs, so the expensive probe measurement only
-  // re-runs when the zoom or the raw CTM actually changes, not on every pointermove.
+  // The screen<->stage transform, corrected for whatever's currently making getScreenCTM()
+  // disagree with real paint geometry. Originally this only re-measured when visualViewport
+  // reported a page pinch-zoom — turned out that's not the only cause (confirmed on a real
+  // device: visualViewport.scale read exactly 1.000, offset 0,0, and getScreenCTM() was STILL
+  // ~85-100px off from where a probe actually painted — some zoom/scale mechanism was in play
+  // that visualViewport can't see at all, quite possibly a Chrome-iOS or OS-level zoom setting).
+  // So: don't try to detect WHEN to correct — always measure. Every touch/pointer coordinate
+  // mapping should call this instead of this.stage.getScreenCTM() directly — EXCEPT where a raw
+  // stage CTM is being composed against another element's raw CTM in the same expression (that
+  // cancels the zoom error by construction; correcting only one side would reintroduce it — see
+  // editor.js's own node<->stage transforms). Re-measures IMMEDIATELY whenever the raw CTM's own
+  // numbers change (our own zoom/pan is cheap to detect and handle size must track it exactly —
+  // a time-only throttle here once left node handles the wrong size for up to 120ms after a
+  // zoom). When the raw CTM is unchanged, only re-verifies once per throttle window, since that's
+  // the case an outside-the-DOM zoom mechanism could be silently drifting without moving it.
   stageCTM() {
     const raw = this.stage && this.stage.getScreenCTM && this.stage.getScreenCTM();
     if (!raw) return raw;
-    const vv = window.visualViewport;
-    if (!vv || (Math.abs(vv.scale - 1) < 0.001 && Math.abs(vv.offsetLeft) < 0.5 && Math.abs(vv.offsetTop) < 0.5)) {
-      return raw;   // fast path: no page zoom in effect (desktop, and the common mobile case)
+    const now = performance.now();
+    const rawKey = `${raw.a},${raw.b},${raw.c},${raw.d},${raw.e},${raw.f}`;
+    if (this._ctmCache && this._ctmCache.rawKey === rawKey && (now - this._ctmCache.at) < 120) {
+      return this._ctmCache.matrix;
     }
-    const key = `${vv.scale},${vv.offsetLeft},${vv.offsetTop},${raw.a},${raw.b},${raw.c},${raw.d},${raw.e},${raw.f}`;
-    if (this._ctmCache && this._ctmCache.key === key) return this._ctmCache.matrix;
     const measured = measureStageAffine(this.stage) || raw;
-    this._ctmCache = { key, matrix: measured };
+    this._ctmCache = { rawKey, at: now, matrix: measured };
     return measured;
   },
   _ctmCache: null,
