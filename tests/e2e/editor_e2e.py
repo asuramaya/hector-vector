@@ -3613,6 +3613,55 @@ def main():
         check("clearGuides empties the layer",
               page.evaluate("editor.guides.length === 0 && editor.stage.querySelectorAll('.hv-guideobj').length === 0"))
 
+        section("The action oracle: what can I do with THIS selection?")
+        # These predicates used to be computed in two places that couldn't see each other — once in
+        # refreshActionButtons (to grey buttons out) and again, privately, inside _objectActions (to
+        # build the Actions menu). Two copies of `fillable`, free to drift. Now one oracle answers,
+        # and the toolbars, the menu and the suggestion block all read it.
+        mount_ctl(page)
+        oracle = page.evaluate("""() => {
+            const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+              + '<rect data-hv-id="a" x="10" y="10" width="40" height="40" fill="#111"/>'
+              + '<rect data-hv-id="b" x="30" y="30" width="40" height="40" fill="#222"/>'
+              + '<text data-hv-id="t" x="5" y="90" font-size="8">hi</text></svg>';
+            mountStageFromText(svg, 't.svg');
+            const out = {};
+            const probe = (name) => {
+                editor._renderInspector();
+                const r = __actions.rank();
+                out[name] = { kind: __actions.kind(), says: __actions.describe(),
+                              tiles: r.tiles.map((t) => t.label), verbs: r.verbs.map((v) => v.label) };
+            };
+            editor.selection = new Set(); editor.artboardSelected = false; probe('none');
+            editor.selection = new Set(['a']); probe('shape');
+            editor.selection = new Set(['a', 'b']); probe('overlap');
+            editor.selection = new Set(['t']); probe('text');
+            editor.selection = new Set(['a', 'b']); editor.group();
+            const g = [...editor.stage.querySelectorAll('g[data-hv-id]')].pop().getAttribute('data-hv-id');
+            editor.selection = new Set([g]); probe('group');
+            return out;
+        }""")
+        check("oracle: two overlapping shapes lead with the booleans (the whole point of selecting both)",
+              oracle["overlap"]["kind"] == "overlap"
+              and oracle["overlap"]["tiles"][:3] == ["Unite", "Subtract", "Intersect"],
+              str(oracle["overlap"]["tiles"][:4]))
+        check("oracle: a group leads with Ungroup; one shape leads with Duplicate",
+              oracle["group"]["tiles"][0] == "Ungroup" and oracle["shape"]["tiles"][0] == "Duplicate",
+              f"group={oracle['group']['tiles'][:2]} shape={oracle['shape']['tiles'][:2]}")
+        # Selected text: the thing you actually want is "turn it into paths". It's floated to the top.
+        check("oracle: selected text floats 'Expand object' to the front of the verbs",
+              oracle["text"]["kind"] == "text" and oracle["text"]["verbs"][0] == "Expand object",
+              str(oracle["text"]["verbs"][:3]))
+        # Only VALID actions are ever offered — that's what lets the UI hide rather than grey out.
+        check("oracle: never offers an invalid action (no booleans on one shape, none on an empty canvas)",
+              "Unite" not in oracle["shape"]["tiles"] and not oracle["none"]["verbs"]
+              and "Delete" not in oracle["none"]["tiles"],
+              f"shape={oracle['shape']['tiles'][:3]} none={oracle['none']['tiles']}")
+        check("oracle: reads the selection back in plain words",
+              oracle["overlap"]["says"] == "2 overlapping shapes" and oracle["group"]["says"] == "A group"
+              and oracle["none"]["says"] == "Nothing selected",
+              f"{oracle['overlap']['says']!r} / {oracle['group']['says']!r}")
+
         section("Customize layout: draggable dividers + right-click add/remove")
         page.evaluate("window.__layout.toggleEdit()"); page.wait_for_timeout(80)
         check("dividers become movable in customize mode",

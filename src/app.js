@@ -55,6 +55,7 @@ import {
 import { configureLayoutPicker, openLayoutPicker } from "./ui/layout-picker.js";
 import { setCustomizeHandler } from "./ui/formfactor.js";
 import { createPointerDrag } from "./ui/pointer-drag.js";
+import { selectionFacts, evaluate, rankFor, selectionKind, describeSelection } from "./ui/actions.js";
 import {
   workItems, outputs, projects, selectedName, selectedOutput, manualOutputName,
   setWorkItems, setOutputs, setProjects, setSelectedName, setSelectedOutput, setManualOutputName,
@@ -982,43 +983,35 @@ function buildRasterTools(node) {
   wire("#layer-merge", () => editor.consolidateByColor());
 
   const set = (id, on) => { const b = document.querySelector(id); if (b) b.disabled = !on; };
+  let lastFacts = null;   // most recent selection facts — the adaptive engine + suggestion block read this
+  // The predicates behind this now live in src/ui/actions.js, computed ONCE per selection change and
+  // shared with the Actions menu and the suggestion block — they used to be recomputed privately in
+  // two places that could not see each other, free to drift. This is the thin consumer: it still
+  // sets .disabled on every gated button exactly as before, which is what keeps the desktop's
+  // grey-out behaviour intact (and what layout.js relies on to restore states after customizing).
   const refreshActionButtons = function () {
-    const has = !!editor.stage;
-    const sel = has ? editor.selectedNodes() : [];
-    const n = sel.length, hasSel = n > 0;
-    // Phone: the contextual bar (arrange/delete/duplicate) rides on this — it only takes canvas
-    // height while there IS a selection to act on. Harmless off mobile; nothing else styles it.
-    document.querySelector("main.app")?.classList.toggle("has-selection", hasSel);
-    const fillable = (hasSel ? editor._effectiveLeaves() : []).filter((s) => shapeToAbsPath(s)).length >= 2;
-    const hasGroup = sel.some((s) => s.tagName.toLowerCase() === "g");
-    const hasClip = !!(editor.clipboard && editor.clipboard.length);
-    set("#act-cut", hasSel); set("#act-copy", hasSel); set("#act-duplicate", hasSel);
-    set("#act-paste", has && hasClip);
-    set("#act-union", fillable); set("#act-subtract", fillable); set("#act-intersect", fillable);
-    // Clip: release when a single clipped/masked group is selected (button flips to ↺ / "Release"),
-    // else make-clip when ≥2 objects are selected with a vector on top.
-    const clipGroup = hasSel && n === 1 && (editor._clipGroupOf(sel[0]) === sel[0] || editor._maskGroupOf(sel[0]) === sel[0]);
-    const canMakeClip = editor._topSelection(sel).filter((s) => s.hasAttribute && s.hasAttribute("data-hv-id")).length >= 2;
+    const facts = selectionFacts(editor);
+    const st = evaluate(facts);
+    for (const [key, s] of st) set(key, s.valid);
+    // Clip is the one button that changes MEANING with context (release vs make). Its label comes
+    // from the same oracle the suggestion block reads, so the two can never disagree.
     const clipBtn = document.querySelector("#act-clip");
     if (clipBtn) {
-      clipBtn.disabled = !(clipGroup || canMakeClip);
-      clipBtn.textContent = clipGroup ? "↺" : "⛶";
-      clipBtn.title = clipGroup ? "Release mask (Ctrl/Cmd+Alt+7)" : "Make clipping mask (Ctrl/Cmd+7) — top object clips the rest";
+      const c = st.get("#act-clip");
+      clipBtn.textContent = c.glyph;
+      clipBtn.title = facts.clipGroup
+        ? "Release mask (Ctrl/Cmd+Alt+7)"
+        : "Make clipping mask (Ctrl/Cmd+7) — top object clips the rest";
     }
-    // rotate/flip act on the selection, or on the artboard itself when it's selected;
-    // grey when nothing is selected (no objects, no artboard).
-    const isRaster = hasSel && editor._selectionIsRaster();
-    const canXform = hasSel || (has && editor.artboardSelected);
-    ["#act-rotate-cw", "#act-rotate-ccw", "#act-flip-h", "#act-flip-v"].forEach((id) => set(id, canXform));
-    // Invert-space (fill the gaps) is a VECTOR op — meaningless on a raster. Gates the
-    // Object-panel-header ⊠ tile (the single, movable home of invert).
-    const canInvert = (hasSel && !isRaster) || (has && editor.artboardSelected);
-    set("#hdr-invert", canInvert);
-    // Layers header: reorder/group/ungroup/rename/delete (selection-gated) + cleanup/merge (whole doc)
-    ["#layer-front", "#layer-forward", "#layer-backward", "#layer-back", "#layer-delete"].forEach((id) => set(id, hasSel));
-    set("#layer-group", n >= 2); set("#layer-ungroup", hasGroup); set("#layer-rename", n === 1);
-    set("#layer-cleanup", has); set("#layer-merge", has);
+    // Phone: the contextual bar (arrange/delete/duplicate) rides on this — it only takes canvas
+    // height while there IS a selection to act on. Harmless off mobile; nothing else styles it.
+    document.querySelector("main.app")?.classList.toggle("has-selection", facts.hasSel);
+    lastFacts = facts;
   };
+  // exposed for the adaptive engine, the suggestion block, and the e2e — one oracle, one answer
+  window.__actions = { facts: () => lastFacts, rank: (opts) => rankFor(lastFacts || selectionFacts(editor), opts),
+                       kind: () => selectionKind(lastFacts || selectionFacts(editor)),
+                       describe: () => describeSelection(lastFacts || selectionFacts(editor)) };
   const prevOnInspect = editor.onInspect;
   editor.onInspect = () => {
     if (prevOnInspect) prevOnInspect();
