@@ -60,10 +60,18 @@ export function composePhone(on) {
       q("#vp-selectall"),
     ];
     for (const el of quick) { remember(el); topbar.appendChild(el || mkSep()); }
-    // Duplicate reads as a selection action, so it joins the contextual bar on a phone. Both it and
-    // Delete are pulled to the FRONT of that bar: it overflows ~510px into 390px, and these two are
-    // the ones you must never have to hunt for behind a horizontal scroll.
-    const ctx = [q("#act-duplicate"), q("#layer-delete")].filter(Boolean);
+    // Everything you'd want to do TO a selection goes on the contextual bar, so the booleans are one
+    // tap away instead of buried in the sheet. Cut/copy/paste deliberately stay behind: paste is
+    // valid with NOTHING selected, so it doesn't belong on a selection-only bar.
+    //
+    // That's up to 18 tiles in a 390px strip — which is exactly why the adaptive engine
+    // (src/ui/adaptive.js) is a PREREQUISITE for this, not a garnish. It hides whatever the current
+    // selection can't use and ranks the rest, so the first six are always the right six.
+    const ctx = [
+      q("#act-duplicate"), q("#layer-delete"),
+      q("#act-union"), q("#act-subtract"), q("#act-intersect"), q("#act-clip"),
+      q("#act-rotate-cw"), q("#act-rotate-ccw"), q("#act-flip-h"), q("#act-flip-v"),
+    ].filter(Boolean);
     // reverse: each insert goes to the head, so the last one inserted ends up first
     if (arrange) for (const el of [...ctx].reverse()) { remember(el); arrange.insertBefore(el, arrange.firstChild); }
     for (const el of [panelFoot, actionbar].filter(Boolean)) {

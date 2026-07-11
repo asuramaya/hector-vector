@@ -26,6 +26,13 @@ import { isPhone } from "./formfactor.js";
 // one gated tile isn't worth the jitter next to a caret and a close button.
 const ADAPTIVE_BARS = new Set(["arrange", "actions"]);
 
+// How many actions a bar will show at once on a PHONE. With two overlapping shapes selected, fifteen
+// different actions are genuinely valid — ranking puts the right ones first, but fifteen 44px tiles
+// still need 700px in a 390px strip, and the tail is a scroll nobody performs. So the bar carries the
+// best few and the SUGGESTED block in the sheet carries the complete ranked list, labels and all.
+// No cap on desktop: a vertical rail has the room.
+const PHONE_BAR_CAP = 7;
+
 let getLayout = () => null, getPref = () => "off";
 export function configureAdaptive(deps) { ({ getLayout, getPref } = deps); }
 
@@ -72,8 +79,8 @@ export function sync(facts) {
   if (!L || !facts) return;
   if (modeNow() !== "full") { clearAdaptive(); return; }
 
-  const { tiles } = rankFor(facts, { isHidden: (k) => L.isHidden(k) });
-  const rank = new Map(tiles.map((t, i) => [t.key, i]));
+  const all = rankFor(facts, { isHidden: (k) => L.isHidden(k) }).tiles;
+  const rank = new Map(all.map((t, i) => [t.key, i]));
 
   // Guard the WRITES, not the reads. facts must be recomputed every time (a shape MOVED into overlap
   // changes what's possible without changing the id set), but if the ranked sequence is identical
@@ -98,6 +105,13 @@ export function sync(facts) {
         .filter((el) => { const k = keyOf(el); return k && !L.isPinned(k) && rank.has(k); })
         .sort((a, b) => rank.get(keyOf(a)) - rank.get(keyOf(b)));
 
+      // The cap is PER BAR, and only where space is actually scarce: the phone's contextual strip,
+      // which sits under the canvas and is competing for it. Capping the GLOBAL ranked list instead
+      // would silently un-show whatever ranked past the cut in EVERY bar — cut/copy/paste rank low,
+      // so they'd vanish from the sheet too and become unreachable on a phone. (They did.)
+      const cap = (isPhone() && bar.name === "arrange") ? PHONE_BAR_CAP : Infinity;
+      const shown = new Set(ranked.slice(0, cap).map((el) => keyOf(el)));
+
       for (const el of ranked) el.style.order = String(free[f++] ?? kids.length);
 
       for (const [i, el] of kids.entries()) {
@@ -109,9 +123,9 @@ export function sync(facts) {
           el.classList.add("act-off");
           continue;
         }
-        const valid = rank.has(k);
-        el.classList.toggle("act-off", !valid);
-        if (!valid) el.style.order = String(free[f++] ?? kids.length);
+        const on = shown.has(k);
+        el.classList.toggle("act-off", !on);
+        if (!on) el.style.order = String(free[f++] ?? kids.length);
       }
     }
     // The scroll-fade hint is driven by a childList MutationObserver, which a class-only change never

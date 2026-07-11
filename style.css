@@ -1302,6 +1302,9 @@ input.insp-ab-name { background: var(--field-bg, #2a2a2e); color: inherit; borde
 .proc-auto-badge { flex: 0 0 auto; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 6px; border-radius: 9px; background: var(--ink); color: #fff; }
 .proc-auto-sum { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
 .proc-auto-steps, .proc-auto-offered { display: flex; flex-direction: column; gap: 5px; }
+/* display:flex OVERRIDES the [hidden] attribute's default display:none — so a collapsed "Also
+   possible" list stayed fully rendered (34 rows, and a 3541px sheet). Say it explicitly. */
+.proc-auto-steps[hidden], .proc-auto-offered[hidden] { display: none; }
 .proc-auto-none { font-size: 11.5px; color: var(--muted); }
 .proc-plan-step { display: flex; align-items: baseline; gap: 6px; font-size: 11.5px; min-width: 0; }
 .proc-plan-cap { flex: 0 0 auto; font-weight: 600; color: var(--ink); }

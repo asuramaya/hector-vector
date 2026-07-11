@@ -154,6 +154,19 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
   const DEFAULTS = { desktop: AUTHORED, phone: null };
   DEFAULTS[mode()] = DEFAULT;
 
+  // One-time re-default for the phone. composePhone() now puts the booleans + transforms on the
+  // contextual bar, but a phone layout saved BEFORE that lists them under `actions`, and apply()
+  // would faithfully drag them straight back into the sheet — so an existing phone user would get
+  // none of it. Drop the saved blob ONLY if it shows no sign of having been customized (nothing
+  // hidden, nothing anchored). If they HAVE customized, their arrangement is their business: it is
+  // kept, and Reset (or the picker's move-to) brings the new bar over whenever they want it.
+  if (isPhone()) {
+    const prev = loadSaved("phone");
+    const untouched = prev && !(prev[HIDDEN_KEY] || []).length && !(prev[PINNED_KEY] || []).length;
+    if (untouched && !(prev.arrange || []).includes("#act-union")) {
+      try { localStorage.removeItem(keyFor("phone")); } catch {}
+    }
+  }
   apply(loadSaved());   // restore the auto-saved arrangement for THIS form factor
 
   // ---- crossing the breakpoint -----------------------------------------------------------------

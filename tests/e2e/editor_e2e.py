@@ -4713,6 +4713,48 @@ def main():
                       mp.evaluate("""() => __layout.isHidden('tool:knife')
                                         && !!document.querySelector('#mobile-top [data-tool=pen]')"""))
 
+                # THE contextual ask: with two overlapping shapes, the booleans must be RIGHT THERE —
+                # not buried in the sheet. And the strip must still be one row that fits.
+                ctx = mp.evaluate("""async () => {
+                    mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+                      + '<rect data-hv-id="p" x="15" y="20" width="45" height="45" fill="#666"/>'
+                      + '<rect data-hv-id="q" x="40" y="40" width="45" height="45" fill="#999"/></svg>', 't.svg');
+                    editor.selection = new Set(['p', 'q']); editor._renderInspector();
+                    await new Promise((r) => setTimeout(r, 400));
+                    const bar = document.querySelector('.stage-wrap > .stage-toolbar');
+                    const vis = (el) => !!el && el.offsetParent !== null;
+                    const shown = [...bar.children].filter((e) => vis(e) && e.id)
+                        .sort((x, y) => (+getComputedStyle(x).order) - (+getComputedStyle(y).order)).map((e) => '#' + e.id);
+                    const sug = document.querySelector('.proc-auto.suggest');
+                    return { shown, overflow: bar.scrollWidth - bar.clientWidth,
+                             rows: Math.round(bar.getBoundingClientRect().height),
+                             // the cap is PER BAR: capping the global ranked list would have made
+                             // cut/copy (which rank low) vanish from the sheet too — unreachable
+                             cutReachable: vis(document.querySelector('#act-cut')),
+                             pasteHidden: !vis(document.querySelector('#act-paste')),
+                             suggested: !!sug,
+                             suggestSays: sug ? sug.querySelector('.proc-auto-sum').textContent : null };
+                }""")
+                check("mobile: two overlapping shapes put the booleans on the bar under the canvas, no sheet needed",
+                      ctx["shown"][:3] == ["#act-union", "#act-subtract", "#act-intersect"], str(ctx["shown"][:4]))
+                check("mobile: the contextual bar still fits — one row, no overflow (the cap earns its keep)",
+                      ctx["overflow"] == 0 and ctx["rows"] < 90 and len(ctx["shown"]) <= 7,
+                      f"overflow={ctx['overflow']} rows={ctx['rows']} n={len(ctx['shown'])}")
+                check("mobile: capping the bar doesn't make anything unreachable (cut/copy still in the sheet)",
+                      ctx["cutReachable"] and ctx["pasteHidden"], str(ctx))
+                check("mobile: the sheet leads with SUGGESTED, reading the selection back",
+                      ctx["suggested"] and ctx["suggestSays"] == "2 overlapping shapes", str(ctx["suggestSays"]))
+                # The sheet was 744px of content in a 480px window — everything you wanted was below
+                # the fold. Show what relates to the selection; fold what doesn't.
+                sheet = mp.evaluate("""() => {
+                    const secs = [...document.querySelectorAll('#rightdock .rail-section')];
+                    return { expanded: secs.filter((s) => !s.classList.contains('collapsed')).length,
+                             total: secs.length };
+                }""")
+                check("mobile: the sheet folds the panels that don't relate to the selection (was 4 open at once)",
+                      sheet["expanded"] <= 2 and sheet["total"] >= 4, str(sheet))
+                mp.evaluate("() => { editor.selection.clear(); editor.onInspect && editor.onInspect(); }")
+
                 # The picker is the ONLY way to customize on a phone (HTML5 drag never fires on touch),
                 # so its reachability is the feature. Drive it through the real UI, not the API.
                 mp.evaluate("() => __layout.reset()")

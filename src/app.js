@@ -1038,6 +1038,9 @@ function buildRasterTools(node) {
     refreshActionButtons(); renderFloatPanel(); updateSelLabel();
     renderProcessorPanel();   // keep the Processor target + contextual reveal/dim in sync with the canvas selection
     syncDockContext();        // park/return contextual panels (Processor, Colour) for the new selection
+    // Phone: show the panels that relate to what's selected, fold the ones that don't (the sheet was
+    // 744px of content in a 480px window, so everything you wanted was below the fold).
+    if (window.__docks && window.__docks.syncSheetSections) window.__docks.syncSheetSections(!!(lastFacts && lastFacts.hasSel));
     // LAST, deliberately. The suggestion block lives inside the Properties panel body, and both
     // renderProps() and syncDockContext()'s reconcile empty that body when they rebuild — anything
     // inserted earlier in this chain gets wiped in the same tick.
