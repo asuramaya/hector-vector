@@ -767,9 +767,24 @@ button:disabled {
   padding: 5px 8px; border-bottom: 1px solid var(--line);
   cursor: pointer; font-size: 13px; background: var(--bg);
 }
+/* Reorder handle. touch-action:none is what lets a FINGER drag the row at all: without it the
+   browser claims the gesture as a scroll of the layer list. Only the grip claims it, so dragging
+   anywhere else on a row still scrolls the panel normally. */
+.layer-grip {
+  flex: 0 0 auto; width: 16px; text-align: center;
+  color: var(--muted); font-size: 12px; line-height: 1; cursor: grab;
+  touch-action: none; user-select: none;
+}
+.layer-grip:active { cursor: grabbing; }
+.layer-row.active .layer-grip { color: rgba(255, 255, 255, 0.6); }
+/* fingers need a real target; a mouse doesn't */
+@media (pointer: coarse) { .layer-grip { width: 24px; font-size: 15px; } }
+
 .layer-row:hover { background: #f2f2f2; }
 .layer-row.active { background: #000; color: #fff; }
-.layer-row.dragging { opacity: 0.4; }
+/* pointer-events:none is load-bearing, not cosmetic: the dragged row follows the pointer, so without
+   it elementFromPoint keeps hitting the row being dragged and the drop target never resolves. */
+.layer-row.dragging { opacity: 0.4; pointer-events: none; }
 /* drag-drop affordances: nest INTO a group (outline+tint), or a "magnet" line BETWEEN
    rows for reorder (before/after). The crevice the pointer is in picks which. */
 .layer-row.drop-into { outline: 1px solid var(--accent); outline-offset: -1px; background: color-mix(in srgb, var(--accent) 14%, var(--bg)); }
@@ -1241,7 +1256,11 @@ input.insp-ab-name { background: var(--field-bg, #2a2a2e); color: inherit; borde
 /* flow connector: a short vertical tick rising into each card after the first */
 .proc-stage:not(:first-child)::before { content: ""; position: absolute; left: 22px; top: -14px; width: 2px; height: 14px; background: var(--hair-2); }
 .proc-stage-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
-.proc-grip { cursor: grab; color: var(--muted); user-select: none; font-size: 12px; line-height: 1; }
+/* touch-action:none is what makes the grip actually grab on a phone — without it the browser
+   claims the gesture as a scroll of the Processor panel and the card never moves. */
+.proc-grip { cursor: grab; color: var(--muted); user-select: none; font-size: 12px; line-height: 1; touch-action: none; }
+.proc-grip:active { cursor: grabbing; }
+@media (pointer: coarse) { .proc-grip { font-size: 16px; padding: 4px; } }
 .proc-stage-title { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
 .proc-stage-title .stage-name { font-weight: 600; font-size: 12.5px; color: var(--ink); }
 .proc-stage-title .stage-note { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }

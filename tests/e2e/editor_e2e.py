@@ -1059,8 +1059,40 @@ def main():
         order = page.evaluate("editor._artworkNodes().map(n=>n.getAttribute('data-hv-id'))")
         check("reorder places node in front of target", order == ["r2", "r3", "r1"], f"order={order}")
 
-        # rows are draggable
-        check("layer rows are draggable", page.evaluate("document.querySelector('#layers-list .layer-row').draggable") is True)
+        # rows are movable — pointer-drag, not HTML5 DnD (which never fires from a finger, so the layer
+        # list simply could not be reordered on a phone at all). Touch drags from the grip; dragging
+        # anywhere else on a row still scrolls the list.
+        check("layer rows are movable, with a touch grip",
+              page.evaluate("""() => { const r = document.querySelector('#layers-list .layer-row');
+                return !!r && r.dataset.hvMovable === '1' && !!r.querySelector('.layer-grip'); }""") is True)
+        # ...and a REAL touch drag from the grip actually reorders. This was flatly impossible before:
+        # the layer list was wired to HTML5 DnD, so on a phone it could not be reordered at all.
+        page.evaluate("() => document.querySelector('#layers-list').scrollIntoView({block:'center'})")
+        page.wait_for_timeout(150)
+        touch_reorder = page.evaluate("""() => {
+            const rows = [...document.querySelectorAll('#layers-list .layer-row')];
+            if (rows.length < 2) return { skipped: true };
+            const before = rows.map((r) => r.dataset.id);
+            const grip = rows[0].querySelector('.layer-grip');
+            const g = grip.getBoundingClientRect(), tgt = rows[1].getBoundingClientRect();
+            const pe = (t, ty, x, y) => t.dispatchEvent(new PointerEvent(ty, {
+                pointerId: 0, pointerType: 'touch', button: 0, isPrimary: true,
+                clientX: x, clientY: y, bubbles: true, cancelable: true }));
+            const x = g.left + g.width / 2, y0 = g.top + g.height / 2, y1 = tgt.bottom - 3;
+            pe(grip, 'pointerdown', x, y0);
+            for (let i = 1; i <= 10; i++) pe(window, 'pointermove', x, y0 + (y1 - y0) * i / 10);
+            pe(window, 'pointerup', x, y1);
+            const after = [...document.querySelectorAll('#layers-list .layer-row')].map((r) => r.dataset.id);
+            // DIRECTION matters, not just "it moved": the list renders front-first, so a naive
+            // screen-position -> DOM-position mapping is INVERTED and dropping a row below another
+            // sends it above. Dragging row 0 down past row 1 must leave it BELOW row 1.
+            const dragged = before[0], passed = before[1];
+            return { before, after, changed: JSON.stringify(before) !== JSON.stringify(after),
+                     wentDown: after.indexOf(dragged) > after.indexOf(passed) };
+        }""")
+        check("a real TOUCH drag on the grip reorders layers, in the direction you dragged",
+              touch_reorder.get("skipped") or (touch_reorder["changed"] and touch_reorder["wentDown"]),
+              str(touch_reorder))
 
         # group / ungroup
         mount_ctl(page)

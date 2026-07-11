@@ -17,6 +17,14 @@ export function createPointerDrag({
   onDrop = () => {},
   onCancel = () => {},
   onTap = () => {},            // down+up under the threshold — a tap, not a drag
+  ignoreFrom = null,           // CSS selector: a pointerdown starting here is not a drag (nested buttons)
+  // CSS selector for a drag HANDLE that touch must start from. Needed wherever the draggable thing
+  // lives in a SCROLLING container (the layer list): a finger dragging a row is indistinguishable
+  // from a finger scrolling the list, so touch reorders from the grip and scrolls from anywhere
+  // else. A mouse has no such conflict and can still drag the whole row.
+  touchHandle = null,
+  ghostAxis = "both",          // which way the dragged element follows the pointer ("y" for list rows,
+                               // which are full-width — tracking x as well would fling them sideways)
   threshold = 6,               // mouse: px of travel before it's a drag
   touchThreshold = 8,          // finger: a little more, fingers wobble
   autoScroll = true,
@@ -48,9 +56,12 @@ export function createPointerDrag({
   // than accumulated from the start point — the live reflow physically relocates the tile mid-drag,
   // so an accumulated offset would drift away from the finger.
   function ghost(x, y) {
+    if (ghostAxis === "none") return;
     el.style.transform = "";
     const r = el.getBoundingClientRect();
-    el.style.transform = `translate(${x - (r.left + r.width / 2)}px, ${y - (r.top + r.height / 2)}px)`;
+    const dx = ghostAxis === "y" ? 0 : x - (r.left + r.width / 2);
+    const dy = ghostAxis === "x" ? 0 : y - (r.top + r.height / 2);
+    el.style.transform = `translate(${dx}px, ${dy}px)`;
   }
 
   function cleanup() {
@@ -100,9 +111,15 @@ export function createPointerDrag({
   function down(e) {
     if (el) return;                                   // one drag at a time
     if (e.pointerType === "mouse" && e.button !== 0) return;
+    // a press that starts on a nested control (a layer row's eye/twisty) is that control's, not a drag
+    if (ignoreFrom && e.target.closest && e.target.closest(ignoreFrom)) return;
+    if (touchHandle && e.pointerType !== "mouse" && !(e.target.closest && e.target.closest(touchHandle))) return;
     el = e.currentTarget; pid = e.pointerId; sx = e.clientX; sy = e.clientY; dragging = false;
-    e.preventDefault();                               // no text selection, no native image drag
-    // NOTE: deliberately NOT setPointerCapture. Old WebKit is quirky about it, and synthetic
+    // NB: NO preventDefault here. Calling it on pointerdown suppresses the compatibility mouse
+    // events on touch — including `click` — which would kill tap-to-select on a layer row. Selection
+    // is suppressed in move() instead, once we know it's actually a drag; native image-drag is
+    // already off because arm() sets draggable = false.
+    // Deliberately NOT setPointerCapture either. Old WebKit is quirky about it, and synthetic
     // PointerEvents dispatched from page.evaluate carry pointerId 0 — setPointerCapture(0) throws,
     // which would make this helper untestable with the very technique the e2e suite already uses.
     // Window listeners filtered by pointerId are both more robust and testable.

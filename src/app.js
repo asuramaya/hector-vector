@@ -54,6 +54,7 @@ import {
 } from "./ui/settings.js";
 import { configureLayoutPicker, openLayoutPicker } from "./ui/layout-picker.js";
 import { setCustomizeHandler } from "./ui/formfactor.js";
+import { createPointerDrag } from "./ui/pointer-drag.js";
 import {
   workItems, outputs, projects, selectedName, selectedOutput, manualOutputName,
   setWorkItems, setOutputs, setProjects, setSelectedName, setSelectedOutput, setManualOutputName,
@@ -1986,6 +1987,36 @@ function procInsertBefore(list, y) {
   }
   return null;
 }
+// The stage strip was the third feature built on HTML5 drag-and-drop, so it was dead on touch too —
+// the cards even have a ⠿ grip, which simply did nothing on a phone. Same pointer-drag helper as the
+// toolbars and the layer list; the insertion hit-test (procInsertBefore) is untouched.
+let procDragCtl = null;
+function procDrag() {
+  if (procDragCtl) return procDragCtl;
+  const listEl = () => document.querySelector(".proc-stages");
+  const endDrag = (card) => { card.classList.remove("dragging"); procDragId = null; };
+  procDragCtl = createPointerDrag({
+    ignoreFrom: "input, select, textarea, button, label",   // the cards are full of real controls
+    touchHandle: ".proc-grip",                              // touch: the grip reorders, the panel still scrolls
+    ghostAxis: "y",
+    containerAt: (x, y) => {
+      const l = listEl(); if (!l) return null;
+      const r = l.getBoundingClientRect();
+      return (x >= r.left - 40 && x <= r.right + 40 && y >= r.top - 60 && y <= r.bottom + 60) ? l : null;
+    },
+    onStart: (card) => { procDragId = card.dataset.stage; card.classList.add("dragging"); },
+    onMove: (card, list, x, y) => { const ref = procInsertBefore(list, y); if (ref !== card) list.insertBefore(card, ref); },
+    onDrop: (card) => {
+      endDrag(card);
+      const list = listEl(); if (!list) return;
+      const order = [...list.querySelectorAll(".proc-stage")].map((c) => c.dataset.stage);
+      if (order.length === CANON_ORDER.length) { settings.pipeline_order = order.join(","); persistSettings(); }
+      renderProcessorPanel();
+    },
+    onCancel: (card) => { endDrag(card); renderProcessorPanel(); },
+  });
+  return procDragCtl;
+}
 // Rebuild the Processor panel + re-kick whichever live preview is active (the structural
 // callback for the schema-driven stage controls hosted in the cards).
 function procRerender() { renderProcessorPanel(); if (rasterLive) scheduleRasterLive(false); if (rasterOp) scheduleRasterOpLive(false); }
@@ -2222,9 +2253,8 @@ function buildProcStageCard(id, target) {
   const on = stageOn(id), open = !!stageExpanded[id];
   const card = document.createElement("div");
   card.className = "proc-stage" + (on ? "" : " off") + (open ? " expanded" : "");
-  card.dataset.stage = id; card.draggable = true;
-  card.addEventListener("dragstart", (e) => { procDragId = id; e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", id); } catch {} card.classList.add("dragging"); });
-  card.addEventListener("dragend", () => { card.classList.remove("dragging"); procDragId = null; });
+  card.dataset.stage = id;
+  procDrag().arm(card);   // pointer-drag: HTML5 DnD never fired from a finger
 
   const head = document.createElement("div"); head.className = "proc-stage-head";
   const grip = document.createElement("span"); grip.className = "proc-grip"; grip.textContent = "⠿"; grip.title = "Drag to reorder";
@@ -2406,18 +2436,9 @@ function buildProcessorRail() {
   }
 
   // Stage cards in saved order, vertical flow, drag to reorder.
+  // No dragover/drop listeners: procDrag() hit-tests the list itself (see above), which is what lets
+  // the ⠿ grip work with a finger instead of being decorative.
   const list = document.createElement("div"); list.className = "proc-stages";
-  list.addEventListener("dragover", (e) => {
-    if (!procDragId) return; e.preventDefault(); e.dataTransfer.dropEffect = "move";
-    const el = list.querySelector(`.proc-stage[data-stage="${procDragId}"]`); if (!el) return;
-    const ref = procInsertBefore(list, e.clientY); if (ref !== el) list.insertBefore(el, ref);
-  });
-  list.addEventListener("drop", (e) => {
-    e.preventDefault();
-    const order = [...list.querySelectorAll(".proc-stage")].map((c) => c.dataset.stage);
-    if (order.length === CANON_ORDER.length) { settings.pipeline_order = order.join(","); persistSettings(); }
-    renderProcessorPanel();
-  });
   // Live preview needs the raster ON the canvas; pass the node (null in batch / library-only).
   const previewNode = t.batch ? null : (t.node || null);
   stageOrder().forEach((id) => list.appendChild(buildProcStageCard(id, previewNode)));

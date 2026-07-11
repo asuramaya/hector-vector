@@ -5,6 +5,7 @@
 // _reorderManyToRoot, the _ensureIds/_artworkNodes/_rasterSwatchThumb helpers)
 // stay on editor.js and are reached via `this.` — so behaviour is identical.
 import { toHexColor } from "../hv/index.js";
+import { createPointerDrag } from "../ui/pointer-drag.js";
 
 export const layersMixin = {
   _layerClick(id, e) {
@@ -80,22 +81,10 @@ export const layersMixin = {
       this.selectArtboard();
       if (this.openContextPanel) this.openContextPanel(e.clientX, e.clientY, "canvas");
     });
-    // Drop layer(s) onto the Artboard row → move them out to the top level (out of any group).
-    const rootDrop = (e) => {
-      e.preventDefault(); this._clearDropMarks();
-      const ids = (this._dragLayerIds && this._dragLayerIds.length) ? this._dragLayerIds : (e.dataTransfer.getData("text/plain") || "").split(",").filter(Boolean);
-      if (ids.length) this._reorderManyToRoot(ids);
-    };
-    abRow.addEventListener("dragover", (e) => { e.preventDefault(); this._clearDropMarks(); abRow.classList.add("drop-into"); });
-    abRow.addEventListener("dragleave", () => abRow.classList.remove("drop-into"));
-    abRow.addEventListener("drop", rootDrop);
+    // Dropping layer(s) onto the Artboard row — or into the empty space below the list — pulls them
+    // out to the top level. Both used to be their own HTML5 dragover/drop handlers; they're part of
+    // the pointer-drag hit-test now (_layerDrag), so they keep working with a finger too.
     (foot || list).appendChild(abRow);
-    // Drop in the empty space of the list (below all rows) → also pull out to the top level.
-    if (!list._dropWired) {
-      list.addEventListener("dragover", (e) => { if (e.target !== list) return; e.preventDefault(); this._clearDropMarks(); list.classList.add("drop-root"); });
-      list.addEventListener("drop", (e) => { if (e.target !== list) return; rootDrop(e); });
-      list._dropWired = true;
-    }
     // Orient the panel to the selection: scroll the (first) active row into view.
     const act = list.querySelector(".layer-row.active:not(.artboard-row)");
     if (act) act.scrollIntoView({ block: "nearest" });
@@ -103,8 +92,18 @@ export const layersMixin = {
   _buildLayerRow(n, id, depth, isGroup, collapsed) {
     const row = document.createElement("div");
     row.className = "layer-row" + (this.selection.has(id) ? " active" : "") + (isGroup ? " is-group" : "");
-    row.draggable = true; row.dataset.id = id;
+    row.dataset.id = id;
     row.style.paddingLeft = (6 + depth * 14) + "px";
+
+    // Touch reorders from this grip, and scrolls the list from anywhere else — a finger dragging a
+    // row is otherwise indistinguishable from a finger scrolling the panel. A mouse can still drag
+    // the whole row.
+    const grip = document.createElement("span");
+    grip.className = "layer-grip";
+    grip.textContent = "⠿";
+    grip.title = "Drag to reorder";
+    grip.setAttribute("aria-hidden", "true");
+    row.appendChild(grip);
 
     // group expand/collapse twisty (a hidden spacer keeps leaf rows aligned)
     const twist = document.createElement("button");
@@ -169,32 +168,90 @@ export const layersMixin = {
       if (!this.selection.has(id)) { this.selection = new Set([id]); this.artboardSelected = false; this._renderSelection(); this._renderInspector(); }
       if (this.openContextPanel) this.openContextPanel(e.clientX, e.clientY, "object");
     });
-    row.addEventListener("dragstart", (e) => {
-      // grab the whole multi-selection together when the dragged row is part of it
-      const ids = (this.selection.has(id) && this.selection.size > 1) ? [...this.selection] : [id];
-      this._dragLayerIds = ids;
-      e.dataTransfer.setData("text/plain", ids.join(",")); e.dataTransfer.effectAllowed = "move";
-      ids.forEach((d) => { const r = document.querySelector(`#layers-list .layer-row[data-id="${CSS.escape(d)}"]`); if (r) r.classList.add("dragging"); });
-    });
-    row.addEventListener("dragend", () => { this._dragLayerIds = null; this._dropPos = null; document.querySelectorAll("#layers-list .layer-row.dragging").forEach((r) => r.classList.remove("dragging")); this._clearDropMarks(); });
-    row.addEventListener("dragover", (e) => {
-      e.preventDefault(); e.dataTransfer.dropEffect = "move";
-      const r = row.getBoundingClientRect(), y = e.clientY - r.top;
-      // group rows have 3 zones (before / nest-into / after) — the "crevices" decide
-      // whether you're adding INTO the group or BETWEEN rows; leaf rows split in half.
-      const pos = isGroup ? (y < r.height * 0.3 ? "before" : y > r.height * 0.7 ? "after" : "into") : (y < r.height / 2 ? "before" : "after");
-      this._clearDropMarks();
-      row.classList.add(pos === "into" ? "drop-into" : pos === "before" ? "drop-before" : "drop-after");
-      this._dropPos = pos;
-    });
-    row.addEventListener("drop", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const ids = (this._dragLayerIds && this._dragLayerIds.length) ? this._dragLayerIds : (e.dataTransfer.getData("text/plain") || "").split(",").filter(Boolean);
-      const pos = this._dropPos || "after";
-      this._clearDropMarks();
-      if (ids.length) this._reorderDrop(ids, id, pos);
-    });
+    this._layerDrag().arm(row);   // pointer-drag, not HTML5 DnD — see _layerDrag below
     return row;
+  },
+  // Reordering layers by dragging was built on HTML5 drag-and-drop, which NEVER fires from a
+  // finger — so on a phone the layer list simply could not be reordered at all. Same helper the
+  // toolbars use now. The hit-test below is the old dragover logic, unchanged: group rows have
+  // three zones (before / nest-into / after) so the "crevices" decide whether you're dropping
+  // INTO a group or BETWEEN rows; leaf rows just split in half.
+  _layerDrag() {
+    if (this._layerDragCtl) return this._layerDragCtl;
+    const listEl = () => document.querySelector("#layers-list");
+    const hit = (x, y) => (document.elementFromPoint(x, y) || null);
+    const rowAt = (x, y) => {
+      const el = hit(x, y);
+      const row = el && el.closest ? el.closest("#layers-list .layer-row") : null;
+      return row && !row.classList.contains("artboard-row") ? row : null;
+    };
+    // Dropping on the pinned Artboard row, or in the empty space below the rows, pulls the layer(s)
+    // OUT to the top level. Those were separate HTML5 dragover/drop handlers on the row and the
+    // list; they'd have died silently with the rest of DnD, so they're folded in here.
+    const rootAt = (x, y) => {
+      const el = hit(x, y);
+      if (!el || !el.closest) return null;
+      if (el.closest("#layers-foot .artboard-row")) return el.closest(".artboard-row");
+      const list = listEl();
+      if (list && el === list) return list;   // empty space below the rows
+      return null;
+    };
+    const clearDrag = () => {
+      this._clearDropMarks();
+      document.querySelectorAll("#layers-list .layer-row.dragging").forEach((r) => r.classList.remove("dragging"));
+      this._dragLayerIds = null; this._dropTarget = null;
+    };
+    this._layerDragCtl = createPointerDrag({
+      ignoreFrom: "button, input, .layer-rename",   // the eye/twisty/rename are their own controls
+      touchHandle: ".layer-grip",                   // touch: grip reorders, elsewhere scrolls the list
+      ghostAxis: "y",                               // rows are full-width; tracking x would fling them sideways
+      // A constant container, so onMove always runs and can decide between row / root / nothing.
+      containerAt: (x, y) => ((rowAt(x, y) || rootAt(x, y)) ? listEl() : null),
+      onStart: (row) => {
+        const id = row.dataset.id;
+        // grab the whole multi-selection together when the dragged row is part of it
+        const ids = (this.selection.has(id) && this.selection.size > 1) ? [...this.selection] : [id];
+        this._dragLayerIds = ids;
+        ids.forEach((d) => { const r = document.querySelector(`#layers-list .layer-row[data-id="${CSS.escape(d)}"]`); if (r) r.classList.add("dragging"); });
+      },
+      onMove: (row, cont, x, y) => {
+        this._clearDropMarks();
+        this._dropTarget = null;
+        const over = rowAt(x, y);
+        if (over && over !== row) {
+          const r = over.getBoundingClientRect(), dy = y - r.top;
+          const isGroup = over.classList.contains("is-group");
+          // where the drop lands ON SCREEN (drives the marker line)
+          const vis = isGroup
+            ? (dy < r.height * 0.3 ? "before" : dy > r.height * 0.7 ? "after" : "into")
+            : (dy < r.height / 2 ? "before" : "after");
+          over.classList.add(vis === "into" ? "drop-into" : vis === "before" ? "drop-before" : "drop-after");
+          // ...and the DOM position that corresponds to it, which is the OPPOSITE. The list renders
+          // front-first (kids.reverse()), so the row ABOVE another is LATER in the DOM, while
+          // _reorderDrop's "before"/"after" are plain DOM-order insertBefore/insertAfter. Passing the
+          // on-screen position straight through — as the old HTML5 drag handler did — meant dropping
+          // a layer above another actually sent it below. A real bug, live for as long as the drag
+          // has existed, and invisible because no test ever performed an actual drag.
+          const pos = vis === "into" ? "into" : (vis === "before" ? "after" : "before");
+          this._dropTarget = { id: over.dataset.id, pos };
+          return;
+        }
+        const root = rootAt(x, y);
+        if (root) {
+          root.classList.add(root.classList.contains("artboard-row") ? "drop-into" : "drop-root");
+          this._dropTarget = { root: true };
+        }
+      },
+      onDrop: () => {
+        const ids = this._dragLayerIds || [], t = this._dropTarget;
+        clearDrag();
+        if (!ids.length || !t) return;
+        if (t.root) this._reorderManyToRoot(ids);
+        else this._reorderDrop(ids, t.id, t.pos);
+      },
+      onCancel: clearDrag,
+    });
+    return this._layerDragCtl;
   },
   _renameInline(node, span) {
     const input = document.createElement("input");
