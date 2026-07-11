@@ -272,6 +272,15 @@ button:disabled {
   color: var(--muted); pointer-events: none; letter-spacing: 0;
 }
 .tool-button.active[data-key]::after { color: rgba(255, 255, 255, 0.75); }
+/* A touch device has no keyboard, so every one of these badges is a lie — "⌘X" on a phone is pure
+   noise cluttering a 44px target. One rule kills them everywhere (tools, viewport controls, action
+   tiles, the swap swatch, the File menu). The data-key attributes stay: the shortcuts still work for
+   anyone with a keyboard attached, and the picker still reads them. */
+@media (pointer: coarse) {
+  .tool-button[data-key]::after, .swatch-swap[data-key]::after,
+  .icon-btn[data-key]::after, .view-btn[data-key]::after,
+  .bar-btn[data-key]::after { content: none; }
+}
 /* viewport controls now use the shared .tool-button object (see above) */
 .vp-sep { width: 1px; align-self: stretch; margin: 2px 3px; background: var(--line); }
 .swatch-swap[data-key]::after { right: -6px; bottom: -1px; }

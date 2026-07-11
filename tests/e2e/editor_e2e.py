@@ -4293,6 +4293,16 @@ def main():
                       mp.evaluate("getComputedStyle(document.querySelector('#output-preview')).touchAction === 'none'"))
                 check("mobile: tool buttons are >=44px touch targets",
                       mp.evaluate("document.querySelector('.toolstrip .tool-button').getBoundingClientRect().height >= 44"))
+                # A phone has no keyboard, so every "⌘X" badge is a lie cluttering a 44px target. The
+                # data-key attributes stay (the shortcuts still work with a keyboard attached, and the
+                # picker reads them) — only the rendered badge goes.
+                badges = mp.evaluate("""() => {
+                    const els = [...document.querySelectorAll('[data-key]')].filter((e) => e.offsetParent !== null);
+                    return { withKey: els.length,
+                             rendered: els.filter((e) => getComputedStyle(e, '::after').content !== 'none').length };
+                }""")
+                check("mobile: keyboard-shortcut badges are not rendered on a touch device",
+                      badges["withKey"] > 10 and badges["rendered"] == 0, str(badges))
                 check("mobile: right dock starts off-screen; Panels FAB slides it up; scrim dismisses it",
                       mp.evaluate("""async () => {
                           const app = document.querySelector('main.app'), dock = document.querySelector('#rightdock');
