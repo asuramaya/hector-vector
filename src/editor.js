@@ -52,41 +52,50 @@ function editorSvgEl() {
   return outputPreviewEl.querySelector("svg.inline-svg");
 }
 
-// On mobile, getScreenCTM() can silently disagree with where things actually paint — confirmed
-// on real devices under at least two different mechanisms (an iOS Safari page pinch-zoom that
-// survives `user-scalable=no`, and separately a Chrome-iOS/OS-level zoom that doesn't even show
-// up in window.visualViewport). getBoundingClientRect() has no such bug — it's real paint
-// geometry — so measure the TRUE stage->screen affine transform from three probe points instead
-// of trusting the CTM. stageCTM() below calls this unconditionally (time-throttled, not gated on
-// any signal that predicts when it's needed — that heuristic has already been wrong once).
+// On real iOS devices, getScreenCTM() disagrees with where the browser actually paints: a touch
+// inverted through it and drawn lands ~100px from the finger. Every iOS browser is WebKit (Chrome
+// included), which is why "a different browser" never helped. getBoundingClientRect() reports real
+// paint geometry and agrees with the touch's own clientX/clientY, so measure the TRUE stage->screen
+// affine from three probe points rather than trusting the CTM. Correct by construction, whatever
+// the underlying cause — no need to guess at page zoom (that guess has already been wrong once:
+// visualViewport read a clean 1.000 on a device that still had the bug).
 //
-// The three probes must land near REAL content, at a SCREEN-relative distance from each other —
-// not at fixed, large stage-space coordinates. A fixed 1000-unit offset (the first version of
-// this function) compounds with the app's own zoom, the external zoom this is correcting for,
-// AND devicePixelRatio, and can land probes at an extreme, likely-degenerate screen position;
-// confirmed on-device, that produced a WORSE correction than the raw bug it was meant to fix.
-// Anchor on the stage's own rendered center (a real measurement) and size the delta off `raw`'s
-// scale so the probes always land a modest, fixed SCREEN distance apart, regardless of zoom.
+// The probes MUST be renderable. SVG says r=0 disables rendering, and WebKit honours that by
+// returning an EMPTY getBoundingClientRect (sitting at the page origin) — so the r=0 circles this
+// function used to probe with collapsed all three points onto one spot on iOS and solved to a
+// SINGULAR matrix, which every tool then inverted into garbage. That shipped, and made the bug
+// worse than it started. Chromium reports a position for r=0 regardless, which is precisely why no
+// headless test caught it (verified in Playwright's real WebKit: r=0 -> left=8,top=8; a sized rect
+// -> the correct point). Hence: sized rects, measured centre-to-centre, and a singular solve is
+// REJECTED rather than trusted — an all-zero matrix is "finite", so a Number.isFinite check alone
+// waves it straight through.
 function measureStageAffine(stage, raw) {
-  const probe = (x, y) => {
-    const c = document.createElementNS(SVG_NS, "circle");
-    c.setAttribute("cx", String(x)); c.setAttribute("cy", String(y)); c.setAttribute("r", "0");
-    c.setAttribute("fill", "none"); c.style.pointerEvents = "none";
-    stage.appendChild(c);
-    const r = c.getBoundingClientRect();
-    c.remove();
-    return { x: r.left, y: r.top };
-  };
-  const rect = stage.getBoundingClientRect();
-  const inv = raw && raw.a ? (() => { try { return raw.inverse(); } catch { return null; } })() : null;
-  const anchor = inv ? new DOMPoint(rect.left + rect.width / 2, rect.top + rect.height / 2).matrixTransform(inv) : { x: 0, y: 0 };
+  const host = stage.querySelector("g.hv-overlay") || stage;   // editor-owned layer, never serialized
   const rawScale = raw ? (Math.hypot(raw.a, raw.b) || 1) : 1;
-  const d = 150 / rawScale;   // ~150 screen px of separation between probes, whatever the zoom
-  if (!Number.isFinite(anchor.x) || !Number.isFinite(anchor.y) || !Number.isFinite(d)) return null;
-  const p0 = probe(anchor.x, anchor.y), p1 = probe(anchor.x + d, anchor.y), p2 = probe(anchor.x, anchor.y + d);
-  const a = (p1.x - p0.x) / d, c = (p2.x - p0.x) / d, e = p0.x - a * anchor.x - c * anchor.y;
-  const b = (p1.y - p0.y) / d, dd = (p2.y - p0.y) / d, f = p0.y - b * anchor.x - dd * anchor.y;
+  const h = 4 / rawScale;   // probe half-size ~4 screen px: always renders, never rounds to nothing
+  const probe = (x, y) => {
+    const r = document.createElementNS(SVG_NS, "rect");
+    r.setAttribute("x", String(x - h)); r.setAttribute("y", String(y - h));
+    r.setAttribute("width", String(2 * h)); r.setAttribute("height", String(2 * h));
+    r.setAttribute("fill", "none"); r.style.pointerEvents = "none";
+    host.appendChild(r);
+    const b = r.getBoundingClientRect();
+    r.remove();
+    return { x: b.left + b.width / 2, y: b.top + b.height / 2 };   // centre: exact even under rotation
+  };
+  // Anchor on the viewBox so the probes always land on real canvas at a sane separation, whatever
+  // the zoom — never at fixed absolute coordinates that compound with it.
+  const vb = stage.viewBox && stage.viewBox.baseVal;
+  const ax = vb && vb.width ? vb.x + vb.width / 2 : 0;
+  const ay = vb && vb.height ? vb.y + vb.height / 2 : 0;
+  const d = vb && vb.width ? vb.width / 4 : 100;
+  if (!Number.isFinite(ax) || !Number.isFinite(ay) || !(d > 0)) return null;
+
+  const p0 = probe(ax, ay), p1 = probe(ax + d, ay), p2 = probe(ax, ay + d);
+  const a = (p1.x - p0.x) / d, c = (p2.x - p0.x) / d, e = p0.x - a * ax - c * ay;
+  const b = (p1.y - p0.y) / d, dd = (p2.y - p0.y) / d, f = p0.y - b * ax - dd * ay;
   if (![a, b, c, dd, e, f].every(Number.isFinite)) return null;
+  if (!(Math.abs(a * dd - b * c) > 1e-9)) return null;   // singular -> unusable; fall back to raw
   return new DOMMatrix([a, b, c, dd, e, f]);
 }
 
@@ -1570,34 +1579,42 @@ const editor = {
     const ov = this._overlayEl();
     if (g && ov && g.nextSibling !== ov) this.stage.insertBefore(g, ov);
   },
-  // The screen<->stage transform, corrected for whatever's currently making getScreenCTM()
-  // disagree with real paint geometry. Originally this only re-measured when visualViewport
-  // reported a page pinch-zoom — turned out that's not the only cause (confirmed on a real
-  // device: visualViewport.scale read exactly 1.000, offset 0,0, and getScreenCTM() was STILL
-  // ~85-100px off from where a probe actually painted — some zoom/scale mechanism was in play
-  // that visualViewport can't see at all, quite possibly a Chrome-iOS or OS-level zoom setting).
-  // So: don't try to detect WHEN to correct — always measure. Every touch/pointer coordinate
-  // mapping should call this instead of this.stage.getScreenCTM() directly — EXCEPT where a raw
-  // stage CTM is being composed against another element's raw CTM in the same expression (that
-  // cancels the zoom error by construction; correcting only one side would reintroduce it — see
-  // editor.js's own node<->stage transforms). Re-measures IMMEDIATELY whenever the raw CTM's own
-  // numbers change (our own zoom/pan is cheap to detect and handle size must track it exactly —
-  // a time-only throttle here once left node handles the wrong size for up to 120ms after a
-  // zoom). When the raw CTM is unchanged, only re-verifies once per throttle window, since that's
-  // the case an outside-the-DOM zoom mechanism could be silently drifting without moving it.
+  // The screen<->stage transform, corrected for whatever is making getScreenCTM() disagree with
+  // real paint geometry on iOS. Don't try to predict WHEN the correction is needed — always
+  // measure. An earlier version only re-measured when visualViewport reported a page pinch-zoom,
+  // and a real device then showed visualViewport.scale at exactly 1.000 while getScreenCTM() was
+  // still ~100px out, so the correction never even ran. If a measurement can't be trusted,
+  // measureStageAffine returns null and we fall back to the raw CTM (today's behaviour) rather
+  // than to a broken one.
+  //
+  // Every touch/pointer coordinate mapping should call this instead of this.stage.getScreenCTM()
+  // directly — EXCEPT where a raw stage CTM is composed against another element's raw CTM in the
+  // same expression (that cancels the error by construction; correcting only one side would
+  // reintroduce it — see editor.js's own node<->stage transforms). Re-measures IMMEDIATELY
+  // whenever the raw CTM's own numbers change (our own zoom/pan is cheap to detect and handle size
+  // must track it exactly — a time-only throttle here once left node handles the wrong size for up
+  // to 120ms after a zoom). When the raw CTM is unchanged, only re-verifies once per throttle
+  // window, since that's the case where an outside-the-DOM mechanism could be drifting silently.
   stageCTM() {
     const raw = this.stage && this.stage.getScreenCTM && this.stage.getScreenCTM();
     if (!raw) return raw;
     const now = performance.now();
     const rawKey = `${raw.a},${raw.b},${raw.c},${raw.d},${raw.e},${raw.f}`;
     if (this._ctmCache && this._ctmCache.rawKey === rawKey && (now - this._ctmCache.at) < 120) {
+      this._ctmMeasured = this._ctmCache.measured;
       return this._ctmCache.matrix;
     }
-    const measured = measureStageAffine(this.stage, raw) || raw;
-    this._ctmCache = { rawKey, at: now, matrix: measured };
-    return measured;
+    const measured = measureStageAffine(this.stage, raw);
+    // Whether the calibration actually RAN, as opposed to quietly falling back to the raw CTM.
+    // Falling back is safe (it's exactly today's behaviour) but on iOS it means the ~100px touch
+    // offset is back and nothing says so — an inert fix looks identical to a working one. Surfaced
+    // so tests and Settings -> Debug can assert the correction is live rather than assume it.
+    this._ctmMeasured = !!measured;
+    this._ctmCache = { rawKey, at: now, matrix: measured || raw, measured: !!measured };
+    return measured || raw;
   },
   _ctmCache: null,
+  _ctmMeasured: false,
   _scaleK() { const m = this.stageCTM(); return m ? (Math.hypot(m.a, m.b) || 1) : 1; },
   _applyGuideCoords(el, gd) {
     const vb = this.stage.viewBox.baseVal, vert = gd.axis === "v";

@@ -4236,6 +4236,49 @@ def main():
                     return stage.querySelectorAll('[data-hv-id]').length > before;
                 }""")
                 check("mobile: one-finger touch still draws (single pointer = tool)", draw is True)
+                # THE invariant behind the iOS touch-coordinate bug: a touch at (clientX, clientY),
+                # inverted through editor.stageCTM() and drawn, must PAINT back at that same client
+                # point. stageCTM() calibrates itself against real paint geometry, so this catches a
+                # degenerate calibration — which is exactly how the bug shipped: the probes used to be
+                # r=0 circles, and SVG says r=0 disables rendering, so WebKit (every iOS browser)
+                # returned an empty rect for all three, solving to a SINGULAR matrix that every tool
+                # then inverted into garbage. Chromium reports a position for r=0 anyway, so the whole
+                # suite stayed green while every iPhone was broken. Assert the determinant too: an
+                # all-zero matrix is "finite", so a NaN check alone waves the singular case straight
+                # through. Engine-agnostic on purpose — see tests/e2e/webkit_ctm.js to run it on WebKit.
+                trip = mp.evaluate("""() => {
+                    const NS='http://www.w3.org/2000/svg', stage=editor.stage;
+                    const host = stage.querySelector('g.hv-overlay') || stage;
+                    const paintedAt = (x,y) => {   // ground truth: a SIZED rect renders in every engine
+                        const raw=stage.getScreenCTM(), h=4/(Math.hypot(raw.a,raw.b)||1);
+                        const r=document.createElementNS(NS,'rect');
+                        r.setAttribute('x',x-h); r.setAttribute('y',y-h);
+                        r.setAttribute('width',2*h); r.setAttribute('height',2*h); r.setAttribute('fill','none');
+                        host.appendChild(r); const b=r.getBoundingClientRect(); r.remove();
+                        return {x:b.left+b.width/2, y:b.top+b.height/2};
+                    };
+                    const out=[];
+                    for (const z of [1, 0.78, 2.5]) {
+                        viewports.output.scale = z;
+                        document.querySelector('.viewport-content').style.transform =
+                            `translate(${viewports.output.x}px, ${viewports.output.y}px) scale(${z})`;
+                        editor._ctmCache = null;
+                        const m = editor.stageCTM(), det = m.a*m.d - m.b*m.c;
+                        const rc = viewports.output.el.getBoundingClientRect();
+                        const cx = rc.left+rc.width*0.4, cy = rc.top+rc.height*0.6;
+                        const sp = new DOMPoint(cx,cy).matrixTransform(m.inverse());
+                        const p = paintedAt(sp.x, sp.y);
+                        out.push({z, det, err: Math.hypot(p.x-cx, p.y-cy), measured: editor._ctmMeasured === true});
+                    }
+                    return out;
+                }""")
+                # `measured` is the load-bearing assertion. A degenerate probe makes the calibration bail
+                # out to the raw CTM, which on Chromium round-trips perfectly — so det and err both look
+                # healthy while the correction iOS actually depends on is quietly dead. An inert fix and a
+                # working one are indistinguishable without this.
+                check("mobile: a touch maps to the point it actually paints at, at every zoom (calibration live, no singular CTM)",
+                      all(abs(t["det"]) > 1e-9 and t["err"] < 1.0 and t["measured"] for t in trip),
+                      str(trip))
                 # Phone portrait collapses to ONE bottom bar: the object-action bar + zoom/fit strip
                 # are reparented INTO the Panels sheet (as View/Actions rows), leaving only the tools.
                 check("mobile: action bar + zoom strip move into the Panels sheet (single bottom bar = tools)",

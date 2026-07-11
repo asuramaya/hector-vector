@@ -51,6 +51,9 @@ function snapshotFor(e) {
     diff: rendered ? Math.hypot(rendered.x - e.clientX, rendered.y - e.clientY) : null,
     corrected,
     correctedDiff: corrected ? Math.hypot(corrected.x - e.clientX, corrected.y - e.clientY) : null,
+    // Did the CTM calibration actually run, or did it bail out to the raw (buggy on iOS) matrix?
+    // Without this, an inert fix and a working one produce identical-looking HUDs.
+    calibrated: !!(ed && ed._ctmMeasured),
     visualViewport: vv ? { scale: vv.scale, offsetLeft: vv.offsetLeft, offsetTop: vv.offsetTop, width: vv.width, height: vv.height } : null,
     devicePixelRatio: window.devicePixelRatio,
     inner: { w: window.innerWidth, h: window.innerHeight },
@@ -71,6 +74,7 @@ export function formatTouchDebugSnapshot(s) {
     s.diff !== null ? `raw diff: ${s.diff.toFixed(1)}px${s.diff > 3 ? "  <-- bug present" : "  (ok)"}` : "raw diff: n/a",
     s.corrected ? `corrected probe: ${s.corrected.x.toFixed(1)}, ${s.corrected.y.toFixed(1)}` : "corrected probe: n/a",
     s.correctedDiff !== null ? `corrected diff: ${s.correctedDiff.toFixed(1)}px${s.correctedDiff > 3 ? "  <-- FIX NOT WORKING" : "  (fix OK)"}` : "corrected diff: n/a",
+    `calibration: ${s.calibrated ? "LIVE" : "FELL BACK TO RAW  <-- fix is inert"}`,
     vv
       ? `visualViewport scale:${vv.scale.toFixed(3)} offset:${vv.offsetLeft.toFixed(1)},${vv.offsetTop.toFixed(1)} size:${vv.width.toFixed(0)}x${vv.height.toFixed(0)}`
       : "visualViewport: n/a",
