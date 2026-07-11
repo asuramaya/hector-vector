@@ -52,6 +52,8 @@ import {
   configureSettings, openAppSettings, openToolsSettings, loadVersion, versionInfo,
   appSettingsOpen, setAppSettingsOpen, setPwaInstallPrompt,
 } from "./ui/settings.js";
+import { configureLayoutPicker, openLayoutPicker } from "./ui/layout-picker.js";
+import { setCustomizeHandler } from "./ui/formfactor.js";
 import {
   workItems, outputs, projects, selectedName, selectedOutput, manualOutputName,
   setWorkItems, setOutputs, setProjects, setSelectedName, setSelectedOutput, setManualOutputName,
@@ -345,6 +347,9 @@ configureSettings({
   prefs, persistPrefs, getWorkspace: () => workspace,
   refreshAll, fetchStatus, applyStatusData,
 });
+// getLayout is a getter, not the object: layoutCtl isn't built until further down.
+configureLayoutPicker({ setStatus, openModal, closeModal, modalSearchEl, modalBodyEl, getLayout: () => layoutCtl });
+setCustomizeHandler(() => openLayoutPicker());   // the phone sheet's "Customize bars…" button
 // Gallery grid + file actions (src/ui/gallery.js): state is in docstate; inject the
 // status/modal/viewport seams + the doc-loaders it leans on (mountBlankCanvas/
 // mountStageFromText from docio, defaultSaveName, rememberLastDoc).
@@ -444,6 +449,9 @@ const MENU_ITEMS = {
     const active = layoutCtl.activeProfile();   // null = the unnamed "Default" working layout
     const dirty = layoutCtl.isDirty();          // live arrangement diverges from its baseline
     const items = [
+      // The picker works everywhere (and is the ONLY way to customize on a phone, where HTML5 drag
+      // never fires). Drag-to-arrange stays as the fast path for a mouse.
+      { label: "Customize bars…", onClick: () => openLayoutPicker() },
       { label: "Customize layout", type: "toggle", checked: layoutCtl.isEditing(), onClick: () => layoutCtl.toggleEdit() },
       { type: "sep" },
       { label: "Default", checked: active === null, badge: (active === null && dirty) ? "edited" : null, onClick: () => layoutCtl.reset() },

@@ -26,6 +26,10 @@ const q = (s) => document.querySelector(s);
 const mkSep = () => { const s = document.createElement("span"); s.className = "tool-sep mobile-made"; s.setAttribute("aria-hidden", "true"); return s; };
 
 let composed = false;
+// Set by app.js — the sheet's "Customize bars…" entry point. Kept as a seam so this module stays
+// free of UI imports (it's imported by layout.js, and a cycle back through the picker would bite).
+let onCustomize = null;
+export function setCustomizeHandler(fn) { onCustomize = fn; }
 
 // Phone portrait (≤620px). MOVES existing elements rather than rebuilding them, so every id-wired
 // handler and every layout.js tileKey survives.
@@ -67,8 +71,20 @@ export function composePhone(on) {
       el.classList.add("in-sheet");
       sheet.insertBefore(el, sheet.querySelector(".rail-section"));
     }
+    // Customize, one tap from the Panels FAB. Built here (not in index.html) so it exists ONLY on a
+    // phone — the landscape layout asserts #mobile-top/the sheet stay clean, and anything permanent
+    // would steal a grid track. .mobile-made means the restore below already removes it.
+    if (!sheet.querySelector(".sheet-customize")) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "ghost-button sheet-customize mobile-made";
+      b.textContent = "Customize bars…";
+      b.addEventListener("click", () => { if (onCustomize) onCustomize(); });
+      sheet.insertBefore(b, sheet.querySelector(".rail-section"));
+    }
   } else {
     topbar.querySelectorAll(".mobile-made").forEach((s) => s.remove());
+    sheet.querySelectorAll(".mobile-made").forEach((s) => s.remove());
     // Restore EVERYTHING we ever moved, not a fixed list — a customized phone layout can have moved
     // tiles we never anticipated, and a tile left behind in #mobile-top is display:none on desktop
     // (i.e. it silently vanishes).

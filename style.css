@@ -1490,7 +1490,11 @@ input.insp-ab-name { background: var(--field-bg, #2a2a2e); color: inherit; borde
   inset: 0;
   display: grid;
   place-items: center;
-  z-index: 50;
+  /* Above EVERYTHING. This used to be 50, i.e. below the phone's FAB (55), scrim (58) and bottom
+     sheet (60) — so any modal opened on a phone rendered underneath them, with the FAB floating on
+     top of it. That hit Settings too, not just the new picker. A modal is the frontmost thing there
+     is; nothing in the chrome should ever cover it. */
+  z-index: 100;
 }
 
 .modal-root[hidden] { display: none; }
@@ -1981,6 +1985,41 @@ text.hv-text-editing { visibility: hidden; }
 .app.editor.customizing .panel-foot { background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
 /* the Layers artboard chin reads as part of the customizable frame too */
 .app.editor.customizing .layers-foot { outline: 1px dashed var(--accent); outline-offset: -1px; background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
+/* ---- "Customize bars" picker (src/ui/layout-picker.js) ---------------------------------------
+   A list, not a drag surface: on a phone the bars sit at opposite ends of the screen and the
+   action bar is inside the sheet, so dragging between them is hostile. Rows are touch-sized. */
+.picker-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 4px; border-bottom: 1px solid var(--line);
+}
+.picker-row input[type="checkbox"] { flex: 0 0 auto; width: 20px; height: 20px; }
+.picker-glyph {
+  flex: 0 0 auto; width: 26px; height: 26px; display: grid; place-items: center;
+  border: 1px solid var(--line); background: var(--bg); font-size: 14px; line-height: 1;
+}
+/* The name must not be the thing that gives way — a row of "Selec…", "Recta…", "Curv…" is useless.
+   It gets a real floor, and the controls stay compact. */
+.picker-name { flex: 1 1 auto; min-width: 7.5em; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-nudge { flex: 0 0 auto; min-width: 30px; padding: 4px 5px; }
+.picker-move { flex: 0 0 auto; width: 6.5em; font-size: 12px; min-width: 0; }
+/* Narrow phones can't fit label + both nudges + the bar picker on one line without eating the label,
+   so let the controls drop to a second line and keep the name readable. */
+@media (max-width: 460px) {
+  .picker-row { flex-wrap: wrap; row-gap: 6px; }
+  .picker-row input[type="checkbox"], .picker-glyph { order: 0; }
+  .picker-name { order: 1; flex: 1 1 auto; min-width: 0; }
+  /* a zero-height flex item with a full-width basis = a forced line break, so the row reads
+     [✓] [glyph] Name  /  [↑] [↓] [move to ▾] instead of stacking into three lines */
+  .picker-row::after { content: ""; order: 2; flex: 0 0 100%; height: 0; }
+  .picker-nudge { order: 3; }
+  .picker-move { order: 3; margin-left: auto; width: auto; max-width: 55%; }
+}
+.picker-over { margin-left: 8px; color: var(--accent); font-weight: 600; }
+.picker-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 0 4px; }
+.picker-foot .primary { margin-left: auto; background: var(--ink); color: #fff; border-color: var(--ink); }
+/* the phone sheet's own way in */
+.sheet-customize { margin: 10px 12px; width: calc(100% - 24px); }
+
 /* A tile the user has switched off. The node STAYS in the DOM (so its order is still captured, and
    every id-wired handler survives) — only its chrome goes away. Hiding a tool trims the BAR, not
    the tool: its keyboard shortcut keeps working. !important because the phone media block sets an

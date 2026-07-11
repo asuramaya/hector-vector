@@ -4400,6 +4400,45 @@ def main():
                 check("mobile: coming back to the phone restores the phone layout (hides + moves), not the desktop one",
                       mp.evaluate("""() => __layout.isHidden('tool:knife')
                                         && !!document.querySelector('#mobile-top [data-tool=pen]')"""))
+
+                # The picker is the ONLY way to customize on a phone (HTML5 drag never fires on touch),
+                # so its reachability is the feature. Drive it through the real UI, not the API.
+                mp.evaluate("() => __layout.reset()")
+                mp.wait_for_timeout(200)
+                mp.click("#mobile-panels")            # the Panels FAB
+                mp.wait_for_timeout(400)
+                check("mobile: the Panels sheet offers a way into Customize bars (no right-click needed)",
+                      mp.evaluate("() => !!document.querySelector('#rightdock .sheet-customize')"))
+                mp.click("#rightdock .sheet-customize")
+                mp.wait_for_timeout(500)
+                opened = mp.evaluate("""() => {
+                    const root = document.querySelector('.modal-root');
+                    const app = document.querySelector('main.app');
+                    const z = (s) => { const e = document.querySelector(s); return e ? +getComputedStyle(e).zIndex || 0 : 0; };
+                    return { open: !!root && !root.hidden,
+                             rows: document.querySelectorAll('.picker-row').length,
+                             sheetClosed: !app.classList.contains('sheet-open'),
+                             // the modal was z-index 50 — UNDER the FAB (55), scrim (58) and sheet (60),
+                             // so every modal on a phone (Settings included) rendered beneath them
+                             aboveChrome: z('.modal-root') > 60 };
+                }""")
+                check("mobile: Customize bars opens above the phone chrome, and closes the sheet under it",
+                      opened["open"] and opened["rows"] > 20 and opened["sheetClosed"] and opened["aboveChrome"], str(opened))
+                # ...and the actual payoff: untick tools IN THE PICKER, watch the strip stop overflowing.
+                trimmed = mp.evaluate("""() => {
+                    const t = document.querySelector('.toolstrip');
+                    const before = t.scrollWidth - t.clientWidth;
+                    let clicked = 0;
+                    for (const k of ['tool:curvature','tool:line','tool:width','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser']) {
+                        const row = document.querySelector(`.picker-row[data-key="${k}"]`);
+                        if (row) { row.querySelector('input[type=checkbox]').click(); clicked++; }
+                    }
+                    return { clicked, before, after: t.scrollWidth - t.clientWidth };
+                }""")
+                check("mobile: unticking tools in the picker trims the real strip — 711px-in-390px, solved through the UI",
+                      trimmed["clicked"] == 7 and trimmed["before"] > 300 and trimmed["after"] == 0, str(trimmed))
+                mp.evaluate("() => { const b = document.querySelector('[data-modal-close]'); if (b) b.click(); }")
+                mp.evaluate("() => __layout.reset()")
             finally:
                 set_page(page)   # hand the screenshot target back to the desktop page
                 mctx.close()

@@ -11,6 +11,7 @@ import { capsInfo, ensureCapsInfo } from "./processor.js";
 import { loadJobs, installJobActive } from "./jobs.js";
 import { CLOUD } from "./env.js";
 import { getTouchDebugSnapshot, formatTouchDebugSnapshot, setTouchDebugVisual, isTouchDebugVisualOn } from "./touchdebug.js";
+import { openLayoutPicker } from "./layout-picker.js";
 
 let setStatus, openModal, closeModal, modalSearchEl, modalBodyEl,
     prefs, persistPrefs, getWorkspace, refreshAll, fetchStatus, applyStatusData;
@@ -252,6 +253,19 @@ export function openAppSettings(opts = {}) {
   updWrap.appendChild(updBox);
   root.appendChild(updWrap);
   }   // !CLOUD (Updates)
+
+  // The guaranteed way in. Settings lives in the header menu, which is never itself customizable,
+  // so this door can't be hidden away — it's the recovery path if you switch off something you
+  // needed, and on a phone it's the only entry point that doesn't rely on a right-click.
+  root.appendChild(sectionTitle("Layout"));
+  const barsWrap = document.createElement("div"); barsWrap.className = "form-row";
+  const barsBox = document.createElement("div"); barsBox.className = "form-actions";
+  barsBox.appendChild(ghostBtn("Customize bars…", () => { closeModal(); openLayoutPicker(); }));
+  const barsHint = document.createElement("div"); barsHint.className = "form-hint";
+  barsHint.textContent = "Choose which buttons appear on each toolbar, and in what order. "
+    + "Hiding a button only trims the bar — its keyboard shortcut keeps working. Phone and desktop keep separate layouts.";
+  barsWrap.appendChild(barsBox); barsWrap.appendChild(barsHint);
+  root.appendChild(barsWrap);
 
   root.appendChild(sectionTitle("Debug"));
   root.appendChild(prefToggleRow("Touch debug overlay", isTouchDebugVisualOn() || prefs.touchDebug,
