@@ -93,7 +93,11 @@ import { configureLibrary, renderLibrary, libraryMode } from "./ui/library.js";
 const LAYOUT_HEAL_MARK = "2026-06-05";
 try {
   if (localStorage.getItem("hector-vector:layout-heal") !== LAYOUT_HEAL_MARK) {
+    // NB: adding a key here is inert until the mark is next bumped — which is exactly right.
+    // Bumping it now, just to introduce the phone key, would wipe every existing user's desktop
+    // layout for no reason at all.
     ["hector-vector:docks", "hector-vector:dock-groups", "hector-vector:layout",
+     "hector-vector:layout:phone",
      "hector-vector:layout-active", "hector-vector:sides-folded", "hector-vector:dock-w"]
       .forEach((k) => localStorage.removeItem(k));
     localStorage.setItem("hector-vector:layout-heal", LAYOUT_HEAL_MARK);

@@ -849,6 +849,32 @@ def main():
               page.evaluate("""() => { const L = JSON.parse(localStorage.getItem('hector-vector:layout') || '{}');
                 return !!document.querySelector('.actionbar [data-tool=pen]')
                   && L.actions.includes('tool:pen') && !L.tools.includes('tool:pen'); }"""))
+        # show/hide is the half the engine never had (it was reorder-only). Desktop gets it too.
+        # NB this runs with customize mode ON, where a hidden tile is deliberately still SHOWN, ghosted
+        # — otherwise there'd be no way to switch it back on from the bar itself. So assert both states.
+        hid = page.evaluate("""() => {
+            const was = window.__layout.isEditing();
+            window.__layout.setHidden('tool:knife', true);
+            const el = document.querySelector('[data-tool=knife]');
+            const L = JSON.parse(localStorage.getItem('hector-vector:layout') || '{}');
+            const ghosted = el.classList.contains('layout-hidden') && el.offsetParent !== null;   // visible while customizing
+            if (was) window.__layout.toggleEdit();          // leave customize mode
+            const gone = el.offsetParent === null;                                                // truly hidden in normal use
+            if (was) window.__layout.toggleEdit();          // put it back the way we found it
+            return { ghosted, gone,
+                     persisted: (L['#hidden'] || []).includes('tool:knife'),
+                     // "#hidden" is a RESERVED key inside the same blob, so an older build reads it as
+                     // an unknown bar and ignores it — order preserved, tiles visible. Correct decay.
+                     barsIntact: Array.isArray(L.tools) && L.tools.includes('tool:select') };
+        }""")
+        check("a tile can be hidden (gone in use, ghosted while customizing so it can be switched back on)",
+              hid["gone"] and hid["ghosted"] and hid["persisted"] and hid["barsIntact"], str(hid))
+        check("un-hiding fully restores the tile",
+              page.evaluate("""() => { window.__layout.setHidden('tool:knife', false);
+                const el = document.querySelector('[data-tool=knife]');
+                return !el.classList.contains('layout-hidden') && el.offsetParent !== null; }"""))
+        check("a desktop-only session never creates the phone layout key",
+              page.evaluate("() => localStorage.getItem('hector-vector:layout:phone') === null"))
         # save it as a named profile, then reset to default
         page.evaluate("window.__layout.saveProfile('Test'); window.__layout.reset()")
         check("Reset restores the default layout and clears storage",
@@ -4325,6 +4351,55 @@ def main():
                 check("mobile: selecting reveals the contextual bar with Delete + Duplicate on-screen, in ONE row",
                       sel["shown"] and sel["del"] and sel["dup"] and sel["rows"] < 90, str(sel))
                 mp.evaluate("() => { editor.selection.clear(); editor.onInspect && editor.onInspect(); }")
+
+                section("Mobile / customization — show-hide, per-form-factor layouts")
+                # THE user-facing problem: 13 tools need 711px in a 390px strip. Hiding tools must
+                # actually make the strip stop overflowing — and the fade hint must notice, which the
+                # existing MutationObserver cannot (it watches childList, and hiding is a CLASS).
+                desktop_key_before = mp.evaluate("() => localStorage.getItem('hector-vector:layout')")
+                trim = mp.evaluate("""() => {
+                    const t = document.querySelector('.toolstrip');
+                    const before = t.scrollWidth - t.clientWidth;
+                    for (const k of ['tool:curvature','tool:line','tool:width','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser'])
+                        __layout.setHidden(k, true);
+                    return { before, after: t.scrollWidth - t.clientWidth };
+                }""")
+                mp.wait_for_timeout(250)
+                faded = mp.evaluate("() => document.querySelector('.toolstrip').classList.contains('is-overflowing-x')")
+                check("mobile: hiding tools actually trims the strip — 711px-in-390px overflow goes to zero, fade hint clears",
+                      trim["before"] > 300 and trim["after"] == 0 and not faded, str(trim))
+                check("mobile: Select is pinned — you cannot hide every tool and strand yourself",
+                      mp.evaluate("""() => __layout.setHidden('tool:select', true) === false
+                                        && document.querySelector('[data-tool=select]').offsetParent !== null"""))
+                # H1: a phone session must never be able to write the DESKTOP layout key. (It nearly
+                # did: the breakpoint handler's persist() re-read mode(), which has already flipped by
+                # the time it fires, so it wrote the phone arrangement into the desktop key.)
+                check("mobile: a phone session cannot touch the desktop layout key (they are separate stores)",
+                      mp.evaluate("() => localStorage.getItem('hector-vector:layout')") == desktop_key_before
+                      and mp.evaluate("""() => { const k = JSON.parse(localStorage.getItem('hector-vector:layout:phone') || 'null');
+                                                 return !!k && k['#hidden'].includes('tool:knife'); }"""))
+                # H2: the stranding bug. Move a tool INTO the quick bar (#mobile-top is display:none
+                # above 620px), cross to desktop, and it must NOT vanish. Only renormalize() saves it —
+                # composePhone's homes map never moved that tile, so it cannot put it back.
+                mp.evaluate("() => __layout.move('tool:pen', 'quick', 0)")
+                mp.wait_for_timeout(200)
+                moved_in = mp.evaluate("() => !!document.querySelector('#mobile-top [data-tool=pen]')")
+                mp.set_viewport_size({"width": 1300, "height": 900})
+                mp.wait_for_timeout(700)
+                crossed = mp.evaluate("""() => {
+                    const pen = document.querySelector('[data-tool=pen]');
+                    return { penVisible: !!pen && pen.offsetParent !== null,
+                             stranded: document.querySelectorAll('#mobile-top .tool-button').length,
+                             stillHidden: document.querySelectorAll('.tool-button.layout-hidden').length };
+                }""")
+                check("mobile: crossing to desktop strands nothing — a tool parked in the quick bar comes back, hides clear",
+                      moved_in and crossed["penVisible"] and crossed["stranded"] == 0 and crossed["stillHidden"] == 0,
+                      str(crossed))
+                mp.set_viewport_size({"width": 390, "height": 800})
+                mp.wait_for_timeout(700)
+                check("mobile: coming back to the phone restores the phone layout (hides + moves), not the desktop one",
+                      mp.evaluate("""() => __layout.isHidden('tool:knife')
+                                        && !!document.querySelector('#mobile-top [data-tool=pen]')"""))
             finally:
                 set_page(page)   # hand the screenshot target back to the desktop page
                 mctx.close()

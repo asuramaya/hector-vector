@@ -1981,6 +1981,15 @@ text.hv-text-editing { visibility: hidden; }
 .app.editor.customizing .panel-foot { background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
 /* the Layers artboard chin reads as part of the customizable frame too */
 .app.editor.customizing .layers-foot { outline: 1px dashed var(--accent); outline-offset: -1px; background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
+/* A tile the user has switched off. The node STAYS in the DOM (so its order is still captured, and
+   every id-wired handler survives) — only its chrome goes away. Hiding a tool trims the BAR, not
+   the tool: its keyboard shortcut keeps working. !important because the phone media block sets an
+   explicit display on bar children, which would otherwise win. */
+.tool-button.layout-hidden { display: none !important; }
+/* ...but while you're customizing you must be able to SEE what you switched off, or you could never
+   switch it back on from the bar itself. Show it, ghosted. */
+.app.editor.customizing .tool-button.layout-hidden { display: grid !important; opacity: 0.32; outline: 1px dashed var(--muted); outline-offset: -1px; }
+
 /* tiles become draggable handles; their normal click is suppressed while customizing */
 .app.editor.customizing .tool-button { cursor: grab; }
 .app.editor.customizing .tool-button:active { cursor: grabbing; }

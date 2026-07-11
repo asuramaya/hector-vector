@@ -37,7 +37,36 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
     for (const ch of cont.children) { if (tail && ch === tail) break; if (isTile(ch) || isSep(ch)) out.push(ch); }
     return out;
   }
-  const capture = () => { const m = {}; for (const b of BARS) m[b.name] = movable(b).map(slotKey); return m; };
+  // Tiles the user has switched OFF. Kept as a reserved key inside the same blob rather than a
+  // {v:2, bars, hidden} wrapper, because a bar name can never contain "#": a legacy blob simply has
+  // no "#hidden" (-> nothing hidden, zero migration code), and an OLDER build reading a new blob
+  // treats "#hidden" as an unknown bar and ignores it — order preserved, tiles visible. That's the
+  // right way to degrade.
+  const HIDDEN_KEY = "#hidden";
+  const hidden = new Set();
+  const capture = () => {
+    const m = {};
+    for (const b of BARS) m[b.name] = movable(b).map(slotKey);
+    m[HIDDEN_KEY] = [...hidden].sort();
+    return m;
+  };
+  // Hiding is a CLASS, never a removal: the node stays in the DOM, so collectTiles() still finds it,
+  // its ORDER is still captured (order and visibility stay orthogonal), and every id-wired handler
+  // survives. It also means hiding a tool only trims the BAR — the keyboard shortcut keeps working.
+  function applyHidden() {
+    for (const [key, el] of collectTiles()) el.classList.toggle("layout-hidden", hidden.has(key));
+    refreshOverflow();
+  }
+  // The bars' overflow-fade hint is driven by a MutationObserver watching childList only (app.js),
+  // so a class-only change would never retrigger it and the "there's more, scroll" fade would lie.
+  function refreshOverflow() {
+    requestAnimationFrame(() => {
+      for (const b of BARS) {
+        const c = barOf(b); if (!c) continue;
+        c.classList.toggle("is-overflowing-x", c.scrollWidth > c.clientWidth + 1);
+      }
+    });
+  }
   // A fresh divider of the right kind for a bar: a thin rule between vertical-stack
   // bars (toolstrip/actionbar), a vertical rule between horizontal bars; viewport
   // keeps its own .vp-sep style.
@@ -77,15 +106,59 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
     const tiles = collectTiles();
     for (const b of BARS) applyBar(b, layout[b.name], tiles);
     // tiles a saved layout doesn't mention (e.g. added in a newer build) keep their place
+    hidden.clear();
+    for (const k of (layout[HIDDEN_KEY] || [])) hidden.add(k);
+    applyHidden();
   }
+
+  // ---- per-form-factor storage ----------------------------------------------------------------
+  // A phone and a desktop cannot share one arrangement: the phone MOVES tiles between bars to build
+  // its bands, so a capture() taken on a phone describes a completely different DOM. They get their
+  // own keys, and keyFor() is the only place a key is ever constructed. Hard invariant: a phone
+  // session can never write the desktop key. (Guarded by an e2e check, not just this comment.)
   const PROFILES_KEY = "hector-vector:layout-profiles";
-  const loadSaved = () => { try { return JSON.parse(localStorage.getItem(LAYOUT_KEY) || "null"); } catch { return null; } };
-  const persist = () => { try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(capture())); } catch {} };   // auto-save
+  const mode = () => (isPhone() ? "phone" : "desktop");
+  const keyFor = (m) => (m === "phone" ? `${LAYOUT_KEY}:phone` : LAYOUT_KEY);
+  const loadSaved = (m = mode()) => { try { return JSON.parse(localStorage.getItem(keyFor(m)) || "null"); } catch { return null; } };
+  // The mode is an ARGUMENT, not something persist() re-reads. When the breakpoint fires, the media
+  // query has ALREADY flipped, so a persist() that asked mode() for itself would write the outgoing
+  // (phone) arrangement straight into the INCOMING (desktop) key — corrupting the desktop layout and
+  // then faithfully restoring the phone bands on top of it. Which is exactly what it did.
+  const persist = (m = mode()) => { try { localStorage.setItem(keyFor(m), JSON.stringify(capture())); } catch {} };   // auto-save
   const loadProfiles = () => { try { return JSON.parse(localStorage.getItem(PROFILES_KEY) || "{}") || {}; } catch { return {}; } };
   const saveProfiles = (p) => { try { localStorage.setItem(PROFILES_KEY, JSON.stringify(p)); } catch {} };
-  apply(loadSaved());   // restore the auto-saved arrangement at boot
-  // Crossing the phone breakpoint re-composes the bands (C1 swaps the saved layout here too).
-  onFormFactorChange((phone) => composePhone(phone));
+  // A profile carries a half per form factor. Legacy profiles are a bare bar-map -> read as desktop.
+  const profileHalf = (p, m = mode()) => (p && typeof p === "object" && ("desktop" in p || "phone" in p)) ? p[m] : (m === "desktop" ? p : null);
+
+  // Reset baselines, per form factor. DEFAULTS.desktop is the AUTHORED order; DEFAULTS.phone is the
+  // composed one, filled in the first time we're on a phone.
+  const DEFAULTS = { desktop: AUTHORED, phone: null };
+  DEFAULTS[mode()] = DEFAULT;
+
+  apply(loadSaved());   // restore the auto-saved arrangement for THIS form factor
+
+  // ---- crossing the breakpoint -----------------------------------------------------------------
+  // renormalize() is the load-bearing step and the reason this isn't just "recompose". A phone
+  // layout can have moved a tool INTO #mobile-top; that container is display:none above 620px, so
+  // without putting every tile back to the outgoing mode's baseline first, the tile is stranded
+  // inside a hidden container on desktop and simply VANISHES. composePhone's homes map can't save
+  // it — the tile was never one of the elements composePhone itself moved.
+  function renormalize(outgoing) {
+    apply(DEFAULTS[outgoing] || AUTHORED);
+    hidden.clear();
+    applyHidden();   // clears every .layout-hidden — visibility is per form factor too
+  }
+  onFormFactorChange((phone) => {
+    const outgoing = phone ? "desktop" : "phone";
+    persist(outgoing);             // save the OUTGOING mode explicitly — mode() has already flipped
+    if (editing) setEditing(false);
+    renormalize(outgoing);         // <- put every tile back before the bands are re-composed
+    composePhone(phone);
+    const now = mode();
+    if (!DEFAULTS[now]) DEFAULTS[now] = capture();
+    apply(loadSaved(now));
+    BARS.forEach((b) => wireBar(b, editing));
+  });
 
   // ---- drag tiles between bars (only while customizing) ----
   let editing = false, dragEl = null;
@@ -173,7 +246,9 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
     if (!el || BARS.some((b) => b.name === name)) return;
     const bar = { name, el, tail: el.querySelector(".panel-x") ? ".panel-x" : null };   // drops land before the × (Dock-to-rail) button
     BARS.push(bar);
-    if (!(name in DEFAULT)) DEFAULT[name] = movable(bar).map(slotKey);   // authored default (for Reset)
+    // authored default (for Reset) — record it in EVERY form factor's baseline, so a panel that
+    // registers late is resettable whichever mode we happen to be booting in
+    for (const d of Object.values(DEFAULTS)) if (d && !(name in d)) d[name] = movable(bar).map(slotKey);
     const saved = loadSaved();
     if (saved && saved[name]) applyBar(bar, saved[name]);   // restore this bar's saved arrangement
     if (editing) wireBar(bar, true);
@@ -201,14 +276,55 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
   // baseline actually records, so a profile saved before a newer panel existed doesn't
   // read as "edited" the instant it's applied (its missing bars simply aren't compared).
   const sameAs = (base) => { if (!base) return false; const now = capture(); return Object.keys(base).every((k) => JSON.stringify(base[k]) === JSON.stringify(now[k])); };
-  const isDirty = () => activeProfile ? !sameAs(loadProfiles()[activeProfile]) : !sameAs(DEFAULT);
+  const baseline = () => (activeProfile ? profileHalf(loadProfiles()[activeProfile]) : DEFAULTS[mode()]);
+  const isDirty = () => !sameAs(baseline());
 
-  function reset() { try { localStorage.removeItem(LAYOUT_KEY); } catch {} apply(DEFAULT); setActive(null); setStatus("Layout reset to default.", 1500); }
-  function applyProfile(name) { const p = loadProfiles()[name]; if (!p) return; apply(p); persist(); setActive(name); setStatus(`Layout: ${name}.`, 1500); }
-  function saveProfile(name) { const nm = (name || "").trim(); if (!nm) return false; const p = loadProfiles(); p[nm] = capture(); saveProfiles(p); setActive(nm); return true; }
-  function updateActive() { if (!activeProfile) return false; const p = loadProfiles(); if (!(activeProfile in p)) return false; p[activeProfile] = capture(); saveProfiles(p); setStatus(`Updated profile "${activeProfile}".`, 1600); return true; }
+  function reset() { try { localStorage.removeItem(keyFor(mode())); } catch {} apply(DEFAULTS[mode()] || AUTHORED); setActive(null); setStatus("Layout reset to default.", 1500); }
+  function applyProfile(name) {
+    const half = profileHalf(loadProfiles()[name]);
+    if (!half) { setActive(name); setStatus(`"${name}" has no ${mode()} layout saved yet.`, 2200); return; }
+    apply(half); persist(); setActive(name); setStatus(`Layout: ${name}.`, 1500);
+  }
+  // Save/update only THIS form factor's half, so a phone save can never clobber the desktop half
+  // (and vice versa). A profile is one thing to the user; it just happens to carry two halves.
+  const withHalf = (prev, snap) => {
+    const cur = (prev && typeof prev === "object" && ("desktop" in prev || "phone" in prev)) ? prev : { desktop: prev || null, phone: null };
+    return { ...cur, [mode()]: snap };
+  };
+  function saveProfile(name) { const nm = (name || "").trim(); if (!nm) return false; const p = loadProfiles(); p[nm] = withHalf(p[nm], capture()); saveProfiles(p); setActive(nm); return true; }
+  function updateActive() { if (!activeProfile) return false; const p = loadProfiles(); if (!(activeProfile in p)) return false; p[activeProfile] = withHalf(p[activeProfile], capture()); saveProfiles(p); setStatus(`Updated profile "${activeProfile}".`, 1600); return true; }
   function deleteProfile(name) { const p = loadProfiles(); if (!(name in p)) return; delete p[name]; saveProfiles(p); if (activeProfile === name) setActive(null); }
   function renameProfile(oldName, newName) { const nm = (newName || "").trim(); if (!nm || nm === oldName) return false; const p = loadProfiles(); if (!(oldName in p) || nm in p) return false; p[nm] = p[oldName]; delete p[oldName]; saveProfiles(p); if (activeProfile === oldName) setActive(nm); return true; }
+
+  // ---- show / hide + programmatic moves (the picker's backend, and the E2E surface) ----
+  // Select is pinned: hiding every tool would otherwise leave no way to point at anything. Reset is
+  // always reachable from Settings regardless, but stranding the user is still not worth allowing.
+  const PINNED = new Set(["tool:select"]);
+  function setHidden(key, on) {
+    if (on && PINNED.has(key)) return false;
+    if (on) hidden.add(key); else hidden.delete(key);
+    applyHidden(); persist();
+    return true;
+  }
+  // Move a tile to a bar (optionally at an index). This is how the picker does cross-bar moves —
+  // on a phone the bars sit at opposite ends of the screen, so dragging between them is hostile.
+  function move(key, barName, index) {
+    const bar = BARS.find((b) => b.name === barName), el = collectTiles().get(key);
+    const cont = bar && barOf(bar);
+    if (!cont || !el) return false;
+    const sibs = movable(bar).filter((m) => m !== el);
+    const ref = (index == null || index >= sibs.length) ? tailEl(cont, bar) : sibs[index];
+    cont.insertBefore(el, ref);
+    persist(); refreshOverflow();
+    return true;
+  }
+  // What the picker renders: every bar, and the tiles currently in it (hidden ones included — they
+  // must still be listed, or you could never switch one back on).
+  const listBars = () => BARS.map((b) => ({
+    name: b.name,
+    el: barOf(b),
+    tiles: movable(b).filter(isTile).map((t) => ({ key: tileKey(t), el: t, hidden: hidden.has(tileKey(t)), pinned: PINNED.has(tileKey(t)) })),
+  })).filter((b) => b.el);
 
   // Exposed for the header Layout dropdown (MENU_ITEMS.layout) + E2E.
   const layoutCtl = {
@@ -219,6 +335,10 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
     saveProfile, updateActive,
     activeProfile: () => activeProfile,
     isDirty,
+    setHidden, move, listBars,
+    isHidden: (key) => hidden.has(key),
+    hiddenKeys: () => [...hidden],
+    mode,
     saveProfilePrompt: () => floatingInput({ title: "Save layout as profile", value: activeProfile || "", placeholder: "profile name", onCommit: (nm) => { if (saveProfile(nm)) setStatus(`Saved layout profile "${nm}".`, 1800); } }),
     renamePrompt: (name) => floatingInput({ title: "Rename profile", value: name, onCommit: (n) => { if (!renameProfile(name, n) && n !== name) setStatus(`A profile named "${n}" already exists.`, 2400); } }),
     listProfiles: () => Object.keys(loadProfiles()),
