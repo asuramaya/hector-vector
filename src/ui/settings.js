@@ -9,6 +9,8 @@ import { api } from "./api.js";
 import { sectionTitle, fieldRow, makeSelectRaw } from "./widgets.js";
 import { capsInfo, ensureCapsInfo } from "./processor.js";
 import { loadJobs, installJobActive } from "./jobs.js";
+import { CLOUD } from "./env.js";
+import { getTouchDebugSnapshot, formatTouchDebugSnapshot, setTouchDebugVisual, isTouchDebugVisualOn } from "./touchdebug.js";
 
 let setStatus, openModal, closeModal, modalSearchEl, modalBodyEl,
     prefs, persistPrefs, getWorkspace, refreshAll, fetchStatus, applyStatusData;
@@ -86,18 +88,21 @@ export function openAppSettings(opts = {}) {
   root.appendChild(prefToggleRow("Smart guides", editor.smartGuides,
     (v) => { editor.smartGuides = v; prefs.smartGuides = v; persistPrefs(); }, "Snap to other objects' edges/centres while moving."));
 
-  // Where the library reads source images from (the backend /api/source endpoint).
-  root.appendChild(sectionTitle("Library source"));
-  const srcInput = document.createElement("input");
-  srcInput.type = "text"; srcInput.value = (workspace && workspace.source_dir) || "";
-  srcInput.placeholder = "/absolute/path/to/folder";
-  const isDefaultSrc = !!(workspace && workspace.source_dir === workspace.default_source_dir);
-  root.appendChild(fieldRow("Folder", srcInput,
-    isDefaultSrc ? "Currently the default folder." : "The library scans this folder for source images."));
-  const srcActions = document.createElement("div"); srcActions.className = "form-actions";
-  srcActions.appendChild(ghostBtn("Set source", async () => { await setSourceDir(srcInput.value); if (appSettingsOpen) openAppSettings(); }));
-  if (!isDefaultSrc) srcActions.appendChild(ghostBtn("Reset to default", async () => { await setSourceDir(""); if (appSettingsOpen) openAppSettings(); }));
-  root.appendChild(srcActions);
+  // Where the library reads source images from (the backend /api/source endpoint) — desktop
+  // only, there's no disk library in the pure-client cloud build.
+  if (!CLOUD) {
+    root.appendChild(sectionTitle("Library source"));
+    const srcInput = document.createElement("input");
+    srcInput.type = "text"; srcInput.value = (workspace && workspace.source_dir) || "";
+    srcInput.placeholder = "/absolute/path/to/folder";
+    const isDefaultSrc = !!(workspace && workspace.source_dir === workspace.default_source_dir);
+    root.appendChild(fieldRow("Folder", srcInput,
+      isDefaultSrc ? "Currently the default folder." : "The library scans this folder for source images."));
+    const srcActions = document.createElement("div"); srcActions.className = "form-actions";
+    srcActions.appendChild(ghostBtn("Set source", async () => { await setSourceDir(srcInput.value); if (appSettingsOpen) openAppSettings(); }));
+    if (!isDefaultSrc) srcActions.appendChild(ghostBtn("Reset to default", async () => { await setSourceDir(""); if (appSettingsOpen) openAppSettings(); }));
+    root.appendChild(srcActions);
+  }
 
   root.appendChild(sectionTitle("Install"));
   const installWrap = document.createElement("div"); installWrap.className = "form-row";
@@ -119,8 +124,11 @@ export function openAppSettings(opts = {}) {
   // the installable unit is the RUNTIME (rembg/realesrgan/vtracer), surfaced once per
   // capability whose models need it. Runtimes with no install path yet (the P3 dejpeg/denoise/
   // deblur/cleanup/face stack) read "coming soon" until their integration task lands.
-  const toolsTitle = sectionTitle("AI models & tools");
-  root.appendChild(toolsTitle);   // captured so the focus:"tools" deep-link below can scroll to it
+  // Desktop only — the cloud build has no processing backend to install runtimes into.
+  let toolsTitle = null;   // captured so the focus:"tools" deep-link below can scroll to it
+  if (!CLOUD) {
+  toolsTitle = sectionTitle("AI models & tools");
+  root.appendChild(toolsTitle);
   const reopenTools = () => { if (appSettingsOpen) openAppSettings({ focus: "tools" }); };
 
   // need-token → its package installer. A model whose `needs` aren't all in here has no
@@ -208,7 +216,10 @@ export function openAppSettings(opts = {}) {
     catch (e) { setStatus(e.message, 2500); }
   }));
   root.appendChild(refreshWrap);
+  }   // !CLOUD (AI models & tools)
 
+  // Software update flow — desktop only, the cloud build auto-deploys on push.
+  if (!CLOUD) {
   root.appendChild(sectionTitle("Updates"));
   const updWrap = document.createElement("div"); updWrap.className = "form-row";
   const updLabel = document.createElement("span"); updLabel.className = "form-label"; updLabel.textContent = "Software update";
@@ -240,6 +251,33 @@ export function openAppSettings(opts = {}) {
   updBox.appendChild(checkBtn); updBox.appendChild(updMsg);
   updWrap.appendChild(updBox);
   root.appendChild(updWrap);
+  }   // !CLOUD (Updates)
+
+  root.appendChild(sectionTitle("Debug"));
+  root.appendChild(prefToggleRow("Touch debug overlay", isTouchDebugVisualOn() || prefs.touchDebug,
+    (v) => { prefs.touchDebug = v; persistPrefs(); setTouchDebugVisual(v); },
+    "Red dot = your raw touch point. Blue dot = where the app actually rendered a probe there. " +
+    "A mismatch is the iOS touch-coordinate bug. Same as adding ?touchdebug to the URL, but sticks across reloads."));
+  const diagSnap = getTouchDebugSnapshot();
+  const diagWrap = document.createElement("div"); diagWrap.className = "form-row";
+  const diagLabel = document.createElement("span"); diagLabel.className = "form-label"; diagLabel.textContent = "Last touch";
+  diagWrap.appendChild(diagLabel);
+  const diagBox = document.createElement("div"); diagBox.style.cssText = "display:flex;flex-direction:column;gap:6px;width:100%;";
+  const diagPre = document.createElement("pre"); diagPre.className = "debug-diag";
+  diagPre.textContent = formatTouchDebugSnapshot(diagSnap);
+  const diagActions = document.createElement("div"); diagActions.className = "form-actions";
+  const copyBtn = ghostBtn("Copy", () => {
+    navigator.clipboard?.writeText(formatTouchDebugSnapshot(getTouchDebugSnapshot())).then(
+      () => { copyBtn.textContent = "Copied ✓"; setTimeout(() => { copyBtn.textContent = "Copy"; }, 1200); },
+      () => {},
+    );
+  });
+  if (!diagSnap) copyBtn.disabled = true;
+  diagActions.appendChild(copyBtn);
+  diagActions.appendChild(ghostBtn("Refresh", () => { if (appSettingsOpen) openAppSettings(); }));
+  diagBox.appendChild(diagPre); diagBox.appendChild(diagActions);
+  diagWrap.appendChild(diagBox);
+  root.appendChild(diagWrap);
 
   root.appendChild(sectionTitle("About"));
   const about = document.createElement("div"); about.className = "about-block";
@@ -259,7 +297,7 @@ export function openAppSettings(opts = {}) {
   modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
   // Deep-link: when opened from a stage that needs a missing tool, scroll to + briefly
   // highlight the tools section so the user lands exactly where they install it.
-  if (opts.focus === "tools") {
+  if (opts.focus === "tools" && toolsTitle) {
     setTimeout(() => {
       try {
         toolsTitle.scrollIntoView({ block: "start", behavior: "smooth" });

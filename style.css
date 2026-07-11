@@ -1780,6 +1780,12 @@ input.insp-ab-name { background: var(--field-bg, #2a2a2e); color: inherit; borde
 .about-name { font-size: 14px; color: var(--fg); font-weight: 600; }
 .about-ver { color: var(--muted); font-weight: 400; font-size: 12px; }
 
+.debug-diag {
+  margin: 0; padding: 8px 10px; background: var(--surface); border: 1px solid var(--line);
+  color: var(--fg); font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow: auto;
+}
+
 .info-grid {
   display: grid;
   grid-template-columns: 120px minmax(0, 1fr);

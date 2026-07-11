@@ -72,7 +72,7 @@ import {
   applyViewportState, mountViewport, clearViewport, bindRulerGuides,
   zoomVp, fitVp, actualVp, frameRect, bindViewportDragging, bindViewportZoom, bindViewportTouch,
 } from "./ui/viewport.js";
-import { initTouchDebug } from "./ui/touchdebug.js";
+import { initTouchDebug, setTouchDebugVisual } from "./ui/touchdebug.js";
 import {
   configureDataSync, workspace, refreshAll, refreshExceptCanvas, loadOutputs, uploadFiles,
   latestOutputsFor, itemIsProcessed, renderPreviews, refreshLibrary,
@@ -171,7 +171,7 @@ const PREFS_KEY = "hector-vector:prefs";
 // `startup`: what to show on launch — "blank" (a fresh canvas + the Process
 // workspace, the default) or "resume" (reopen the last document). Migrates the
 // old boolean `resume` pref for anyone who had set it.
-const PREFS_DEFAULTS = { startup: "blank", smartGuides: true, rulers: false };
+const PREFS_DEFAULTS = { startup: "blank", smartGuides: true, rulers: false, touchDebug: false };
 let prefs = (() => {
   try {
     const stored = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
@@ -371,7 +371,8 @@ function stem_(n) { return n.replace(/\.[^.]+$/, ""); }
 Object.values(viewports).forEach(bindViewportDragging);
 Object.values(viewports).forEach(bindViewportZoom);
 Object.values(viewports).forEach(bindViewportTouch);
-initTouchDebug();   // opt-in ?touchdebug overlay for the iOS touch-coordinate bug — no-op otherwise
+initTouchDebug();   // always-on recorder (cheap); ?touchdebug or a persisted pref switches the visual overlay on
+if (prefs.touchDebug) setTouchDebugVisual(true);
 
 // Mobile: the floating Panels button slides the right dock up as a bottom sheet; the scrim
 // dismisses it. The controls are display:none off mobile, so these listeners never fire there.
@@ -485,6 +486,8 @@ const MENU_ITEMS = {
       { type: "sep" },
       { label: "Export PNG…", onClick: exportFlow },
       { label: "Copy SVG markup", onClick: copySvgSource },
+      { type: "sep" },
+      { label: "Settings…", onClick: openAppSettings },
     ];
     const canReveal = !!(selectedOutput && selectedOutput.path);
     const items = [
