@@ -385,64 +385,10 @@ if (prefs.touchDebug) setTouchDebugVisual(true);
   fab.addEventListener("click", () => setSheet(!appEl.classList.contains("sheet-open")));
   scrim?.addEventListener("click", () => setSheet(false));
 
-  // Phone portrait (≤620px). Everything here MOVES existing elements rather than rebuilding them,
-  // so every id-wired handler and every layout.js tileKey survives; each move records its exact
-  // home (parent + next sibling) and is put back verbatim above 620px.
-  //
-  // Three bands, by how often you reach for them:
-  //   TOP    — undo/redo + zoom/fit. Always visible: undo is the most-used control in a touch
-  //            editor and it used to be TWO taps away, buried in the Panels sheet.
-  //   BOTTOM — the tools. Always visible.
-  //   CONTEXT— arrange + delete + duplicate, shown ONLY when something is selected (see the
-  //            .has-selection class), so it costs zero canvas while you're drawing. Delete lived
-  //            in .stage-toolbar, which the phone stylesheet display:none'd outright — it was
-  //            genuinely UNREACHABLE on a phone.
-  // The rest (booleans, rotate/flip, rulers/guides) stays one tap away in the Panels sheet.
-  const sheet = document.querySelector("#rightdock");
-  const topbar = document.querySelector("#mobile-top");
-  const actionbar = document.querySelector(".editor-grid > .actionbar");
-  const panelFoot = document.querySelector(".stage-wrap > .panel-foot");
-  const arrange = document.querySelector(".stage-wrap > .stage-toolbar");
-  if (sheet && topbar) {
-    const sep = () => { const s = document.createElement("span"); s.className = "tool-sep mobile-made"; s.setAttribute("aria-hidden", "true"); return s; };
-    const pick = (s) => document.querySelector(s);
-    // Quick bar, in reach order. Rulers/smart-guides deliberately stay behind in the sheet — they
-    // are set-once toggles, not per-stroke controls, and the bar has to fit 390px.
-    const quick = [
-      pick("#undo-button"), pick("#redo-button"), null,
-      pick('[data-action="zoom-out"]'), pick('[data-action="fit"]'),
-      pick('[data-action="actual"]'), pick('[data-action="zoom-in"]'), null,
-      pick("#vp-selectall"),
-    ];
-    // Duplicate reads as a selection action, so it joins the contextual bar on a phone. Both it and
-    // Delete are pulled to the FRONT of that bar: it overflows ~450px into 390px, and these two are
-    // the ones you must never have to go hunting for behind a horizontal scroll.
-    const ctx = [pick("#act-duplicate"), pick("#layer-delete")];
-    const moved = [...quick, ...ctx, panelFoot, actionbar].filter(Boolean);
-    const homes = new Map(moved.map((el) => [el, { parent: el.parentNode, next: el.nextSibling }]));
-    const goHome = (el) => { const h = homes.get(el); if (h && h.parent) h.parent.insertBefore(el, h.next); };
-
-    const collapse = matchMedia("(max-width: 620px)");
-    const apply = (on) => {
-      if (on) {
-        for (const el of quick) topbar.appendChild(el || sep());
-        // reverse: each insert goes to the head, so the last one inserted ends up first
-        if (arrange) for (const el of [...ctx].reverse().filter(Boolean)) arrange.insertBefore(el, arrange.firstChild);
-        for (const el of [panelFoot, actionbar].filter(Boolean)) {
-          el.classList.add("in-sheet");
-          sheet.insertBefore(el, sheet.querySelector(".rail-section"));
-        }
-      } else {
-        topbar.querySelectorAll(".mobile-made").forEach((s) => s.remove());
-        for (const el of moved) {
-          el.classList.remove("in-sheet");
-          goHome(el);
-        }
-      }
-    };
-    apply(collapse.matches);
-    collapse.addEventListener("change", (e) => apply(e.matches));
-  }
+  // The phone BAND COMPOSITION used to live here too, but it has to run AFTER the layout engine has
+  // snapshotted the authored DOM and applied the saved arrangement — otherwise layout.js mistakes
+  // the phone composition for "the authored layout" and can corrupt the desktop one. It now lives
+  // in src/ui/formfactor.js and is driven by layout.js. Only the sheet toggle belongs here.
 })();
 
 document.querySelectorAll("[data-vp]").forEach((button) => {

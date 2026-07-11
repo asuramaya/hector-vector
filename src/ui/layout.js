@@ -8,6 +8,8 @@
 // helpers) through the factory's `deps` object. The factory returns the control
 // object the header Layout dropdown and the E2E suite drive; the caller is
 // responsible for publishing it (e.g. on `window.__layout`).
+import { isPhone, onFormFactorChange, composePhone } from "./formfactor.js";
+
 export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput, showRichContextMenu, MENU_ITEMS }) {
   const LAYOUT_KEY = "hector-vector:layout";
   const SEP = "|";
@@ -17,6 +19,7 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
     { name: "arrange",     sel: ".stage-toolbar",     tail: null },
     { name: "actions",     sel: ".actionbar",         tail: null },
     { name: "viewport",    sel: ".viewport-controls", tail: null },
+    { name: "quick",       sel: "#mobile-top",        tail: null },   // phone-only; empty (and display:none) on desktop
     { name: "hdr-history", sel: ".rail-section.history .panel-actions", tail: null },
     { name: "hdr-layers",  sel: ".rail-section.layers .panel-actions",  tail: null },
   ];
@@ -40,7 +43,16 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
   // keeps its own .vp-sep style.
   const sepClassFor = (bar) => bar.name === "viewport" ? "vp-sep" : (axisY(barOf(bar)) ? "tool-sep" : "tool-vsep");
   function makeSep(bar) { const s = document.createElement("span"); s.className = sepClassFor(bar); s.setAttribute("aria-hidden", "true"); return s; }
-  const DEFAULT = capture();   // authored DOM order — taken before applying any saved layout
+
+  // Ordering is load-bearing, so the engine owns it end to end:
+  //   authored snapshot  ->  compose the phone bands  ->  default snapshot  ->  apply saved layout
+  // The phone composition used to run far earlier (an IIFE in app.js), which meant DEFAULT below
+  // snapshotted the COMPOSED phone DOM and called it "authored" — losing the zoom tiles entirely
+  // (they move into #mobile-top) and filing #act-duplicate under `arrange`. Persist that and the
+  // user's DESKTOP layout is corrupted.
+  const AUTHORED = capture();   // pristine, pre-composition DOM order
+  composePhone(isPhone());
+  const DEFAULT = capture();    // the baseline for Reset in the CURRENT form factor
 
   // every tile by key, wherever it currently sits (across all registered bars)
   function collectTiles() {
@@ -72,6 +84,8 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
   const loadProfiles = () => { try { return JSON.parse(localStorage.getItem(PROFILES_KEY) || "{}") || {}; } catch { return {}; } };
   const saveProfiles = (p) => { try { localStorage.setItem(PROFILES_KEY, JSON.stringify(p)); } catch {} };
   apply(loadSaved());   // restore the auto-saved arrangement at boot
+  // Crossing the phone breakpoint re-composes the bands (C1 swaps the saved layout here too).
+  onFormFactorChange((phone) => composePhone(phone));
 
   // ---- drag tiles between bars (only while customizing) ----
   let editing = false, dragEl = null;
