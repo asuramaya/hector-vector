@@ -10,6 +10,7 @@
 // responsible for publishing it (e.g. on `window.__layout`).
 import { isPhone, onFormFactorChange, composePhone } from "./formfactor.js";
 import { createPointerDrag } from "./pointer-drag.js";
+import { suspendAdaptive } from "./adaptive.js";
 
 export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput, showRichContextMenu, MENU_ITEMS }) {
   const LAYOUT_KEY = "hector-vector:layout";
@@ -322,6 +323,10 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
   BARS.forEach(wireBarContext);   // arm the Layout right-click on the static frame bars at boot
   function setEditing(on) {
     editing = on;
+    // Suspend the adaptive engine while customizing. insertionRef() walks DOM order and compares
+    // rects; with style.order set, visual order and DOM order diverge and the drag hit-test becomes
+    // gibberish. It also means a tile the engine hid can always be tapped back on.
+    suspendAdaptive(on);
     appEl.classList.toggle("customizing", on);
     if (layoutTrigger) layoutTrigger.classList.toggle("active", on);
     BARS.forEach((b) => wireBar(b, on));

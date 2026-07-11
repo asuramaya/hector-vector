@@ -56,6 +56,7 @@ import { configureLayoutPicker, openLayoutPicker } from "./ui/layout-picker.js";
 import { setCustomizeHandler } from "./ui/formfactor.js";
 import { createPointerDrag } from "./ui/pointer-drag.js";
 import { selectionFacts, evaluate, rankFor, selectionKind, describeSelection } from "./ui/actions.js";
+import { configureAdaptive, sync as syncAdaptive, suspendAdaptive } from "./ui/adaptive.js";
 import {
   workItems, outputs, projects, selectedName, selectedOutput, manualOutputName,
   setWorkItems, setOutputs, setProjects, setSelectedName, setSelectedOutput, setManualOutputName,
@@ -179,7 +180,13 @@ const PREFS_KEY = "hector-vector:prefs";
 // `startup`: what to show on launch — "blank" (a fresh canvas + the Process
 // workspace, the default) or "resume" (reopen the last document). Migrates the
 // old boolean `resume` pref for anyone who had set it.
-const PREFS_DEFAULTS = { startup: "blank", smartGuides: true, rulers: false, touchDebug: false };
+// adaptiveBars: "off" (bars never change) | "suggest-only" (the SUGGESTED block, but bars stay put)
+// | "full" (bars rearrange by what's selected). Desktop defaults to suggest-only: the block is pure
+// addition — nothing you already know how to hit moves — whereas bar reflow is the one part that
+// costs muscle memory, and .actionbar has been in the same order for the life of the project. A
+// PHONE is always "full" regardless (see adaptive.js): there, space is genuinely scarce and there is
+// no muscle memory to protect.
+const PREFS_DEFAULTS = { startup: "blank", smartGuides: true, rulers: false, touchDebug: false, adaptiveBars: "suggest-only" };
 let prefs = (() => {
   try {
     const stored = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
@@ -1007,11 +1014,18 @@ function buildRasterTools(node) {
     // height while there IS a selection to act on. Harmless off mobile; nothing else styles it.
     document.querySelector("main.app")?.classList.toggle("has-selection", facts.hasSel);
     lastFacts = facts;
+    // The bars rearrange themselves from the SAME facts — one pass, one answer. (No third link on the
+    // onInspect chain: this block already owns action state and already runs on every selection change.)
+    syncAdaptive(facts);
   };
   // exposed for the adaptive engine, the suggestion block, and the e2e — one oracle, one answer
   window.__actions = { facts: () => lastFacts, rank: (opts) => rankFor(lastFacts || selectionFacts(editor), opts),
                        kind: () => selectionKind(lastFacts || selectionFacts(editor)),
                        describe: () => describeSelection(lastFacts || selectionFacts(editor)) };
+  // getLayout is a GETTER: layoutCtl isn't built until further down this file, and this codebase has
+  // been bitten by exactly that ordering class before.
+  configureAdaptive({ getLayout: () => layoutCtl, getPref: () => prefs.adaptiveBars });
+  window.__adaptive = { sync: () => syncAdaptive(lastFacts), suspend: suspendAdaptive };
   const prevOnInspect = editor.onInspect;
   editor.onInspect = () => {
     if (prevOnInspect) prevOnInspect();

@@ -3662,6 +3662,129 @@ def main():
               and oracle["none"]["says"] == "Nothing selected",
               f"{oracle['overlap']['says']!r} / {oracle['group']['says']!r}")
 
+        section("Adaptive bars: show what you can actually do, hide what you can't")
+        # Desktop ships "suggest-only" (bars stay put). Flip it to full for this section — the phone is
+        # always full regardless. Compare VISIBLE sequences (by computed `order`), never DOM order:
+        # that distinction IS the feature.
+        page.evaluate("""() => { const P = JSON.parse(localStorage.getItem('hector-vector:prefs') || '{}');
+            P.adaptiveBars = 'full'; localStorage.setItem('hector-vector:prefs', JSON.stringify(P)); }""")
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_function("()=>!!window.__layout && !!window.__adaptive && !!window.editor", timeout=20000)
+        page.wait_for_timeout(400)
+        mount_ctl(page)
+        adapt = page.evaluate("""async () => {
+            const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+              + '<rect data-hv-id="a" x="10" y="10" width="40" height="40" fill="#111"/>'
+              + '<rect data-hv-id="b" x="30" y="30" width="40" height="40" fill="#222"/></svg>';
+            mountStageFromText(svg, 't.svg');
+            const bar = document.querySelector('.actionbar');
+            const domOrder = () => [...bar.children].filter((e) => e.id).map((e) => '#' + e.id);
+            const wait = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+            // what you SEE: visible tiles, sorted by their computed flexbox order
+            const visible = () => [...bar.children].filter((e) => e.offsetParent !== null && e.id)
+                .sort((x, y) => (+getComputedStyle(x).order) - (+getComputedStyle(y).order))
+                .map((e) => '#' + e.id);
+            const domBefore = domOrder(), layoutBefore = localStorage.getItem('hector-vector:layout');
+            const out = {};
+            editor.selection = new Set(['a']); editor._renderInspector(); await wait(); out.shape = visible();
+            editor.selection = new Set(['a', 'b']); editor._renderInspector(); await wait(); out.overlap = visible();
+            editor.selection = new Set(); editor._renderInspector(); await wait(); out.none = visible();
+            // THE guard for the whole architecture: adaptivity may only write style.order + a class.
+            // If it ever moved DOM nodes, capture() would persist whatever happened to be selected and
+            // the user's saved layout would silently become "whatever I last had selected".
+            out.domUntouched = JSON.stringify(domOrder()) === JSON.stringify(domBefore);
+            out.layoutUntouched = localStorage.getItem('hector-vector:layout') === layoutBefore;
+            out.greyedNotHidden = !!document.querySelector('.actionbar #act-union.act-off');
+            return out;
+        }""")
+        check("adaptive: two overlapping shapes put the booleans first, on the bar",
+              adapt["overlap"][:3] == ["#act-union", "#act-subtract", "#act-intersect"], str(adapt["overlap"][:4]))
+        check("adaptive: one shape leads with Duplicate and offers NO booleans at all",
+              adapt["shape"][0] == "#act-duplicate" and "#act-union" not in adapt["shape"], str(adapt["shape"][:4]))
+        check("adaptive: an impossible action is HIDDEN, not greyed out (that's the whole point)",
+              adapt["greyedNotHidden"] and "#act-union" not in adapt["shape"])
+        check("adaptive: nothing selected -> the object bar empties out (costs no space)",
+              adapt["none"] == [], str(adapt["none"]))
+        # If this ever fails, the engine has started moving DOM nodes and every user's saved layout is
+        # about to start tracking their last selection.
+        check("adaptive: NEVER touches DOM order, NEVER writes the saved layout",
+              adapt["domUntouched"] and adapt["layoutUntouched"],
+              f"dom={adapt['domUntouched']} layout={adapt['layoutUntouched']}")
+        # A hide is the user's word, and it must beat the engine everywhere — not just on the bar.
+        hidden_never = page.evaluate("""async () => {
+            __layout.setHidden('#act-union', true);
+            editor.selection = new Set(['a', 'b']); editor._renderInspector();
+            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+            const el = document.querySelector('#act-union');
+            const suggested = __actions.rank({ isHidden: (k) => __layout.isHidden(k) }).tiles.map((t) => t.key);
+            __layout.setHidden('#act-union', false);
+            return { invisible: el.offsetParent === null, offered: suggested.includes('#act-union') };
+        }""")
+        check("adaptive: a button the USER hid is never suggested, even when it's valid",
+              hidden_never["invisible"] and not hidden_never["offered"], str(hidden_never))
+        # Pin an action that is INVALID for most selections — it must survive every one of them.
+        # The guarantee is that a pinned tile keeps its SLOT and is never hidden. It is deliberately NOT
+        # "its pixel position never changes": a tile before it can still collapse, and the alternative
+        # (visibility:hidden) would keep exactly the dead holes this feature exists to remove. The
+        # picker hint says so rather than pretending otherwise.
+        pinned = page.evaluate("""async () => {
+            __layout.setPinned('#act-paste', true);
+            const bar = document.querySelector('.actionbar');
+            const el = document.querySelector('#act-paste');
+            const home = [...bar.children].indexOf(el);
+            const wait = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+            const seen = [];
+            for (const sel of [['a'], ['a', 'b'], []]) {
+                editor.selection = new Set(sel); editor._renderInspector(); await wait();
+                seen.push({ shown: el.offsetParent !== null, off: el.classList.contains('act-off'),
+                            slot: getComputedStyle(el).order });
+            }
+            __layout.setPinned('#act-paste', false);
+            return { home: String(home), seen,
+                     alwaysShown: seen.every((s) => s.shown && !s.off),
+                     slotHeld: seen.every((s) => s.slot === String(home)) };
+        }""")
+        check("adaptive: an ANCHORED button holds its slot and is never hidden, whatever you select",
+              pinned["alwaysShown"] and pinned["slotHeld"], str(pinned))
+        # Customize mode must clear it: layout.js's drag hit-test walks DOM order and compares rects,
+        # so with style.order set the insertion point would be gibberish.
+        susp = page.evaluate("""async () => {
+            editor.selection = new Set(['a']); editor._renderInspector();
+            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+            __layout.toggleEdit();
+            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+            const bar = document.querySelector('.actionbar');
+            const out = { off: bar.querySelectorAll('.act-off').length,
+                          ordered: [...bar.children].filter((e) => e.style.order !== '').length };
+            __layout.toggleEdit();
+            return out;
+        }""")
+        check("adaptive: customizing suspends it (or the drag hit-test would lie)",
+              susp["off"] == 0 and susp["ordered"] == 0, str(susp))
+        # ...and off means OFF: today's behaviour, byte for byte.
+        page.evaluate("""() => { const P = JSON.parse(localStorage.getItem('hector-vector:prefs') || '{}');
+            P.adaptiveBars = 'off'; localStorage.setItem('hector-vector:prefs', JSON.stringify(P)); }""")
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_function("()=>!!window.__layout && !!window.editor", timeout=20000)
+        page.wait_for_timeout(400)
+        mount_ctl(page)
+        off = page.evaluate("""async () => {
+            editor.selection = new Set(['r1']); editor._renderInspector();
+            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+            const u = document.querySelector('#act-union'), bar = document.querySelector('.actionbar');
+            return { present: u.offsetParent !== null, disabled: u.disabled,
+                     noOrder: [...bar.children].every((e) => e.style.order === ''),
+                     noActOff: bar.querySelectorAll('.act-off').length === 0 };
+        }""")
+        check("adaptive: pref 'off' is byte-identical to the old behaviour (present, greyed, unmoved)",
+              off["present"] and off["disabled"] and off["noOrder"] and off["noActOff"], str(off))
+        page.evaluate("""() => { const P = JSON.parse(localStorage.getItem('hector-vector:prefs') || '{}');
+            delete P.adaptiveBars; localStorage.setItem('hector-vector:prefs', JSON.stringify(P)); }""")
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_function("()=>!!window.__layout && !!window.editor", timeout=20000)
+        page.wait_for_timeout(300)
+        mount_ctl(page)
+
         section("Customize layout: draggable dividers + right-click add/remove")
         page.evaluate("window.__layout.toggleEdit()"); page.wait_for_timeout(80)
         check("dividers become movable in customize mode",

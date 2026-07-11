@@ -2055,6 +2055,19 @@ text.hv-text-editing { visibility: hidden; }
    the tool: its keyboard shortcut keeps working. !important because the phone media block sets an
    explicit display on bar children, which would otherwise win. */
 .tool-button.layout-hidden { display: none !important; }
+/* The ENGINE says this action isn't possible right now. A different thing entirely from
+   .layout-hidden (the USER switched it off) — different class, different owner, and the engine never
+   persists. Plain display:none, no !important, so both .layout-hidden and .customizing win over it. */
+.tool-button.act-off, .tool-sep.act-off, .tool-vsep.act-off, .vp-sep.act-off { display: none; }
+/* an anchored tile: the engine won't reorder it or hide it, whatever you select */
+.tool-button.layout-pinned::before {
+  content: ""; position: absolute; left: 2px; top: 2px;
+  width: 3px; height: 3px; border-radius: 50%; background: var(--accent); pointer-events: none;
+}
+/* Freeze the track. The bars' EXTENT changing is the real jank — it re-measures the grid and the
+   canvas lurches. Give them a floor sized to the empty bar so the track never moves. */
+.editor-grid > .actionbar { min-height: 34px; }
+.app.has-selection .stage-wrap > .stage-toolbar { min-height: 34px; }
 /* ...but while you're customizing you must be able to SEE what you switched off, or you could never
    switch it back on from the bar itself. Show it, ghosted. */
 .app.editor.customizing .tool-button.layout-hidden { display: grid !important; opacity: 0.32; outline: 1px dashed var(--muted); outline-offset: -1px; }

@@ -257,6 +257,16 @@ export function openAppSettings(opts = {}) {
   // The guaranteed way in. Settings lives in the header menu, which is never itself customizable,
   // so this door can't be hidden away — it's the recovery path if you switch off something you
   // needed, and on a phone it's the only entry point that doesn't rely on a right-click.
+  root.appendChild(fieldRow("Adaptive toolbars",
+    makeSelectRaw(prefs.adaptiveBars || "suggest-only", [
+      ["off", "Off — bars never change"],
+      ["suggest-only", "Suggestions only"],
+      ["full", "Full — bars follow the selection"],
+    ], (v) => { prefs.adaptiveBars = v; persistPrefs(); if (window.__adaptive) window.__adaptive.sync(); }),
+    "The selection and object bars can rearrange to show only what you can do with what's selected, "
+    + "best first. Anchor (\ud83d\udccc) any button in Customize bars to hold it in place — though it can still "
+    + "shift sideways when a button before it disappears. A phone is always fully adaptive."));
+
   root.appendChild(sectionTitle("Layout"));
   const barsWrap = document.createElement("div"); barsWrap.className = "form-row";
   const barsBox = document.createElement("div"); barsBox.className = "form-actions";
