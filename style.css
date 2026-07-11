@@ -2147,13 +2147,30 @@ text.hv-text-editing { visibility: hidden; }
     width: 42px; height: 4px; margin: 8px auto 4px;
     border-radius: 3px; background: var(--line); flex: 0 0 auto;
   }
+  /* the object-action bar + zoom/fit strip, reparented into the sheet (app.js) as labelled
+     rows so the bottom of the canvas keeps ONLY the tool bar. */
+  .editor-grid > .rightdock > .in-sheet {
+    display: flex; flex-flow: row wrap; align-items: center; justify-content: flex-start;
+    gap: 8px; width: auto; margin: 0; padding: 12px; overflow: visible;
+    border: 0; border-bottom: 1px solid var(--line);
+  }
+  .editor-grid > .rightdock > .in-sheet::before {
+    flex: 0 0 100%; font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 2px;
+  }
+  .editor-grid > .rightdock > .panel-foot.in-sheet::before { content: "View"; }
+  .editor-grid > .rightdock > .actionbar.in-sheet::before { content: "Actions"; }
+  .editor-grid > .rightdock > .in-sheet .tool-button { width: 40px; height: 40px; font-size: 17px; flex: 0 0 auto; }
+  .editor-grid > .rightdock > .in-sheet .tool-sep,
+  .editor-grid > .rightdock > .in-sheet .vp-sep { display: none; }
+  .editor-grid > .rightdock > .panel-foot.in-sheet .viewport-controls { display: flex; flex-wrap: wrap; gap: 8px; }
 
   /* --- floating Panels toggle + dismiss scrim --- */
   /* Floats clear ABOVE the two bottom bars over the lower-right canvas (the standard bottom-right
      FAB spot). The fill/stroke swatches move LEFT below so they don't sit under it. */
   .mobile-fab {
     display: grid; place-items: center;
-    position: fixed; right: 14px; bottom: calc(190px + env(safe-area-inset-bottom));
+    position: fixed; right: 14px; bottom: calc(76px + env(safe-area-inset-bottom));
     width: 50px; height: 50px; border-radius: 50%;
     background: var(--ink); color: #fff; border: 0;
     font-size: 21px; line-height: 1; cursor: pointer;

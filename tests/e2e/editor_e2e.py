@@ -4236,6 +4236,12 @@ def main():
                     return stage.querySelectorAll('[data-hv-id]').length > before;
                 }""")
                 check("mobile: one-finger touch still draws (single pointer = tool)", draw is True)
+                # Phone portrait collapses to ONE bottom bar: the object-action bar + zoom/fit strip
+                # are reparented INTO the Panels sheet (as View/Actions rows), leaving only the tools.
+                check("mobile: action bar + zoom strip move into the Panels sheet (single bottom bar = tools)",
+                      mp.evaluate("""() => !!document.querySelector('#rightdock > .actionbar.in-sheet')
+                                        && !!document.querySelector('#rightdock > .panel-foot.in-sheet')
+                                        && !document.querySelector('.editor-grid > .actionbar')"""))
             finally:
                 set_page(page)   # hand the screenshot target back to the desktop page
                 mctx.close()

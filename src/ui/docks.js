@@ -699,6 +699,7 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
       // (Manage-screen citizens) aren't dock panels — they don't shelve.
       head.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); if (!away.has(section.dataset.section)) shelve(section.dataset.section); });
       head.addEventListener("pointerdown", (e) => {
+        if (e.pointerType === "touch") return;   // mobile: headers only collapse (tap) — no drag-to-float (it overlapped panels in the bottom sheet)
         if (e.target.closest(".panel-actions") || e.button !== 0) return;
         const name = section.dataset.section;
         if (groupOf(name) || away.has(name)) return;   // grouped → container drives the move; away → it lives in the Manage grid, not draggable into a dock

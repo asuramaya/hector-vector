@@ -381,6 +381,28 @@ Object.values(viewports).forEach(bindViewportTouch);
   const setSheet = (open) => { appEl.classList.toggle("sheet-open", open); fab.setAttribute("aria-expanded", open ? "true" : "false"); };
   fab.addEventListener("click", () => setSheet(!appEl.classList.contains("sheet-open")));
   scrim?.addEventListener("click", () => setSheet(false));
+
+  // Phone portrait (≤620px): collapse to ONE bottom bar (the tools). Move the object-action bar
+  // and the zoom/fit strip INTO the Panels sheet (as "View" + "Actions" rows) so they're one tap
+  // away without permanently eating canvas. Moving the elements (not rebuilding them) preserves
+  // every existing id-wired handler. Restored to their desktop/landscape homes above 620px.
+  const sheet = document.querySelector("#rightdock");
+  const actionbar = document.querySelector(".editor-grid > .actionbar");
+  const panelFoot = document.querySelector(".stage-wrap > .panel-foot");
+  if (sheet && (actionbar || panelFoot)) {
+    const items = [panelFoot, actionbar].filter(Boolean);   // View first, then Actions
+    const homes = new Map(items.map((el) => [el, { parent: el.parentNode, next: el.nextSibling }]));
+    const collapse = matchMedia("(max-width: 620px)");
+    const apply = (on) => {
+      if (on) {
+        for (const el of items) { el.classList.add("in-sheet"); sheet.insertBefore(el, sheet.querySelector(".rail-section")); }
+      } else {
+        for (const el of items) { el.classList.remove("in-sheet"); const h = homes.get(el); h.parent.insertBefore(el, h.next); }
+      }
+    };
+    apply(collapse.matches);
+    collapse.addEventListener("change", (e) => apply(e.matches));
+  }
 })();
 
 document.querySelectorAll("[data-vp]").forEach((button) => {
