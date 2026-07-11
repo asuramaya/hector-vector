@@ -50,17 +50,27 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
   // right way to degrade.
   const HIDDEN_KEY = "#hidden";
   const hidden = new Set();
+  // Tiles the user has ANCHORED. The adaptive engine (src/ui/adaptive.js) reorders and hides action
+  // tiles by what's valid for the current selection; a pinned tile is exempt — it always shows, and
+  // it never gets reordered. This is the answer to "don't move my buttons around". Same reserved-key
+  // trick as #hidden, and it degrades the same way.
+  const PINNED_KEY = "#pinned";
+  const pinnedSet = new Set();
   const capture = () => {
     const m = {};
     for (const b of BARS) m[b.name] = movable(b).map(slotKey);
     m[HIDDEN_KEY] = [...hidden].sort();
+    m[PINNED_KEY] = [...pinnedSet].sort();
     return m;
   };
   // Hiding is a CLASS, never a removal: the node stays in the DOM, so collectTiles() still finds it,
   // its ORDER is still captured (order and visibility stay orthogonal), and every id-wired handler
   // survives. It also means hiding a tool only trims the BAR — the keyboard shortcut keeps working.
   function applyHidden() {
-    for (const [key, el] of collectTiles()) el.classList.toggle("layout-hidden", hidden.has(key));
+    for (const [key, el] of collectTiles()) {
+      el.classList.toggle("layout-hidden", hidden.has(key));
+      el.classList.toggle("layout-pinned", pinnedSet.has(key));
+    }
     refreshOverflow();
   }
   // The bars' overflow-fade hint is driven by a MutationObserver watching childList only (app.js),
@@ -114,6 +124,8 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
     // tiles a saved layout doesn't mention (e.g. added in a newer build) keep their place
     hidden.clear();
     for (const k of (layout[HIDDEN_KEY] || [])) hidden.add(k);
+    pinnedSet.clear();
+    for (const k of (layout[PINNED_KEY] || [])) pinnedSet.add(k);
     applyHidden();
   }
 
@@ -152,7 +164,8 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
   function renormalize(outgoing) {
     apply(DEFAULTS[outgoing] || AUTHORED);
     hidden.clear();
-    applyHidden();   // clears every .layout-hidden — visibility is per form factor too
+    pinnedSet.clear();
+    applyHidden();   // clears .layout-hidden AND .layout-pinned — both are per form factor
   }
   onFormFactorChange((phone) => {
     const outgoing = phone ? "desktop" : "phone";
@@ -348,12 +361,21 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
   function renameProfile(oldName, newName) { const nm = (newName || "").trim(); if (!nm || nm === oldName) return false; const p = loadProfiles(); if (!(oldName in p) || nm in p) return false; p[nm] = p[oldName]; delete p[oldName]; saveProfiles(p); if (activeProfile === oldName) setActive(nm); return true; }
 
   // ---- show / hide + programmatic moves (the picker's backend, and the E2E surface) ----
-  // Select is pinned: hiding every tool would otherwise leave no way to point at anything. Reset is
-  // always reachable from Settings regardless, but stranding the user is still not worth allowing.
-  const PINNED = new Set(["tool:select"]);
+  // Select can NEVER be hidden: switch off every tool and there'd be no way to point at anything.
+  // Reset stays reachable from Settings regardless, but stranding the user isn't worth allowing.
+  // NB "always on" is a different idea from PINNED below — that one means "the adaptive engine must
+  // not touch this tile". Conflating the two would be a mess, so they get different names.
+  const ALWAYS_ON = new Set(["tool:select"]);
   function setHidden(key, on) {
-    if (on && PINNED.has(key)) return false;
+    if (on && ALWAYS_ON.has(key)) return false;
     if (on) hidden.add(key); else hidden.delete(key);
+    applyHidden(); persist();
+    return true;
+  }
+  // Anchor a tile: the adaptive engine will never reorder it or hide it, whatever is selected.
+  // A pin is per form factor, like a hide — the phone and desktop bars are different bars.
+  function setPinned(key, on) {
+    if (on) pinnedSet.add(key); else pinnedSet.delete(key);
     applyHidden(); persist();
     return true;
   }
@@ -374,7 +396,7 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
   const listBars = () => BARS.map((b) => ({
     name: b.name,
     el: barOf(b),
-    tiles: movable(b).filter(isTile).map((t) => ({ key: tileKey(t), el: t, hidden: hidden.has(tileKey(t)), pinned: PINNED.has(tileKey(t)) })),
+    tiles: movable(b).filter(isTile).map((t) => ({ key: tileKey(t), el: t, hidden: hidden.has(tileKey(t)), pinned: pinnedSet.has(tileKey(t)), alwaysOn: ALWAYS_ON.has(tileKey(t)) })),
   })).filter((b) => b.el);
 
   // Exposed for the header Layout dropdown (MENU_ITEMS.layout) + E2E.
@@ -386,9 +408,11 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
     saveProfile, updateActive,
     activeProfile: () => activeProfile,
     isDirty,
-    setHidden, move, listBars,
+    setHidden, setPinned, move, listBars, refreshOverflow,
     isHidden: (key) => hidden.has(key),
     hiddenKeys: () => [...hidden],
+    isPinned: (key) => pinnedSet.has(key),
+    pinnedKeys: () => [...pinnedSet],
     mode,
     saveProfilePrompt: () => floatingInput({ title: "Save layout as profile", value: activeProfile || "", placeholder: "profile name", onCommit: (nm) => { if (saveProfile(nm)) setStatus(`Saved layout profile "${nm}".`, 1800); } }),
     renamePrompt: (name) => floatingInput({ title: "Rename profile", value: name, onCommit: (n) => { if (!renameProfile(name, n) && n !== name) setStatus(`A profile named "${n}" already exists.`, 2400); } }),

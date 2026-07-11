@@ -32,6 +32,10 @@ const BAR_HINTS = {
 };
 const barTitle = (name) => BAR_TITLES[name] || (name.startsWith("hdr-") ? `${name.slice(4)} panel header` : name);
 
+// The bars the adaptive engine rearranges by selection (see src/ui/adaptive.js). Only these get a
+// pin control — anchoring a TOOL would be meaningless, since nothing ever moves or hides one.
+const ADAPTIVE_BARS = new Set(["arrange", "actions"]);
+
 export function openLayoutPicker() {
   const L = getLayout && getLayout();
   if (!L) return;
@@ -76,8 +80,8 @@ export function openLayoutPicker() {
         const box = document.createElement("input");
         box.type = "checkbox";
         box.checked = !tile.hidden;
-        box.disabled = tile.pinned;
-        box.title = tile.pinned ? "Always shown" : (tile.hidden ? "Show" : "Hide");
+        box.disabled = tile.alwaysOn;
+        box.title = tile.alwaysOn ? "Always shown" : (tile.hidden ? "Show" : "Hide");
         box.addEventListener("change", () => { L.setHidden(tile.key, !box.checked); rerender(); });
         row.appendChild(box);
 
@@ -88,7 +92,7 @@ export function openLayoutPicker() {
 
         const name = document.createElement("span");
         name.className = "picker-name";
-        name.textContent = labelOf(tile.el) + (tile.pinned ? " (always on)" : "");
+        name.textContent = labelOf(tile.el) + (tile.alwaysOn ? " (always on)" : "");
         row.appendChild(name);
 
         const nudge = (delta) => { L.move(tile.key, bar.name, i + delta); rerender(); };
@@ -97,6 +101,16 @@ export function openLayoutPicker() {
         dn.disabled = i === bar.tiles.length - 1; dn.title = "Move down";
         up.classList.add("picker-nudge"); dn.classList.add("picker-nudge");
         row.appendChild(up); row.appendChild(dn);
+
+        // Anchor. Only meaningful on the bars the engine actually rearranges — pinning a TOOL is
+        // meaningless, because nothing would ever move or hide it.
+        if (ADAPTIVE_BARS.has(bar.name)) {
+          const pin = ghostBtn(tile.pinned ? "📌" : "📍", () => { L.setPinned(tile.key, !tile.pinned); rerender(); });
+          pin.classList.add("picker-nudge", "picker-pin");
+          pin.classList.toggle("on", !!tile.pinned);
+          pin.title = tile.pinned ? "Anchored — always shown, never reordered. Tap to release." : "Anchor this button in place";
+          row.appendChild(pin);
+        }
 
         // Cross-bar moves live here rather than in a drag — see the note at the top of the file.
         const to = document.createElement("select");
@@ -128,7 +142,8 @@ export function openLayoutPicker() {
     const note = document.createElement("div");
     note.className = "form-hint";
     note.textContent = "Hiding a button only trims the bar — its keyboard shortcut keeps working. "
-      + "Phone and desktop keep separate layouts.";
+      + "The selection and object bars rearrange themselves to show what you can actually do right now; "
+      + "anchor (📌) any button you want held in place. Phone and desktop keep separate layouts.";
     root.appendChild(note);
   }
 

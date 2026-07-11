@@ -2043,6 +2043,8 @@ text.hv-text-editing { visibility: hidden; }
   .picker-move { order: 3; margin-left: auto; width: auto; max-width: 55%; }
 }
 .picker-over { margin-left: 8px; color: var(--accent); font-weight: 600; }
+.picker-pin { filter: grayscale(1); opacity: 0.5; }
+.picker-pin.on { filter: none; opacity: 1; background: var(--surface); border-color: var(--ink); }
 .picker-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 0 4px; }
 .picker-foot .primary { margin-left: auto; background: var(--ink); color: #fff; border-color: var(--ink); }
 /* the phone sheet's own way in */
