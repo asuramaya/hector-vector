@@ -106,6 +106,10 @@
         <aside class="leftdock" id="leftdock" aria-label="Left dock">
           <div class="dock-resizer dock-resizer-l" id="leftdock-resizer" title="Drag to resize"></div>
         </aside>
+        <!-- Phone-only quick bar. Empty in the markup on purpose: app.js MOVES the real
+             undo/redo + zoom/fit buttons in here on a phone (and back out again above 620px),
+             so every id-wired handler survives instead of being duplicated. -->
+        <nav class="mobilebar" id="mobile-top" role="toolbar" aria-label="Quick actions"></nav>
         <nav class="toolstrip" role="toolbar" aria-label="Tools">
           <button class="tool-button tool-primary active" data-tool="select" data-key="V" type="button" title="Select / Move (V) — drag empty space to marquee (Alt = lasso) · Ctrl+T scale · Ctrl+R rotate">▣</button>
           <button class="tool-button tool-primary" data-tool="node" data-key="A" type="button" title="Edit points (A) — anchors &amp; handles">✥</button>

@@ -221,6 +221,10 @@ button:disabled {
 .manage-grid .rail-section.collapsed { flex: 1 1 auto; }
 .manage-grid .rail-section .caret { display: none; }
 
+/* Phone-only quick bar (undo/redo + zoom/fit). Off a phone it holds nothing — app.js only moves
+   the real buttons into it below 620px — so it must not claim a grid row here. */
+.mobilebar { display: none; }
+
 .toolstrip {
   border: 1px solid var(--line);
   background: var(--bg);
@@ -2091,9 +2095,43 @@ text.hv-text-editing { visibility: hidden; }
   /* the status strip ("Ready." / transient messages) is a whole band we can't spare on a phone —
      feedback still fires; it's just not a permanent row here. */
   .app.editor > .status-bar { display: none; }
-  /* the Arrange strip (bring-forward/back, group, delete) is a desktop convenience row — on a
-     phone it's clutter; those ops live in the layer sheet + long-press menu. */
+  /* The Arrange strip becomes the CONTEXTUAL bar: hidden while you draw, and slid in under the
+     canvas the moment something is selected (order:3 drops it below .stage-body). It carries the
+     ops you can only want with a selection — arrange, rename, duplicate and, crucially, DELETE,
+     which this stylesheet used to display:none outright, leaving no way at all to delete an
+     object on a phone. */
   .stage-wrap > .stage-toolbar { display: none; }
+  .app.has-selection .stage-wrap > .stage-toolbar {
+    display: flex; order: 3;
+    /* nowrap or it stacks into two rows and eats ~200px of canvas — it must scroll, not wrap.
+       flex-start is load-bearing too: the desktop rule centres this bar, and centred flex content
+       that overflows spills off the LEFT edge, where scrolling cannot reach it — Duplicate was
+       sitting at x=-50, permanently unreachable. */
+    flex-direction: row; flex-wrap: nowrap; justify-content: flex-start; align-items: center; gap: 8px;
+    padding: 7px 10px; margin: 0;
+    border-width: 1px 0 0 0; border-top: 1px solid var(--line);
+    overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .app.has-selection .stage-wrap > .stage-toolbar::-webkit-scrollbar { display: none; }
+  .app.has-selection .stage-wrap > .stage-toolbar .tool-button { width: 44px; height: 44px; font-size: 19px; flex: 0 0 auto; }
+  .app.has-selection .stage-wrap > .stage-toolbar .tool-vsep { width: 1px; height: 26px; margin: 0 3px; align-self: center; flex: 0 0 auto; }
+
+  /* --- the always-on quick bar: undo/redo + canvas control, directly under the topbar --- */
+  .mobilebar {
+    display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 8px;
+    padding: 6px 10px; min-width: 0;
+    border-bottom: 1px solid var(--line);
+    overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .mobilebar::-webkit-scrollbar { display: none; }
+  /* app.js only fills this bar below 620px, so in LANDSCAPE (which also matches the coarse-pointer
+     branch of this query) it stays empty — and an empty flex box still claimed a 53px grid column,
+     stealing the landscape tool rail's slot. Collapse it whenever it holds nothing. */
+  .mobilebar:empty { display: none; }
+  .mobilebar .tool-button { width: 42px; height: 42px; font-size: 18px; flex: 0 0 auto; }
+  .mobilebar .tool-sep { width: 1px; height: 24px; margin: 0 3px; align-self: center; flex: 0 0 auto; background: var(--line); }
 
   /* --- shell: single column, canvas on top, the two bars beneath --- */
   /* minmax(0,1fr) NOT 1fr: a bare 1fr track still resolves to its widest item's min-content,
@@ -2102,12 +2140,13 @@ text.hv-text-editing { visibility: hidden; }
      column stay at viewport width and the bars scroll INSIDE it. */
   .app.editor .editor-grid {
     grid-template-columns: minmax(0, 1fr) !important;   /* beat docks.js's inline column track */
-    grid-template-rows: minmax(0, 1fr) auto auto;
+    grid-template-rows: auto minmax(0, 1fr) auto;
   }
   .editor-grid > .leftdock { display: none !important; }
-  .editor-grid > .stage-wrap { grid-row: 1; grid-column: 1; min-width: 0; }
-  .editor-grid > .actionbar  { grid-row: 2; grid-column: 1; min-width: 0; }
+  .editor-grid > .mobilebar  { grid-row: 1; grid-column: 1; min-width: 0; }
+  .editor-grid > .stage-wrap { grid-row: 2; grid-column: 1; min-width: 0; }
   .editor-grid > .toolstrip  { grid-row: 3; grid-column: 1; min-width: 0; }
+  /* .actionbar is reparented into the Panels sheet on a phone (app.js), so it claims no row here. */
 
   /* --- tools + object actions become horizontal, thumb-reachable scroll bars --- */
   .editor-grid > .toolstrip,
@@ -2127,6 +2166,15 @@ text.hv-text-editing { visibility: hidden; }
   .editor-grid > .actionbar::-webkit-scrollbar { display: none; }
   .editor-grid > .toolstrip .tool-button,
   .editor-grid > .actionbar .tool-button { width: 44px; height: 44px; font-size: 19px; flex: 0 0 auto; }
+  /* The strip scrolls horizontally here (it's a vertical rail on desktop), so the desktop
+     .tile-scroll-y mask is on the wrong axis and never fires. Fade the trailing edge while there
+     are still tools out of view — otherwise 6 of the 13 are simply invisible, with nothing to
+     suggest they exist. */
+  .editor-grid > .toolstrip.tile-scroll-y { -webkit-mask-image: none; mask-image: none; }
+  .editor-grid > .toolstrip.is-overflowing-x {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent 100%);
+    mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent 100%);
+  }
   /* toolstrip is the last band → pad past the home indicator */
   .editor-grid > .toolstrip { padding-bottom: calc(7px + env(safe-area-inset-bottom)); }
   .editor-grid > .toolstrip .tool-button.tool-primary { width: 48px; height: 48px; font-size: 21px; }
@@ -2189,6 +2237,9 @@ text.hv-text-editing { visibility: hidden; }
     font-size: 21px; line-height: 1; cursor: pointer;
     z-index: 55; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
   }
+  /* the contextual bar slides in beneath the canvas, so lift the FAB clear of it or it lands on
+     top of Delete — the one control it must never cover. */
+  .app.has-selection .mobile-fab { bottom: calc(140px + env(safe-area-inset-bottom)); }
   .app.sheet-open .mobile-fab { display: none; }   /* tap the scrim to dismiss */
   .app.sheet-open .mobile-scrim { display: block; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); z-index: 58; }
   .stage-body .tool-swatches { left: 12px; right: auto; }

@@ -4285,6 +4285,46 @@ def main():
                       mp.evaluate("""() => !!document.querySelector('#rightdock > .actionbar.in-sheet')
                                         && !!document.querySelector('#rightdock > .panel-foot.in-sheet')
                                         && !document.querySelector('.editor-grid > .actionbar')"""))
+                # Reachability, not just presence. The phone layout had regressed to the point where
+                # DELETE was display:none'd outright (no way to delete an object at all) and undo —
+                # the most-used control in a touch editor — was two taps deep in the Panels sheet.
+                # Assert the quick bar holds them and that the contextual bar actually surfaces on a
+                # selection, since "the button exists in the DOM" is exactly what was true before.
+                quick = mp.evaluate("""() => {
+                    const bar = document.querySelector('#mobile-top');
+                    const on = e => !!e && e.offsetParent !== null && e.getBoundingClientRect().width > 0;
+                    const inBar = s => { const e = document.querySelector(s); return on(e) && !!e.closest('#mobile-top'); };
+                    return { visible: on(bar), undo: inBar('#undo-button'), redo: inBar('#redo-button'),
+                             fit: inBar('[data-action="fit"]'), zoomIn: inBar('[data-action="zoom-in"]') };
+                }""")
+                check("mobile: undo/redo + zoom/fit sit in the always-on quick bar (were 2 taps deep in the sheet)",
+                      all(quick.values()), str(quick))
+                ctxbar = ".stage-wrap > .stage-toolbar"
+                # the one-finger-draw check above leaves its rect selected — clear it, or we'd be
+                # asserting the idle state while there is very much a selection.
+                mp.evaluate("() => { editor.selection.clear(); editor.onInspect && editor.onInspect(); }")
+                mp.wait_for_timeout(200)
+                idle = mp.evaluate(f"() => {{ const e=document.querySelector('{ctxbar}'); return !e || e.offsetParent===null; }}")
+                check("mobile: contextual bar stays hidden while nothing is selected (costs no canvas while drawing)", idle)
+                # select via the API, not another synthetic draw: the pinch check above leaves the
+                # canvas zoomed, and what's under test here is "a selection reveals the bar", not
+                # pointer plumbing (the one-finger-draw check already covers that).
+                mp.evaluate("() => editor.selectAll()")
+                mp.wait_for_timeout(300)
+                sel = mp.evaluate(f"""() => {{
+                    const bar = document.querySelector('{ctxbar}');
+                    const shown = !!bar && bar.offsetParent !== null;
+                    const reach = s => {{ const e = document.querySelector(s); if (!e || e.offsetParent === null) return false;
+                        const r = e.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.width > 0; }};
+                    return {{ shown, rows: bar ? Math.round(bar.getBoundingClientRect().height) : 0,
+                              del: reach('#layer-delete'), dup: reach('#act-duplicate'),
+                              selSize: editor.selection.size, nodes: editor.stage.querySelectorAll('[data-hv-id]').length,
+                              hasSel: document.querySelector('main.app').classList.contains('has-selection') }};
+                }}""")
+                # rows: one row (~60px). It used to WRAP to two and eat ~200px of canvas.
+                check("mobile: selecting reveals the contextual bar with Delete + Duplicate on-screen, in ONE row",
+                      sel["shown"] and sel["del"] and sel["dup"] and sel["rows"] < 90, str(sel))
+                mp.evaluate("() => { editor.selection.clear(); editor.onInspect && editor.onInspect(); }")
             finally:
                 set_page(page)   # hand the screenshot target back to the desktop page
                 mctx.close()
@@ -4301,6 +4341,16 @@ def main():
                       lp.evaluate("""() => {
                           const cols = getComputedStyle(document.querySelector('.editor-grid')).gridTemplateColumns.trim().split(/\\s+/).length;
                           return cols === 3 && getComputedStyle(document.querySelector('.toolstrip')).flexDirection === 'column';
+                      }"""))
+                # The phone quick bar is only FILLED below 620px, but landscape still matches the
+                # coarse-pointer branch of the same media query — so an empty one stayed display:flex
+                # and claimed a 53px grid column, sitting right on top of the vertical tool rail.
+                check("mobile landscape: the (empty) phone quick bar collapses instead of overlaying the tool rail",
+                      lp.evaluate("""() => {
+                          const mb = document.querySelector('#mobile-top');
+                          return !!mb && mb.childNodes.length === 0
+                                 && getComputedStyle(mb).display === 'none'
+                                 && mb.getBoundingClientRect().width === 0;
                       }"""))
             finally:
                 set_page(page)

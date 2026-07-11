@@ -385,22 +385,59 @@ if (prefs.touchDebug) setTouchDebugVisual(true);
   fab.addEventListener("click", () => setSheet(!appEl.classList.contains("sheet-open")));
   scrim?.addEventListener("click", () => setSheet(false));
 
-  // Phone portrait (≤620px): collapse to ONE bottom bar (the tools). Move the object-action bar
-  // and the zoom/fit strip INTO the Panels sheet (as "View" + "Actions" rows) so they're one tap
-  // away without permanently eating canvas. Moving the elements (not rebuilding them) preserves
-  // every existing id-wired handler. Restored to their desktop/landscape homes above 620px.
+  // Phone portrait (≤620px). Everything here MOVES existing elements rather than rebuilding them,
+  // so every id-wired handler and every layout.js tileKey survives; each move records its exact
+  // home (parent + next sibling) and is put back verbatim above 620px.
+  //
+  // Three bands, by how often you reach for them:
+  //   TOP    — undo/redo + zoom/fit. Always visible: undo is the most-used control in a touch
+  //            editor and it used to be TWO taps away, buried in the Panels sheet.
+  //   BOTTOM — the tools. Always visible.
+  //   CONTEXT— arrange + delete + duplicate, shown ONLY when something is selected (see the
+  //            .has-selection class), so it costs zero canvas while you're drawing. Delete lived
+  //            in .stage-toolbar, which the phone stylesheet display:none'd outright — it was
+  //            genuinely UNREACHABLE on a phone.
+  // The rest (booleans, rotate/flip, rulers/guides) stays one tap away in the Panels sheet.
   const sheet = document.querySelector("#rightdock");
+  const topbar = document.querySelector("#mobile-top");
   const actionbar = document.querySelector(".editor-grid > .actionbar");
   const panelFoot = document.querySelector(".stage-wrap > .panel-foot");
-  if (sheet && (actionbar || panelFoot)) {
-    const items = [panelFoot, actionbar].filter(Boolean);   // View first, then Actions
-    const homes = new Map(items.map((el) => [el, { parent: el.parentNode, next: el.nextSibling }]));
+  const arrange = document.querySelector(".stage-wrap > .stage-toolbar");
+  if (sheet && topbar) {
+    const sep = () => { const s = document.createElement("span"); s.className = "tool-sep mobile-made"; s.setAttribute("aria-hidden", "true"); return s; };
+    const pick = (s) => document.querySelector(s);
+    // Quick bar, in reach order. Rulers/smart-guides deliberately stay behind in the sheet — they
+    // are set-once toggles, not per-stroke controls, and the bar has to fit 390px.
+    const quick = [
+      pick("#undo-button"), pick("#redo-button"), null,
+      pick('[data-action="zoom-out"]'), pick('[data-action="fit"]'),
+      pick('[data-action="actual"]'), pick('[data-action="zoom-in"]'), null,
+      pick("#vp-selectall"),
+    ];
+    // Duplicate reads as a selection action, so it joins the contextual bar on a phone. Both it and
+    // Delete are pulled to the FRONT of that bar: it overflows ~450px into 390px, and these two are
+    // the ones you must never have to go hunting for behind a horizontal scroll.
+    const ctx = [pick("#act-duplicate"), pick("#layer-delete")];
+    const moved = [...quick, ...ctx, panelFoot, actionbar].filter(Boolean);
+    const homes = new Map(moved.map((el) => [el, { parent: el.parentNode, next: el.nextSibling }]));
+    const goHome = (el) => { const h = homes.get(el); if (h && h.parent) h.parent.insertBefore(el, h.next); };
+
     const collapse = matchMedia("(max-width: 620px)");
     const apply = (on) => {
       if (on) {
-        for (const el of items) { el.classList.add("in-sheet"); sheet.insertBefore(el, sheet.querySelector(".rail-section")); }
+        for (const el of quick) topbar.appendChild(el || sep());
+        // reverse: each insert goes to the head, so the last one inserted ends up first
+        if (arrange) for (const el of [...ctx].reverse().filter(Boolean)) arrange.insertBefore(el, arrange.firstChild);
+        for (const el of [panelFoot, actionbar].filter(Boolean)) {
+          el.classList.add("in-sheet");
+          sheet.insertBefore(el, sheet.querySelector(".rail-section"));
+        }
       } else {
-        for (const el of items) { el.classList.remove("in-sheet"); const h = homes.get(el); h.parent.insertBefore(el, h.next); }
+        topbar.querySelectorAll(".mobile-made").forEach((s) => s.remove());
+        for (const el of moved) {
+          el.classList.remove("in-sheet");
+          goHome(el);
+        }
       }
     };
     apply(collapse.matches);
@@ -990,6 +1027,9 @@ function buildRasterTools(node) {
     const has = !!editor.stage;
     const sel = has ? editor.selectedNodes() : [];
     const n = sel.length, hasSel = n > 0;
+    // Phone: the contextual bar (arrange/delete/duplicate) rides on this — it only takes canvas
+    // height while there IS a selection to act on. Harmless off mobile; nothing else styles it.
+    document.querySelector("main.app")?.classList.toggle("has-selection", hasSel);
     const fillable = (hasSel ? editor._effectiveLeaves() : []).filter((s) => shapeToAbsPath(s)).length >= 2;
     const hasGroup = sel.some((s) => s.tagName.toLowerCase() === "g");
     const hasClip = !!(editor.clipboard && editor.clipboard.length);
@@ -1931,6 +1971,11 @@ function observeOverflow(el, axis) {
   const check = () => {
     const over = axis === "y" ? (el.scrollHeight > el.clientHeight + 1) : (el.scrollWidth > el.clientWidth + 1);
     el.classList.toggle("is-overflowing", over);
+    // A bar's scroll axis FLIPS between layouts — the toolstrip is a vertical rail on desktop and a
+    // horizontal strip on a phone — so also track the horizontal case independently of the axis this
+    // was registered with. Without it the phone's tool strip hid 6 of 13 tools behind a scroll with
+    // no hint whatsoever that there was anything to scroll to.
+    el.classList.toggle("is-overflowing-x", el.scrollWidth > el.clientWidth + 1);
   };
   try { new ResizeObserver(check).observe(el); } catch {}
   try { new MutationObserver(check).observe(el, { childList: true }); } catch {}
