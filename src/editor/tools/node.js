@@ -27,7 +27,7 @@ export const nodeMixin = {
   // handles to what's actually in view. A ~15% margin keeps just-offscreen anchors
   // grabbable. Returns null if it can't be computed (→ caller falls back to all anchors).
   _visibleUserRect() {
-    const ctm = this.stage && this.stage.getScreenCTM(); if (!ctm) return null;
+    const ctm = this.stage && this.stageCTM(); if (!ctm) return null;
     let inv; try { inv = ctm.inverse(); } catch { return null; }
     let host = this.stage.parentElement, clip = null;
     while (host && host !== document.body) {
@@ -79,7 +79,7 @@ export const nodeMixin = {
       for (const key of [...this._nodeSel]) if (!live.has(key)) this._nodeSel.delete(key);
     }
     // constant ~5px on screen regardless of zoom (CTM.a = screen px per user unit)
-    const m = this.stage.getScreenCTM();
+    const m = this.stageCTM();
     const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
     const r = 5 / k, hr = 3.5 / k;
     const g = document.createElementNS(SVG_NS, "g");
@@ -179,7 +179,7 @@ export const nodeMixin = {
         else if (!wasSel) { this._nodeSel = new Set([key]); }
         this._refreshNodeSelHighlight();
       }
-      const m0 = this.stage.getScreenCTM();
+      const m0 = this.stageCTM();
       const sp = m0 ? new DOMPoint(e.clientX, e.clientY).matrixTransform(m0.inverse()) : { x: 0, y: 0 };
       const group = alt ? [] : [...this._nodeSel].map((kk) => this._nodeEls.get(kk)).filter(Boolean);
       const starts = group.map((ent) => ({ ent, x: ent.nd.x, y: ent.nd.y }));
@@ -188,7 +188,7 @@ export const nodeMixin = {
       const move = (ev) => {
         if (!moved && Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) < 3) return;   // ignore click jitter
         moved = true;
-        const m = this.stage.getScreenCTM(); if (!m) return;
+        const m = this.stageCTM(); if (!m) return;
         const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
         if (!pushed) { this.push("Move point"); pushed = true; }
         if (alt) {                          // Alt-drag → pull symmetric handles (corner→smooth / re-smooth)
@@ -294,7 +294,7 @@ export const nodeMixin = {
   // Hit-test an anchor under a screen point (for the node-tool right-click menu).
   anchorAt(clientX, clientY) {
     if (this.tool !== "node" || !this.stage) return null;
-    const m = this.stage.getScreenCTM(); if (!m) return null;
+    const m = this.stageCTM(); if (!m) return null;
     const k = Math.hypot(m.a, m.b) || 1;
     const p = new DOMPoint(clientX, clientY).matrixTransform(m.inverse());
     const hit = nearestOnPaths(this.stage, p.x, p.y, 8 / k);
@@ -355,7 +355,7 @@ export const nodeMixin = {
       let pushed = false;
       const sync = (line, h) => { dot.setAttribute("cx", nfmt(h.x)); dot.setAttribute("cy", nfmt(h.y)); line.setAttribute("x2", nfmt(h.x)); line.setAttribute("y2", nfmt(h.y)); };
       const move = (ev) => {
-        const m = this.stage.getScreenCTM(); if (!m) return;
+        const m = this.stageCTM(); if (!m) return;
         if (!pushed) { this.push("Reshape"); pushed = true; }
         let p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
         if (ev.shiftKey) p = snap45(nd.x, nd.y, p.x, p.y);
@@ -386,7 +386,7 @@ export const nodeMixin = {
       c.setPointerCapture(e.pointerId); c.classList.add("dragging"); this._handleDragging = true;
       let pushed = false;
       const move = (ev) => {
-        const m = this.stage.getScreenCTM(); if (!m) return;
+        const m = this.stageCTM(); if (!m) return;
         if (!pushed) { this.push("Move point"); pushed = true; }
         const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
         c.setAttribute("cx", p.x); c.setAttribute("cy", p.y);

@@ -24,7 +24,7 @@ export const penMixin = {
       else this._insertPenAnchor(hit.el, hit.i, hit.t);
       return;
     }
-    const inv = () => this.stage.getScreenCTM().inverse();
+    const inv = () => this.stageCTM().inverse();
     let pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(inv());
     let anchor;            // the anchor this press adjusts (a new one, or the first when closing)
     let closing = false;
@@ -86,7 +86,7 @@ export const penMixin = {
   },
   _penHover(ev) {
     if (!this._pen || this._pen.dragging) return;
-    const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(this.stage.getScreenCTM().inverse());
+    const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(this.stageCTM().inverse());
     const closeHover = this._pen.pts.length >= 2 && this._penNearFirst(p);
     this._redrawPen(closeHover ? null : { x: p.x, y: p.y });   // snap the rubber-band to the closing anchor
     this._renderPenMarks(closeHover);
@@ -112,7 +112,7 @@ export const penMixin = {
   },
   _penIdleHover(ev) {
     if (this.tool !== "pen" || this._pen || this._penTempSelect || !this.stage) return;
-    const m = this.stage.getScreenCTM(); if (!m) { this._penHit = null; return; }
+    const m = this.stageCTM(); if (!m) { this._penHit = null; return; }
     const k = Math.hypot(m.a, m.b) || 1;
     const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
     const hit = nearestOnPaths(this.stage, p.x, p.y, 6 / k);
@@ -132,7 +132,7 @@ export const penMixin = {
     const ov = this._overlayEl(); if (!ov) return;
     ov.querySelectorAll("g.hv-pen-hint").forEach((g) => g.remove());
     if (!hit) return;
-    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
+    const m = this.stageCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
     const r = 4 / k;
     const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "hv-pen-hint");
     if (hit.mode === "segment") {
@@ -190,13 +190,13 @@ export const penMixin = {
   },
   _penNearFirst(pt) {
     const f = this._pen.pts[0]; if (!f) return false;
-    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
+    const m = this.stageCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
     return Math.hypot(pt.x - f.x, pt.y - f.y) < 8 / k;
   },
   _renderPenMarks(closeHover) {
     const ov = this._overlayEl(); if (!ov || !this._pen) return;
     ov.querySelectorAll("g.hv-pen").forEach((g) => g.remove());
-    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
+    const m = this.stageCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
     const r = 4 / k, hr = 3 / k;
     const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "hv-pen");
     // bezier direction handles (tangent line + round endpoints). `in` and `out`

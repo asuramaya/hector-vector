@@ -26,7 +26,7 @@ export const marqueeMixin = {
   _beginSegmentDrag(startEvent, el, i, t0) {
     const pa = pathToAnchors(el);
     if (!pa.editable) { this._beginNodeMarquee(startEvent, startEvent.shiftKey); return; }
-    const inv = () => this.stage.getScreenCTM().inverse();
+    const inv = () => this.stageCTM().inverse();
     const start = new DOMPoint(startEvent.clientX, startEvent.clientY).matrixTransform(inv());
     const sb = subOf(pa.anchors, pa.subs, i);   // wrap to the NEXT anchor within i's subpath (#20)
     const A = pa.anchors[i], B = pa.anchors[(i + 1 < sb.end) ? i + 1 : (sb.closed ? sb.start : i)];
@@ -63,7 +63,7 @@ export const marqueeMixin = {
   // (Shift adds to the current anchor selection). A plain click clears.
   _beginNodeMarquee(startEvent, additive) {
     const ov = this._overlayEl(); if (!ov) return;
-    const inv = () => this.stage.getScreenCTM().inverse();
+    const inv = () => this.stageCTM().inverse();
     const start = new DOMPoint(startEvent.clientX, startEvent.clientY).matrixTransform(inv());
     const base = additive ? new Set(this._nodeSel) : new Set();
     const box = document.createElementNS(SVG_NS, "rect"); box.setAttribute("class", "hv-marquee");
@@ -91,7 +91,7 @@ export const marqueeMixin = {
   _beginMarquee(startEvent, lasso) {
     if (!this.stage) return;
     const ov = this._overlayEl(); if (!ov) return;
-    const inv = () => this.stage.getScreenCTM().inverse();
+    const inv = () => this.stageCTM().inverse();
     const start = new DOMPoint(startEvent.clientX, startEvent.clientY).matrixTransform(inv());
     const additive = startEvent.shiftKey;
     const pts = [{ x: start.x, y: start.y }];

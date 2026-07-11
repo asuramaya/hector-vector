@@ -102,8 +102,8 @@ function mkOverlay() {
     clear(e) {
       const entry = dots.get(e.pointerId);
       if (!entry) return;
-      entry.raw.style.display = "none";
-      entry.mapped.style.display = "none";
+      entry.raw.remove(); entry.mapped.remove();
+      dots.delete(e.pointerId);
     },
   };
 }

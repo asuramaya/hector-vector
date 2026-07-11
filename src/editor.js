@@ -52,6 +52,32 @@ function editorSvgEl() {
   return outputPreviewEl.querySelector("svg.inline-svg");
 }
 
+// iOS Safari ignores `user-scalable=no` (an accessibility guarantee since iOS 10), so the page
+// can still get pinch-zoomed — and getScreenCTM() does NOT account for that page-level zoom (it
+// stays anchored to the unzoomed layout viewport), while touch clientX/Y DOES reflect it. Any
+// stage.getScreenCTM() call site that maps a raw client/touch coordinate is silently wrong by
+// the zoom's scale+translate once that happens. getBoundingClientRect() has no such bug (it's
+// real paint geometry), so measure the TRUE stage->screen affine transform from three probe
+// points instead of trusting the CTM. Only worth doing when a page zoom is actually in effect —
+// stageCTM() below fast-paths straight back to the raw CTM otherwise.
+function measureStageAffine(stage) {
+  const probe = (x, y) => {
+    const c = document.createElementNS(SVG_NS, "circle");
+    c.setAttribute("cx", String(x)); c.setAttribute("cy", String(y)); c.setAttribute("r", "0");
+    c.setAttribute("fill", "none"); c.style.pointerEvents = "none";
+    stage.appendChild(c);
+    const r = c.getBoundingClientRect();
+    c.remove();
+    return { x: r.left, y: r.top };
+  };
+  const d = 1000;   // generously large so the measured scale survives float rounding at any zoom
+  const p0 = probe(0, 0), p1 = probe(d, 0), p2 = probe(0, d);
+  const a = (p1.x - p0.x) / d, c = (p2.x - p0.x) / d, e = p0.x;
+  const b = (p1.y - p0.y) / d, dd = (p2.y - p0.y) / d, f = p0.y;
+  if (![a, b, c, dd, e, f].every(Number.isFinite)) return null;
+  return new DOMMatrix([a, b, c, dd, e, f]);
+}
+
 const editor = {
   stage: null,
   selection: new Set(),
@@ -271,7 +297,7 @@ const editor = {
       // anchor/handle drags stopPropagation, so reaching here = empty canvas or path
       // body. Over a segment → reshape it; otherwise → marquee-select anchors.
       e.stopPropagation(); e.preventDefault();
-      const m = this.stage.getScreenCTM();
+      const m = this.stageCTM();
       const sp = m ? new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse()) : null;
       const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
       const hit = sp ? nearestOnPaths(this.stage, sp.x, sp.y, 6 / k) : null;
@@ -317,7 +343,7 @@ const editor = {
   },
   _beginMove(startEvent) {
     let nodes = this._topSelection(this.selectedNodes()); if (!nodes.length) return;
-    const inv = () => this.stage.getScreenCTM().inverse();
+    const inv = () => this.stageCTM().inverse();
     const start = new DOMPoint(startEvent.clientX, startEvent.clientY).matrixTransform(inv());
     let bases = nodes.map((n) => currentTranslate(n));
     let origs = nodes.map((n) => n.getAttribute("transform"));
@@ -342,7 +368,7 @@ const editor = {
       if (ev.shiftKey) { if (Math.abs(dx) >= Math.abs(dy)) dy = 0; else dx = 0; }   // lock to the H/V axis
       else {
         if (cand) {                          // smart-guide snap (skipped while Shift-constraining)
-          const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
+          const m = this.stageCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
           const rx = [ref0.x0, (ref0.x0 + ref0.x1) / 2, ref0.x1], ry = [ref0.y0, (ref0.y0 + ref0.y1) / 2, ref0.y1];
           const s = this._snapMove(rx, ry, dx, dy, cand, 6 / k); dx = s.dx; dy = s.dy; gx = s.gx; gy = s.gy;
         }
@@ -377,7 +403,7 @@ const editor = {
   // commits it once the shape is large enough to keep (a bare click creates nothing).
   _beginDraw(startEvent) {
     const tool = this.tool;
-    const inv = () => this.stage.getScreenCTM().inverse();
+    const inv = () => this.stageCTM().inverse();
     const start = new DOMPoint(startEvent.clientX, startEvent.clientY).matrixTransform(inv());
     this.beginCoalesce();                         // snapshot the document before the shape exists
     this.selection = new Set(); this.artboardSelected = false; this._renderSelection();
@@ -734,7 +760,7 @@ const editor = {
     if (!(bb.width > 0) || !(bb.height > 0)) return;
     const toStage = this.stage.getScreenCTM().inverse().multiply(n.getScreenCTM());
     const f2s = (fx, fy) => new DOMPoint(bb.x + fx * bb.width, bb.y + fy * bb.height).matrixTransform(toStage);
-    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1; const r = 5 / k;
+    const m = this.stageCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1; const r = 5 / k;
     const num = (a, d) => { const v = parseFloat(grad.getAttribute(a)); return isNaN(v) ? d : v; };
     const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "hv-gradedit");
     const dot = (p, which) => { const c = document.createElementNS(SVG_NS, "circle"); c.setAttribute("cx", nfmt(p.x)); c.setAttribute("cy", nfmt(p.y)); c.setAttribute("r", nfmt(r)); c.setAttribute("class", "hv-gradedit-handle"); this._bindGradientHandle(c, n, tgt, which); return c; };
@@ -759,7 +785,7 @@ const editor = {
       const grad = this._gradEl(node, target); if (!grad) return;
       this._handleDragging = true;
       const frac = (ev) => {
-        const sp = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(this.stage.getScreenCTM().inverse());
+        const sp = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(this.stageCTM().inverse());
         const lp = new DOMPoint(sp.x, sp.y).matrixTransform(node.getScreenCTM().inverse().multiply(this.stage.getScreenCTM()));
         return { fx: (lp.x - bb.x) / bb.width, fy: (lp.y - bb.y) / bb.height };
       };
@@ -1532,7 +1558,28 @@ const editor = {
     const ov = this._overlayEl();
     if (g && ov && g.nextSibling !== ov) this.stage.insertBefore(g, ov);
   },
-  _scaleK() { const m = this.stage && this.stage.getScreenCTM(); return m ? (Math.hypot(m.a, m.b) || 1) : 1; },
+  // The screen<->stage transform, corrected for an active iOS Safari page pinch-zoom (see
+  // measureStageAffine above). Every touch/pointer coordinate mapping should call this instead
+  // of this.stage.getScreenCTM() directly — EXCEPT where a raw stage CTM is being composed
+  // against another element's raw CTM in the same expression (that cancels the zoom error by
+  // construction; correcting only one side would reintroduce it — see editor.js's own node<->
+  // stage transforms). Cached by a key of the inputs, so the expensive probe measurement only
+  // re-runs when the zoom or the raw CTM actually changes, not on every pointermove.
+  stageCTM() {
+    const raw = this.stage && this.stage.getScreenCTM && this.stage.getScreenCTM();
+    if (!raw) return raw;
+    const vv = window.visualViewport;
+    if (!vv || (Math.abs(vv.scale - 1) < 0.001 && Math.abs(vv.offsetLeft) < 0.5 && Math.abs(vv.offsetTop) < 0.5)) {
+      return raw;   // fast path: no page zoom in effect (desktop, and the common mobile case)
+    }
+    const key = `${vv.scale},${vv.offsetLeft},${vv.offsetTop},${raw.a},${raw.b},${raw.c},${raw.d},${raw.e},${raw.f}`;
+    if (this._ctmCache && this._ctmCache.key === key) return this._ctmCache.matrix;
+    const measured = measureStageAffine(this.stage) || raw;
+    this._ctmCache = { key, matrix: measured };
+    return measured;
+  },
+  _ctmCache: null,
+  _scaleK() { const m = this.stageCTM(); return m ? (Math.hypot(m.a, m.b) || 1) : 1; },
   _applyGuideCoords(el, gd) {
     const vb = this.stage.viewBox.baseVal, vert = gd.axis === "v";
     el.setAttribute("x1", nfmt(vert ? gd.pos : vb.x)); el.setAttribute("y1", nfmt(vert ? vb.y : gd.pos));
@@ -1576,7 +1623,7 @@ const editor = {
       this._handleDragging = true;
       const vert = gd.axis === "v";
       const move = (ev) => {
-        const m = this.stage.getScreenCTM(); if (!m) return;
+        const m = this.stageCTM(); if (!m) return;
         const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
         gd.pos = this._snapGuide(gd.axis, vert ? p.x : p.y, ev.shiftKey);
         this._applyGuideCoords(vis, gd); this._applyGuideCoords(hl, gd);   // in place, keeps the capture alive

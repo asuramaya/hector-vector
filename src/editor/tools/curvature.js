@@ -11,7 +11,7 @@ export const curvatureMixin = {
   _curvDown(e) {
     if (e.button !== 0) return;
     e.stopPropagation(); e.preventDefault();
-    const inv = () => this.stage.getScreenCTM().inverse();
+    const inv = () => this.stageCTM().inverse();
     let pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(inv());
     if (!this._curv) {
       this.beginCoalesce();
@@ -46,10 +46,10 @@ export const curvatureMixin = {
   // double-click corner toggle so a simple click still flips smooth⇄corner.
   _curvDragPoint(i, downEv) {
     if (!this._curv) return;
-    const inv = () => this.stage.getScreenCTM().inverse();
+    const inv = () => this.stageCTM().inverse();
     const start = new DOMPoint(downEv.clientX, downEv.clientY).matrixTransform(inv());
     const orig = { x: this._curv.pts[i].x, y: this._curv.pts[i].y };
-    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
+    const m = this.stageCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
     let moved = false;
     this._curv._drag = true;   // suspend the hover preview while dragging a point
     const move = (ev) => {
@@ -87,7 +87,7 @@ export const curvatureMixin = {
   },
   _curvHover(ev) {
     if (!this._curv || this._curv._drag) return;
-    let p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(this.stage.getScreenCTM().inverse());
+    let p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(this.stageCTM().inverse());
     const closeHover = this._curv.pts.length >= 2 && this._curvNearFirst(p);
     if (!closeHover && ev.shiftKey && this._curv.pts.length) p = this._constrain45(this._curv.pts[this._curv.pts.length - 1], p);
     this._curvRedraw(closeHover ? null : p);
@@ -96,11 +96,11 @@ export const curvatureMixin = {
   },
   _curvNearFirst(pt) {
     const f = this._curv.pts[0]; if (!f) return false;
-    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
+    const m = this.stageCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
     return Math.hypot(pt.x - f.x, pt.y - f.y) < 8 / k;
   },
   _curvNearPoint(pt) {
-    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1, tol = 8 / k;
+    const m = this.stageCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1, tol = 8 / k;
     for (let i = 0; i < this._curv.pts.length; i++) if (Math.hypot(pt.x - this._curv.pts[i].x, pt.y - this._curv.pts[i].y) < tol) return i;
     return -1;
   },
@@ -113,7 +113,7 @@ export const curvatureMixin = {
   _curvMarks(closeHover) {
     const ov = this._overlayEl(); if (!ov || !this._curv) return;
     ov.querySelectorAll("g.hv-pen").forEach((g) => g.remove());
-    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1, r = 4 / k;
+    const m = this.stageCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1, r = 4 / k;
     const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "hv-pen");
     this._curv.pts.forEach((a, i) => {
       const first = i === 0, close = first && closeHover, rr = close ? r * 1.7 : r;
@@ -165,7 +165,7 @@ export const curvatureMixin = {
     const targets = this.artboardSelected
       ? [this.artboardEl()].filter(Boolean)
       : this.selectedNodes();
-    const ctm = this.stage.getScreenCTM();
+    const ctm = this.stageCTM();
     if (ctm) {
       const inv = ctm.inverse();
       for (const n of targets) {
@@ -194,7 +194,7 @@ export const curvatureMixin = {
     const ov = this._overlayEl(); if (!ov) return;
     ov.querySelectorAll("g.hv-pen-points").forEach((g) => g.remove());
     if (this.tool !== "pen" || this._pen || this._penTempSelect || !this.stage || !this.selection.size) return;
-    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
+    const m = this.stageCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
     const r = 3.5 / k;
     const accept = this._nodeFocusAccept();   // restrict to the selected object(s)
     const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "hv-pen-points");

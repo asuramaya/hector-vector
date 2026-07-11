@@ -29,6 +29,13 @@ html, body {
   background: var(--bg);
   color: var(--fg);
   font-family: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  /* iOS Safari ignores the viewport meta's user-scalable=no (an accessibility guarantee since
+     iOS 10) but DOES respect touch-action — this is Apple's own documented workaround. The
+     editor already implements its own two-finger pinch-to-zoom for the canvas (viewport.js
+     bindViewportTouch), so native page pinch/double-tap zoom is pure liability: it desyncs
+     getScreenCTM() from real touch coordinates (see editor.js stageCTM()). pan-x pan-y keeps
+     normal scrolling (dock panels, the bottom sheet, lists) working. */
+  touch-action: pan-x pan-y;
 }
 
 button, select, input, a { font: inherit; }

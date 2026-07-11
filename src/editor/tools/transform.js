@@ -30,7 +30,7 @@ export const transformMixin = {
     const nodes = this.selectedNodes(); if (!nodes.length) return;
     const bb = this._bboxUnion(nodes);
     if (!(bb.x1 - bb.x0 > 1e-3) || !(bb.y1 - bb.y0 > 1e-3)) return;   // zero-area (a lone line) — nothing to scale
-    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1; const r = 4.5 / k;
+    const m = this.stageCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1; const r = 4.5 / k;
     const midX = (bb.x0 + bb.x1) / 2, midY = (bb.y0 + bb.y1) / 2;
     const specs = [   // x,y = handle position; ax,ay = the anchor (opposite point) it scales away from
       { h: "nw", x: bb.x0, y: bb.y0, ax: bb.x1, ay: bb.y1, sx: 1, sy: 1 },
@@ -80,7 +80,7 @@ export const transformMixin = {
       this._handleDragging = true;
       const xf = this._xform, cx = (xf.bb.x0 + xf.bb.x1) / 2, cy = (xf.bb.y0 + xf.bb.y1) / 2;
       const origs = nodes.map((n) => n.getAttribute("transform"));
-      const ptU = (ev) => new DOMPoint(ev.clientX, ev.clientY).matrixTransform(this.stage.getScreenCTM().inverse());
+      const ptU = (ev) => new DOMPoint(ev.clientX, ev.clientY).matrixTransform(this.stageCTM().inverse());
       const a0 = (() => { const p = ptU(e); return Math.atan2(p.y - cy, p.x - cx); })();
       let pushed = false;
       const move = (ev) => {
@@ -165,7 +165,7 @@ export const transformMixin = {
         else { const s = `matrix(${nfmt(sx)} 0 0 ${nfmt(sy)} ${nfmt(ax * (1 - sx))} ${nfmt(ay * (1 - sy))})`; n.setAttribute("transform", origs[i] ? `${s} ${origs[i]}` : s); }
       });
       const move = (ev) => {
-        const m = this.stage.getScreenCTM(); if (!m) return;
+        const m = this.stageCTM(); if (!m) return;
         const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
         const ax = ev.altKey ? cx : spec.ax, ay = ev.altKey ? cy : spec.ay;   // Alt → scale from centre
         const f = this._scaleFactors(spec, p, ev.shiftKey, ax, ay); last = { ...f, ax, ay };

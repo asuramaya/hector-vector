@@ -159,7 +159,7 @@ export const widthMixin = {
   // plain stroked path it first converts to a width-stroke, so the tool works directly.
   _widthDown(e) {
     e.stopPropagation(); e.preventDefault();
-    const m = this.stage.getScreenCTM(); if (!m) return;
+    const m = this.stageCTM(); if (!m) return;
     const toUser = (ev) => new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
     let g = e.target.closest && this._wsGroupOf(e.target.closest("[data-hv-id]") || e.target);
     if (!g) {
@@ -198,7 +198,7 @@ export const widthMixin = {
     const g = this.selectedNodes().map((n) => this._wsGroupOf(n)).find(Boolean); if (!g) return;
     const spec = this._wsSpec(g); const spine = this._wsSpine(spec); if (!spine) return;
     const ov = this._overlayEl(); if (!ov) return;
-    const m = this.stage.getScreenCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;   // user units per... screen px factor
+    const m = this.stageCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;   // user units per... screen px factor
     const layer = document.createElementNS(SVG_NS, "g"); layer.setAttribute("class", "hv-whandles");
     // point on the spine at parameter t
     const at = (t) => { for (let i = 1; i < spine.ts.length; i++) { if (t <= spine.ts[i]) { const a = spine.pts[i - 1], b = spine.pts[i], d = spine.ts[i] - spine.ts[i - 1], u = d > 0 ? (t - spine.ts[i - 1]) / d : 0; return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u }; } } const L = spine.pts[spine.pts.length - 1]; return { x: L.x, y: L.y }; };

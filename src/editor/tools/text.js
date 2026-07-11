@@ -110,7 +110,7 @@ export const textMixin = {
     if (this._isoDblClick) this._isoDblClick(e);   // not text → enter/exit isolation (Epic I)
   },
   _textStagePoint(e) {
-    const m = this.stage.getScreenCTM();
+    const m = this.stageCTM();
     const sp = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse());
     return { x: sp.x, y: sp.y };
   },
@@ -169,7 +169,7 @@ export const textMixin = {
   _positionTextOverlay() {
     const te = this._textEdit; if (!te || !this.stage) return;
     const { node, el, wrap } = te;
-    const m = this.stage.getScreenCTM(); if (!m) return;
+    const m = this.stageCTM(); if (!m) return;
     const x = parseFloat(node.getAttribute("x")) || 0;
     const y = parseFloat(node.getAttribute("y")) || 0;
     const fs = parseFloat(node.getAttribute("font-size")) || 16;

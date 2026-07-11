@@ -16,7 +16,7 @@ export const builderMixin = {
   _bPt(m, ev) { return new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse()); },
   // Capture a pointer drag into a stage-space polyline; onMove(pts) live, onUp(pts,ev) commits.
   _bDrag(e, onMove, onUp) {
-    const m = this.stage.getScreenCTM(); if (!m) return;
+    const m = this.stageCTM(); if (!m) return;
     const pts = [this._bPt(m, e)];
     const move = (ev) => { pts.push(this._bPt(m, ev)); onMove(pts, ev); };
     const up = (ev) => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); this._bTrail(null); onUp(pts, ev); };
@@ -122,7 +122,7 @@ export const builderMixin = {
   },
   _scissorsDown(e) {
     e.stopPropagation(); e.preventDefault();
-    const m = this.stage.getScreenCTM(); if (!m) return;
+    const m = this.stageCTM(); if (!m) return;
     const sp = this._bPt(m, e), k = Math.hypot(m.a, m.b) || 1;
     this.scissorsCut(sp.x, sp.y, 8 / k);
   },

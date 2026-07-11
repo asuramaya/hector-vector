@@ -113,7 +113,7 @@ export function applyViewportState(vp) {
 export function drawRulers() {
   const cont = document.querySelector("#rulers");
   if (!cont || cont.hidden || !editor.stage) return;
-  const ctm = editor.stage.getScreenCTM(); if (!ctm) return;
+  const ctm = editor.stageCTM(); if (!ctm) return;
   const sx = ctm.a || 1, sy = ctm.d || 1;            // screen px per doc unit (no canvas rotation)
   const dpr = window.devicePixelRatio || 1;
   const INK = "#9a9aa0", LINE = "#c8c8cc";
@@ -151,7 +151,7 @@ export function drawRulers() {
 export function bindRulerGuides(rulersEl) {
   if (!rulersEl || rulersEl._hvGuidesBound) return;
   rulersEl._hvGuidesBound = true;
-  const toDoc = (cx, cy) => { const m = editor.stage && editor.stage.getScreenCTM(); return m ? new DOMPoint(cx, cy).matrixTransform(m.inverse()) : null; };
+  const toDoc = (cx, cy) => { const m = editor.stage && editor.stageCTM(); return m ? new DOMPoint(cx, cy).matrixTransform(m.inverse()) : null; };
   const startCreate = (axis) => (e) => {
     if (!editor.stage || editor.guidesLocked || e.button !== 0) return;
     e.preventDefault();
