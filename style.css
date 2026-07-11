@@ -2033,6 +2033,18 @@ text.hv-text-editing { visibility: hidden; }
 .app.editor.customizing .tool-button { cursor: grab; }
 .app.editor.customizing .tool-button:active { cursor: grabbing; }
 .app.editor.customizing .tool-button.dragging { opacity: 0.4; outline: 1px solid var(--accent); }
+/* The drag runs on pointer events now (HTML5 drag never fires from a finger). Two consequences:
+   - touch-action:none, or a drag along the phone's horizontally-scrolling tool strip would just be
+     read as a scroll and the tile would never move. Only the TILES claim the gesture; the bar's own
+     background still scrolls normally.
+   - the tile follows the pointer via a transform, so it must not swallow its own hit-tests. */
+.app.editor.customizing .tool-button,
+.app.editor.customizing .tool-sep,
+.app.editor.customizing .tool-vsep,
+.app.editor.customizing .vp-sep { touch-action: none; }
+.app.editor.customizing .tool-button.dragging { pointer-events: none; position: relative; z-index: 3; }
+/* a bar refusing the drop (a panel header already at its tile cap) — replaces DnD's dropEffect */
+.app.editor.customizing .no-drop { outline: 1px dashed var(--danger, #c33) !important; cursor: no-drop; }
 /* disabled tiles stay draggable in customize mode (you're arranging, not using them) */
 .app.editor.customizing .tool-button:disabled { opacity: 1; cursor: grab; }
 /* dividers become visible, grabbable chips while customizing (drag to move,

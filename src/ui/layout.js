@@ -9,6 +9,7 @@
 // object the header Layout dropdown and the E2E suite drive; the caller is
 // responsible for publishing it (e.g. on `window.__layout`).
 import { isPhone, onFormFactorChange, composePhone } from "./formfactor.js";
+import { createPointerDrag } from "./pointer-drag.js";
 
 export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput, showRichContextMenu, MENU_ITEMS }) {
   const LAYOUT_KEY = "hector-vector:layout";
@@ -29,7 +30,12 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
   const tileKey = (b) => b.id ? "#" + b.id : b.dataset.tool ? "tool:" + b.dataset.tool : (b.dataset.vp && b.dataset.action) ? "vp:" + b.dataset.action : "t:" + (b.textContent || "").trim();
   const slotKey = (el) => isSep(el) ? SEP : tileKey(el);
   const tailEl = (cont, bar) => bar.tail ? cont.querySelector(bar.tail) : null;
-  const axisY = (cont) => cont.classList.contains("toolstrip") || cont.classList.contains("actionbar");
+  // Which way does this bar run? ASK the layout, don't infer it from the class name. The old test
+  // was `classList.contains("toolstrip") || …("actionbar")` — true enough on a desktop, where those
+  // are vertical rails, but on a PHONE the toolstrip is a horizontal row. The hit-test would then
+  // compare the wrong axis and phone reordering would be gibberish. On desktop this is provably the
+  // same answer: toolstrip/actionbar are column, every other bar is a row.
+  const axisY = (cont) => getComputedStyle(cont).flexDirection.startsWith("column");
   // movable children of a bar (tiles + separators that sit before the pinned tail)
   function movable(bar) {
     const cont = barOf(bar); if (!cont) return [];
@@ -175,34 +181,78 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
     }
     return tail;   // before the pinned tail, or null => append
   }
-  const onDragStart = (e) => { dragEl = e.currentTarget; e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", ""); } catch {} dragEl.classList.add("dragging"); };
-  const onDragEnd = () => { if (dragEl) dragEl.classList.remove("dragging"); dragEl = null; };
   const HDR_TILE_CAP = 8;   // headers scroll on overflow now (tile-scroll), so allow more tiles
-  const onBarOver = (e) => {
-    if (!dragEl) return;
-    const cont = e.currentTarget, bar = barFor(cont);
-    // Cap incoming tiles on panel headers (reordering within a full header is still fine).
-    if (bar && bar.name.startsWith("hdr-") && dragEl.parentElement !== cont
-        && movable(bar).filter(isTile).length >= HDR_TILE_CAP) { e.dataTransfer.dropEffect = "none"; return; }
-    e.preventDefault(); e.dataTransfer.dropEffect = "move";
-    const ref = insertionRef(cont, e.clientX, e.clientY, bar);
-    if (ref !== dragEl) cont.insertBefore(dragEl, ref);   // live reflow while dragging
-  };
-  const onBarDrop = (e) => { e.preventDefault(); persist(); };   // DOM already reflects the move → auto-save it
+
+  // Which bar is under the pointer. Deliberately a RECT test rather than elementFromPoint: the phone
+  // has a scrim and a bottom sheet floating over the frame, and a stray hit through one of those
+  // could otherwise steal a tile into a bar you can't even see.
+  //
+  // On a PHONE, drag is intra-bar reorder ONLY. Cross-bar dragging there is a hostile gesture — the
+  // bars sit at opposite ends of a 390px screen and the action bar is inside the sheet, which covers
+  // the tool strip when it's open. Cross-bar moves are the picker's job (see layout-picker.js). A
+  // finger also strays off a 44px-tall bar constantly, so falling back to the source container keeps
+  // the reorder alive instead of stalling.
+  function containerAt(x, y, el) {
+    const src = el.parentElement;
+    if (isPhone()) {
+      const bar = barFor(src);
+      if (!bar) return null;
+      return src;   // stay in the bar you started in, wherever the finger wanders
+    }
+    for (const b of BARS) {
+      const c = barOf(b); if (!c) continue;
+      const r = c.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return c;
+    }
+    return null;   // outside every bar: don't move it (native dragover behaved the same way)
+  }
+
+  const drag = createPointerDrag({
+    containerAt,
+    onStart: (el) => { dragEl = el; },
+    // Identical to what the old dragover handler computed — the hit-test and the live reflow below
+    // are untouched; only the event source changed.
+    onMove: (el, cont, x, y) => {
+      const bar = barFor(cont);
+      // Cap incoming tiles on panel headers (reordering within a full header is still fine).
+      if (bar && bar.name.startsWith("hdr-") && el.parentElement !== cont
+          && movable(bar).filter(isTile).length >= HDR_TILE_CAP) { cont.classList.add("no-drop"); return; }
+      cont.classList.remove("no-drop");
+      const ref = insertionRef(cont, x, y, bar);
+      if (ref !== el) cont.insertBefore(el, ref);   // live reflow while dragging
+    },
+    onDrop: () => {
+      document.querySelectorAll(".no-drop").forEach((c) => c.classList.remove("no-drop"));
+      dragEl = null;
+      persist();   // the DOM already reflects the move → auto-save it
+    },
+    onCancel: () => {   // Escape: pointer-drag has no native "revert", so we restore and don't persist
+      document.querySelectorAll(".no-drop").forEach((c) => c.classList.remove("no-drop"));
+      dragEl = null;
+    },
+    // A tap (no travel) on a tile while customizing toggles it off/on. Hidden tiles stay visible
+    // here, ghosted, precisely so they can be tapped back on.
+    onTap: (el) => {
+      dragEl = null;
+      if (!isTile(el)) return;
+      const key = tileKey(el);
+      const nowHidden = !hidden.has(key);
+      if (!setHidden(key, nowHidden)) setStatus("That one's always on.", 1500);
+      else setStatus(nowHidden ? "Hidden — tap again to bring it back." : "Shown.", 1500);
+    },
+  });
+
   const blockClick = (e) => { e.preventDefault(); e.stopPropagation(); };
-  // Both tiles AND dividers are draggable while customizing; dividers can also be
+  // Both tiles AND dividers are movable while customizing; dividers can also be
   // added/removed via the bar's right-click menu.
   function frameMovables() { const out = []; for (const b of BARS) for (const m of movable(b)) out.push(m); return out; }
   function wireMovable(el, on) {
-    el.draggable = on;
     if (on) {
-      if (isTile(el)) { el.disabled = false; el.addEventListener("click", blockClick, true); }   // disabled buttons can't be dragged
-      el.addEventListener("dragstart", onDragStart);
-      el.addEventListener("dragend", onDragEnd);
+      if (isTile(el)) { el.disabled = false; el.addEventListener("click", blockClick, true); }   // disabled buttons must still be movable
+      drag.arm(el);
     } else {
       if (isTile(el)) el.removeEventListener("click", blockClick, true);
-      el.removeEventListener("dragstart", onDragStart);
-      el.removeEventListener("dragend", onDragEnd);
+      drag.disarm(el);
     }
   }
   const sepUnder = (t) => isSep(t) ? t : (t && t.closest ? t.closest(".tool-sep, .tool-vsep, .vp-sep") : null);
@@ -234,11 +284,12 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
     cont._layoutCtxWired = true; cont.addEventListener("contextmenu", onBarContext);
   }
 
+  // No dragover/drop listeners any more: the pointer-drag helper hit-tests the bars itself (see
+  // containerAt), which is what lets a finger drag work at all — touch never fires HTML5 drag events.
   function wireBar(bar, on) {
     const cont = barOf(bar); if (!cont) return;
     for (const m of movable(bar)) wireMovable(m, on);
-    if (on) { cont.addEventListener("dragover", onBarOver); cont.addEventListener("drop", onBarDrop); }
-    else { cont.removeEventListener("dragover", onBarOver); cont.removeEventListener("drop", onBarDrop); }
+    if (!on) cont.classList.remove("no-drop");
   }
   // Register a panel header's action area as a customize-layout bar (drop receiver). The
   // panel headers are built dynamically (after this module), so they opt in on creation.

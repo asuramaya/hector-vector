@@ -140,6 +140,25 @@ def mount_ctl(page):
     page.wait_for_function("editor.stage && editor.nodeById('r2')", timeout=20000)
     page.wait_for_timeout(150)
 
+def drag_tile(page, src_sel, dst_sel):
+    """Drag a toolbar tile into a bar, with REAL mouse events.
+
+    Customize used to run on HTML5 drag-and-drop, so these tests dispatched synthetic DragEvents.
+    It runs on pointer events now (the only way a finger can drag at all), so synthetic DragEvents
+    do nothing — and driving it with real input is a strictly better test anyway: it exercises the
+    mechanism a user actually gets, rather than a hand-rolled imitation of it."""
+    s = page.locator(src_sel).bounding_box()
+    d = page.locator(dst_sel).bounding_box()
+    if not s or not d:
+        return False
+    page.mouse.move(s["x"] + s["width"] / 2, s["y"] + s["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(d["x"] + d["width"] - 4, d["y"] + d["height"] / 2, steps=12)
+    page.mouse.up()
+    page.wait_for_timeout(120)
+    return True
+
+
 def open_ctx_panel(page):
     """Show the Properties panel for the current selection/artboard. (Right-clicking an OBJECT
     now opens the Actions command menu, so summon the style panel directly rather than via the
@@ -834,9 +853,39 @@ def main():
                 document.body.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true})); return ok; }"""))
         # customize mode (via the exposed controller) makes frame tiles draggable
         page.evaluate("window.__layout.toggleEdit()")
-        check("customize mode makes frame tiles draggable",
+        # "Movable" is marked by data-hv-movable now, NOT the native draggable attribute: the drag runs
+        # on pointer events so a finger works too, and native DnD is explicitly switched OFF so it can
+        # never race the pointer drag.
+        check("customize mode makes frame tiles movable (pointer-drag armed, native DnD off)",
               page.evaluate("""!!document.querySelector('.app.editor.customizing')
-                && document.querySelector('.toolstrip .tool-button').draggable === true"""))
+                && document.querySelector('.toolstrip .tool-button').dataset.hvMovable === '1'
+                && document.querySelector('.toolstrip .tool-button').draggable === false"""))
+        # An ACTUAL drag, with real mouse events. Nothing in this suite ever dragged for real before —
+        # customize was always driven through window.__layout + appendChild — which is exactly why
+        # nobody noticed the whole engine was dead on touch. A broken drag now fails a test.
+        # (drag TEXT, not pen: a later check still expects to find pen in the toolstrip)
+        txt_box = page.locator(".toolstrip [data-tool=text]").bounding_box()
+        act_box = page.locator(".actionbar .tool-button").first.bounding_box()
+        page.mouse.move(txt_box["x"] + txt_box["width"] / 2, txt_box["y"] + txt_box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(act_box["x"] + act_box["width"] / 2, act_box["y"] + 2, steps=14)
+        page.mouse.up()
+        page.wait_for_timeout(250)
+        check("a real mouse drag moves a tile across bars, and auto-saves it",
+              page.evaluate("""() => !!document.querySelector('.actionbar [data-tool=text]')
+                && (JSON.parse(localStorage.getItem('hector-vector:layout') || '{}').actions || []).includes('tool:text')"""))
+        page.evaluate("() => window.__layout.move('tool:text', 'tools')")   # put it back for the checks below
+        # Escape mid-drag must put it back — native DnD reverted for free; pointer-drag has to do it.
+        nd = page.locator(".toolstrip [data-tool=node]").bounding_box()
+        before_idx = page.evaluate("""() => [...document.querySelectorAll('.toolstrip .tool-button')].findIndex(b => b.dataset.tool === 'node')""")
+        page.mouse.move(nd["x"] + nd["width"] / 2, nd["y"] + nd["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(nd["x"] + nd["width"] / 2, nd["y"] + 90, steps=8)
+        page.keyboard.press("Escape")
+        page.mouse.up()
+        page.wait_for_timeout(200)
+        check("Escape mid-drag returns the tile to where it started",
+              page.evaluate("""() => [...document.querySelectorAll('.toolstrip .tool-button')].findIndex(b => b.dataset.tool === 'node')""") == before_idx)
         # the bottom bar (the full-width .panel-foot, not just its centered button cluster)
         # turns blue in customize mode — same tint as the top toolstrip
         check("customize mode tints the whole bottom bar blue (panel-foot, like the toolstrip)",
@@ -3534,8 +3583,8 @@ def main():
 
         section("Customize layout: draggable dividers + right-click add/remove")
         page.evaluate("window.__layout.toggleEdit()"); page.wait_for_timeout(80)
-        check("dividers become draggable in customize mode",
-              page.evaluate("() => { const s=document.querySelector('.actionbar .tool-sep'); return !!s && s.draggable === true; }") is True)
+        check("dividers become movable in customize mode",
+              page.evaluate("() => { const s=document.querySelector('.actionbar .tool-sep'); return !!s && s.dataset.hvMovable === '1'; }") is True)
         before = page.evaluate("document.querySelectorAll('.actionbar .tool-sep').length")
         page.evaluate("() => { const bar=document.querySelector('.actionbar'); const r=bar.getBoundingClientRect();"
                       "bar.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:Math.round(r.left+6),clientY:Math.round(r.top+6)})); }")
@@ -3553,18 +3602,9 @@ def main():
         check("right-click removes a divider",
               page.evaluate("document.querySelectorAll('.actionbar .tool-sep').length") == before, f"back to {before}")
         # panel headers are customize-layout receivers: drag a toolbar tile into one
-        landed = page.evaluate("""() => {
-            const tile = document.querySelector('.actionbar #act-union');
-            const hdr = document.querySelector('.rail-section.properties .panel-actions');
-            if (!tile || !hdr) return 'missing';
-            const dt = new DataTransfer();
-            tile.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
-            const r = hdr.getBoundingClientRect();
-            hdr.dispatchEvent(new DragEvent('dragover', { bubbles: true, clientX: Math.round(r.right - 4), clientY: Math.round(r.top + r.height / 2), dataTransfer: dt }));
-            hdr.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: dt }));
-            tile.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
-            return document.querySelector('.rail-section.properties .panel-actions #act-union') ? 'in' : 'out'; }""")
-        check("drag a toolbar tile INTO a panel header receiver", landed == "in", str(landed))
+        drag_tile(page, ".actionbar #act-union", ".rail-section.properties .panel-actions")
+        landed = page.evaluate("() => !!document.querySelector('.rail-section.properties .panel-actions #act-union')")
+        check("drag a toolbar tile INTO a panel header receiver", landed is True, str(landed))
         check("header receiver arrangement is auto-saved",
               page.evaluate("((JSON.parse(localStorage.getItem('hector-vector:layout')||'{}'))['hdr-properties']||[]).includes('#act-union')"))
         # no blank-slot placeholder box any more — an empty/partial header just shows its real button(s)
@@ -3572,16 +3612,10 @@ def main():
               page.evaluate("!document.querySelector('.hdr-slot-empty')"))
         # Headers now scroll on overflow (tile-scroll), so the cap was raised past 3 — a
         # 4th dropped tile is accepted (was refused under the old 3-tile cap).
+        drag_tile(page, ".actionbar #act-cut", ".rail-section.properties .panel-actions")
+        drag_tile(page, ".actionbar #act-copy", ".rail-section.properties .panel-actions")   # a 4th tile — now accepted (overflow-scrolls)
         capped = page.evaluate("""() => {
             const hdr = document.querySelector('.rail-section.properties .panel-actions');
-            const drop = (id) => { const tile = document.querySelector('.actionbar #'+id); if (!tile) return;
-              const dt = new DataTransfer(); tile.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:dt}));
-              const r = hdr.getBoundingClientRect();
-              hdr.dispatchEvent(new DragEvent('dragover',{bubbles:true,clientX:Math.round(r.right-4),clientY:Math.round(r.top+r.height/2),dataTransfer:dt}));
-              hdr.dispatchEvent(new DragEvent('drop',{bubbles:true,dataTransfer:dt}));
-              tile.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer:dt})); };
-            drop('act-cut');
-            drop('act-copy');  // a 4th tile — now accepted (overflow-scrolls)
             const tiles = [...hdr.children].filter(c => c.classList.contains('tool-button') && !c.classList.contains('panel-x'));
             return { n: tiles.length, copyIn: !!hdr.querySelector('#act-copy') }; }""")
         check("panel header accepts more than 3 tiles (overflow-scrolls)", capped["n"] >= 4 and capped["copyIn"] is True, str(capped))
@@ -4439,6 +4473,50 @@ def main():
                       trimmed["clicked"] == 7 and trimmed["before"] > 300 and trimmed["after"] == 0, str(trimmed))
                 mp.evaluate("() => { const b = document.querySelector('[data-modal-close]'); if (b) b.click(); }")
                 mp.evaluate("() => __layout.reset()")
+                mp.wait_for_timeout(200)
+
+                # A REAL touch drag. This was flatly impossible before — HTML5 drag events never fire
+                # from a finger, so the customize engine was 100% dead on every phone. Synthetic
+                # PointerEvents carry pointerId 0, which is why the helper must not depend on
+                # setPointerCapture (it throws on id 0) — that constraint is what makes this testable.
+                mp.evaluate("() => __layout.toggleEdit()")
+                touch_drag = mp.evaluate("""() => {
+                    const strip = document.querySelector('.toolstrip');
+                    const rect = strip.querySelector('[data-tool=rect]'), pen = strip.querySelector('[data-tool=pen]');
+                    const rb = rect.getBoundingClientRect(), pb = pen.getBoundingClientRect();
+                    const pe = (t, ty, x, y) => t.dispatchEvent(new PointerEvent(ty, {
+                        pointerId: 0, pointerType: 'touch', button: 0, isPrimary: true,
+                        clientX: x, clientY: y, bubbles: true, cancelable: true }));
+                    const y = rb.top + rb.height / 2, x0 = rb.left + rb.width / 2, x1 = pb.left + 2;
+                    pe(rect, 'pointerdown', x0, y);
+                    for (let i = 1; i <= 10; i++) pe(window, 'pointermove', x0 + (x1 - x0) * i / 10, y);
+                    pe(window, 'pointerup', x1, y);
+                    const dom = [...strip.querySelectorAll('.tool-button')].map((b) => 'tool:' + b.dataset.tool);
+                    const saved = JSON.parse(localStorage.getItem('hector-vector:layout:phone') || 'null');
+                    const savedTools = ((saved && saved.tools) || []).filter((k) => k !== '|');
+                    return { movedBefore: dom.indexOf('tool:rect') < dom.indexOf('tool:pen'),
+                             persisted: JSON.stringify(dom) === JSON.stringify(savedTools) };
+                }""")
+                check("mobile: a real TOUCH drag reorders the tool strip and auto-saves (HTML5 drag never fires on touch)",
+                      touch_drag["movedBefore"] and touch_drag["persisted"], str(touch_drag))
+                # Cross-bar drag is refused on a phone BY POLICY (the bars are at opposite ends of the
+                # screen and the action bar is inside the sheet). Assert the policy, so a future
+                # "helpful" relaxation trips a test rather than shipping a hostile gesture.
+                cross = mp.evaluate("""() => {
+                    const strip = document.querySelector('.toolstrip'), quick = document.querySelector('#mobile-top');
+                    const t = strip.querySelector('[data-tool=text]');
+                    const r = t.getBoundingClientRect(), q = quick.getBoundingClientRect();
+                    const pe = (tg, ty, x, y) => tg.dispatchEvent(new PointerEvent(ty, {
+                        pointerId: 0, pointerType: 'touch', button: 0, isPrimary: true,
+                        clientX: x, clientY: y, bubbles: true, cancelable: true }));
+                    pe(t, 'pointerdown', r.left + r.width / 2, r.top + r.height / 2);
+                    for (let i = 1; i <= 8; i++) pe(window, 'pointermove', q.left + q.width / 2, r.top + (q.top - r.top) * i / 8);
+                    pe(window, 'pointerup', q.left + q.width / 2, q.top + q.height / 2);
+                    return { stayed: !!strip.querySelector('[data-tool=text]'), leaked: !!quick.querySelector('[data-tool=text]') };
+                }""")
+                check("mobile: dragging across bars is refused — cross-bar moves belong to the picker",
+                      cross["stayed"] and not cross["leaked"], str(cross))
+                mp.evaluate("() => { __layout.toggleEdit(); __layout.reset(); }")
             finally:
                 set_page(page)   # hand the screenshot target back to the desktop page
                 mctx.close()
