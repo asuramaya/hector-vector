@@ -59,7 +59,15 @@ function editorSvgEl() {
 // geometry — so measure the TRUE stage->screen affine transform from three probe points instead
 // of trusting the CTM. stageCTM() below calls this unconditionally (time-throttled, not gated on
 // any signal that predicts when it's needed — that heuristic has already been wrong once).
-function measureStageAffine(stage) {
+//
+// The three probes must land near REAL content, at a SCREEN-relative distance from each other —
+// not at fixed, large stage-space coordinates. A fixed 1000-unit offset (the first version of
+// this function) compounds with the app's own zoom, the external zoom this is correcting for,
+// AND devicePixelRatio, and can land probes at an extreme, likely-degenerate screen position;
+// confirmed on-device, that produced a WORSE correction than the raw bug it was meant to fix.
+// Anchor on the stage's own rendered center (a real measurement) and size the delta off `raw`'s
+// scale so the probes always land a modest, fixed SCREEN distance apart, regardless of zoom.
+function measureStageAffine(stage, raw) {
   const probe = (x, y) => {
     const c = document.createElementNS(SVG_NS, "circle");
     c.setAttribute("cx", String(x)); c.setAttribute("cy", String(y)); c.setAttribute("r", "0");
@@ -69,10 +77,15 @@ function measureStageAffine(stage) {
     c.remove();
     return { x: r.left, y: r.top };
   };
-  const d = 1000;   // generously large so the measured scale survives float rounding at any zoom
-  const p0 = probe(0, 0), p1 = probe(d, 0), p2 = probe(0, d);
-  const a = (p1.x - p0.x) / d, c = (p2.x - p0.x) / d, e = p0.x;
-  const b = (p1.y - p0.y) / d, dd = (p2.y - p0.y) / d, f = p0.y;
+  const rect = stage.getBoundingClientRect();
+  const inv = raw && raw.a ? (() => { try { return raw.inverse(); } catch { return null; } })() : null;
+  const anchor = inv ? new DOMPoint(rect.left + rect.width / 2, rect.top + rect.height / 2).matrixTransform(inv) : { x: 0, y: 0 };
+  const rawScale = raw ? (Math.hypot(raw.a, raw.b) || 1) : 1;
+  const d = 150 / rawScale;   // ~150 screen px of separation between probes, whatever the zoom
+  if (!Number.isFinite(anchor.x) || !Number.isFinite(anchor.y) || !Number.isFinite(d)) return null;
+  const p0 = probe(anchor.x, anchor.y), p1 = probe(anchor.x + d, anchor.y), p2 = probe(anchor.x, anchor.y + d);
+  const a = (p1.x - p0.x) / d, c = (p2.x - p0.x) / d, e = p0.x - a * anchor.x - c * anchor.y;
+  const b = (p1.y - p0.y) / d, dd = (p2.y - p0.y) / d, f = p0.y - b * anchor.x - dd * anchor.y;
   if (![a, b, c, dd, e, f].every(Number.isFinite)) return null;
   return new DOMMatrix([a, b, c, dd, e, f]);
 }
@@ -1580,7 +1593,7 @@ const editor = {
     if (this._ctmCache && this._ctmCache.rawKey === rawKey && (now - this._ctmCache.at) < 120) {
       return this._ctmCache.matrix;
     }
-    const measured = measureStageAffine(this.stage) || raw;
+    const measured = measureStageAffine(this.stage, raw) || raw;
     this._ctmCache = { rawKey, at: now, matrix: measured };
     return measured;
   },
