@@ -53,10 +53,11 @@ import {
   appSettingsOpen, setAppSettingsOpen, setPwaInstallPrompt,
 } from "./ui/settings.js";
 import { configureLayoutPicker, openLayoutPicker } from "./ui/layout-picker.js";
-import { setCustomizeHandler } from "./ui/formfactor.js";
+import { setCustomizeHandler, onFormFactorChange } from "./ui/formfactor.js";
 import { createPointerDrag } from "./ui/pointer-drag.js";
 import { selectionFacts, evaluate, rankFor, selectionKind, describeSelection } from "./ui/actions.js";
 import { configureAdaptive, sync as syncAdaptive, suspendAdaptive } from "./ui/adaptive.js";
+import { configureSuggest, render as renderSuggest, rehomeSuggest } from "./ui/suggest.js";
 import {
   workItems, outputs, projects, selectedName, selectedOutput, manualOutputName,
   setWorkItems, setOutputs, setProjects, setSelectedName, setSelectedOutput, setManualOutputName,
@@ -1025,6 +1026,8 @@ function buildRasterTools(node) {
   // getLayout is a GETTER: layoutCtl isn't built until further down this file, and this codebase has
   // been bitten by exactly that ordering class before.
   configureAdaptive({ getLayout: () => layoutCtl, getPref: () => prefs.adaptiveBars });
+  configureSuggest({ getLayout: () => layoutCtl, getPref: () => prefs.adaptiveBars, getEditor: () => editor });
+  onFormFactorChange(() => { rehomeSuggest(); if (lastFacts) renderSuggest(lastFacts); });
   window.__adaptive = { sync: () => syncAdaptive(lastFacts), suspend: suspendAdaptive };
   const prevOnInspect = editor.onInspect;
   editor.onInspect = () => {
@@ -1035,6 +1038,10 @@ function buildRasterTools(node) {
     refreshActionButtons(); renderFloatPanel(); updateSelLabel();
     renderProcessorPanel();   // keep the Processor target + contextual reveal/dim in sync with the canvas selection
     syncDockContext();        // park/return contextual panels (Processor, Colour) for the new selection
+    // LAST, deliberately. The suggestion block lives inside the Properties panel body, and both
+    // renderProps() and syncDockContext()'s reconcile empty that body when they rebuild — anything
+    // inserted earlier in this chain gets wiped in the same tick.
+    renderSuggest(lastFacts);
   };
   refreshActionButtons();
 }

@@ -3785,6 +3785,70 @@ def main():
         page.wait_for_timeout(300)
         mount_ctl(page)
 
+        section("The SUGGESTED block: says out loud what the bars only imply")
+        mount_ctl(page)
+        sug = page.evaluate("""async () => {
+            const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+              + '<rect data-hv-id="a" x="10" y="10" width="40" height="40" fill="#111"/>'
+              + '<rect data-hv-id="b" x="30" y="30" width="40" height="40" fill="#222"/></svg>';
+            mountStageFromText(svg, 't.svg');
+            const wait = () => new Promise((r) => setTimeout(r, 250));
+            editor.selection = new Set(['a', 'b']); editor._renderInspector(); await wait();
+            const box = document.querySelector('.proc-auto.suggest');
+            if (!box) return { found: false };
+            const rows = [...box.querySelectorAll('.suggest-row')].map((r) => ({
+                cap: r.querySelector('.proc-plan-cap').textContent.trim(),
+                why: r.querySelector('.proc-plan-why').textContent.trim() }));
+            const sum = box.querySelector('.proc-auto-sum').textContent;
+            // running a suggestion CLICKS THE REAL BUTTON — so it can never offer something the
+            // toolbar can't actually do, and it inherits the wired handler's error handling.
+            const before = editor.stage.querySelectorAll('[data-hv-id]').length;
+            box.querySelector('[data-suggest-key="#act-union"] .proc-plan-add').click();
+            await wait();
+            const after = editor.stage.querySelectorAll('[data-hv-id]').length;
+            return { found: true, sum, rows, before, after,
+                     hasMore: !!box.querySelector('.suggest-more-lbl') };
+        }""")
+        check("suggested: reads the selection back and leads with the booleans, WITH reasons",
+              sug["found"] and sug["sum"] == "2 overlapping shapes"
+              and [r["cap"].split()[-1] for r in sug["rows"][:3]] == ["Unite", "Subtract", "Intersect"]
+              and all(r["why"] for r in sug["rows"][:3]),
+              str(sug.get("rows", [])[:2]))
+        check("suggested: 'Do it' actually does it (it clicks the real button, so it can't offer a lie)",
+              sug["before"] == 2 and sug["after"] == 1, f"{sug.get('before')} -> {sug.get('after')} nodes")
+        check("suggested: the menu-only verbs get a home ('Also possible' — they have no toolbar tile)",
+              sug["hasMore"])
+        # A clipping mask is the one action that changes MEANING with context. The block must ask the
+        # same question the button does, not re-derive it.
+        relabel = page.evaluate("""async () => {
+            const wait = () => new Promise((r) => setTimeout(r, 250));
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+              + '<rect data-hv-id="a" x="10" y="10" width="40" height="40" fill="#111"/>'
+              + '<rect data-hv-id="b" x="20" y="20" width="30" height="30" fill="#222"/></svg>', 't.svg');
+            editor.selection = new Set(['a', 'b']); editor._renderInspector(); await wait();
+            editor.makeClipMask(); await wait();
+            const g = editor.stage.querySelector('g[data-hv-id]');
+            editor.selection = new Set([g.getAttribute('data-hv-id')]); editor._renderInspector(); await wait();
+            const row = document.querySelector('.proc-auto.suggest [data-suggest-key="#act-clip"] .proc-plan-cap');
+            return { text: row ? row.textContent.trim() : null,
+                     button: document.querySelector('#act-clip').textContent.trim() };
+        }""")
+        check("suggested: a clipped group offers 'Release mask' — the block and the button agree",
+              relabel["text"] and "Release" in relabel["text"] and relabel["button"] == "↺", str(relabel))
+        # Images already have a BETTER suggester (the auto-plan banner reads the actual pixels).
+        # Don't put a worse second opinion next to it.
+        raster_quiet = page.evaluate("""async () => {
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
+              + '<image data-hv-id="im" x="0" y="0" width="10" height="10" href="data:image/png;base64,'
+              + 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="/></svg>', 't.svg');
+            editor.selection = new Set(['im']); editor._renderInspector();
+            await new Promise((r) => setTimeout(r, 300));
+            return !document.querySelector('.proc-auto.suggest');
+        }""")
+        check("suggested: stays quiet for an image — the Processor's auto-plan banner already reads the pixels",
+              raster_quiet)
+        mount_ctl(page)
+
         section("Customize layout: draggable dividers + right-click add/remove")
         page.evaluate("window.__layout.toggleEdit()"); page.wait_for_timeout(80)
         check("dividers become movable in customize mode",
