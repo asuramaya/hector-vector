@@ -2284,6 +2284,13 @@ text.hv-text-editing { visibility: hidden; }
 }
 
 @media (max-width: 720px), (pointer: coarse) and (max-width: 1024px) {
+  /* Don't show the shell until its furniture has landed. The bars are MOVED into place by JS, so the
+     first paint is the authored DESKTOP layout — action bar across the top, an extra strip under the
+     canvas — which then snaps. One honest paint beats two, the first of which is a lie. Desktop needs
+     no composition and so never hides. (layout.js drops `booting`; index.html carries a timeout
+     backstop so a boot failure can never leave a blank screen.) */
+  .app.booting { visibility: hidden; }
+
   /* reclaim every pixel: drop the 10px frame + gap, and hug the safe-area (notch/home indicator)
      instead. The bottom inset is applied to whatever bar sits last (below). */
   .app.editor {

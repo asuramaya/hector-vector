@@ -12,16 +12,24 @@ export function configureMenus(deps) {
 // Currently-open header dropdown element (null when none). Live binding: app.js's
 // trigger wiring reads it to toggle; only ever reassigned inside this module.
 export let openMenuEl = null;
+// The open list, and where it came from. A dropdown inside an overflow-scrolling bar gets PORTALLED to
+// <body> while open (see openMenu), so openMenuEl.querySelector(".menu-list") stops finding it.
+let openListEl = null, listHome = null;
 export function closeMenus() {
   if (!openMenuEl) return;
-  const list = openMenuEl.querySelector(".menu-list");
+  // NOT querySelector: the list may have been portalled out to <body>, so the menu no longer contains
+  // it. Track the element we actually opened.
+  const list = openListEl || openMenuEl.querySelector(".menu-list");
   const trigger = openMenuEl.querySelector(".menu-trigger");
-  // drop the viewport pinning openMenu may have applied, so the CSS owns placement again
   if (list) {
+    // drop the viewport pinning openMenu may have applied, so the CSS owns placement again
     list.style.position = ""; list.style.left = ""; list.style.top = "";
     list.style.maxHeight = ""; list.style.overflowY = ""; list.style.overscrollBehavior = "";
     list.hidden = true;
+    if (listHome && listHome.parent) listHome.parent.insertBefore(list, listHome.next);   // back into its .menu
+    listHome = null;
   }
+  openListEl = null;
   if (trigger) trigger.setAttribute("aria-expanded", "false");
   openMenuEl.classList.remove("open");
   openMenuEl = null;
@@ -87,24 +95,32 @@ export function openMenu(menuEl) {
   menuEl.classList.add("open");
   openMenuEl = menuEl;
 
-  // The phone's quick bar scrolls sideways (overflow-x:auto, overflow-y:hidden), and the File menu
-  // now lives IN it — so the dropdown was being clipped to the bar's own height, i.e. to nothing. The
-  // trigger still lit up as "open", which is exactly what it looked like from the outside: a button
-  // that goes blue and does nothing. Pin the list to the VIEWPORT instead, under the trigger, where no
-  // ancestor can crop it. Off a scroller this is a no-op and the CSS keeps its absolute placement.
-  list.style.position = ""; list.style.left = ""; list.style.top = "";
-  list.style.maxHeight = ""; list.style.overflowY = "";
+  // The phone's quick bar scrolls sideways (overflow-x:auto, overflow-y:hidden) and the File menu now
+  // lives IN it — so a `position: absolute` dropdown was clipped to the bar's own height, i.e. to
+  // nothing. The trigger still lit up as "open", which is exactly what it looked like from outside: a
+  // button that goes black and does nothing.
+  //
+  // Pinning it to the viewport with position:fixed fixes the PAINT. It does not reliably fix the
+  // HIT-TESTING: on iOS Safari a fixed element that is still a DOM CHILD of an overflow scroller can
+  // keep a hit area clipped to that scroller's box — so you see a menu you cannot tap, and the item
+  // you press does nothing at all. Playwright's WebKit does not reproduce that; the phone does.
+  //
+  // So don't depend on it. PORTAL the list to <body>, which is exactly where showContextMenu() already
+  // puts the right-click menu — the one menu in this app that has always worked on the device. No
+  // overflow ancestor, nothing to clip, no engine-specific behaviour to trust.
   if (trigger && clippedBy(menuEl)) {
+    listHome = { parent: list.parentNode, next: list.nextSibling };
+    document.body.appendChild(list);
     const r = trigger.getBoundingClientRect();
     list.style.position = "fixed";
-    // A phone held sideways is 390px tall and this menu is 476px. Clamp it to the screen and let it
-    // scroll — placeAt can only slide a menu that FITS back into view, and silently leaves one that
-    // doesn't hanging off the bottom.
+    // A phone held sideways is 390px tall and this menu is 476px. Clamp it and let it scroll — placeAt
+    // can only slide a menu that FITS back into view; one that doesn't, it leaves hanging off the end.
     list.style.maxHeight = (window.innerHeight - 16) + "px";
     list.style.overflowY = "auto";
     list.style.overscrollBehavior = "contain";
     placeAt(list, r.left, r.bottom + 4);
   }
+  openListEl = list;
 }
 
 // ---------- right-click context menu (canvas + objects) ----------

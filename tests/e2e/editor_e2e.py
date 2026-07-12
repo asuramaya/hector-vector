@@ -5093,6 +5093,14 @@ def main():
                     const at = (dy) => { const e = document.elementFromPoint(Math.round(b.left + b.width / 2),
                                                                             Math.round(b.top + dy));
                                          return !!(e && e.closest('.menu-list')); };
+                    // Is ANY ancestor clipping its overflow? position:fixed escapes the PAINT of an
+                    // overflow scroller, but on iOS Safari the HIT AREA can stay clipped to it — a menu
+                    // you can see and cannot tap. So the menu must not live inside one at all.
+                    let clipper = null;
+                    for (let p = list.parentElement; p && p !== document.body; p = p.parentElement) {
+                        const s = getComputedStyle(p);
+                        if (s.overflowX !== 'visible' || s.overflowY !== 'visible') { clipper = p.className; break; }
+                    }
                     return { open: true,
                              onScreen: b.width > 40 && b.height > 40 && b.top >= 0
                                        && b.bottom <= innerHeight + 1 && b.left >= 0,
@@ -5100,14 +5108,22 @@ def main():
                              topHittable: at(8), midHittable: at(Math.round(b.height / 2)),
                              items: list.querySelectorAll('button').length,
                              // a menu taller than the screen must scroll, not hang off the bottom
-                             fits: b.height <= innerHeight };
+                             fits: b.height <= innerHeight,
+                             portalled: list.parentElement === document.body,
+                             clipper };
                 }""")
                 check("mobile: the File menu (the logo) actually RENDERS — not clipped away by the bar it lives in",
                       filemenu.get("open") and filemenu.get("onScreen") and filemenu.get("fits")
                       and filemenu.get("topHittable") and filemenu.get("midHittable")
                       and filemenu.get("items", 0) >= 6, str(filemenu))
+                check("mobile: ...and it is PORTALLED out of the scrolling bar (iOS clips the hit area, not just the paint)",
+                      filemenu.get("portalled") and filemenu.get("clipper") is None, str(filemenu))
+                # ...and it must go home again, or the next open finds an empty .menu
                 mp.evaluate("() => document.body.click()")   # dismiss
-                mp.wait_for_timeout(150)
+                mp.wait_for_timeout(200)
+                check("mobile: the portalled menu goes back into its .menu on close",
+                      mp.evaluate("""() => !!document.querySelector('.menu[data-menu="file"] > .menu-list')
+                                      && !document.querySelector('body > .menu-list')"""))
 
                 # The app is a shell, not a document. A drag on a toolbar was being handed to iOS as a
                 # PAGE scroll — which rubber-bands the whole UI and collapses Safari's toolbar, so the
@@ -5123,6 +5139,23 @@ def main():
                 }""")
                 check("mobile: the page itself cannot be dragged (a swipe on a bar is not a page scroll)",
                       all(pinned.values()), str(pinned))
+
+                # NO BOOT FLASH. The phone/landscape shells are composed by JS (the bars are MOVED, so
+                # every wired handler survives), which can't happen until the modules parse — so the
+                # browser painted the authored DESKTOP layout first: the action bar across the top, an
+                # extra strip under the canvas, then a snap. `.booting` hides the shell until the
+                # furniture lands. Assert BOTH halves: the guard actually hides, and it actually lifts —
+                # a guard that never lifts is a white screen, which is worse than the flash.
+                boot = mp.evaluate("""() => {
+                    const a = document.querySelector('main.app');
+                    const settled = !a.classList.contains('booting') && getComputedStyle(a).visibility === 'visible';
+                    a.classList.add('booting');
+                    const guards = getComputedStyle(a).visibility === 'hidden';
+                    a.classList.remove('booting');
+                    return { settled, guards };
+                }""")
+                check("mobile: the shell doesn't flash the desktop bars on load (and the guard always lifts)",
+                      boot["settled"] and boot["guards"], str(boot))
                 # Mid-path, holding is part of drawing: the Pen must not be interrupted by a menu.
                 # Clear the canvas first — landing the anchor on existing geometry makes the Pen take
                 # its "extend that path" branch instead of starting a fresh draft. (Safe: these are the

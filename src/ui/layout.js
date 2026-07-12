@@ -177,6 +177,13 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
   }
   apply(loadSaved());   // restore the auto-saved arrangement for THIS form factor
 
+  // The shell is composed; let it be seen. The phone's bars are MOVED into place by JS, which cannot
+  // happen until the modules have parsed — so the browser paints the authored desktop DOM first and
+  // the user watches the action bar sit at the top and an extra strip under the canvas for a beat
+  // before everything snaps into position. `.booting` hides the shell (on touch only) until the
+  // furniture is where it belongs; one clean paint instead of two, the second of which is a lie.
+  document.querySelector("main.app")?.classList.remove("booting");
+
   // ---- crossing the breakpoint -----------------------------------------------------------------
   // renormalize() is the load-bearing step and the reason this isn't just "recompose". A phone
   // layout can have moved a tool INTO #mobile-top; that container is display:none above 620px, so

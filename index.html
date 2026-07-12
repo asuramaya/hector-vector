@@ -74,7 +74,13 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <main class="app editor">
+    <!-- `booting`: the phone/landscape shells are composed by JS (ui/formfactor.js MOVES the real bars
+         into place, so every wired handler survives). That can't run until the modules parse, so the
+         browser would otherwise paint the authored DESKTOP layout first — the action bar across the
+         top, an extra strip under the canvas — and snap it into place a beat later. Hidden on touch
+         until the furniture has landed; layout.js drops the class, and the inline script below is the
+         backstop if layout.js ever fails to boot at all. -->
+    <main class="app editor booting">
       <header class="topbar editor-bar">
         <div class="panel-actions doc-actions-left">
           <img class="brand-logo" src="/assets/hv_logo.svg" alt="hector-vector" title="hector-vector" />
@@ -326,5 +332,10 @@
     </div>
 
     <script type="module" src="/src/app.js"></script>
+    <!-- Backstop for `booting` (see <main>). layout.js drops the class the moment the shell is
+         composed; if it ever throws before that — a module that fails to parse, a bad deploy — this
+         guarantees the user sees a broken app rather than a blank white screen. Never let a cosmetic
+         guard become the thing that hides a real failure. -->
+    <script>setTimeout(function () { var a = document.querySelector("main.app"); if (a) a.classList.remove("booting"); }, 2500);</script>
   </body>
 </html>
