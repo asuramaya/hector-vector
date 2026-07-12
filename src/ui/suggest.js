@@ -11,7 +11,7 @@
 // auto-routing work; vectors simply never got one. This is that gap, closed — and it reuses the
 // banner's styling wholesale rather than inventing a second visual language for the same job.
 import { rankFor, describeSelection, selectionKind } from "./actions.js";
-import { isPhone } from "./formfactor.js";
+import { isTouchShell } from "./formfactor.js";
 
 let getLayout = () => null, getPref = () => "off", getEditor = () => null;
 export function configureSuggest(deps) { ({ getLayout, getPref, getEditor } = deps); }
@@ -22,7 +22,7 @@ let el = null, lastKey = "";
 // Phone: first thing in the Panels sheet. Desktop: the top of the Properties panel — the one that's
 // literally titled "Object", is already contextual, and already hosts the Actions ▾ button.
 function host() {
-  if (isPhone()) return document.querySelector("#rightdock");
+  if (isTouchShell()) return document.querySelector("#rightdock");
   const body = document.querySelector(".rail-section.properties .fp-body");
   return body || null;
 }
@@ -59,7 +59,7 @@ function run(item) {
 export function render(facts) {
   const L = getLayout(), ed = getEditor();
   if (!facts || !ed) return;
-  const on = isPhone() || (getPref() || "off") !== "off";
+  const on = isTouchShell() || (getPref() || "off") !== "off";
   const parent = host();
   if (!on || !parent) { if (el) { el.remove(); el = null; lastKey = ""; } return; }
 
@@ -74,12 +74,12 @@ export function render(facts) {
     return;
   }
 
-  const key = kind + "|" + items.map((i) => i.key).join(",") + "|" + (isPhone() ? "p" : "d");
+  const key = kind + "|" + items.map((i) => i.key).join(",") + "|" + (isTouchShell() ? "p" : "d");
   if (el && el.parentElement === parent && key === lastKey) return;   // nothing changed; don't repaint
   lastKey = key;
 
   const box = document.createElement("div");
-  box.className = "proc-auto suggest" + (isPhone() ? " in-sheet" : "");
+  box.className = "proc-auto suggest" + (isTouchShell() ? " in-sheet" : "");
 
   const head = document.createElement("div");
   head.className = "proc-auto-head";

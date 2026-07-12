@@ -987,6 +987,16 @@ function buildRasterTools(node) {
     const masked = s.length === 1 && (editor._clipGroupOf(s[0]) === s[0] || editor._maskGroupOf(s[0]) === s[0]);
     if (masked) editor.releaseMask(); else editor.makeClipMask();
   });
+  // Free transform, as a TOGGLE. Entering was keyboard-only (Ctrl+T for scale; rotate had no binding
+  // at all) and LEAVING was Esc-only — so on a phone the mode was both unreachable and, had you got
+  // in, inescapable. The same button that opens it closes it.
+  const xform = (mode) => () => {
+    if (editor._xformMode === mode) editor.clearXform();
+    else { editor.setTool("select"); editor.enterTransform(mode); }
+    refreshActionButtons();
+  };
+  wire("#act-scale", xform("scale"));
+  wire("#act-rotate", xform("rotate"));
   wire("#act-rotate-cw", () => editor.transform("rotateCW"));
   wire("#act-rotate-ccw", () => editor.transform("rotateCCW"));
   wire("#act-flip-h", () => editor.transform("flipH"));
@@ -1023,6 +1033,11 @@ function buildRasterTools(node) {
         ? "Release mask (Ctrl/Cmd+Alt+7)"
         : "Make clipping mask (Ctrl/Cmd+7) — top object clips the rest";
     }
+    // Scale/Rotate are MODES, not one-shot commands: the button has to show that it's engaged, or a
+    // phone user has no way to tell they're in a transform (there's no status bar down there) and no
+    // clue the same button is the way out.
+    document.querySelector("#act-scale")?.classList.toggle("active", editor._xformMode === "scale");
+    document.querySelector("#act-rotate")?.classList.toggle("active", editor._xformMode === "rotate");
     // Phone: the contextual bar (arrange/delete/duplicate) rides on this — it only takes canvas
     // height while there IS a selection to act on. Harmless off mobile; nothing else styles it.
     document.querySelector("main.app")?.classList.toggle("has-selection", facts.hasSel);
@@ -1376,11 +1391,21 @@ function openStageContext(clientX, clientY, target) {
     });
   }
 }
-// Click-away closes the context panel — but NOT when the click lands in the colour
-// picker it spawned (the picker's backdrop lives outside .context-menu).
+// Click-away closes the context menu — but NOT when the click lands in the colour picker it spawned
+// (the picker's backdrop lives outside .context-menu).
+//
+// CAPTURE, and on touch the dismissing tap is CONSUMED. With a mouse, a click-away that also passes
+// through to whatever is underneath is conventional and harmless. With a finger it is not: the menu
+// is opened by a press-and-hold ON THE CANVAS, so the tap that closes it lands on the canvas too —
+// and in the bubble phase the editor's own pointerdown has already run, meaning you dismiss a menu
+// and pay for it with a stray rectangle or a cleared selection. The first tap should just close the
+// menu. Toolbar taps still act (a button's click isn't cancelled by stopping the pointerdown), so
+// only the destructive surface is guarded.
 document.addEventListener("pointerdown", (e) => {
-  if (ctxMenuEl && !e.target.closest(".context-menu") && !e.target.closest(".cp-backdrop")) hideContextMenu();
-});
+  if (!ctxMenuEl || e.target.closest(".context-menu") || e.target.closest(".cp-backdrop")) return;
+  hideContextMenu();
+  if (e.pointerType === "touch" && e.target.closest(".stage-wrap")) { e.preventDefault(); e.stopPropagation(); }
+}, true);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideContextMenu(); });   // panels are permanent; Esc only dismisses the transient menu/picker
 window.addEventListener("blur", hideContextMenu);
 window.addEventListener("pagehide", () => { rememberLastDoc(); editor.dispose(); });   // remember the doc, then free its state on close

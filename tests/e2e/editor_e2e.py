@@ -3645,9 +3645,14 @@ def main():
               oracle["overlap"]["kind"] == "overlap"
               and oracle["overlap"]["tiles"][:3] == ["Unite", "Subtract", "Intersect"],
               str(oracle["overlap"]["tiles"][:4]))
-        check("oracle: a group leads with Ungroup; one shape leads with Duplicate",
-              oracle["group"]["tiles"][0] == "Ungroup" and oracle["shape"]["tiles"][0] == "Duplicate",
-              f"group={oracle['group']['tiles'][:2]} shape={oracle['shape']['tiles'][:2]}")
+        # One shape leads with Scale/Rotate — on a phone those two tiles are the ONLY way to resize or
+        # turn an object (no Ctrl+T, no Esc to get back out), so below the bar's 7-tile cap they may as
+        # well not exist. Duplicate stays right behind them. A group still leads with Ungroup.
+        check("oracle: a group leads with Ungroup; one shape leads with Scale (its only door on touch)",
+              oracle["group"]["tiles"][0] == "Ungroup"
+              and oracle["shape"]["tiles"][:2] == ["Scale", "Rotate"]
+              and "Duplicate" in oracle["shape"]["tiles"],
+              f"group={oracle['group']['tiles'][:2]} shape={oracle['shape']['tiles'][:3]}")
         # Selected text: the thing you actually want is "turn it into paths". It's floated to the top.
         check("oracle: selected text floats 'Expand object' to the front of the verbs",
               oracle["text"]["kind"] == "text" and oracle["text"]["verbs"][0] == "Expand object",
@@ -3699,8 +3704,10 @@ def main():
         }""")
         check("adaptive: two overlapping shapes put the booleans first, on the bar",
               adapt["overlap"][:3] == ["#act-union", "#act-subtract", "#act-intersect"], str(adapt["overlap"][:4]))
-        check("adaptive: one shape leads with Duplicate and offers NO booleans at all",
-              adapt["shape"][0] == "#act-duplicate" and "#act-union" not in adapt["shape"], str(adapt["shape"][:4]))
+        check("adaptive: one shape leads with Scale/Rotate, keeps Duplicate, and offers NO booleans at all",
+              adapt["shape"][:2] == ["#act-scale", "#act-rotate"]
+              and "#act-duplicate" in adapt["shape"] and "#act-union" not in adapt["shape"],
+              str(adapt["shape"][:4]))
         check("adaptive: an impossible action is HIDDEN, not greyed out (that's the whole point)",
               adapt["greyedNotHidden"] and "#act-union" not in adapt["shape"])
         check("adaptive: nothing selected -> the object bar empties out (costs no space)",
@@ -4962,6 +4969,102 @@ def main():
                 tapped = mp.evaluate(hold, [0.5, 0.5, 120])   # a quick tap is a SELECT, not a hold
                 check("mobile: a quick tap does NOT open the menu (only a real hold does)",
                       not tapped["open"], str(tapped)[:120])
+
+                # THE MENU MUST ANSWER THE FIRST TAP. Holding opens the menu under the finger, so the
+                # click the browser synthesizes on release has to be swallowed or it fires whatever item
+                # appeared under the fingertip. That swallow used to be a 700ms WINDOW, which is wrong in
+                # both directions: hold longer than the window and the release-click picks an item you
+                # never chose; lift fast and tap an item inside it and YOUR tap is the one eaten — the
+                # menu plays dead, which is exactly how it felt. It eats ONE click now, keyed off the
+                # release, not a clock.
+                menu = mp.evaluate("""async () => {
+                    const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+                    editor._artworkNodes().forEach((n) => n.remove());
+                    const NS = 'http://www.w3.org/2000/svg', vb = editor.stage.viewBox.baseVal;
+                    const sq = document.createElementNS(NS, 'rect');
+                    sq.setAttribute('x', vb.x + vb.width * 0.3); sq.setAttribute('y', vb.y + vb.height * 0.3);
+                    sq.setAttribute('width', vb.width * 0.4); sq.setAttribute('height', vb.height * 0.4);
+                    sq.setAttribute('fill', '#c33'); sq.setAttribute('data-hv-id', 'mnu');
+                    (editor._artRoot ? editor._artRoot() : editor.stage).appendChild(sq);
+                    editor.setTool('select'); editor.selection = new Set(); editor._renderSelection();
+                    await nap(120);
+                    const b = editor.stage.getBoundingClientRect();
+                    const x = Math.round(b.left + b.width / 2), y = Math.round(b.top + b.height / 2);
+                    const tgt = document.elementFromPoint(x, y);
+                    const mk = (t, btns) => new PointerEvent(t, { bubbles: true, cancelable: true, composed: true,
+                      pointerId: 1, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y, button: 0, buttons: btns });
+                    tgt.dispatchEvent(mk('pointerdown', 1));
+                    await nap(650);                       // hold -> menu
+                    tgt.dispatchEvent(mk('pointerup', 0));
+                    await nap(60);
+                    const m = document.querySelector('.context-menu');
+                    if (!m) return { opened: false };
+                    const item = [...m.querySelectorAll('button:not([disabled])')][0];
+                    if (!item) return { opened: true, noItems: true };
+                    const label = item.textContent.trim();
+                    // menus.js closes the menu from INSIDE the item's own click handler, so "did the menu
+                    // close?" is an exact proxy for "did the click reach the item?" — no dependence on
+                    // which verbs a given selection happens to offer.
+                    //
+                    // 1. The click the engine synthesizes at the fingertip on release — landing ON the
+                    //    item that just appeared under it. MUST be swallowed, or holding picks a command.
+                    item.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                    await nap(80);
+                    const swallowed = !!document.querySelector('.context-menu');
+                    // 2. ...and now the user's REAL tap, promptly after the hold. MUST go through.
+                    item.click();
+                    await nap(250);
+                    return { opened: true, label, swallowed,
+                             menuGone: !document.querySelector('.context-menu') };
+                }""")
+                check("mobile: the menu answers the FIRST tap (the release-click is eaten, yours is not)",
+                      menu.get("opened") and menu.get("swallowed") and menu.get("menuGone"), str(menu))
+
+                # A tap that dismisses the menu should ONLY dismiss it. The menu is opened by holding ON
+                # THE CANVAS, so the tap that closes it lands on the canvas too — and it used to fall
+                # through to the editor, so you closed a menu and paid for it with a cleared selection or
+                # a stray shape.
+                dismiss = mp.evaluate("""async () => {
+                    const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+                    const b = editor.stage.getBoundingClientRect();
+                    const x = Math.round(b.left + b.width / 2), y = Math.round(b.top + b.height / 2);
+                    const tgt = document.elementFromPoint(x, y);
+                    const mk = (t, btns, cx, cy) => new PointerEvent(t, { bubbles: true, cancelable: true, composed: true,
+                      pointerId: 2, pointerType: 'touch', isPrimary: true, clientX: cx, clientY: cy, button: 0, buttons: btns });
+                    tgt.dispatchEvent(mk('pointerdown', 1, x, y));
+                    await nap(650);
+                    tgt.dispatchEvent(mk('pointerup', 0, x, y));
+                    await nap(80);
+                    if (!document.querySelector('.context-menu')) return { noMenu: true };
+                    const selBefore = [...editor.selection];
+                    const n0 = editor._artworkNodes().length;
+                    // tap empty canvas, well away from the shape, to dismiss
+                    const ex = Math.round(b.left + b.width * 0.06), ey = Math.round(b.top + b.height * 0.06);
+                    const et = document.elementFromPoint(ex, ey) || tgt;
+                    et.dispatchEvent(mk('pointerdown', 1, ex, ey));
+                    et.dispatchEvent(mk('pointerup', 0, ex, ey));
+                    await nap(200);
+                    return { gone: !document.querySelector('.context-menu'),
+                             keptSelection: JSON.stringify([...editor.selection]) === JSON.stringify(selBefore),
+                             noStrayNode: editor._artworkNodes().length === n0 };
+                }""")
+                check("mobile: the tap that dismisses the menu ONLY dismisses it (no stray shape, no lost selection)",
+                      dismiss.get("gone") and dismiss.get("keptSelection") and dismiss.get("noStrayNode"), str(dismiss))
+
+                # The app is a shell, not a document. A drag on a toolbar was being handed to iOS as a
+                # PAGE scroll — which rubber-bands the whole UI and collapses Safari's toolbar, so the
+                # layout heaves around under your finger while you're aiming at a 40px button.
+                pinned = mp.evaluate("""() => {
+                    const cs = (s, p) => getComputedStyle(document.querySelector(s))[p];
+                    const de = document.documentElement;
+                    return { bodyFixed: cs('body', 'position') === 'fixed',
+                             noBounce: cs('body', 'overscrollBehavior') === 'none',
+                             barsPanX: cs('.editor-grid > .toolstrip', 'touchAction') === 'pan-x',
+                             canvasNone: cs('.preview-frame', 'touchAction') === 'none',
+                             noDocScroll: de.scrollWidth <= de.clientWidth && de.scrollHeight <= de.clientHeight };
+                }""")
+                check("mobile: the page itself cannot be dragged (a swipe on a bar is not a page scroll)",
+                      all(pinned.values()), str(pinned))
                 # Mid-path, holding is part of drawing: the Pen must not be interrupted by a menu.
                 # Clear the canvas first — landing the anchor on existing geometry makes the Pen take
                 # its "extend that path" branch instead of starting a fresh draft. (Safe: these are the
@@ -5001,16 +5104,44 @@ def main():
                           const cols = getComputedStyle(document.querySelector('.editor-grid')).gridTemplateColumns.trim().split(/\\s+/).length;
                           return cols === 3 && getComputedStyle(document.querySelector('.toolstrip')).flexDirection === 'column';
                       }"""))
-                # The phone quick bar is only FILLED below 620px, but landscape still matches the
-                # coarse-pointer branch of the same media query — so an empty one stayed display:flex
-                # and claimed a 53px grid column, sitting right on top of the vertical tool rail.
-                check("mobile landscape: the (empty) phone quick bar collapses instead of overlaying the tool rail",
-                      lp.evaluate("""() => {
-                          const mb = document.querySelector('#mobile-top');
-                          return !!mb && mb.childNodes.length === 0
-                                 && getComputedStyle(mb).display === 'none'
-                                 && mb.getBoundingClientRect().width === 0;
-                      }"""))
+                # Landscape is its own SHELL now, with its own saved-layout profile. The buttons
+                # SURROUND the canvas (the desktop's spatial language, which a sideways phone has the
+                # width to afford): tools left, actions right, chrome + the contextual bar across a
+                # single top row. It used to stack the zoom strip and the contextual bar UNDER the
+                # canvas — spending the one axis a 390px-tall screen hasn't got.
+                lp.evaluate("""() => {
+                    mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+                      + '<rect data-hv-id="lz" x="20" y="20" width="45" height="45" fill="#666"/></svg>', 'lz.svg');
+                    editor.selection = new Set(['lz']); editor._renderInspector();
+                }""")
+                lp.wait_for_timeout(400)
+                shell = lp.evaluate("""() => {
+                    const top = document.querySelector('#mobile-top');
+                    const bar = top.getBoundingClientRect();
+                    const ctx = top.querySelector('.stage-toolbar.on-topbar');
+                    const vis = (e) => !!e && e.offsetParent !== null;
+                    const rail = (s) => document.querySelector(s).getBoundingClientRect();
+                    const tools = rail('.editor-grid > .toolstrip'), acts = rail('.editor-grid > .actionbar');
+                    const stage = rail('.stage-wrap');
+                    return {
+                        topH: Math.round(bar.height), topW: Math.round(bar.width), topY: Math.round(bar.top),
+                        ctxOnTop: vis(ctx),
+                        ctxTiles: ctx ? [...ctx.children].filter((e) => vis(e) && e.id).map((e) => '#' + e.id) : [],
+                        // buttons SURROUND the canvas: rails either side, top bar above, nothing stacked below
+                        toolsLeft: Math.round(tools.right) <= Math.round(stage.left),
+                        actsRight: Math.round(acts.left) >= Math.round(stage.right),
+                        nothingBelow: !vis(document.querySelector('.stage-wrap > .stage-toolbar')),
+                        stageH: Math.round(stage.height), innerH: innerHeight,
+                    };
+                }""")
+                check("mobile landscape: chrome + the contextual bar ride ONE top row (was stacked under the canvas)",
+                      shell["ctxOnTop"] and shell["topH"] <= 64 and shell["topY"] == 0
+                      and shell["topW"] > 700 and shell["nothingBelow"], str(shell))
+                check("mobile landscape: the buttons SURROUND the canvas, and it keeps most of the height",
+                      shell["toolsLeft"] and shell["actsRight"]
+                      and shell["stageH"] > shell["innerH"] * 0.8
+                      and shell["ctxTiles"][:2] == ["#act-scale", "#act-rotate"], str(shell))
+                lp.evaluate("() => { editor.selection.clear(); editor.onInspect && editor.onInspect(); }")
                 # The sheet is tabbed in BOTH orientations — it was keyed off the phone-bands
                 # breakpoint (≤620px), which a phone in landscape (844px wide) does not match, so it
                 # stayed a stacked scroller exactly where the stack hurts most: 340px of height.

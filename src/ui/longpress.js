@@ -37,12 +37,37 @@ export function bindLongPress(el, {
       document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: id, clientX: x, clientY: y }));
     } catch { /* older engines: the loop rides through and its real pointerup finalizes it; harmless */ }
 
-    // The menu opens UNDER the finger, and the finger is still down. Swallow the one click the
-    // browser synthesizes when it finally lifts, so releasing can't activate the item that just
-    // appeared beneath it. Capture phase, once, and self-clearing if no click ever comes.
-    const eat = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+    // The menu opens UNDER the finger, and the finger is still down. When it finally lifts, the
+    // browser synthesizes a click right there — which would activate whatever menu item just appeared
+    // under the fingertip. Swallow exactly ONE click: the release.
+    //
+    // This used to be a 700ms window, and a window is wrong in BOTH directions:
+    //   · hold longer than the window and the release-click sails through, picking an item you never
+    //     chose;
+    //   · lift fast and tap an item INSIDE the window and it eats YOUR tap instead — the menu plays
+    //     dead on first touch, which reads as "the menu is broken", because it is.
+    // One click, then disarm. No clock to race. The timeout is only a backstop for the case where the
+    // engine synthesizes no click at all (then nothing was eaten, and nothing needs to be).
+    let spent = false;
+    const done = () => {
+      if (spent) return;
+      spent = true;
+      clearTimeout(leak);
+      window.removeEventListener("click", eat, true);
+      window.removeEventListener("pointerup", lifted, true);
+      window.removeEventListener("pointercancel", lifted, true);
+    };
+    const eat = (ev) => { ev.stopPropagation(); ev.preventDefault(); done(); };
+    // Disarm on the RELEASE of the finger that opened the menu — never on a clock. A timer long enough
+    // to cover a long hold is also long enough to eat the user's first real tap; a timer short enough
+    // not to is also short enough to let the release-click through. The release is the actual event we
+    // are guarding against, so wait for it, give the synthesized click a beat to arrive, then stand
+    // down. (If it never arrives, nothing was eaten and nothing needs to be.)
+    const lifted = (ev) => { if (ev.pointerId === id) setTimeout(done, 350); };
+    const leak = setTimeout(done, 15000);   // the pointer never reported up at all: don't leak the listener
     window.addEventListener("click", eat, true);
-    setTimeout(() => window.removeEventListener("click", eat, true), 700);
+    window.addEventListener("pointerup", lifted, true);
+    window.addEventListener("pointercancel", lifted, true);
 
     onLongPress(x, y, t);
   }

@@ -30,7 +30,13 @@ export const transformMixin = {
     const nodes = this.selectedNodes(); if (!nodes.length) return;
     const bb = this._bboxUnion(nodes);
     if (!(bb.x1 - bb.x0 > 1e-3) || !(bb.y1 - bb.y0 > 1e-3)) return;   // zero-area (a lone line) — nothing to scale
-    const m = this.stageCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1; const r = 4.5 / k;
+    const m = this.stageCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
+    // A 9px handle is a mouse target. A finger needs ~44px, but a 44px SQUARE would swallow the shape
+    // it's supposed to be resizing — so the handle stays modest and gets an INVISIBLE 44px hit rect
+    // sitting on top of it. Big enough to hit, small enough to see past.
+    const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+    const r = (coarse ? 8 : 4.5) / k;
+    const hr = coarse ? 22 / k : 0;   // half a 44px target
     const midX = (bb.x0 + bb.x1) / 2, midY = (bb.y0 + bb.y1) / 2;
     const specs = [   // x,y = handle position; ax,ay = the anchor (opposite point) it scales away from
       { h: "nw", x: bb.x0, y: bb.y0, ax: bb.x1, ay: bb.y1, sx: 1, sy: 1 },
@@ -52,11 +58,21 @@ export const transformMixin = {
     // so they never sit under a resize handle — the earlier on-corner zones were
     // mostly covered and "didn't work". Always present; emphasized in rotate mode.
     const rotOut = r * 3.2;   // diagonal offset beyond the corner
-    for (const [x, y, ox, oy] of [[bb.x0, bb.y0, -1, -1], [bb.x1, bb.y0, 1, -1], [bb.x1, bb.y1, 1, 1], [bb.x0, bb.y1, -1, 1]]) {
+    // With fat finger targets the rotators and the resize handles would sit on top of each other and
+    // you'd get whichever one the browser felt like. On touch each mode shows only its own handles —
+    // which is fine now that Rotate is a button of its own, and not a keystroke nobody could press.
+    for (const [x, y, ox, oy] of ((coarse && mode !== "rotate") ? [] : [[bb.x0, bb.y0, -1, -1], [bb.x1, bb.y0, 1, -1], [bb.x1, bb.y1, 1, 1], [bb.x0, bb.y1, -1, 1]])) {
+      const cx = x + ox * rotOut, cy = y + oy * rotOut;
       const z = document.createElementNS(SVG_NS, "circle"); z.setAttribute("class", "hv-xform-rot");
-      z.setAttribute("cx", nfmt(x + ox * rotOut)); z.setAttribute("cy", nfmt(y + oy * rotOut)); z.setAttribute("r", nfmt(r * 1.4));
+      z.setAttribute("cx", nfmt(cx)); z.setAttribute("cy", nfmt(cy)); z.setAttribute("r", nfmt(r * 1.4));
       this._bindRotateHandle(z);
       g.appendChild(z);
+      if (hr) {   // the invisible thumb-sized target over it
+        const zh = document.createElementNS(SVG_NS, "circle"); zh.setAttribute("class", "hv-xform-hit");
+        zh.setAttribute("cx", nfmt(cx)); zh.setAttribute("cy", nfmt(cy)); zh.setAttribute("r", nfmt(hr));
+        this._bindRotateHandle(zh);
+        g.appendChild(zh);
+      }
     }
     const handles = [];
     // Resize handles only in scale mode — rotate mode is purely the corner rotators.
@@ -65,10 +81,19 @@ export const transformMixin = {
       c.setAttribute("x", nfmt(s.x - r)); c.setAttribute("y", nfmt(s.y - r));
       c.setAttribute("width", nfmt(2 * r)); c.setAttribute("height", nfmt(2 * r));
       this._bindTransformHandle(c, s);
-      g.appendChild(c); handles.push({ el: c, s });
+      g.appendChild(c);
+      let hit = null;
+      if (hr) {
+        hit = document.createElementNS(SVG_NS, "rect"); hit.setAttribute("class", "hv-xform-hit");
+        hit.setAttribute("x", nfmt(s.x - hr)); hit.setAttribute("y", nfmt(s.y - hr));
+        hit.setAttribute("width", nfmt(2 * hr)); hit.setAttribute("height", nfmt(2 * hr));
+        this._bindTransformHandle(hit, s);
+        g.appendChild(hit);
+      }
+      handles.push({ el: c, hit, s });
     }
     ov.appendChild(g);
-    this._xform = { box, handles, r, bb, g };
+    this._xform = { box, handles, r, hr, bb, g };
   },
   // Rotate the selection about the bbox centre (corner rotation zones). Shift = 15°
   // snaps. Composes with any existing transform; result is left as a matrix.
@@ -141,7 +166,11 @@ export const transformMixin = {
     const a = sp(xf.bb.x0, xf.bb.y0), b = sp(xf.bb.x1, xf.bb.y1);
     xf.box.setAttribute("x", nfmt(Math.min(a.x, b.x))); xf.box.setAttribute("y", nfmt(Math.min(a.y, b.y)));
     xf.box.setAttribute("width", nfmt(Math.abs(b.x - a.x))); xf.box.setAttribute("height", nfmt(Math.abs(b.y - a.y)));
-    for (const { el, s } of xf.handles) { const q = sp(s.x, s.y); el.setAttribute("x", nfmt(q.x - xf.r)); el.setAttribute("y", nfmt(q.y - xf.r)); }
+    for (const { el, hit, s } of xf.handles) {
+      const q = sp(s.x, s.y);
+      el.setAttribute("x", nfmt(q.x - xf.r)); el.setAttribute("y", nfmt(q.y - xf.r));
+      if (hit) { hit.setAttribute("x", nfmt(q.x - xf.hr)); hit.setAttribute("y", nfmt(q.y - xf.hr)); }   // the touch target rides along
+    }
   },
   _bindTransformHandle(c, spec) {
     c.addEventListener("pointerdown", (e) => {

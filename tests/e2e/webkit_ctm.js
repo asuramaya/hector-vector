@@ -142,20 +142,31 @@ async function run(label, browserType) {
   // which is precisely where WebKit has always diverged from Blink on flex sizing. If the pane
   // collapses to its content height on iOS, or refuses to scroll, then every panel is a stub and a
   // green headless Chromium run would say nothing at all. Same class of blind spot as the r=0 probes.
-  // Wait out the long-press click-eater above. longpress.js arms a capture-phase click swallower for
-  // 700ms after a hold (so the click that ENDS the hold can't fire whatever the menu was covering),
-  // and it eats the very next click wherever it lands — including this block's tap on the FAB. Nothing
-  // is wrong with the app; the two checks are simply too close together for a real thumb.
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(400);
   const sheet = await page.evaluate(async () => {
     const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+    // Feed the long-press click-eater. After a hold, longpress.js arms a capture-phase swallower for
+    // exactly ONE click — the one the engine synthesizes when the finger lifts, which would otherwise
+    // fire whatever menu item appeared under the fingertip. Our synthetic pointer events never produce
+    // that click, so the eater can still be armed and would swallow this block's tap on the FAB
+    // instead. Nothing is wrong with the app; a real thumb always feeds it. Feed it deliberately
+    // rather than racing a timer — that race is exactly what made this check flaky.
+    document.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await nap(60);
     // Idempotent: the FAB TOGGLES, and an earlier check may already have raised the sheet (an error
     // toast can call revealPanel, which opens it). A blind click would close it and read a sheet that
     // is 102% translated off-screen.
     const app = document.querySelector("main.app");
     if (!app.classList.contains("sheet-open")) document.querySelector("#mobile-panels").click();
-    await nap(500);
-    const d = document.querySelector("#rightdock"), box = d.getBoundingClientRect();
+    const d = document.querySelector("#rightdock");
+    // The sheet SLIDES in (a 0.26s transform transition). Poll until it lands instead of napping a
+    // guessed number of milliseconds and reading it mid-flight — WebKit under docker is slower than
+    // Chromium, and a fixed sleep here fails about one run in three for no reason at all.
+    let box = d.getBoundingClientRect();
+    for (let i = 0; i < 60 && Math.abs(box.bottom - innerHeight) > 2; i++) {
+      await nap(50);
+      box = d.getBoundingClientRect();
+    }
     const strip = d.querySelector(".sheet-tabs");
     const tabs = [...d.querySelectorAll(".sheet-tab")];
     const shown = () => [...d.children].filter((c) => !c.classList.contains("sheet-tabbar")
@@ -176,7 +187,7 @@ async function run(label, browserType) {
       sideways: !!strip && strip.scrollWidth > strip.clientWidth + 1,
       fill: box.height ? +(ph / box.height).toFixed(2) : 0,   // the pane FILLS the sheet, not its content height
       sheetScrolls: d.scrollHeight > d.clientHeight + 1,      // one scroller, and it isn't this one
-      geom: `top=${Math.round(box.top)} bottom=${Math.round(box.bottom)} vh=${innerHeight}`,
+      geom: `top=${Math.round(box.top)} vh=${innerHeight} cls="${app.className}" fab=${getComputedStyle(document.querySelector("#mobile-panels")).display}`,
     };
   });
   const shOk = sheet.tabbed && sheet.one && sheet.swapped && sheet.onscreen

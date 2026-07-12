@@ -8,7 +8,7 @@
 // helpers) through the factory's `deps` object. The factory returns the control
 // object the header Layout dropdown and the E2E suite drive; the caller is
 // responsible for publishing it (e.g. on `window.__layout`).
-import { isPhone, isSheet, onFormFactorChange, composePhone, composeSheet } from "./formfactor.js";
+import { isPhone, isSheet, shellMode, onFormFactorChange, composeShell, composeSheet } from "./formfactor.js";
 import { createPointerDrag } from "./pointer-drag.js";
 import { suspendAdaptive } from "./adaptive.js";
 
@@ -97,7 +97,7 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
   // (they move into #mobile-top) and filing #act-duplicate under `arrange`. Persist that and the
   // user's DESKTOP layout is corrupted.
   const AUTHORED = capture();   // pristine, pre-composition DOM order
-  composePhone(isPhone());
+  composeShell(shellMode());
   const DEFAULT = capture();    // the baseline for Reset in the CURRENT form factor
   // ...and only now turn the right dock into a tabbed sheet: its panes are the bars composePhone just
   // moved in, so the strip has to be built after them. (It adds no tiles and registers no bar, so it
@@ -140,8 +140,12 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
   // own keys, and keyFor() is the only place a key is ever constructed. Hard invariant: a phone
   // session can never write the desktop key. (Guarded by an e2e check, not just this comment.)
   const PROFILES_KEY = "hector-vector:layout-profiles";
-  const mode = () => (isPhone() ? "phone" : "desktop");
-  const keyFor = (m) => (m === "phone" ? `${LAYOUT_KEY}:phone` : LAYOUT_KEY);
+  // THREE shells, three saved arrangements. A phone held sideways used to answer "desktop" here — so
+  // the landscape bars (which move tiles into #mobile-top, a container that is display:none on a real
+  // desktop) would have been persisted into the DESKTOP key, and those tiles would simply vanish the
+  // next time the user opened the app on their laptop. Each shell owns its own blob.
+  const mode = () => shellMode();
+  const keyFor = (m) => (m === "desktop" ? LAYOUT_KEY : `${LAYOUT_KEY}:${m}`);
   const loadSaved = (m = mode()) => { try { return JSON.parse(localStorage.getItem(keyFor(m)) || "null"); } catch { return null; } };
   // The mode is an ARGUMENT, not something persist() re-reads. When the breakpoint fires, the media
   // query has ALREADY flipped, so a persist() that asked mode() for itself would write the outgoing
@@ -151,11 +155,11 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
   const loadProfiles = () => { try { return JSON.parse(localStorage.getItem(PROFILES_KEY) || "{}") || {}; } catch { return {}; } };
   const saveProfiles = (p) => { try { localStorage.setItem(PROFILES_KEY, JSON.stringify(p)); } catch {} };
   // A profile carries a half per form factor. Legacy profiles are a bare bar-map -> read as desktop.
-  const profileHalf = (p, m = mode()) => (p && typeof p === "object" && ("desktop" in p || "phone" in p)) ? p[m] : (m === "desktop" ? p : null);
+  const profileHalf = (p, m = mode()) => (p && typeof p === "object" && ("desktop" in p || "phone" in p || "landscape" in p)) ? p[m] : (m === "desktop" ? p : null);
 
   // Reset baselines, per form factor. DEFAULTS.desktop is the AUTHORED order; DEFAULTS.phone is the
   // composed one, filled in the first time we're on a phone.
-  const DEFAULTS = { desktop: AUTHORED, phone: null };
+  const DEFAULTS = { desktop: AUTHORED, phone: null, landscape: null };
   DEFAULTS[mode()] = DEFAULT;
 
   // One-time re-default for the phone. composePhone() now puts the booleans + transforms on the
@@ -185,13 +189,17 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
     pinnedSet.clear();
     applyHidden();   // clears .layout-hidden AND .layout-pinned — both are per form factor
   }
-  onFormFactorChange((phone) => {
-    const outgoing = phone ? "desktop" : "phone";
-    persist(outgoing);             // save the OUTGOING mode explicitly — mode() has already flipped
+  // Track the shell we are actually IN, because mode() has already flipped by the time the media
+  // query fires — asking it for the outgoing mode would write the incoming shell's arrangement into
+  // the outgoing shell's key. (Two shells made that a boolean flip; three make it a variable.)
+  let curMode = mode();
+  onFormFactorChange((now) => {
+    const outgoing = curMode;
+    curMode = now;
+    persist(outgoing);             // save the OUTGOING shell explicitly
     if (editing) setEditing(false);
-    renormalize(outgoing);         // <- put every tile back before the bands are re-composed
-    composePhone(phone);
-    const now = mode();
+    renormalize(outgoing);         // <- put every tile back before the bars are re-composed
+    composeShell(now);
     if (!DEFAULTS[now]) DEFAULTS[now] = capture();
     apply(loadSaved(now));
     BARS.forEach((b) => wireBar(b, editing));

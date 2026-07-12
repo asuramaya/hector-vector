@@ -18,7 +18,7 @@
 // stay separate. If this ever reused setHidden(), it would persist() on every selection change and
 // permanently destroy the user's hide set.
 import { rankFor } from "./actions.js";
-import { isPhone } from "./formfactor.js";
+import { isTouchShell } from "./formfactor.js";
 
 // Only ACTION bars adapt. The tools bar must never: tools are MODES, not actions — Pen is always
 // valid, Ellipse is always valid, there is nothing to gate on. It's also the one surface with real
@@ -44,7 +44,7 @@ const modeNow = () => {
   const p = getPref() || "off";
   // The phone is fully adaptive regardless of the desktop preference: there, screen space is genuinely
   // scarce and there is no muscle memory to protect — that bar is days old.
-  if (isPhone()) return "full";
+  if (isTouchShell()) return "full";
   return p;
 };
 
@@ -109,7 +109,7 @@ export function sync(facts) {
       // which sits under the canvas and is competing for it. Capping the GLOBAL ranked list instead
       // would silently un-show whatever ranked past the cut in EVERY bar — cut/copy/paste rank low,
       // so they'd vanish from the sheet too and become unreachable on a phone. (They did.)
-      const cap = (isPhone() && bar.name === "arrange") ? PHONE_BAR_CAP : Infinity;
+      const cap = (isTouchShell() && bar.name === "arrange") ? PHONE_BAR_CAP : Infinity;
       const shown = new Set(ranked.slice(0, cap).map((el) => keyOf(el)));
 
       for (const el of ranked) el.style.order = String(free[f++] ?? kids.length);

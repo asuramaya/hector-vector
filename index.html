@@ -79,7 +79,9 @@
         <div class="panel-actions doc-actions-left">
           <img class="brand-logo" src="/assets/hv_logo.svg" alt="hector-vector" title="hector-vector" />
           <div class="menu" data-menu="file">
-            <button class="icon-btn menu-trigger" data-key="⇧F" type="button" aria-haspopup="true" aria-expanded="false" title="File — New / Open / Save / Export (Shift+F)">≣</button>
+            <!-- On a phone the brand logo is MOVED into this button and the glyph hides: the mark you
+                 already recognise becomes the way in, and the whole header row can go. -->
+            <button class="icon-btn menu-trigger" data-key="⇧F" type="button" aria-haspopup="true" aria-expanded="false" title="File — New / Open / Save / Export (Shift+F)"><span class="mt-glyph">≣</span></button>
             <div class="menu-list" role="menu" hidden></div>
           </div>
           <!-- Layout customization lives on the frame itself now: right-click any toolbar's
@@ -183,6 +185,13 @@
           <button class="tool-button" id="act-subtract" type="button" title="Subtract front from back" disabled>−</button>
           <button class="tool-button" id="act-intersect" type="button" title="Intersect — keep the overlap" disabled>∩</button>
           <button class="tool-button" id="act-clip" type="button" title="Make clipping mask (Ctrl/Cmd+7) — top object clips the rest" disabled>⛶</button>
+          <span class="tool-sep" aria-hidden="true"></span>
+          <!-- Free transform. These were keyboard-only doors: scale was Ctrl+T and rotate had no
+               binding AT ALL (Ctrl+R went to the rulers) — so on a phone neither existed, and on a
+               desktop rotate never had. The handles always worked with a finger; there was simply no
+               way in. They TOGGLE, because a phone has no Esc to get back out with. -->
+          <button class="tool-button" id="act-scale" data-key="⌘T" type="button" title="Scale — drag the box handles (Ctrl/Cmd+T)" disabled>⤢</button>
+          <button class="tool-button" id="act-rotate" type="button" title="Rotate — drag the corner handles" disabled>⟳</button>
           <span class="tool-sep" aria-hidden="true"></span>
           <button class="tool-button" id="act-rotate-cw" type="button" title="Rotate 90° clockwise">↻</button>
           <button class="tool-button" id="act-rotate-ccw" type="button" title="Rotate 90° counter-clockwise">↺</button>

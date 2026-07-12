@@ -15,12 +15,26 @@ export const PHONE_MQ = "(max-width: 620px)";
 // Must stay in lockstep with the sheet's media query in style.css.
 export const SHEET_MQ = "(max-width: 720px), (pointer: coarse) and (max-width: 1024px)";
 
-const mql = window.matchMedia(PHONE_MQ);
-export const isPhone = () => mql.matches;
-export function onFormFactorChange(cb) { mql.addEventListener("change", (e) => cb(e.matches)); }
+// A phone held sideways: width to spare, no height. It is NOT "a phone" by PHONE_MQ (it's 844px wide)
+// and it is not a desktop either — it's a third shell, and it needs its own saved-layout profile,
+// because tiles live in different bars there. Must stay in lockstep with style.css's landscape block.
+export const LAND_MQ = "(pointer: coarse) and (orientation: landscape) and (max-height: 500px)";
 
+const mql = window.matchMedia(PHONE_MQ);
+const landMql = window.matchMedia(LAND_MQ);
 const sheetMql = window.matchMedia(SHEET_MQ);
+
+export const isPhone = () => mql.matches;             // portrait phone specifically
+export const isLandscape = () => landMql.matches;
 export const isSheet = () => sheetMql.matches;
+// The one question most callers actually mean: "is this a touch shell?" (either orientation).
+export const shellMode = () => (landMql.matches ? "landscape" : mql.matches ? "phone" : "desktop");
+export const isTouchShell = () => shellMode() !== "desktop";
+export function onFormFactorChange(cb) {
+  const fire = () => cb(shellMode());
+  mql.addEventListener("change", fire);
+  landMql.addEventListener("change", fire);
+}
 
 // Where each element lived before we first moved it, so it can be put back verbatim.
 //
@@ -35,7 +49,7 @@ const goHome = (el) => { const h = homes.get(el); if (h && h.parent) h.parent.in
 const q = (s) => document.querySelector(s);
 const mkSep = () => { const s = document.createElement("span"); s.className = "tool-sep mobile-made"; s.setAttribute("aria-hidden", "true"); return s; };
 
-let composed = false;
+let composed = "desktop";   // which shell is currently built: "desktop" | "phone" | "landscape"
 // Set by app.js — the sheet's "Customize bars…" entry point. Kept as a seam so this module stays
 // free of UI imports (it's imported by layout.js, and a cycle back through the picker would bite).
 let onCustomize = null;
@@ -216,14 +230,42 @@ sheetMql.addEventListener("change", (e) => composeSheet(e.matches));
 //            .stage-toolbar, which the phone stylesheet display:none'd outright — it was genuinely
 //            UNREACHABLE on a phone.
 // The rest (booleans, rotate/flip, rulers/guides) stays one tap away in the Panels sheet.
-export function composePhone(on) {
+// LANDSCAPE is the same shell with the furniture on different walls. A phone held sideways has width
+// to spare and no height, so stacking bars UNDER the canvas — which is what it did — spends the one
+// axis it hasn't got. Instead the buttons SURROUND the canvas, exactly as they do on a desktop: tools
+// down the left, actions down the right, and the contextual bar across the TOP with the chrome. Same
+// tiles, same handlers, same oracle; only the walls change.
+export function composeShell(m) {
   const sheet = q("#rightdock"), topbar = q("#mobile-top");
-  if (!sheet || !topbar || on === composed) return;
+  if (!sheet || !topbar || m === composed) return;
   const actionbar = q(".editor-grid > .actionbar") || q("#rightdock > .actionbar");
-  const panelFoot = q(".stage-wrap > .panel-foot") || q("#rightdock > .panel-foot");
-  const arrange = q(".stage-wrap > .stage-toolbar");
+  const panelFoot = q(".stage-wrap > .panel-foot") || q("#rightdock > .panel-foot") || q("#mobile-top > .panel-foot");
+  const arrange = q(".stage-toolbar");
+  const on = m !== "desktop";
+
+  // Whatever we were, go back to nothing first: the two touch shells move DIFFERENT things, and
+  // composing one on top of the other would strand a tile in a container the new shell hides.
+  if (composed && composed !== "desktop") undoCompose(topbar, sheet);
 
   if (on) {
+    // The header row held a logo, a ≣ and (in the cloud build) nothing else — 50px of screen to say
+    // the app's own name back to someone already using it. So the LOGO BECOMES THE BUTTON: it moves
+    // inside the File trigger, the ≣ glyph hides, and the whole header can go. The mark you already
+    // recognise is now the way in, and it costs a tile instead of a row.
+    //
+    // These ride at the head of the quick bar and are NOT tiles (no .tool-button), so layout.js's
+    // movable() skips them — they can't be captured into a saved arrangement, hidden by the picker,
+    // or shuffled by applyBar (which only ever appends tiles after them).
+    const chrome = document.createElement("div");
+    chrome.className = "mobile-chrome mobile-made";
+    const trigger = q('.menu[data-menu="file"] .menu-trigger');
+    const logo = q(".brand-logo");
+    if (trigger && logo) { remember(logo); trigger.classList.add("has-logo"); trigger.insertBefore(logo, trigger.firstChild); }
+    for (const el of [q('.menu[data-menu="file"]'), q(".view-swap"), q("#panel-shelf")]) {
+      if (el) { remember(el); chrome.appendChild(el); }   // shelf comes along: it's the only way back to a parked panel
+    }
+    topbar.appendChild(chrome);
+
     // Quick bar, in reach order. Rulers/smart-guides deliberately stay behind in the sheet — they
     // are set-once toggles, not per-stroke controls, and the bar has to fit 390px.
     const quick = [
@@ -241,32 +283,49 @@ export function composePhone(on) {
     // (src/ui/adaptive.js) is a PREREQUISITE for this, not a garnish. It hides whatever the current
     // selection can't use and ranks the rest, so the first six are always the right six.
     const ctx = [
+      // Scale/Rotate lead: they're the two most basic things you can do to an object, they are the
+      // ONLY door to free transform on a phone (no Ctrl+T), and the same tile is the way back out
+      // (no Esc). Behind a sheet tab they may as well not exist.
+      q("#act-scale"), q("#act-rotate"),
       q("#act-duplicate"), q("#layer-delete"),
       q("#act-union"), q("#act-subtract"), q("#act-intersect"), q("#act-clip"),
       q("#act-rotate-cw"), q("#act-rotate-ccw"), q("#act-flip-h"), q("#act-flip-v"),
     ].filter(Boolean);
     // reverse: each insert goes to the head, so the last one inserted ends up first
     if (arrange) for (const el of [...ctx].reverse()) { remember(el); arrange.insertBefore(el, arrange.firstChild); }
-    for (const el of [panelFoot, actionbar].filter(Boolean)) {
+
+    // PORTRAIT: the action bar and the zoom strip go into the Panels sheet (as tabs), leaving exactly
+    // one bar at the bottom — the tools. The contextual bar stays under the canvas, where your thumb
+    // already is, and costs nothing while nothing is selected.
+    // LANDSCAPE: the action bar is a RAIL down the right-hand side (it has the height for it), and the
+    // contextual bar rides up onto the top bar instead of stacking under the canvas. The zoom strip
+    // goes into the sheet either way — it's a set-once surface, not a per-stroke one.
+    const intoSheet = m === "phone" ? [panelFoot, actionbar] : [panelFoot];
+    for (const el of intoSheet.filter(Boolean)) {
       remember(el);
       el.classList.add("in-sheet");
       sheet.insertBefore(el, sheet.querySelector(".rail-section"));
     }
+    if (m === "landscape" && arrange) { remember(arrange); arrange.classList.add("on-topbar"); topbar.appendChild(arrange); }
     // (The sheet's tab strip is composeSheet's job, not this one — it spans both orientations.)
-  } else {
-    topbar.querySelectorAll(".mobile-made").forEach((s) => s.remove());
-    sheet.querySelectorAll(".mobile-made").forEach((s) => s.remove());
-    // Restore EVERYTHING we ever moved, not a fixed list — a customized phone layout can have moved
-    // tiles we never anticipated, and a tile left behind in #mobile-top is display:none on desktop
-    // (i.e. it silently vanishes).
-    // .sheet-active goes too: a bar that leaves the sheet still carrying it would be display:none'd
-    // back on the canvas by its own pane rule.
-    for (const el of homes.keys()) { el.classList.remove("in-sheet", "sheet-active"); goHome(el); }
   }
-  composed = on;
+  composed = m;
 }
 
-export const isPhoneComposed = () => composed;
+// Put every last thing back where it was authored. Not a fixed list: a customized layout can have
+// moved tiles we never anticipated, and a tile stranded in #mobile-top (display:none on desktop)
+// silently VANISHES. .in-sheet/.sheet-active/.on-topbar go too — a bar still wearing a pane class
+// back out on the canvas would be display:none'd by that pane's own rule.
+function undoCompose(topbar, sheet) {
+  q('.menu[data-menu="file"] .menu-trigger')?.classList.remove("has-logo");   // the ≣ comes back
+  // Order matters: the homes loop re-parents children OUT of .mobile-chrome, so empty the wrappers
+  // first and let goHome() put each child back itself.
+  topbar.querySelectorAll(".mobile-made").forEach((s) => s.remove());
+  sheet.querySelectorAll(".mobile-made").forEach((s) => s.remove());
+  for (const el of homes.keys()) { el.classList.remove("in-sheet", "sheet-active", "on-topbar"); goHome(el); }
+}
+
+export const isPhoneComposed = () => composed !== "desktop";
 // Every element the phone composition has ever relocated (layout.js needs this to guarantee no tile
 // is stranded inside a display:none container when the breakpoint is crossed).
 export const movedByPhone = () => [...homes.keys()];

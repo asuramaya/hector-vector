@@ -495,7 +495,9 @@ const editor = {
       if (this._xformMode === "scale") return "Scale — drag the box handles · Shift keeps aspect · Alt from centre · Esc to finish";
       if (this._xformMode === "rotate") return "Rotate — drag the corner rotators · Shift = 15° · Esc to finish";
       if (this.artboardSelected) return "Artboard — set size/background in the panel · click a shape to select it";
-      if (this.selection.size) return `${this.selection.size} selected — drag to move · Alt-drag duplicates · Ctrl+T scale · Ctrl+R rotate · ⌫ delete`;
+      // Ctrl+R has meant "rulers" for a long time — this line advertised a shortcut that did the
+      // wrong thing, for a mode nothing could enter. Both now have buttons (#act-scale / #act-rotate).
+      if (this.selection.size) return `${this.selection.size} selected — drag to move · Alt-drag duplicates · Ctrl+T or ⤢ scale · ⟳ rotate · ⌫ delete`;
       return "Select (V) — click a shape · drag to marquee (Alt = lasso) · Space-drag pans · A edits points";
     }
     if (t === "node") return "Points (A) — drag anchors/handles · Shift multi-selects · Alt converts · drag a segment to reshape · ⌫ deletes";

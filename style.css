@@ -34,8 +34,16 @@ html, body {
      editor already implements its own two-finger pinch-to-zoom for the canvas (viewport.js
      bindViewportTouch), so native page pinch/double-tap zoom is pure liability: it desyncs
      getScreenCTM() from real touch coordinates (see editor.js stageCTM()). pan-x pan-y keeps
-     normal scrolling (dock panels, the bottom sheet, lists) working. */
+     normal scrolling (dock panels, the bottom sheet, lists) working — an ancestor with
+     touch-action:none would kill scrolling in EVERY descendant, so this cannot be `none`. */
   touch-action: pan-x pan-y;
+  /* The app is a shell, not a document: there is nothing to scroll and nothing to bounce. Without
+     this, a drag anywhere that isn't the canvas (a toolbar, a panel edge, the gap between them) is
+     handed to the page — iOS rubber-bands the whole UI under your finger and collapses/expands
+     Safari's toolbar as it goes, so the entire layout heaves around while you're trying to hit a
+     40px button. It also stops a scroll that reaches the end of a list from CHAINING out to the
+     page. */
+  overscroll-behavior: none;
 }
 
 button, select, input, a { font: inherit; }
@@ -1097,6 +1105,9 @@ svg.hv-iso > .hv-ablayer, svg.hv-iso > rect.hv-artboard { opacity: 0.4; }
 .hv-xform-ghost { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; opacity: 0.7; }
 /* rotation handles — visible circles set outside the corners; subtle in scale mode,
    emphasized in rotate mode. (cursor 'grab' as a stand-in for a rotate cursor) */
+/* The thumb-sized target that sits invisibly over a handle. A finger needs ~44px; a 44px handle you
+   could SEE would cover the shape you're resizing. So: hit it here, look at the one underneath. */
+.hv-xform-hit { fill: transparent; stroke: none; pointer-events: all; }
 .hv-xform-rot { fill: #fff; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: all; cursor: grab; opacity: 0.45; }
 .hv-xform-rot:hover { opacity: 1; fill: var(--accent); }
 .hv-xform-rotate .hv-xform-rot { opacity: 1; }
@@ -2215,6 +2226,28 @@ text.hv-text-editing { visibility: hidden; }
   .toolstrip .tool-button.tool-primary { width: 40px; height: 40px; font-size: 18px; }
   /* You can't install a local desktop app from a phone/tablet — the CTA is desktop-only. */
   .cloud .get-desktop { display: none; }
+
+  /* Pin the page. `overflow: hidden` is not enough on iOS: Safari will still rubber-band the body and
+     use a stray drag to collapse/expand its own toolbar, and a 100dvh app RESIZES when it does — so
+     the whole UI heaves under your finger. A fixed body has nothing to hand the gesture to. */
+  body { position: fixed; inset: 0; }
+
+  /* A drag on a BAR must never become a drag on the page. These strips scroll horizontally, so allow
+     exactly that and nothing else: a vertical swipe on a toolbar was being handed straight to iOS as
+     a page scroll. This is the other half of the same bug — touch-action says which gestures the
+     browser may take, overscroll-behavior says where they may go. */
+  .mobilebar,
+  .editor-grid > .toolstrip,
+  .editor-grid > .actionbar,
+  .stage-wrap > .stage-toolbar,
+  .stage-wrap .panel-foot,
+  .sheet-tabs { touch-action: pan-x; overscroll-behavior: contain; }
+  /* ...and the vertical scrollers scroll themselves, never the page behind them. */
+  .editor-grid > .rightdock,
+  .rightdock .section-body,
+  .rightdock .sheet-active,
+  .layers-list,
+  .fp-body { touch-action: pan-y; overscroll-behavior: contain; }
 }
 
 @media (max-width: 720px), (pointer: coarse) and (max-width: 1024px) {
@@ -2427,10 +2460,27 @@ text.hv-text-editing { visibility: hidden; }
   .stage-wrap .panel-foot { justify-content: flex-start; overflow-x: auto; padding-right: 72px; }
   .stage-wrap .panel-foot::-webkit-scrollbar { display: none; }
 
-  /* --- topbar: tighten so it doesn't crowd the canvas --- */
-  .topbar.editor-bar { padding: 6px 8px; }
-  .editor-bar .doc-title { display: none; }   /* selection name is non-essential on a phone */
-  .cloud .get-desktop { font-size: 12px; padding: 5px 9px; }
+  /* --- the header row is GONE --- */
+  /* It held a logo, a ≣, and (in the cloud build) nothing else: ~50px of a 844px screen spent saying
+     the app's own name to someone who is already inside it. The logo now IS the File button, one tile
+     down in the quick bar (ui/formfactor.js moves it there), so the row has nothing left to do. */
+  .app.editor > .topbar { display: none; }
+  /* .app's rows are `auto auto 1fr auto`, assigned BY CHILD ORDER — so hiding the header slid the
+     editor grid up into an `auto` track and the app stopped filling the screen (a dead white band at
+     the bottom, with the FAB stranded on top of the tool bar). The header and the status bar are both
+     gone here; one child, one row, and it takes everything. */
+  .app.editor { grid-template-rows: minmax(0, 1fr); }
+  .mobile-chrome { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+  .mobile-chrome .panel-shelf:empty { display: none; }
+  /* the logo, wearing the File menu */
+  .menu-trigger.has-logo {
+    display: grid; place-items: center;
+    width: 42px; height: 42px; padding: 0;
+    border: 1px solid var(--line); background: var(--bg);
+  }
+  .menu-trigger.has-logo .mt-glyph { display: none; }
+  .menu-trigger.has-logo .brand-logo { display: block; width: 26px; height: 26px; }
+  .mobile-chrome .view-swap .view-tab { min-height: 42px; padding: 0 10px; }
 }
 
 /* ---- Short LANDSCAPE (phones held sideways) ----
@@ -2439,14 +2489,38 @@ text.hv-text-editing { visibility: hidden; }
    so fold back to side rails (tools left · canvas · actions right) — the desktop frame, touch-sized
    — and keep the dock as a bottom sheet. Height-gated so tablets (taller) never hit this. */
 @media (pointer: coarse) and (orientation: landscape) and (max-height: 500px) {
+  /* Buttons SURROUND the canvas — the desktop's own spatial language, which a phone held sideways has
+     the width to afford. Tools down the left, actions down the right, chrome + the contextual bar
+     across the top, canvas in the middle. It used to stack the zoom strip and the contextual bar
+     UNDER the canvas, spending the one axis a 390px-tall screen hasn't got. */
   .app.editor .editor-grid {
     grid-template-columns: auto minmax(0, 1fr) auto !important;
-    grid-template-rows: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
   .editor-grid > .leftdock { display: none !important; }
-  .editor-grid > .toolstrip { grid-row: 1; grid-column: 1; min-width: 0; }
-  .editor-grid > .stage-wrap { grid-row: 1; grid-column: 2; min-width: 0; }
-  .editor-grid > .actionbar  { grid-row: 1; grid-column: 3; min-width: 0; }
+  .editor-grid > .mobilebar { grid-row: 1; grid-column: 1 / -1; min-width: 0; }
+  .editor-grid > .toolstrip { grid-row: 2; grid-column: 1; min-width: 0; }
+  .editor-grid > .stage-wrap { grid-row: 2; grid-column: 2; min-width: 0; }
+  .editor-grid > .actionbar  { grid-row: 2; grid-column: 3; min-width: 0; }
+  /* the contextual bar rides ON the top bar (formfactor.js moves the nav there) — it appears only
+     when something is selected, so it costs nothing while you draw */
+  .mobilebar > .stage-toolbar.on-topbar {
+    display: none;
+    /* nowrap or it wraps to two rows INSIDE the top bar and eats 90px of a 390px screen. It's a
+       sideways scroller here, not a wrapping bar — the adaptive engine already ranks it, so what
+       matters most is what you see first. */
+    flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; gap: 5px;
+    padding: 0; margin: 0; border: 0;
+    overflow-x: auto; overflow-y: hidden; scrollbar-width: none; touch-action: pan-x;
+  }
+  .app.has-selection .mobilebar > .stage-toolbar.on-topbar { display: flex; align-items: center; }
+  .mobilebar > .stage-toolbar.on-topbar::-webkit-scrollbar { display: none; }
+  .mobilebar > .stage-toolbar.on-topbar .tool-button { width: 40px; height: 40px; font-size: 17px; flex: 0 0 auto; }
+  .mobilebar > .stage-toolbar.on-topbar .tool-vsep { width: 1px; height: 24px; margin: 0 2px; align-self: center; flex: 0 0 auto; }
+  /* the top bar is one row, and a short screen can't spare more */
+  .editor-grid > .mobilebar { padding: 5px 8px; gap: 6px; }
+  .editor-grid > .mobilebar .tool-button { width: 40px; height: 40px; font-size: 17px; }
+  .editor-grid > .mobilebar .menu-trigger.has-logo { width: 40px; height: 40px; }
   /* rails: vertical again, scrolling on the Y this time */
   .editor-grid > .toolstrip,
   .editor-grid > .actionbar {

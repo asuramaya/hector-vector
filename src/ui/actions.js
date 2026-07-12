@@ -100,6 +100,11 @@ export const ACTIONS = [
   { key: "#layer-backward", glyph: "↓", label: "Send backward",  why: "Move it down one",               valid: (f) => f.hasSel },
   { key: "#layer-back",    glyph: "⤓",  label: "Send to back",   why: "Put it behind everything",       valid: (f) => f.hasSel },
 
+  // Free transform ranks ABOVE the 90° nudges: "make it bigger" and "turn it a bit" are what people
+  // actually reach for, and on a phone these two buttons ARE the only way in (no Ctrl+T) and the only
+  // way back out (no Esc).
+  { key: "#act-scale",     glyph: "⤢",  label: "Scale",        why: "Drag the handles to resize it",    valid: (f) => f.canXform },
+  { key: "#act-rotate",    glyph: "⟳",  label: "Rotate",       why: "Drag the corners to turn it",      valid: (f) => f.canXform },
   { key: "#act-rotate-cw", glyph: "↻",  label: "Rotate right", why: "Turn it 90° clockwise",            valid: (f) => f.canXform },
   { key: "#act-rotate-ccw", glyph: "↺", label: "Rotate left",  why: "Turn it 90° anticlockwise",        valid: (f) => f.canXform },
   { key: "#act-flip-h",    glyph: "⇄",  label: "Flip across",  why: "Mirror it left-to-right",          valid: (f) => f.canXform },
@@ -156,15 +161,19 @@ const RANK = {
   empty:     [],
   none:      ["#act-paste", "#layer-cleanup", "#layer-merge"],
   artboard:  ["#hdr-invert", "#act-paste", "#act-rotate-cw", "#act-flip-h"],
-  shape:     ["#act-duplicate", "#layer-delete", "#layer-front", "#layer-back", "#act-flip-h", "#act-rotate-cw"],
+  // Scale/Rotate lead wherever ONE thing is selected. On a desktop they're a nicety you could reach
+  // with Ctrl+T; on a phone they are the ONLY way to resize or turn an object at all — there is no
+  // keyboard, and dragging a shape only ever MOVES it. Below the bar's 7-tile cap they may as well
+  // not exist, which is exactly where they were.
+  shape:     ["#act-scale", "#act-rotate", "#act-duplicate", "#layer-delete", "#layer-front", "#layer-back", "#act-flip-h", "#act-rotate-cw"],
   // the money case: two shapes that overlap. The booleans ARE the reason you selected both.
   overlap:   ["#act-union", "#act-subtract", "#act-intersect", "#act-clip", "#layer-group", "#act-duplicate"],
-  shapes:    ["#layer-group", "#act-duplicate", "#layer-delete", "#layer-front", "#layer-back"],
-  group:     ["#layer-ungroup", "#act-duplicate", "#layer-delete", "#layer-front", "#layer-back"],
+  shapes:    ["#layer-group", "#act-scale", "#act-rotate", "#act-duplicate", "#layer-delete", "#layer-front", "#layer-back"],
+  group:     ["#layer-ungroup", "#act-scale", "#act-rotate", "#act-duplicate", "#layer-delete", "#layer-front", "#layer-back"],
   clipgroup: ["#act-clip", "#layer-ungroup", "#act-duplicate", "#layer-delete"],
-  text:      ["#act-duplicate", "#layer-delete", "#layer-front", "#layer-back"],
-  raster:    ["#act-duplicate", "#layer-delete", "#act-rotate-cw", "#act-flip-h", "#act-copy"],
-  mixed:     ["#layer-group", "#act-duplicate", "#layer-delete", "#layer-front", "#layer-back"],
+  text:      ["#act-scale", "#act-rotate", "#act-duplicate", "#layer-delete", "#layer-front", "#layer-back"],
+  raster:    ["#act-scale", "#act-rotate", "#act-duplicate", "#layer-delete", "#act-rotate-cw", "#act-flip-h", "#act-copy"],
+  mixed:     ["#layer-group", "#act-scale", "#act-duplicate", "#layer-delete", "#layer-front", "#layer-back"],
 };
 
 // A ranked, VALID-only list of everything you could do right now: tile-backed actions first (they
