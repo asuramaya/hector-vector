@@ -79,6 +79,63 @@ async function run(label, browserType) {
     console.log(`  zoom ${String(r.z).padEnd(5)} det=${String(r.det).padEnd(10)} ` +
                 `touch->paint err=${String(r.err).padEnd(7)} calibrated=${String(r.measured).padEnd(6)} ${why}`);
   }
+
+  // ── Press-and-hold = right-click ────────────────────────────────────────────────────────────
+  // A finger has no second button, so without this every command behind the Actions menu is
+  // unreachable on a phone. It belongs in THIS rig and not only in the Chromium suite because iOS
+  // does not reliably fire `contextmenu` on a long-press, and we deliberately switched off
+  // -webkit-touch-callout over the canvas — both WebKit-only behaviours the Chromium run cannot see.
+  const lp = await page.evaluate(async () => {
+    const fit = document.querySelector('[data-action="fit"]'); if (fit) fit.click();
+    await new Promise((r) => setTimeout(r, 250));
+    editor.setTool("rect");
+    const b0 = editor.stage.getBoundingClientRect();
+    const NS = "http://www.w3.org/2000/svg";
+    const sq = document.createElementNS(NS, "rect");
+    const vb = editor.stage.viewBox.baseVal;
+    sq.setAttribute("x", vb.x + vb.width * 0.25); sq.setAttribute("y", vb.y + vb.height * 0.25);
+    sq.setAttribute("width", vb.width * 0.5); sq.setAttribute("height", vb.height * 0.5);
+    sq.setAttribute("fill", "#c33"); sq.setAttribute("data-hv-id", "lpwk");
+    (editor._artRoot ? editor._artRoot() : editor.stage).appendChild(sq);
+    editor.setTool("select"); editor.selection = new Set(); editor._renderSelection();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const hold = async (ms) => {
+      const b = editor.stage.getBoundingClientRect();
+      const x = Math.round(b.left + b.width / 2), y = Math.round(b.top + b.height / 2);
+      const tgt = document.elementFromPoint(x, y) || document.querySelector(".stage-wrap");
+      // down AND up on the same target: touch pointers get implicit pointer capture, so that is
+      // where a real engine delivers the release.
+      const mk = (t, btns) => new PointerEvent(t, { bubbles: true, cancelable: true, composed: true,
+        pointerId: 1, pointerType: "touch", isPrimary: true, clientX: x, clientY: y, button: 0, buttons: btns });
+      tgt.dispatchEvent(mk("pointerdown", 1));
+      await new Promise((r) => setTimeout(r, ms));
+      tgt.dispatchEvent(mk("pointerup", 0));
+      await new Promise((r) => setTimeout(r, 120));
+      const m = document.querySelector(".context-menu");
+      const open = !!m && m.getBoundingClientRect().width > 0;   // position:fixed → offsetParent is always null
+      const items = m ? m.querySelectorAll("button").length : 0;
+      if (m) m.remove();
+      return { open, items };
+    };
+    const nBefore = editor._artworkNodes().length;
+    const held = await hold(650);
+    const tapped = await hold(120);
+    return {
+      held: held.open, items: held.items, tapped: tapped.open,
+      selected: [...editor.selection].join(","),
+      // the aborted in-flight gesture must not leave a stray node behind
+      clean: editor._artworkNodes().length === nBefore,
+      // the callout that used to pop Safari's Copy/Look-Up sheet over the artwork
+      callout: getComputedStyle(document.querySelector(".stage-wrap")).webkitTouchCallout || "(unset)",
+    };
+  });
+  const lpOk = lp.held && lp.items > 0 && !lp.tapped && lp.selected === "lpwk" && lp.clean;
+  if (!lpOk) ok = false;
+  console.log(`  long-press   menu=${String(lp.held).padEnd(6)} items=${String(lp.items).padEnd(3)} ` +
+              `quick-tap-opens=${String(lp.tapped).padEnd(6)} selected=${lp.selected || "(none)"} ` +
+              `no-stray-node=${lp.clean} callout=${lp.callout} ${lpOk ? "ok" : "FAIL"}`);
+
   await browser.close();
   return ok;
 }

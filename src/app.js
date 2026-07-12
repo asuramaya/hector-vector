@@ -55,6 +55,7 @@ import {
 import { configureLayoutPicker, openLayoutPicker } from "./ui/layout-picker.js";
 import { setCustomizeHandler, onFormFactorChange } from "./ui/formfactor.js";
 import { createPointerDrag } from "./ui/pointer-drag.js";
+import { bindLongPress } from "./ui/longpress.js";
 import { selectionFacts, evaluate, rankFor, selectionKind, describeSelection } from "./ui/actions.js";
 import { configureAdaptive, sync as syncAdaptive, suspendAdaptive } from "./ui/adaptive.js";
 import { configureSuggest, render as renderSuggest, rehomeSuggest } from "./ui/suggest.js";
@@ -1304,46 +1305,66 @@ function pointMenuItems() {
     { label: n > 1 ? `Delete ${n} points` : "Delete point", onClick: () => editor.deleteNodeSelection() },
   ];
 }
+// The context menu, reached by TWO gestures that mean the same thing: right-click with a mouse, and
+// press-and-hold with a finger. One implementation, so the phone can never drift into offering a
+// different (or smaller) set of commands than the desktop.
+function openStageContext(clientX, clientY, target) {
+  if (!editor.stage) return;
+  if (editor.tool === "node") {                 // an anchor → point menu
+    const a = editor.anchorAt(clientX, clientY);
+    if (a) {
+      if (!editor._nodeSel.has(a.key)) { editor._nodeSel = new Set([a.key]); editor.mountNodeHandles(); }
+      showContextMenu(clientX, clientY, pointMenuItems());
+      return;
+    }
+  }
+  let hit = target && target.closest && target.closest("[data-hv-id]");
+  if (hit && hit.getAttribute("data-hv-locked") === "1") hit = null;
+  if (hit && editor.stage.contains(hit)) {
+    const id = hit.getAttribute("data-hv-id");
+    if (!editor.selection.has(id)) {
+      editor.selection = new Set([id]); editor.artboardSelected = false;
+      editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
+    }
+    // An object → the same context-gated Actions commands as the inspector's "Actions ▾" button,
+    // plus a fallback to open the full Properties panel. Rasters (no vector commands) fall straight
+    // through to Properties.
+    const acts = editor._objectActions ? editor._objectActions(editor.selectedNodes()) : [];
+    if (acts.length) {
+      showContextMenu(clientX, clientY, [
+        ...acts,
+        { type: "sep" },
+        { label: "Open Properties…", onClick: () => showContextPanel(clientX, clientY, "object") },
+      ]);
+    } else {
+      showContextPanel(clientX, clientY, "object");
+    }
+  } else {
+    editor.selection = new Set(); editor.artboardSelected = true;
+    editor._renderSelection(); editor._renderInspector();
+    showContextPanel(clientX, clientY, "canvas");
+  }
+}
 {
   const wrap = document.querySelector(".stage-wrap");
-  if (wrap) wrap.addEventListener("contextmenu", (e) => {
-    if (!editor.stage) return;
-    e.preventDefault();
-    if (editor.tool === "node") {                 // right-click an anchor → point menu
-      const a = editor.anchorAt(e.clientX, e.clientY);
-      if (a) {
-        if (!editor._nodeSel.has(a.key)) { editor._nodeSel = new Set([a.key]); editor.mountNodeHandles(); }
-        showContextMenu(e.clientX, e.clientY, pointMenuItems());
-        return;
-      }
-    }
-    let hit = e.target.closest && e.target.closest("[data-hv-id]");
-    if (hit && hit.getAttribute("data-hv-locked") === "1") hit = null;
-    if (hit && editor.stage.contains(hit)) {
-      const id = hit.getAttribute("data-hv-id");
-      if (!editor.selection.has(id)) {
-        editor.selection = new Set([id]); editor.artboardSelected = false;
-        editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
-      }
-      // Right-click an object → the same context-gated Actions commands as the inspector's
-      // "Actions ▾" button, plus a fallback to open the full Properties panel. Rasters (no
-      // vector commands) fall straight through to Properties.
-      const acts = editor._objectActions ? editor._objectActions(editor.selectedNodes()) : [];
-      if (acts.length) {
-        showContextMenu(e.clientX, e.clientY, [
-          ...acts,
-          { type: "sep" },
-          { label: "Open Properties…", onClick: () => showContextPanel(e.clientX, e.clientY, "object") },
-        ]);
-      } else {
-        showContextPanel(e.clientX, e.clientY, "object");
-      }
-    } else {
-      editor.selection = new Set(); editor.artboardSelected = true;
-      editor._renderSelection(); editor._renderInspector();
-      showContextPanel(e.clientX, e.clientY, "canvas");
-    }
-  });
+  if (wrap) {
+    wrap.addEventListener("contextmenu", (e) => {
+      if (!editor.stage) return;
+      e.preventDefault();
+      openStageContext(e.clientX, e.clientY, e.target);
+    });
+    // Touch has no second button, so holding is the right-click. Without this, every command behind
+    // the Actions menu was unreachable on a phone and holding did literally nothing.
+    bindLongPress(wrap, {
+      shouldIgnore: (e) => (
+        !editor.stage
+        || editor._touchGesture                 // a pinch/pan is already under way
+        || editor._pen || editor._curv          // mid-path: holding is part of drawing, not a menu
+        || (e.target.closest && e.target.closest('[contenteditable="true"], input, textarea'))
+      ),
+      onLongPress: (x, y, target) => openStageContext(x, y, target),
+    });
+  }
 }
 // Click-away closes the context panel — but NOT when the click lands in the colour
 // picker it spawned (the picker's backdrop lives outside .context-menu).

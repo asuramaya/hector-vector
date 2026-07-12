@@ -4570,7 +4570,13 @@ def main():
                     const before = stage.querySelectorAll('[data-hv-id]').length;
                     const sx = rc.left+rc.width*0.3, sy = rc.top+rc.height*0.3;
                     const pe = (tg,t,x,y) => tg.dispatchEvent(new PointerEvent(t,{pointerId:9,pointerType:'touch',button:0,clientX:x,clientY:y,bubbles:true,cancelable:true}));
-                    pe(stage,'pointerdown',sx,sy); pe(window,'pointermove',sx+70,sy+55); pe(window,'pointerup',sx+70,sy+55);
+                    // All three go to the STAGE, not the window. A touch pointer gets implicit pointer
+                    // capture to the pointerdown target, so that is where a real browser delivers the
+                    // move and the release; they still reach the editor's window-level drag loops by
+                    // bubbling. Dispatching the up straight at the window instead leaves this pointer
+                    // stranded in bindViewportTouch's map — the next synthetic touch then looks like a
+                    // SECOND finger, _touchGesture latches on, and every later gesture is swallowed.
+                    pe(stage,'pointerdown',sx,sy); pe(stage,'pointermove',sx+70,sy+55); pe(stage,'pointerup',sx+70,sy+55);
                     return stage.querySelectorAll('[data-hv-id]').length > before;
                 }""")
                 check("mobile: one-finger touch still draws (single pointer = tool)", draw is True)
@@ -4837,6 +4843,78 @@ def main():
                 check("mobile: dragging across bars is refused — cross-bar moves belong to the picker",
                       cross["stayed"] and not cross["leaked"], str(cross))
                 mp.evaluate("() => { __layout.toggleEdit(); __layout.reset(); }")
+
+                # PRESS-AND-HOLD = right-click. A finger has no second button, so without this every
+                # command behind the Actions menu is unreachable on a phone and holding does nothing.
+                # The hard part isn't the menu (it already existed) — it's that by the time the hold
+                # fires, the press has ALREADY begun a draw/move/marquee. src/ui/longpress.js aborts
+                # that with the synthetic zero-delta pointerup bindViewportTouch already uses, so
+                # these checks assert BOTH halves: the menu opens AND the gesture left nothing behind.
+                mp.evaluate("() => { editor.setTool('select'); editor.selection = new Set(); editor._renderSelection(); }")
+                # Holds at a point given as a FRACTION of the stage rect, so they land on real geometry
+                # whatever zoom the pinch checks above left behind. down AND up both go to the element
+                # under the finger: touch pointers get IMPLICIT POINTER CAPTURE to the pointerdown
+                # target, so that is where a real browser delivers the release. (Dispatching the up on
+                # window instead bypasses bindViewportTouch's cleanup, its pointer map never drains,
+                # and after two holds the editor believes two fingers are down — _touchGesture sticks
+                # on and every subsequent gesture is swallowed.)
+                hold = """
+                async ([fx, fy, ms]) => {
+                  const b = editor.stage.getBoundingClientRect();
+                  const x = Math.round(b.left + b.width * fx), y = Math.round(b.top + b.height * fy);
+                  const tgt = document.elementFromPoint(x, y) || document.querySelector('.stage-wrap');
+                  const under = tgt.closest && tgt.closest('[data-hv-id]');
+                  const mk = (t, btns) => new PointerEvent(t, { bubbles: true, cancelable: true, composed: true,
+                      pointerId: 1, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y, button: 0, buttons: btns });
+                  tgt.dispatchEvent(mk('pointerdown', 1));
+                  await new Promise((r) => setTimeout(r, ms));
+                  tgt.dispatchEvent(mk('pointerup', 0));
+                  await new Promise((r) => setTimeout(r, 80));
+                  const m = document.querySelector('.context-menu');
+                  // .context-menu is position:fixed, so offsetParent is ALWAYS null — measure the rect.
+                  const open = !!m && m.getBoundingClientRect().width > 0;
+                  const labels = m ? [...m.querySelectorAll('button')].map((b2) => b2.textContent.trim()) : [];
+                  const out = { open, labels, sel: [...editor.selection], nodes: editor._artworkNodes().length,
+                                under: under ? under.getAttribute('data-hv-id') : null };
+                  if (m) m.remove();
+                  return out;
+                }"""
+                n0 = mp.evaluate("editor._artworkNodes().length")
+                held = mp.evaluate(hold, [0.5, 0.5, 650])
+                check("mobile: press-and-hold on a shape opens the Actions menu (touch has no right-click)",
+                      held["open"] and len(held["labels"]) > 0, str(held)[:160])
+                # Assert against what was actually UNDER the finger, not a hard-coded id — earlier
+                # checks in this section leave their own geometry on the canvas.
+                check("mobile: press-and-hold selects the shape it was held on",
+                      held["under"] is not None and held["sel"] == [held["under"]], str(held)[:160])
+                # If the aborted gesture leaked, the in-flight draw would have left a stray node behind.
+                check("mobile: holding does not leave the in-flight gesture behind (no stray node, no move)",
+                      held["nodes"] == n0, f"before={n0} after={held['nodes']}")
+                tapped = mp.evaluate(hold, [0.5, 0.5, 120])   # a quick tap is a SELECT, not a hold
+                check("mobile: a quick tap does NOT open the menu (only a real hold does)",
+                      not tapped["open"], str(tapped)[:120])
+                # Mid-path, holding is part of drawing: the Pen must not be interrupted by a menu.
+                # Clear the canvas first — landing the anchor on existing geometry makes the Pen take
+                # its "extend that path" branch instead of starting a fresh draft. (Safe: these are the
+                # last checks in the phone context.)
+                # Fit first: the pinch/CTM checks above leave the view at 2.5x, which pushes most of the
+                # stage rect off-screen — elementFromPoint then returns null and the tap never reaches
+                # the SVG at all.
+                mp.evaluate("""() => {
+                    editor._artworkNodes().forEach((n) => n.remove());
+                    editor.selection = new Set(); editor._penHit = null;
+                    editor._renderSelection(); editor._renderLayers();
+                    const f = document.querySelector('[data-action="fit"]'); if (f) f.click();
+                    editor.setTool('pen');
+                }""")
+                mp.wait_for_timeout(250)
+                mp.evaluate(hold, [0.45, 0.45, 120])          # one real anchor → a genuine _pen draft
+                pen_open = mp.evaluate("!!editor._pen")
+                pen_held = mp.evaluate(hold, [0.6, 0.6, 650])
+                check("mobile: holding mid-Pen-path opens no menu and does not destroy the draft",
+                      pen_open and not pen_held["open"] and mp.evaluate("!!editor._pen"),
+                      f"draft={pen_open} menu={pen_held['open']}")
+                mp.evaluate("() => { editor.cancelPen && editor.cancelPen(); editor._pen = null; editor.setTool('select'); }")
             finally:
                 set_page(page)   # hand the screenshot target back to the desktop page
                 mctx.close()
