@@ -5051,6 +5051,42 @@ def main():
                 check("mobile: the tap that dismisses the menu ONLY dismisses it (no stray shape, no lost selection)",
                       dismiss.get("gone") and dismiss.get("keptSelection") and dismiss.get("noStrayNode"), str(dismiss))
 
+                # THE FILE MENU MUST BE ON SCREEN, not merely "open". The logo IS the File button now,
+                # and it lives in the quick bar — which scrolls sideways (overflow-x:auto,
+                # overflow-y:hidden). An overflow ancestor CLIPS a position:absolute dropdown, so the
+                # menu opened perfectly, lit the trigger up, and was cropped away to nothing: a button
+                # that goes black and does nothing. `!list.hidden` would have passed the whole time, so
+                # assert the thing that actually failed — that you can SEE it and HIT it.
+                # Feed the long-press click-eater first: the hold checks above leave it armed to swallow
+                # exactly one click (the one a real finger produces on release), and our synthetic
+                # pointer events never produce that click. Otherwise it eats THIS tap instead.
+                mp.evaluate("() => document.dispatchEvent(new MouseEvent('click', { bubbles: true }))")
+                mp.wait_for_timeout(80)
+                mp.evaluate("() => document.querySelector('.menu-trigger.has-logo').click()")
+                mp.wait_for_timeout(350)
+                filemenu = mp.evaluate("""() => {
+                    const list = document.querySelector('.menu-list:not([hidden])');
+                    if (!list) return { open: false };
+                    const b = list.getBoundingClientRect();
+                    const at = (dy) => { const e = document.elementFromPoint(Math.round(b.left + b.width / 2),
+                                                                            Math.round(b.top + dy));
+                                         return !!(e && e.closest('.menu-list')); };
+                    return { open: true,
+                             onScreen: b.width > 40 && b.height > 40 && b.top >= 0
+                                       && b.bottom <= innerHeight + 1 && b.left >= 0,
+                             // clipped-to-nothing and painted-under both fail here, and only here
+                             topHittable: at(8), midHittable: at(Math.round(b.height / 2)),
+                             items: list.querySelectorAll('button').length,
+                             // a menu taller than the screen must scroll, not hang off the bottom
+                             fits: b.height <= innerHeight };
+                }""")
+                check("mobile: the File menu (the logo) actually RENDERS — not clipped away by the bar it lives in",
+                      filemenu.get("open") and filemenu.get("onScreen") and filemenu.get("fits")
+                      and filemenu.get("topHittable") and filemenu.get("midHittable")
+                      and filemenu.get("items", 0) >= 6, str(filemenu))
+                mp.evaluate("() => document.body.click()")   # dismiss
+                mp.wait_for_timeout(150)
+
                 # The app is a shell, not a document. A drag on a toolbar was being handed to iOS as a
                 # PAGE scroll — which rubber-bands the whole UI and collapses Safari's toolbar, so the
                 # layout heaves around under your finger while you're aiming at a 40px button.

@@ -47,6 +47,9 @@ html, body {
 }
 
 button, select, input, a { font: inherit; }
+/* iOS paints its own translucent grey-blue box over any tapped control. We already draw a pressed
+   state; the OS one just smears it. */
+button, a, label, summary, [role="button"] { -webkit-tap-highlight-color: transparent; }
 
 .app {
   height: 100vh;
@@ -298,7 +301,13 @@ button:disabled {
   border: 1px solid var(--line); background: var(--bg); color: var(--fg);
   font: inherit; font-size: 16px; line-height: 1; cursor: pointer; display: grid; place-items: center;
 }
-.icon-btn:hover, .menu.open .icon-btn { background: var(--accent); color: #fff; border-color: var(--accent); }
+/* Open/hover state is INK, not accent. Blue was survivable on a 32px header icon; with the brand mark
+   living in this button on a phone it became a big blue tile, and blue means "selected object"
+   everywhere else in this app. Every other active control here is black-on-white (.tool-button.active,
+   .view-btn.active) — one language. */
+.icon-btn:hover, .menu.open .icon-btn { background: var(--ink); color: #fff; border-color: var(--ink); }
+/* the logo is a black mark: invert it when the button goes black, or it vanishes into its own tile */
+.menu.open .icon-btn.has-logo .brand-logo { filter: invert(1); }
 /* text variant for header dropdown triggers (Layout ▾) */
 .icon-btn.hdr-text { width: auto; padding: 0 10px; font-size: 13px; }
 .icon-btn.hdr-text.active { background: var(--accent); color: #fff; border-color: var(--accent); }
@@ -1149,7 +1158,10 @@ input.insp-ab-name { background: var(--field-bg, #2a2a2e); color: inherit; borde
   top: calc(100% + 4px);
   left: 0;          /* open rightward from the trigger (keeps left-edge menus in bounds) */
   right: auto;
-  z-index: 40;
+  /* Above the bars, below the modals. It was 40 — under the Edit/Manage swap (60), which on a phone
+     sits right beside the File button, so the dropdown opened *behind* the tabs it overlapped.
+     Order of this app's world: FAB 55 · scrim 58 · view-swap/sheet 60 · [menus 70] · modal 100. */
+  z-index: 70;
   min-width: 190px;
   background: var(--bg);
   border: 1px solid var(--line);
@@ -2535,6 +2547,20 @@ text.hv-text-editing { visibility: hidden; }
   }
   .editor-grid > .toolstrip { border-width: 0 1px 0 0; }
   .editor-grid > .actionbar { border-width: 0 0 0 1px; }
+
+  /* FULL-BLEED. The safe-area inset was padding the whole GRID, so the app sat in a white picture
+     frame: the top bar's rule stopped short of both edges and a dead gutter ran down each side. In
+     landscape the notch is on one flank and the home indicator on the other, so the thing that has to
+     dodge them is the RAILS — not the app. Background and borders now run edge to edge and the buttons
+     hug the safe area from inside it. (After the rail block above, which sets `padding` wholesale and
+     would otherwise wipe these.) */
+  .app.editor { padding: 0; }
+  .editor-grid > .mobilebar {
+    padding-left: calc(8px + env(safe-area-inset-left));
+    padding-right: calc(8px + env(safe-area-inset-right));
+  }
+  .editor-grid > .toolstrip { padding-left: calc(5px + env(safe-area-inset-left)); }
+  .editor-grid > .actionbar { padding-right: calc(5px + env(safe-area-inset-right)); }
   .editor-grid > .toolstrip,
   .editor-grid > .actionbar { padding-bottom: calc(6px + env(safe-area-inset-bottom)); }
   .editor-grid > .toolstrip::-webkit-scrollbar,
@@ -2545,8 +2571,14 @@ text.hv-text-editing { visibility: hidden; }
   /* separators back to horizontal hairlines inside the vertical rails */
   .editor-grid > .toolstrip .tool-sep,
   .editor-grid > .actionbar .tool-sep { width: 24px; height: 1px; margin: 3px 0; align-self: center; }
-  /* no bottom bars now → the FAB drops to the free bottom-right corner */
-  .mobile-fab { bottom: calc(16px + env(safe-area-inset-bottom)); right: calc(16px + env(safe-area-inset-right)); }
+  /* The bottom-right corner is NOT free in landscape — the action rail lives there, and the FAB was
+     sitting on top of it, covering the very buttons it was supposed to be next to. Park it clear of
+     the rail, over the canvas: 51px of rail (40px tile + 5px padding either side + the 1px border)
+     plus a gap, plus whatever the notch takes. */
+  .mobile-fab {
+    bottom: calc(16px + env(safe-area-inset-bottom));
+    right: calc(66px + env(safe-area-inset-right));
+  }
   .stage-wrap .panel-foot { padding-right: 64px; }
   /* Landscape has the opposite problem from portrait: width to spare, no height. A BOTTOM sheet here
      was 88vh of a 390px screen — it swallowed the canvas whole, so you couldn't see the thing you

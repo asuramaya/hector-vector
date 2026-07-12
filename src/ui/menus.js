@@ -16,7 +16,12 @@ export function closeMenus() {
   if (!openMenuEl) return;
   const list = openMenuEl.querySelector(".menu-list");
   const trigger = openMenuEl.querySelector(".menu-trigger");
-  if (list) list.hidden = true;
+  // drop the viewport pinning openMenu may have applied, so the CSS owns placement again
+  if (list) {
+    list.style.position = ""; list.style.left = ""; list.style.top = "";
+    list.style.maxHeight = ""; list.style.overflowY = ""; list.style.overscrollBehavior = "";
+    list.hidden = true;
+  }
   if (trigger) trigger.setAttribute("aria-expanded", "false");
   openMenuEl.classList.remove("open");
   openMenuEl = null;
@@ -60,6 +65,16 @@ function populateMenuList(list, items, opts = {}) {
     list.appendChild(btn);
   }
 }
+// Is anything between this element and the body clipping its overflow? A dropdown is
+// `position: absolute` inside its `.menu`, and an ancestor with overflow:auto/hidden CLIPS it — the
+// menu opens perfectly and is cut away to nothing on the way out.
+function clippedBy(el) {
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const s = getComputedStyle(p);
+    if (s.overflowX !== "visible" || s.overflowY !== "visible") return p;
+  }
+  return null;
+}
 export function openMenu(menuEl) {
   closeMenus();
   const itemsFn = menuItems[menuEl.dataset.menu];
@@ -71,6 +86,25 @@ export function openMenu(menuEl) {
   if (trigger) trigger.setAttribute("aria-expanded", "true");
   menuEl.classList.add("open");
   openMenuEl = menuEl;
+
+  // The phone's quick bar scrolls sideways (overflow-x:auto, overflow-y:hidden), and the File menu
+  // now lives IN it — so the dropdown was being clipped to the bar's own height, i.e. to nothing. The
+  // trigger still lit up as "open", which is exactly what it looked like from the outside: a button
+  // that goes blue and does nothing. Pin the list to the VIEWPORT instead, under the trigger, where no
+  // ancestor can crop it. Off a scroller this is a no-op and the CSS keeps its absolute placement.
+  list.style.position = ""; list.style.left = ""; list.style.top = "";
+  list.style.maxHeight = ""; list.style.overflowY = "";
+  if (trigger && clippedBy(menuEl)) {
+    const r = trigger.getBoundingClientRect();
+    list.style.position = "fixed";
+    // A phone held sideways is 390px tall and this menu is 476px. Clamp it to the screen and let it
+    // scroll — placeAt can only slide a menu that FITS back into view, and silently leaves one that
+    // doesn't hanging off the bottom.
+    list.style.maxHeight = (window.innerHeight - 16) + "px";
+    list.style.overflowY = "auto";
+    list.style.overscrollBehavior = "contain";
+    placeAt(list, r.left, r.bottom + 4);
+  }
 }
 
 // ---------- right-click context menu (canvas + objects) ----------
