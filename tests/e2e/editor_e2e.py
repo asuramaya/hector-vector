@@ -4851,15 +4851,37 @@ def main():
                     const root = document.querySelector('.modal-root');
                     const app = document.querySelector('main.app');
                     const z = (s) => { const e = document.querySelector(s); return e ? +getComputedStyle(e).zIndex || 0 : 0; };
+                    const rows = [...document.querySelectorAll('.picker-row')];
+                    const hs = rows.map((r) => Math.round(r.getBoundingClientRect().height));
+                    const mv = document.querySelector('.picker-moveto');
+                    const mr = mv ? mv.getBoundingClientRect() : null;
+                    const overSel = mr && document.elementFromPoint(Math.round(mr.left + mr.width / 2),
+                                                                   Math.round(mr.top + mr.height / 2));
+                    const bd = document.querySelector('.modal-backdrop');
                     return { open: !!root && !root.hidden,
-                             rows: document.querySelectorAll('.picker-row').length,
+                             rows: rows.length,
                              sheetClosed: !app.classList.contains('sheet-open'),
                              // the modal was z-index 50 — UNDER the FAB (55), scrim (58) and sheet (60),
                              // so every modal on a phone (Settings included) rendered beneath them
-                             aboveChrome: z('.modal-root') > 60 };
+                             aboveChrome: z('.modal-root') > 60,
+                             // ONE line per row. It wrapped to two — the redundant per-row bar-select
+                             // forced the break — so 49 rows became a mile of scrolling.
+                             tallestRow: Math.max(...hs),
+                             // the ⇄ is a real 34px+ target and the tap lands on the SELECT under it
+                             moveW: mr ? Math.round(mr.width) : 0,
+                             moveH: mr ? Math.round(mr.height) : 0,
+                             moveIsSelect: !!(overSel && overSel.tagName === 'SELECT'),
+                             // a white window on a white wash over a white canvas reads as "nothing
+                             // happened" — the backdrop has to actually dim
+                             backdropDims: bd && !/rgba\\(255,\\s*255,\\s*255/.test(getComputedStyle(bd).backgroundColor) };
                 }""")
                 check("mobile: Customize bars opens above the phone chrome, and closes the sheet under it",
                       opened["open"] and opened["rows"] > 20 and opened["sheetClosed"] and opened["aboveChrome"], str(opened))
+                check("mobile: every picker row is ONE line, and the ⇄ move control is a real tap target",
+                      opened["tallestRow"] <= 52 and opened["moveW"] >= 34 and opened["moveH"] >= 32
+                      and opened["moveIsSelect"], str(opened))
+                check("mobile: a modal DIMS what's behind it (a white dialog on a white canvas is invisible)",
+                      opened["backdropDims"], str(opened.get("backdropDims")))
                 # ...and the actual payoff: untick tools IN THE PICKER, watch the strip stop overflowing.
                 trimmed = mp.evaluate("""() => {
                     const t = document.querySelector('.toolstrip');

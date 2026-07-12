@@ -177,7 +177,12 @@ function buildTabs(sheet) {
   gear.className = "sheet-customize";
   gear.title = "Customize bars…";
   gear.setAttribute("aria-label", "Customize bars");
-  gear.textContent = "⚙";
+  const mark = document.createElement("img");
+  mark.className = "brand-logo";
+  mark.src = "/assets/hv_logo.svg";
+  mark.alt = "";
+  mark.setAttribute("aria-hidden", "true");
+  gear.appendChild(mark);
   gear.addEventListener("click", () => { if (onCustomize) onCustomize(); });
   bar.append(tabsEl, gear);
   sheet.insertBefore(bar, sheet.firstChild);

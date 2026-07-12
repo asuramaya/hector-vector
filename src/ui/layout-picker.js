@@ -113,16 +113,27 @@ export function openLayoutPicker() {
         }
 
         // Cross-bar moves live here rather than in a drag — see the note at the top of the file.
+        //
+        // It is wrapped, and the wrapper is what you SEE. Inside its own section this select always
+        // reads back the section's own name ("Tools", under the heading TOOLS) — so on a phone it was
+        // a wide, redundant control repeated on every row, which is what forced each row onto two
+        // lines and turned thirteen tools into a mile of scrolling. The select itself is still there,
+        // stretched invisibly across the wrapper, so tapping the ⇄ opens the NATIVE picker with the
+        // full bar names spelled out. Nothing is lost; it just stops shouting.
+        const moveTo = document.createElement("span");
+        moveTo.className = "picker-moveto";
+        moveTo.title = "Move to another bar";
         const to = document.createElement("select");
         to.className = "picker-move";
-        to.title = "Move to another bar";
+        to.setAttribute("aria-label", "Move to another bar");
         for (const [val, text] of targets) {
           const o = document.createElement("option");
           o.value = val; o.textContent = text; o.selected = val === bar.name;
           to.appendChild(o);
         }
         to.addEventListener("change", () => { L.move(tile.key, to.value); rerender(); });
-        row.appendChild(to);
+        moveTo.appendChild(to);
+        row.appendChild(moveTo);
 
         root.appendChild(row);
       });

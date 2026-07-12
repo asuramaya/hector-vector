@@ -1580,10 +1580,14 @@ input.insp-ab-name { background: var(--field-bg, #2a2a2e); color: inherit; borde
 
 .modal-root[hidden] { display: none; }
 
+/* DIM, not wash. This was rgba(255,255,255,0.7) — white — behind a white window with a hairline
+   border, sitting over a white canvas. On a desktop you get away with it; on a phone held at arm's
+   length the dialog genuinely reads as "nothing happened", which is exactly what it was reported as.
+   A modal has to announce that the world behind it has stopped. */
 .modal-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(0, 0, 0, 0.42);
 }
 
 .modal-window {
@@ -1591,9 +1595,12 @@ input.insp-ab-name { background: var(--field-bg, #2a2a2e); color: inherit; borde
   background: var(--bg);
   border: 1px solid var(--line);
   width: min(960px, 92vw);
-  max-height: 88vh;
+  /* dvh: vh is the TALL viewport on iOS (it ignores Safari's toolbars), so a vh-capped dialog can be
+     taller than the screen it is centred in — and its buttons end up under the browser chrome. */
+  max-height: 88dvh;
   display: grid;
   grid-template-rows: auto 1fr;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
 }
 .modal-window.modal-narrow { width: min(460px, 92vw); }
 
@@ -2082,18 +2089,32 @@ text.hv-text-editing { visibility: hidden; }
    It gets a real floor, and the controls stay compact. */
 .picker-name { flex: 1 1 auto; min-width: 7.5em; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .picker-nudge { flex: 0 0 auto; min-width: 30px; padding: 4px 5px; }
-.picker-move { flex: 0 0 auto; width: 6.5em; font-size: 12px; min-width: 0; }
-/* Narrow phones can't fit label + both nudges + the bar picker on one line without eating the label,
-   so let the controls drop to a second line and keep the name readable. */
+/* The "move to another bar" select, wearing a ⇄. Inside its own section it always reads back that
+   section's own name, so as a wide text control it was pure noise on every row — while still being
+   the only way to move a tile between bars. So: a 40px target showing ⇄, with the real select
+   stretched invisibly over it. Tapping opens the native picker, with the bar names spelled out in
+   full. (Not `visibility:hidden` or `display:none` — those would take the tap target with them.) */
+.picker-moveto {
+  position: relative; flex: 0 0 auto;
+  width: 40px; height: 34px; display: grid; place-items: center;
+  border: 1px solid var(--line); background: var(--bg);
+  font-size: 14px; line-height: 1; cursor: pointer;
+}
+.picker-moveto::before { content: "⇄"; pointer-events: none; }
+.picker-move {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  opacity: 0; cursor: pointer; -webkit-appearance: none; appearance: none;
+}
+/* Phones: ONE line per row. It used to wrap to two — the redundant bar-select forced the break — so
+   thirteen tools became a mile of scrolling in a sheet you were already scrolling. Halving the row
+   height is most of what "hard to navigate" meant. */
 @media (max-width: 460px) {
-  .picker-row { flex-wrap: wrap; row-gap: 6px; }
-  .picker-row input[type="checkbox"], .picker-glyph { order: 0; }
-  .picker-name { order: 1; flex: 1 1 auto; min-width: 0; }
-  /* a zero-height flex item with a full-width basis = a forced line break, so the row reads
-     [✓] [glyph] Name  /  [↑] [↓] [move to ▾] instead of stacking into three lines */
-  .picker-row::after { content: ""; order: 2; flex: 0 0 100%; height: 0; }
-  .picker-nudge { order: 3; }
-  .picker-move { order: 3; margin-left: auto; width: auto; max-width: 55%; }
+  .picker-row { flex-wrap: nowrap; gap: 5px; padding: 4px 2px; }
+  .picker-row input[type="checkbox"] { width: 22px; height: 22px; }
+  .picker-glyph { width: 26px; height: 26px; font-size: 13px; }
+  .picker-name { flex: 1 1 auto; min-width: 0; font-size: 13px; }   /* the name gives way LAST, but it may give way */
+  .picker-nudge { min-width: 32px; height: 34px; padding: 0; font-size: 14px; }
+  .picker-moveto { width: 36px; }
 }
 .picker-over { margin-left: 8px; color: var(--accent); font-weight: 600; }
 .picker-pin { filter: grayscale(1); opacity: 0.5; }
@@ -2430,8 +2451,10 @@ text.hv-text-editing { visibility: hidden; }
   .sheet-customize {
     flex: 0 0 auto; width: 44px; height: 44px; padding: 0;
     border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+    display: grid; place-items: center;
     font-size: 18px; line-height: 1; cursor: pointer;
   }
+  .sheet-customize .brand-logo { display: block; width: 24px; height: 24px; }
 
   .editor-grid > .rightdock.sheet-tabbed > *:not(.sheet-tabbar) { display: none; }
   .editor-grid > .rightdock.sheet-tabbed > .rail-section.sheet-active,
@@ -2461,6 +2484,8 @@ text.hv-text-editing { visibility: hidden; }
     font-size: 21px; line-height: 1; cursor: pointer;
     z-index: 55; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
   }
+  /* the brand mark is black ink; the FAB is a black disc — invert it or it disappears into its own button */
+  .mobile-fab .brand-logo { display: block; width: 26px; height: 26px; filter: invert(1); }
   /* the contextual bar slides in beneath the canvas, so lift the FAB clear of it or it lands on
      top of Delete — the one control it must never cover. */
   .app.has-selection .mobile-fab { bottom: calc(140px + env(safe-area-inset-bottom)); }
