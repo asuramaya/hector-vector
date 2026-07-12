@@ -481,7 +481,18 @@ button:disabled {
 /* the side-panel fold toggle reads as "active" when panels are hidden */
 .bar-btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 
-.stage-wrap { min-height: 0; position: relative; }
+/* Nothing over the canvas is text you're meant to select. On iOS a long-press there was starting a
+   text selection and popping the native Copy/Look-Up callout over the artwork — the SVG itself had
+   user-select:none, but the wrapper (and <text> elements inside it) did not, and -webkit-touch-callout
+   is a separate switch nothing had ever turned off. The canvas is a drawing surface, so say so. */
+.stage-wrap {
+  min-height: 0; position: relative;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+/* ...except the text tool's live editor, which IS real text you type into. */
+.stage-wrap [contenteditable="true"], .stage-wrap input, .stage-wrap textarea {
+  user-select: text; -webkit-user-select: text; -webkit-touch-callout: default;
+}
 .stage-head { gap: 10px; }
 /* arrange/structure toolbar across the top of the canvas (reorder/group/cleanup …) */
 /* top arrange bar — the top run of the picture frame: same fill as the side bars,
