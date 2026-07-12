@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>hector-vector — pen pressure probe</title>
+<!--
+  Does YOUR pen actually report pressure to the browser?
+
+  Nothing in hector-vector reads e.pressure today, and before building a pressure pipeline it is
+  worth knowing whether the hardware + driver + browser on the other end even sends one. A tablet
+  whose driver presents the pen as a mouse reports a CONSTANT pressure of 0.5, and no amount of
+  code on our side can recover what was never sent.
+
+  Draw on the pad below. The verdict line says what the browser is actually giving us.
+-->
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 14px/1.5 "IBM Plex Sans", -apple-system, Helvetica, Arial, sans-serif;
+    background: #fff; color: #000; -webkit-text-size-adjust: 100%;
+  }
+  @media (prefers-color-scheme: dark) { body { background: #111; color: #eee; } }
+  header { padding: 14px 16px; border-bottom: 1px solid currentColor; }
+  h1 { margin: 0 0 4px; font-size: 16px; }
+  p.sub { margin: 0; opacity: 0.65; font-size: 13px; }
+  #verdict {
+    margin: 0; padding: 12px 16px; font-weight: 600;
+    border-bottom: 1px solid currentColor; background: #f4f4f4;
+  }
+  @media (prefers-color-scheme: dark) { #verdict { background: #1c1c1c; } }
+  .yes { color: #0a7d2c; } .no { color: #b00020; } .wait { opacity: 0.6; }
+  #pad {
+    display: block; width: 100%; height: 52vh; touch-action: none; cursor: crosshair;
+    background: #fafafa;
+  }
+  @media (prefers-color-scheme: dark) { #pad { background: #191919; } }
+  #hud {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    gap: 1px; background: currentColor; border-top: 1px solid currentColor;
+  }
+  #hud div { background: #fff; padding: 8px 10px; }
+  @media (prefers-color-scheme: dark) { #hud div { background: #111; } }
+  #hud b { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.55; }
+  #hud span { font-variant-numeric: tabular-nums; font-size: 15px; }
+  footer { padding: 12px 16px; font-size: 13px; opacity: 0.75; }
+  button { font: inherit; padding: 6px 12px; margin: 0 16px 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pen pressure probe</h1>
+  <p class="sub">Draw on the pad with your pen. Then, for comparison, draw with a finger or the mouse.</p>
+</header>
+
+<p id="verdict" class="wait">Waiting for a stroke…</p>
+
+<canvas id="pad"></canvas>
+
+<div id="hud">
+  <div><b>pointerType</b><span id="t">—</span></div>
+  <div><b>pressure</b><span id="p">—</span></div>
+  <div><b>range seen</b><span id="r">—</span></div>
+  <div><b>distinct values</b><span id="d">—</span></div>
+  <div><b>tilt x / y</b><span id="tilt">—</span></div>
+  <div><b>twist</b><span id="tw">—</span></div>
+  <div><b>coalesced / move</b><span id="c">—</span></div>
+  <div><b>sample rate</b><span id="hz">—</span></div>
+</div>
+
+<button id="clear" type="button">Clear</button>
+<footer id="note"></footer>
+
+<script>
+(() => {
+  const pad = document.getElementById("pad");
+  const ctx = pad.getContext("2d");
+  const $ = (id) => document.getElementById(id);
+  const verdict = $("verdict"), note = $("note");
+
+  const fit = () => {
+    const r = pad.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    pad.width = Math.round(r.width * dpr); pad.height = Math.round(r.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineCap = ctx.lineJoin = "round";
+  };
+  fit();
+  addEventListener("resize", fit);
+
+  // Per pointerType, what have we actually SEEN? The whole question is whether pressure varies.
+  const seen = new Map();   // type -> { lo, hi, vals:Set, n }
+  let last = null, moves = 0, coalesced = 0, t0 = 0, ticks = 0;
+
+  const stat = (type, pr) => {
+    let s = seen.get(type);
+    if (!s) { s = { lo: 1, hi: 0, vals: new Set(), n: 0 }; seen.set(type, s); }
+    s.lo = Math.min(s.lo, pr); s.hi = Math.max(s.hi, pr);
+    s.vals.add(Math.round(pr * 200));   // ~0.5% buckets: real pens produce dozens, a mouse produces one
+    s.n++;
+    return s;
+  };
+
+  const say = (cls, html) => { verdict.className = cls; verdict.innerHTML = html; };
+
+  function judge(type, s) {
+    const spread = s.hi - s.lo;
+    if (type === "pen" && s.vals.size > 6 && spread > 0.1) {
+      say("yes", `✅ <b>Pressure is live.</b> Your pen reports ${s.vals.size} distinct levels, `
+        + `${s.lo.toFixed(2)}–${s.hi.toFixed(2)}. hector-vector can absolutely use this.`);
+      note.textContent = "This is the good case: the driver is passing pressure through Pointer Events. "
+        + "Tilt and twist above tell you whether those are available too (many pens report tilt but not twist).";
+    } else if (type === "pen") {
+      say("no", `⚠️ <b>Recognised as a pen, but pressure is flat.</b> `
+        + `Only ${s.vals.size} distinct value(s), range ${s.lo.toFixed(2)}–${s.hi.toFixed(2)}.`);
+      note.textContent = "The browser knows it's a pen but is getting no pressure axis — usually a driver/"
+        + "compositor issue (on Linux: try Chromium under X11 rather than Wayland, and make sure the tablet "
+        + "isn't in 'mouse mode'). Nothing in the app can recover a value that was never sent.";
+    } else if (s.vals.size <= 2 && Math.abs(s.hi - 0.5) < 0.01) {
+      say("no", `❌ <b>Reported as "${type}", pressure pinned at 0.5.</b> `
+        + `That is the spec's stand-in for "this device has no pressure".`);
+      note.textContent = "Your tablet is presenting itself as a plain mouse, so the browser never sees a pen "
+        + "at all. On Linux that's typically the driver (or Wayland). Fix that and this page will flip green.";
+    } else {
+      say("wait", `Reading a <b>${type}</b>: pressure ${s.lo.toFixed(2)}–${s.hi.toFixed(2)}, `
+        + `${s.vals.size} distinct value(s). Now try the pen.`);
+      note.textContent = "A finger or mouse has no pressure axis — this is expected. The pen is the one that matters.";
+    }
+  }
+
+  const draw = (e, pr) => {
+    const r = pad.getBoundingClientRect();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    if (last) {
+      ctx.strokeStyle = getComputedStyle(document.body).color;
+      ctx.lineWidth = 0.6 + pr * 26;      // width straight off pressure — the whole point
+      ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(x, y); ctx.stroke();
+    }
+    last = { x, y };
+  };
+
+  pad.addEventListener("pointerdown", (e) => {
+    pad.setPointerCapture(e.pointerId);
+    last = null; moves = 0; ticks = 0; t0 = performance.now();
+    draw(e, e.pressure);
+  });
+
+  pad.addEventListener("pointermove", (e) => {
+    if (last === null && e.buttons === 0) return;
+    if (e.buttons === 0) return;
+    // A pen fires far faster than the display refreshes; without coalesced events you silently drop
+    // most of the samples (and most of the pressure detail) between frames.
+    const batch = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+    const list = batch.length ? batch : [e];
+    coalesced = list.length;
+    moves++; ticks += list.length;
+
+    for (const ev of list) draw(ev, ev.pressure);
+
+    const s = stat(e.pointerType, e.pressure);
+    $("t").textContent = e.pointerType;
+    $("p").textContent = e.pressure.toFixed(3);
+    $("r").textContent = `${s.lo.toFixed(2)} – ${s.hi.toFixed(2)}`;
+    $("d").textContent = String(s.vals.size);
+    $("tilt").textContent = `${e.tiltX ?? 0}° / ${e.tiltY ?? 0}°`;
+    $("tw").textContent = `${e.twist ?? 0}°`;
+    $("c").textContent = String(coalesced);
+    const secs = (performance.now() - t0) / 1000;
+    $("hz").textContent = secs > 0.25 ? `${Math.round(ticks / secs)} Hz` : "—";
+    judge(e.pointerType, s);
+  });
+
+  pad.addEventListener("pointerup", () => { last = null; });
+  pad.addEventListener("pointercancel", () => { last = null; });
+
+  $("clear").addEventListener("click", () => {
+    ctx.clearRect(0, 0, pad.width, pad.height);
+    seen.clear(); last = null;
+    say("wait", "Waiting for a stroke…");
+    note.textContent = "";
+  });
+})();
+</script>
+</body>
+</html>

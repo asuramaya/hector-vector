@@ -13,6 +13,7 @@ rm -rf "$DIST"; mkdir -p "$DIST"
 cp index.html compare.html style.css sw.js manifest.webmanifest _headers robots.txt llms.txt "$DIST"/
 cp -r assets src "$DIST"/
 cp tests/companion-spike.html "$DIST"/companion-spike.html   # LNA bridge spike, run from the public origin
+cp tests/pen-probe.html "$DIST"/pen-probe.html               # does this device's pen report pressure? (needed on the iPad, which can't reach localhost)
 
 echo "── bundle ──"; find "$DIST" -type f | sed "s|^$DIST/|  |" | sort
 echo "── deploying to Cloudflare Pages (project: hector-vector) ──"
