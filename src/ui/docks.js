@@ -12,37 +12,31 @@
 // the control object is published, exactly as before).
 import { showContextMenu } from "./menus.js";   // shelf-square right-click options menu
 import { CLOUD } from "./env.js";
-import { isPhone } from "./formfactor.js";
 
 export function createDocks({ editor, measureFit, viewports, renderProcessorPanel, renderLibrary, renderJobsPanel, processorRelevant, cycleBg }) {
-  // Sections the user has collapsed/expanded BY HAND this session. The phone sheet auto-arranges
-  // itself (below), but the moment you touch a section you own it — same "hands off what the user
-  // touched" rule the contextual docks already follow with `pinned`.
-  const userToggledSections = new Set();
-  // The phone sheet was a desktop dump: History, Layers, Object and Colour all expanded at once —
-  // 744px of content in a 480px sheet, so everything you actually wanted was below the fold. Show the
-  // two that relate to what's selected, fold the two that don't. Only on a phone, and only for
-  // sections the user hasn't taken over by hand.
-  const SHEET_WHEN_SELECTED = { properties: true, color: true, history: false, layers: false };
-  function syncSheetSections(hasSel) {
-    if (!isPhone()) return;
-    for (const [name, wantOpen] of Object.entries(SHEET_WHEN_SELECTED)) {
-      if (userToggledSections.has(name)) continue;   // you touched it; it's yours now
-      const s = document.querySelector(`.rail-section.${name}`);
-      if (!s) continue;
-      s.classList.toggle("collapsed", hasSel ? !wantOpen : name !== "layers");
-    }
+  const secKey = (name) => "hv-sec-" + name;
+  // A panel folded on the desktop rail must come back folded — but the phone's tabbed sheet
+  // force-expands whatever pane it shows (a tab onto a collapsed panel is an empty sheet). Re-read
+  // the saved state on the way back to desktop so the phone's override doesn't leak into the rail.
+  function syncCollapse() {
+    document.querySelectorAll(".rail-section[data-section]").forEach((s) => {
+      s.classList.toggle("collapsed", localStorage.getItem(secKey(s.dataset.section)) === "1");
+    });
   }
   function wireSectionCollapse(section) {
     const head = section.querySelector(".section-head"); if (!head || head._collapseWired) return;
     head._collapseWired = true;
-    const key = "hv-sec-" + section.dataset.section;
+    const key = secKey(section.dataset.section);
     if (localStorage.getItem(key) === "1") section.classList.add("collapsed");
     head.addEventListener("click", (e) => {
       // action clicks or a just-finished drag don't collapse — but a plain click does,
       // whether the panel is docked OR floating (a drag sets head._docking to opt out).
       if (e.target.closest(".panel-actions") || head._docking) return;
-      userToggledSections.add(section.dataset.section);
+      // Phone: the sheet is a tab surface, so the tab IS the panel — folding it would blank the sheet
+      // you just opened, and there is no second panel below for the space to go to. Header taps do
+      // nothing there. (This also retires the old auto-fold triage: with one pane at a time, there is
+      // nothing left to triage.)
+      if (section.parentElement?.classList.contains("sheet-tabbed")) return;
       const c = section.classList.toggle("collapsed");
       try { localStorage.setItem(key, c ? "1" : "0"); } catch {}
       const win = head.closest(".dock-window");
@@ -601,6 +595,10 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
       const dock = dockElFor(side);
       dock.querySelectorAll(".dock-vsep").forEach((s) => s.remove());
       const secs = [...dock.querySelectorAll(":scope > .rail-section")];
+      // A tabbed sheet is not a stack: there is nothing to split, the separators are display:none, and
+      // one pane owns the whole surface. Writing heights here would leave an inline `flex: 0 0 180px`
+      // on the pane — which silently WINS over the sheet's stylesheet and clips the panel to 180px.
+      if (dock.classList.contains("sheet-tabbed")) { secs.forEach((s) => { s.style.flex = ""; }); return; }
       const dockH = dock.getBoundingClientRect().height || 600;
       const even = Math.round(dockH / Math.max(1, secs.length));
       // Minimum height each section needs so the stack can never overflow the dock (open =
@@ -932,7 +930,7 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
       float: (n) => setLoc(n, "float"), dock: (n, side, before) => setLoc(n, side || "right", before),
       clampFloats: clampFloatsOnResize,
       loc: curLoc, isFolded: () => folded, toggleFold: () => { folded = !folded; reconcile(); persist(); },
-      summonProps, showColor, showInfo, close, shelve, unshelve, syncContextual, syncSheetSections, renderProps, renderPanels, renderColor, propsVisible,
+      summonProps, showColor, showInfo, close, shelve, unshelve, syncContextual, syncCollapse, renderProps, renderPanels, renderColor, propsVisible,
       // Manage screen borrows panels out of the dock into its own grid, then hands them back.
       borrow: borrowSections, restore: restoreSections, isAway: (n) => away.has(n),
       relayout: () => { relayoutDock("left"); relayoutDock("right"); },

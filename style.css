@@ -2077,8 +2077,7 @@ text.hv-text-editing { visibility: hidden; }
 .picker-pin.on { filter: none; opacity: 1; background: var(--surface); border-color: var(--ink); }
 .picker-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 0 4px; }
 .picker-foot .primary { margin-left: auto; background: var(--ink); color: #fff; border-color: var(--ink); }
-/* the phone sheet's own way in */
-.sheet-customize { margin: 10px 12px; width: calc(100% - 24px); }
+/* (the phone sheet's own way in — .sheet-customize — is a tab now; it's styled with the strip) */
 
 /* A tile the user has switched off. The node STAYS in the DOM (so its order is still captured, and
    every id-wired handler survives) — only its chrome goes away. Hiding a tool trims the BAR, not
@@ -2321,7 +2320,9 @@ text.hv-text-editing { visibility: hidden; }
   .editor-grid > .rightdock {
     position: fixed; left: 0; right: 0; bottom: 0;
     width: auto; margin: 0;
-    height: min(66vh, 480px);
+    /* dvh, not vh: vh is the TALL viewport (it ignores Safari's toolbars), so a vh-sized sheet
+       runs off the bottom of the screen on iOS. */
+    height: min(70dvh, 540px);
     border: 1px solid var(--line); border-bottom: 0;
     border-radius: 16px 16px 0 0;
     transform: translateY(102%);
@@ -2341,23 +2342,68 @@ text.hv-text-editing { visibility: hidden; }
     width: 42px; height: 4px; margin: 8px auto 4px;
     border-radius: 3px; background: var(--line); flex: 0 0 auto;
   }
-  /* the object-action bar + zoom/fit strip, reparented into the sheet (app.js) as labelled
-     rows so the bottom of the canvas keeps ONLY the tool bar. */
+  /* the object-action bar + zoom/fit strip, reparented into the sheet (ui/formfactor.js) so the
+     bottom of the canvas keeps ONLY the tool bar. They're panes here, same as the panels. */
   .editor-grid > .rightdock > .in-sheet {
-    display: flex; flex-flow: row wrap; align-items: center; justify-content: flex-start;
-    gap: 8px; width: auto; margin: 0; padding: 12px; overflow: visible;
-    border: 0; border-bottom: 1px solid var(--line);
+    display: flex; flex-flow: row wrap; align-items: center; align-content: flex-start;
+    justify-content: flex-start;
+    gap: 8px; width: auto; margin: 0; padding: 12px; overflow: visible; border: 0;
   }
-  .editor-grid > .rightdock > .in-sheet::before {
-    flex: 0 0 100%; font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
-    text-transform: uppercase; color: var(--muted); margin-bottom: 2px;
-  }
-  .editor-grid > .rightdock > .panel-foot.in-sheet::before { content: "View"; }
-  .editor-grid > .rightdock > .actionbar.in-sheet::before { content: "Actions"; }
-  .editor-grid > .rightdock > .in-sheet .tool-button { width: 40px; height: 40px; font-size: 17px; flex: 0 0 auto; }
+  .editor-grid > .rightdock > .in-sheet .tool-button { width: 44px; height: 44px; font-size: 18px; flex: 0 0 auto; }
   .editor-grid > .rightdock > .in-sheet .tool-sep,
   .editor-grid > .rightdock > .in-sheet .vp-sep { display: none; }
   .editor-grid > .rightdock > .panel-foot.in-sheet .viewport-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+
+  /* --- the sheet is a TAB SURFACE: one panel, full height --- */
+  /* It was a stack of ten panels in a 480px sheet: you scrolled the sheet to find a panel, then
+     scrolled inside the panel to read it. Two scrollers, one thumb. Now a strip of tabs scrolls
+     sideways and the panel you pick owns the whole sheet. (ui/formfactor.js builds the strip; the
+     panes are the sheet's own children, moved by nobody.) */
+  .editor-grid > .rightdock.sheet-tabbed { display: flex; flex-direction: column; overflow: hidden; }
+  .editor-grid > .rightdock.sheet-tabbed::before { order: -2; }   /* the grab handle stays on top */
+  /* SUGGESTED inserts itself at the head of the sheet, so the bar holds its place by order, not by
+     DOM position. The strip scrolls; the gear does NOT (it's the only way into Customize on a phone
+     — it must never scroll out of reach). */
+  .sheet-tabbar {
+    order: -1; flex: 0 0 auto;
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; border-bottom: 1px solid var(--line);
+  }
+  .sheet-tabs {
+    flex: 1 1 auto; min-width: 0;
+    display: flex; align-items: center; gap: 6px;
+    overflow-x: auto; overflow-y: hidden;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  .sheet-tabs::-webkit-scrollbar { display: none; }
+  .sheet-tab {
+    flex: 0 0 auto; height: 44px; padding: 0 15px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--muted);
+    font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer;
+  }
+  .sheet-tab.on { background: var(--ink); color: var(--bg); }
+  .sheet-customize {
+    flex: 0 0 auto; width: 44px; height: 44px; padding: 0;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+    font-size: 18px; line-height: 1; cursor: pointer;
+  }
+
+  .editor-grid > .rightdock.sheet-tabbed > *:not(.sheet-tabbar) { display: none; }
+  .editor-grid > .rightdock.sheet-tabbed > .rail-section.sheet-active,
+  .editor-grid > .rightdock.sheet-tabbed > .in-sheet.sheet-active { display: flex; }
+  .editor-grid > .rightdock.sheet-tabbed > .proc-auto.sheet-active { display: block; }
+  .editor-grid > .rightdock.sheet-tabbed > .sheet-active {
+    flex: 1 1 auto; min-height: 0; margin: 0; border: 0;
+    overflow-y: auto; overscroll-behavior: contain;
+  }
+  /* a panel pane: header pinned, body scrolls (the body carries a 100vh max-height for the desktop rail) */
+  .editor-grid > .rightdock.sheet-tabbed > .rail-section.sheet-active { overflow: hidden; }
+  .editor-grid > .rightdock.sheet-tabbed > .rail-section.sheet-active > .section-body {
+    flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto;
+  }
+  /* the tab IS the title — no accordion caret, and no header tap that folds the pane away */
+  .editor-grid > .rightdock.sheet-tabbed .section-head { cursor: default; }
+  .editor-grid > .rightdock.sheet-tabbed .section-head .caret { display: none; }
 
   /* --- floating Panels toggle + dismiss scrim --- */
   /* Floats clear ABOVE the two bottom bars over the lower-right canvas (the standard bottom-right
@@ -2428,6 +2474,18 @@ text.hv-text-editing { visibility: hidden; }
   /* no bottom bars now → the FAB drops to the free bottom-right corner */
   .mobile-fab { bottom: calc(16px + env(safe-area-inset-bottom)); right: calc(16px + env(safe-area-inset-right)); }
   .stage-wrap .panel-foot { padding-right: 64px; }
-  /* the sheet shouldn't swallow the whole short screen */
-  .editor-grid > .rightdock { height: min(88vh, 340px); }
+  /* Landscape has the opposite problem from portrait: width to spare, no height. A BOTTOM sheet here
+     was 88vh of a 390px screen — it swallowed the canvas whole, so you couldn't see the thing you
+     were editing while you edited it. Same sheet, same tabs, same panes: it just comes in from the
+     SIDE, where the room is. */
+  .editor-grid > .rightdock {
+    top: 0; bottom: 0; left: auto;
+    right: 0; width: min(54vw, 420px); height: auto;
+    padding-right: env(safe-area-inset-right);
+    border: 0; border-left: 1px solid var(--line); border-radius: 0;
+    transform: translateX(102%);
+    box-shadow: -8px 0 30px rgba(0, 0, 0, 0.18);
+  }
+  .app.sheet-open .editor-grid > .rightdock { transform: translateX(0); }
+  .editor-grid > .rightdock::before { display: none; }   /* the drag-handle pip reads as "pull down" */
 }

@@ -8,7 +8,7 @@
 // helpers) through the factory's `deps` object. The factory returns the control
 // object the header Layout dropdown and the E2E suite drive; the caller is
 // responsible for publishing it (e.g. on `window.__layout`).
-import { isPhone, onFormFactorChange, composePhone } from "./formfactor.js";
+import { isPhone, isSheet, onFormFactorChange, composePhone, composeSheet } from "./formfactor.js";
 import { createPointerDrag } from "./pointer-drag.js";
 import { suspendAdaptive } from "./adaptive.js";
 
@@ -99,6 +99,10 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
   const AUTHORED = capture();   // pristine, pre-composition DOM order
   composePhone(isPhone());
   const DEFAULT = capture();    // the baseline for Reset in the CURRENT form factor
+  // ...and only now turn the right dock into a tabbed sheet: its panes are the bars composePhone just
+  // moved in, so the strip has to be built after them. (It adds no tiles and registers no bar, so it
+  // cannot pollute either capture above — but it costs nothing to sequence it honestly.)
+  composeSheet(isSheet());
 
   // every tile by key, wherever it currently sits (across all registered bars)
   function collectTiles() {

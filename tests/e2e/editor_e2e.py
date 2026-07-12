@@ -4732,12 +4732,17 @@ def main():
                     const shown = [...bar.children].filter((e) => vis(e) && e.id)
                         .sort((x, y) => (+getComputedStyle(x).order) - (+getComputedStyle(y).order)).map((e) => '#' + e.id);
                     const sug = document.querySelector('.proc-auto.suggest');
+                    // The cap is PER BAR: capping the global ranked list would have made cut/copy
+                    // (which rank low) vanish from the sheet too — i.e. unreachable anywhere. They
+                    // live on the Actions bar, which the tabbed sheet shows one tap away, so "still
+                    // offered" is the class the adaptive engine gives it — not what's on screen right
+                    // now. That it's genuinely VISIBLE once you tap Actions is asserted below.
+                    const abar = document.querySelector('#rightdock > .actionbar');
+                    const off = (s) => { const e = abar && abar.querySelector(s); return !e || e.classList.contains('act-off'); };
                     return { shown, overflow: bar.scrollWidth - bar.clientWidth,
                              rows: Math.round(bar.getBoundingClientRect().height),
-                             // the cap is PER BAR: capping the global ranked list would have made
-                             // cut/copy (which rank low) vanish from the sheet too — unreachable
-                             cutReachable: vis(document.querySelector('#act-cut')),
-                             pasteHidden: !vis(document.querySelector('#act-paste')),
+                             cutOffered: !!abar && !off('#act-cut'),
+                             pasteHidden: off('#act-paste') && !vis(document.querySelector('#act-paste')),
                              suggested: !!sug,
                              suggestSays: sug ? sug.querySelector('.proc-auto-sum').textContent : null };
                 }""")
@@ -4746,19 +4751,83 @@ def main():
                 check("mobile: the contextual bar still fits — one row, no overflow (the cap earns its keep)",
                       ctx["overflow"] == 0 and ctx["rows"] < 90 and len(ctx["shown"]) <= 7,
                       f"overflow={ctx['overflow']} rows={ctx['rows']} n={len(ctx['shown'])}")
-                check("mobile: capping the bar doesn't make anything unreachable (cut/copy still in the sheet)",
-                      ctx["cutReachable"] and ctx["pasteHidden"], str(ctx))
+                check("mobile: capping the bar doesn't make anything unreachable (cut/copy still offered in the sheet)",
+                      ctx["cutOffered"] and ctx["pasteHidden"], str(ctx))
                 check("mobile: the sheet leads with SUGGESTED, reading the selection back",
                       ctx["suggested"] and ctx["suggestSays"] == "2 overlapping shapes", str(ctx["suggestSays"]))
-                # The sheet was 744px of content in a 480px window — everything you wanted was below
-                # the fold. Show what relates to the selection; fold what doesn't.
+                # The sheet was a STACK: ten panels in a 480px window, so you scrolled the sheet to find
+                # a panel and then scrolled inside the panel to read it — two scrollers, one thumb, and
+                # whatever you wanted below the fold. It's a tab surface now: the strip scrolls
+                # sideways and ONE pane owns the whole sheet.
+                # Open it for real (idempotent — an earlier check may have left it open), because a
+                # closed sheet is translated off-screen and its tabs are unclickable.
+                mp.evaluate("""() => { const a = document.querySelector('main.app');
+                    if (!a.classList.contains('sheet-open')) document.querySelector('#mobile-panels').click(); }""")
+                mp.wait_for_timeout(450)
                 sheet = mp.evaluate("""() => {
-                    const secs = [...document.querySelectorAll('#rightdock .rail-section')];
-                    return { expanded: secs.filter((s) => !s.classList.contains('collapsed')).length,
-                             total: secs.length };
+                    const d = document.querySelector('#rightdock');
+                    const strip = d.querySelector('.sheet-tabs');
+                    const tabs = [...strip.querySelectorAll('.sheet-tab')];
+                    const panes = [...d.children].filter((c) => !c.classList.contains('sheet-tabbar'));
+                    const shown = panes.filter((c) => getComputedStyle(c).display !== 'none');
+                    const r = shown[0] ? shown[0].getBoundingClientRect() : null;
+                    return { tabbed: d.classList.contains('sheet-tabbed'),
+                             tabs: tabs.map((t) => t.dataset.tabKey),
+                             sideways: strip.scrollWidth > strip.clientWidth + 1,   // scrolls, doesn't wrap
+                             stripRows: Math.round(strip.getBoundingClientRect().height),
+                             minTab: Math.min(...tabs.map((t) => Math.round(t.getBoundingClientRect().height))),
+                             visible: shown.length,
+                             paneH: r ? Math.round(r.height) : 0,
+                             sheetH: Math.round(d.getBoundingClientRect().height),
+                             sheetScrolls: d.scrollHeight > d.clientHeight + 1 };
                 }""")
-                check("mobile: the sheet folds the panels that don't relate to the selection (was 4 open at once)",
-                      sheet["expanded"] <= 2 and sheet["total"] >= 4, str(sheet))
+                check("mobile: the Panels sheet is a TAB surface — one pane at a time, not a stack you scroll",
+                      sheet["tabbed"] and sheet["visible"] == 1 and not sheet["sheetScrolls"], str(sheet))
+                check("mobile: the tabs scroll SIDEWAYS in one row (that's the whole point) with 44px targets",
+                      sheet["sideways"] and sheet["stripRows"] < 70 and sheet["minTab"] >= 44, str(sheet))
+                # The dock's vertical splitter writes an inline `flex: 0 0 180px` onto every stacked
+                # panel — an inline style BEATS the sheet's stylesheet, so the pane opened clipped to
+                # 180px of a 540px sheet with its content cut off mid-panel. docks.js must not write
+                # stack heights into a surface that has no stack.
+                check("mobile: the open pane fills the sheet (not clipped to the dock splitter's stack height)",
+                      sheet["paneH"] > sheet["sheetH"] * 0.7, str(sheet))
+                # "One tap away" is a claim about the UI, so tap it. Cut ranks too low for the canvas
+                # bar's 7-tile cap; the sheet's Actions tab is where it has to actually appear.
+                mp.click('.sheet-tab[data-tab-key="actions"]')
+                mp.wait_for_timeout(250)
+                check("mobile: ...and one tap on Actions genuinely puts Cut on screen (not just in the DOM)",
+                      mp.evaluate("""() => { const c = document.querySelector('#act-cut');
+                          return !!c && c.offsetParent !== null && c.getBoundingClientRect().width >= 40; }"""))
+                # Drive the REAL tab buttons — the pane must actually swap, and the tapped tab is the
+                # only one marked current (a11y: aria-selected, not just a class).
+                mp.click('.sheet-tab[data-tab-key="layers"]')
+                mp.wait_for_timeout(250)
+                swapped = mp.evaluate("""() => {
+                    const d = document.querySelector('#rightdock');
+                    const shown = [...d.children].filter((c) => !c.classList.contains('sheet-tabbar')
+                                    && getComputedStyle(c).display !== 'none');
+                    const on = [...d.querySelectorAll('.sheet-tab[aria-selected="true"]')];
+                    return { visible: shown.length,
+                             key: shown[0] && (shown[0].dataset.section || shown[0].className.split(' ')[0]),
+                             marked: on.length === 1 && on[0].dataset.tabKey === 'layers',
+                             list: !!shown[0] && !!shown[0].querySelector('#layers-list') };
+                }""")
+                check("mobile: tapping a tab swaps the whole sheet to that panel (Layers, alone, live)",
+                      swapped["visible"] == 1 and swapped["key"] == "layers"
+                      and swapped["marked"] and swapped["list"], str(swapped))
+                # A tab IS the panel. The desktop's tap-the-header-to-fold gesture would blank the sheet
+                # you just opened — and there's no second panel below for the space to go to.
+                mp.click("#rightdock .rail-section.layers .section-head")
+                mp.wait_for_timeout(200)
+                check("mobile: tapping a pane's header does NOT fold it away (that would blank the sheet)",
+                      mp.evaluate("""() => { const s = document.querySelector('#rightdock .rail-section.layers');
+                          return !s.classList.contains('collapsed')
+                                 && getComputedStyle(s.querySelector('.section-body')).display !== 'none'; }"""))
+                # hand the sheet back CLOSED — the next block clicks the FAB expecting to open it. The
+                # FAB is display:none while the sheet is up, so dismiss the way a thumb would: the scrim,
+                # tapped ABOVE the sheet (its centre is over the sheet itself).
+                mp.mouse.click(195, 50)
+                mp.wait_for_timeout(350)
                 mp.evaluate("() => { editor.selection.clear(); editor.onInspect && editor.onInspect(); }")
 
                 # The picker is the ONLY way to customize on a phone (HTML5 drag never fires on touch),
@@ -4942,6 +5011,27 @@ def main():
                                  && getComputedStyle(mb).display === 'none'
                                  && mb.getBoundingClientRect().width === 0;
                       }"""))
+                # The sheet is tabbed in BOTH orientations — it was keyed off the phone-bands
+                # breakpoint (≤620px), which a phone in landscape (844px wide) does not match, so it
+                # stayed a stacked scroller exactly where the stack hurts most: 340px of height.
+                # And a BOTTOM sheet is the wrong shape here (88vh swallowed the canvas whole) — same
+                # sheet, same tabs, in from the SIDE, where a landscape phone has room to spare.
+                lp.click("#mobile-panels")
+                lp.wait_for_timeout(500)
+                land = lp.evaluate("""() => {
+                    const d = document.querySelector('#rightdock'), r = d.getBoundingClientRect();
+                    const shown = [...d.children].filter((c) => !c.classList.contains('sheet-tabbar')
+                                    && getComputedStyle(c).display !== 'none');
+                    return { tabbed: d.classList.contains('sheet-tabbed'),
+                             tabs: [...d.querySelectorAll('.sheet-tab')].length,
+                             visible: shown.length,
+                             fromSide: Math.round(r.left) > 0 && Math.round(r.right) >= innerWidth - 1,
+                             fullHeight: Math.round(r.height) >= innerHeight - 1,
+                             canvasLeft: Math.round(r.left) };
+                }""")
+                check("mobile landscape: the sheet comes in from the SIDE, tabbed, leaving the canvas visible",
+                      land["tabbed"] and land["visible"] == 1 and land["tabs"] >= 3
+                      and land["fromSide"] and land["fullHeight"] and land["canvasLeft"] > 300, str(land))
             finally:
                 set_page(page)
                 lctx.close()

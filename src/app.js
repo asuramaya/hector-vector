@@ -53,7 +53,7 @@ import {
   appSettingsOpen, setAppSettingsOpen, setPwaInstallPrompt,
 } from "./ui/settings.js";
 import { configureLayoutPicker, openLayoutPicker } from "./ui/layout-picker.js";
-import { setCustomizeHandler, onFormFactorChange } from "./ui/formfactor.js";
+import { setCustomizeHandler, onFormFactorChange, refreshSheetTabs, showSheetTab } from "./ui/formfactor.js";
 import { createPointerDrag } from "./ui/pointer-drag.js";
 import { bindLongPress } from "./ui/longpress.js";
 import { selectionFacts, evaluate, rankFor, selectionKind, describeSelection } from "./ui/actions.js";
@@ -396,12 +396,20 @@ if (prefs.touchDebug) setTouchDebugVisual(true);
 
 // Mobile: the floating Panels button slides the right dock up as a bottom sheet; the scrim
 // dismisses it. The controls are display:none off mobile, so these listeners never fire there.
+let setSheet = () => {};
 (() => {
   const appEl = document.querySelector("main.app");
   const fab = document.querySelector("#mobile-panels");
   const scrim = document.querySelector("#mobile-scrim");
   if (!appEl || !fab) return;
-  const setSheet = (open) => { appEl.classList.toggle("sheet-open", open); fab.setAttribute("aria-expanded", open ? "true" : "false"); };
+  setSheet = (open) => {
+    appEl.classList.toggle("sheet-open", open);
+    fab.setAttribute("aria-expanded", open ? "true" : "false");
+    // Rebuild the tab strip at the moment you look at it: panels come and go (SUGGESTED tracks the
+    // selection, Manage borrows the server panels), and reset the default tab — the selection may
+    // well have changed since you last had the sheet open.
+    if (open) refreshSheetTabs({ reset: true });
+  };
   fab.addEventListener("click", () => setSheet(!appEl.classList.contains("sheet-open")));
   scrim?.addEventListener("click", () => setSheet(false));
 
@@ -432,6 +440,9 @@ document.querySelectorAll("[data-vp]").forEach((button) => {
 // — the Edit canvas is the only view now. revealPanel un-collapses + scrolls a dock panel
 // into view (used by the "click for Jobs" error toast).
 function revealPanel(name) {
+  // Phone: the panel isn't below the fold, it's behind a tab — so open the sheet ON it. Without this
+  // the "click for Jobs" toast pointed at a panel the user could not get to.
+  if (showSheetTab(name)) { setSheet(true); return; }
   const sec = document.querySelector(`.rail-section.${name}`);
   if (sec) { sec.classList.remove("collapsed"); sec.scrollIntoView({ block: "nearest" }); }
 }
@@ -1039,9 +1050,8 @@ function buildRasterTools(node) {
     refreshActionButtons(); renderFloatPanel(); updateSelLabel();
     renderProcessorPanel();   // keep the Processor target + contextual reveal/dim in sync with the canvas selection
     syncDockContext();        // park/return contextual panels (Processor, Colour) for the new selection
-    // Phone: show the panels that relate to what's selected, fold the ones that don't (the sheet was
-    // 744px of content in a 480px window, so everything you wanted was below the fold).
-    if (window.__docks && window.__docks.syncSheetSections) window.__docks.syncSheetSections(!!(lastFacts && lastFacts.hasSel));
+    // (The phone sheet used to auto-fold the panels that didn't relate to the selection. It's a tab
+    // surface now — one panel at a time — so there is nothing left to fold. See ui/formfactor.js.)
     // LAST, deliberately. The suggestion block lives inside the Properties panel body, and both
     // renderProps() and syncDockContext()'s reconcile empty that body when they rebuild — anything
     // inserted earlier in this chain gets wiped in the same tick.

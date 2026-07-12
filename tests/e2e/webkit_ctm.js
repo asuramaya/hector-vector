@@ -136,6 +136,57 @@ async function run(label, browserType) {
               `quick-tap-opens=${String(lp.tapped).padEnd(6)} selected=${lp.selected || "(none)"} ` +
               `no-stray-node=${lp.clean} callout=${lp.callout} ${lpOk ? "ok" : "FAIL"}`);
 
+  // ── The Panels sheet is a TAB surface, not a stack ──────────────────────────────────────────
+  // This belongs in THIS rig and not only in the Chromium suite. The pane fills the sheet with a
+  // flex(1 1 auto) + min-height:0 + overflow:auto column nested inside a position:fixed element —
+  // which is precisely where WebKit has always diverged from Blink on flex sizing. If the pane
+  // collapses to its content height on iOS, or refuses to scroll, then every panel is a stub and a
+  // green headless Chromium run would say nothing at all. Same class of blind spot as the r=0 probes.
+  // Wait out the long-press click-eater above. longpress.js arms a capture-phase click swallower for
+  // 700ms after a hold (so the click that ENDS the hold can't fire whatever the menu was covering),
+  // and it eats the very next click wherever it lands — including this block's tap on the FAB. Nothing
+  // is wrong with the app; the two checks are simply too close together for a real thumb.
+  await page.waitForTimeout(800);
+  const sheet = await page.evaluate(async () => {
+    const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+    // Idempotent: the FAB TOGGLES, and an earlier check may already have raised the sheet (an error
+    // toast can call revealPanel, which opens it). A blind click would close it and read a sheet that
+    // is 102% translated off-screen.
+    const app = document.querySelector("main.app");
+    if (!app.classList.contains("sheet-open")) document.querySelector("#mobile-panels").click();
+    await nap(500);
+    const d = document.querySelector("#rightdock"), box = d.getBoundingClientRect();
+    const strip = d.querySelector(".sheet-tabs");
+    const tabs = [...d.querySelectorAll(".sheet-tab")];
+    const shown = () => [...d.children].filter((c) => !c.classList.contains("sheet-tabbar")
+      && getComputedStyle(c).display !== "none");
+    const before = shown().length;
+    const lay = tabs.find((t) => t.dataset.tabKey === "layers");
+    if (lay) lay.click();
+    await nap(250);
+    const after = shown(), pane = after[0];
+    const ph = pane ? pane.getBoundingClientRect().height : 0;
+    return {
+      tabbed: d.classList.contains("sheet-tabbed"),
+      n: tabs.length,
+      // 100dvh/dvh-sized sheet must sit ON the visual viewport — vh would push it under Safari's chrome
+      onscreen: box.top > 0 && box.top < innerHeight - 40 && box.bottom <= innerHeight + 1,
+      one: before === 1 && after.length === 1,
+      swapped: !!pane && pane.dataset.section === "layers",
+      sideways: !!strip && strip.scrollWidth > strip.clientWidth + 1,
+      fill: box.height ? +(ph / box.height).toFixed(2) : 0,   // the pane FILLS the sheet, not its content height
+      sheetScrolls: d.scrollHeight > d.clientHeight + 1,      // one scroller, and it isn't this one
+      geom: `top=${Math.round(box.top)} bottom=${Math.round(box.bottom)} vh=${innerHeight}`,
+    };
+  });
+  const shOk = sheet.tabbed && sheet.one && sheet.swapped && sheet.onscreen
+    && sheet.n >= 3 && sheet.fill > 0.7 && !sheet.sheetScrolls;
+  if (!shOk) ok = false;
+  console.log(`  sheet tabs   tabbed=${String(sheet.tabbed).padEnd(6)} tabs=${String(sheet.n).padEnd(3)} ` +
+              `one-pane=${String(sheet.one).padEnd(6)} swaps=${String(sheet.swapped).padEnd(6)} ` +
+              `pane-fills=${String(sheet.fill).padEnd(5)} scrolls-sideways=${String(sheet.sideways).padEnd(6)} ` +
+              `onscreen=${String(sheet.onscreen).padEnd(6)} ${sheet.geom} ${shOk ? "ok" : "FAIL"}`);
+
   await browser.close();
   return ok;
 }
