@@ -234,6 +234,29 @@ to deliver its one differentiated feature. Not worth it — hector-vector stays 
 `sw.js` shell, browser-side PNG export, and the location-agnostic HTTP boundary remain fine
 as-is; nothing here requires undoing them, it just isn't a path to a serverless product.)
 
+### What shipped instead: the browser build (2026-07)
+
+The above still stands, and **[hector-vector.com](https://hector-vector.com) does not contradict
+it** — because it does not move an ounce of compute to the edge. The rejected idea was porting
+the *pipeline* (vtracer, k-means, ESRGAN, rembg) into WASM/ONNX so the cloud could do the AI
+work. That is still rejected, for every reason above.
+
+What we shipped is the part that never needed Python at all. The **vector editor is already
+~100% client-side** — SVG in the DOM, geometry in `src/hv/`, PNG export on a canvas — so
+serving it from Cloudflare Pages costs *no rewrite*: the same `src/` tree, no build step, no
+second implementation, no parity treadmill. `index.html` detects the deployed host and gates
+the three server-backed panels (Processor / Library / Jobs) behind a "get the desktop app"
+CTA; everything else just runs.
+
+So the split is clean, and it's the one this document argued for all along:
+
+- **The browser** gets the editor, free, with nothing to install and nothing leaving the tab.
+- **The desktop** keeps the compute — because that is where the compute belongs.
+
+The one genuinely edge-shaped ambition, a cloud page driving your *local* GPU, remains blocked
+exactly where the spike left it (Local Network Access). `tests/companion-spike.html` is the
+probe for whether that ever becomes viable.
+
 ## Key references
 
 BiRefNet — github.com/ZhengPeng7/BiRefNet · BEN2 — github.com/PramaLLC/BEN2 · BRIA RMBG-2.0 — huggingface.co/briaai/RMBG-2.0 · rembg — github.com/danielgatis/rembg · InSPyReNet — github.com/plemeri/InSPyReNet · Real-ESRGAN — github.com/xinntao/Real-ESRGAN · DAT — github.com/zhengchen1999/DAT · HAT — github.com/XPixelGroup/HAT · SwinIR — github.com/JingyunLiang/SwinIR · SPAN — github.com/hongyuanyu/SPAN · Real-CUGAN — github.com/bilibili/ailab · AuraSR — github.com/fal-ai/aura-sr · DiffBIR — github.com/XPixelGroup/DiffBIR · SUPIR — github.com/Fanghua-Yu/SUPIR · StableSR — github.com/IceClear/StableSR · Phhofm models — github.com/Phhofm/models · Upscayl — github.com/upscayl/upscayl · spandrel — github.com/chaiNNer-org/spandrel · OpenModelDB — openmodeldb.info · vtracer — github.com/visioncortex/vtracer · potrace — potrace.sourceforge.net · DeepSVG — github.com/alexandre01/deepsvg · GFPGAN — github.com/TencentARC/GFPGAN · CodeFormer — github.com/sczhou/CodeFormer · IOPaint — github.com/Sanster/IOPaint · LaMa — github.com/advimman/lama · MI-GAN — github.com/Picsart-AI-Research/MI-GAN · FBCNN — github.com/jiaxi-jiang/FBCNN · SCUNet — github.com/cszn/SCUNet · NAFNet — github.com/megvii-research/NAFNet · Restormer — github.com/swz30/Restormer · Deep_White_Balance — github.com/mahmoudnafifi/Deep_White_Balance · kmeans-colors — github.com/okaneco/kmeans-colors · img.ly background-removal-js — github.com/imgly/background-removal-js

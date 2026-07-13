@@ -137,6 +137,49 @@ def cap_panels(page):
     shot(page, "editor-panels.png")
 
 
+def select_a_shape(page):
+    page.evaluate("""() => {
+        const paths = [...editor.stage.querySelectorAll('path[data-hv-id]')];
+        const pick = paths.slice(1)[0] || paths[0];
+        if (!pick) return;
+        editor.selection = new Set([pick.getAttribute('data-hv-id')]);
+        editor.artboardSelected = false;
+        editor._renderSelection(); editor.onInspect();
+    }""")
+    page.wait_for_timeout(250)
+
+
+def open_sheet(page, tab):
+    page.evaluate("() => document.querySelector('#mobile-panels').click()")   # slide the Panels sheet up
+    page.wait_for_function("() => document.querySelector('main.app').classList.contains('sheet-open')")
+    page.wait_for_timeout(450)   # the sheet's slide-in; don't race it
+    page.evaluate(f"() => document.querySelector('.sheet-tab[data-tab-key=\"{tab}\"]').click()")
+    page.wait_for_function(f"() => document.querySelector('.sheet-tab[data-tab-key=\"{tab}\"]')"
+                           ".getAttribute('aria-selected') === 'true'")
+    page.wait_for_timeout(200)
+
+
+def cap_mobile(page):
+    # Sheet CLOSED: the point of the phone shell is that the bar under the canvas already
+    # offers what this selection can do — you shouldn't have to open anything.
+    # (The phone shell is composed by JS off matchMedia, so this needs a real emulated
+    # phone context — coarse pointer + touch — not merely a narrow window.)
+    boot(page); mount(page, HERO_SVG); select_a_shape(page)
+    shot(page, "editor-mobile.png")
+
+
+def cap_mobile_sheet(page):
+    boot(page); mount(page, HERO_SVG); select_a_shape(page)
+    open_sheet(page, "properties")
+    shot(page, "editor-mobile-sheet.png")
+
+
+def cap_mobile_landscape(page):
+    boot(page); mount(page, HERO_SVG); select_a_shape(page)
+    page.wait_for_timeout(250)
+    shot(page, "editor-mobile-landscape.png")
+
+
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
@@ -145,6 +188,20 @@ def main():
         cap_processor(page)
         cap_nodes(page)
         cap_panels(page)
+
+        # Phone + landscape: separate contexts, because is_mobile/has_touch is a context
+        # property — a desktop page resized to 390px is NOT the shell a phone gets.
+        phone = browser.new_context(viewport={"width": 390, "height": 800},
+                                    has_touch=True, is_mobile=True, device_scale_factor=2)
+        cap_mobile(phone.new_page())
+        cap_mobile_sheet(phone.new_page())
+        phone.close()
+
+        land = browser.new_context(viewport={"width": 844, "height": 390},
+                                   has_touch=True, is_mobile=True, device_scale_factor=2)
+        cap_mobile_landscape(land.new_page())
+        land.close()
+
         browser.close()
     print("done")
 

@@ -1,12 +1,25 @@
 # hector-vector
 
-**A browser-based SVG vector editor with a raster→vector pipeline folded right in.** Draw and edit vectors, *or* drop in a raster and upscale → cut out → trace it on the same canvas. Self-hosted and local — nothing is uploaded; everything runs on your machine.
+**A real SVG vector editor that runs in your browser — and an AI raster→vector pipeline folded right into the same canvas.** Draw and edit vectors, *or* drop in a raster and upscale → cut out → trace it in place. Nothing is uploaded: the browser build computes everything in the tab, and the desktop build runs everything on your machine.
+
+### → **[hector-vector.com](https://hector-vector.com)** — free, no install, no account. Just open it and draw.
 
 `v1.0.0` · MIT · stdlib Python backend + dependency-free ES-module frontend · no build step
 
 ![The hector-vector editor: the project logo on the canvas with the Layers and Properties panels docked](docs/editor-hero.png)
 
-It began as a batch "image studio" and grew a real editor — and now the canvas is the product. Pen and shape tools, boolean operations, direct node editing, layers, and a dockable-panel workspace; with the upscale / cutout / vectorize pipeline available as a **contextual panel** on any raster you place. It is *not* a Photoshop clone — it does vector editing and a tight set of raster↔vector jobs really well.
+It began as a batch "image studio" and grew a real editor — and now the canvas is the product. Pen and shape tools, boolean operations and Pathfinder, a geometric stroker, gradients, masks, live effects, text on a path, direct node editing, layers, and a dockable-panel workspace. It is *not* a Photoshop clone — it does vector editing and a tight set of raster↔vector jobs really well.
+
+**Two ways to run it, one codebase:**
+
+| | **[hector-vector.com](https://hector-vector.com)** (browser) | **The desktop app** (this repo) |
+|---|---|---|
+| | The complete vector toolset, free | Everything in the browser, plus… |
+| | Zero install · any browser · phone, tablet or laptop | The **AI image pipeline** — upscale, background removal, vectorize, restore |
+| | Open `.svg`, export SVG / PNG | Batch job queue · local Library · `.hv` projects with history |
+| | Nothing leaves the tab | 2000+ fonts, complex scripts, fully offline |
+
+The browser build is the *same editor* — it just can't run a 500 MB PyTorch model in a tab. [Full comparison →](https://hector-vector.com/compare)
 
 > **This README is the project's public status surface.** Jump to **[Features](#features)** for everything it does today and **[Roadmap & status](#roadmap--status)** for what's shipped, in progress, and planned.
 
@@ -15,7 +28,7 @@ It began as a batch "image studio" and grew a real editor — and now the canvas
 - [Screenshots](#screenshots)
 - [Quick start](#quick-start)
 - [Features](#features)
-  - [Canvas & document](#canvas--document) · [Drawing tools](#drawing-tools) · [Path & node editing](#path--node-editing) · [Text & fonts](#text--fonts) · [Object operations](#object-operations) · [Fill, stroke & colour](#fill-stroke--colour) · [Workspace & panels](#workspace--panels) · [Raster→vector pipeline](#rastervector-pipeline) · [Vectorize engines](#vectorize-engines) · [Pixel Art → SVG](#pixel-art--svg) · [Library & export](#library--export) · [Platform](#platform)
+  - [Canvas & document](#canvas--document) · [Drawing tools](#drawing-tools) · [Path & node editing](#path--node-editing) · [Text & fonts](#text--fonts) · [Object operations](#object-operations) · [Fill, stroke & colour](#fill-stroke--colour) · [Workspace & panels](#workspace--panels) · [Touch, phone & tablet](#touch-phone--tablet) · [Raster→vector pipeline](#rastervector-pipeline) · [Vectorize engines](#vectorize-engines) · [Pixel Art → SVG](#pixel-art--svg) · [Library & export](#library--export) · [Platform](#platform)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Requirements](#requirements)
 - [Roadmap & status](#roadmap--status)
@@ -30,7 +43,18 @@ It began as a batch "image studio" and grew a real editor — and now the canvas
 | ![A raster placed on the canvas with the contextual Processor stage strip](docs/editor-processor.png) | ![The node tool editing bézier anchors on a path](docs/editor-nodes.png) | ![Two panels snapped into a floating locking-bezel group over the canvas](docs/editor-panels.png) |
 | The **Processor** appears on a selected raster: Upscale → Remove BG → Vectorize, run to canvas. | Direct anchor/handle editing; dense traces stay editable (the node tool LOD-culls handles). | Panels tear off, snap into bezel-locked groups, or shelve as squares. |
 
+It's the same editor on a phone — not a viewer, not a cut-down "mobile version":
+
+| The bar reads your selection | One pane owns the sheet | Landscape surrounds the canvas |
+|---|---|---|
+| ![The phone shell: canvas with a quick bar above and a contextual action bar below offering Scale, Rotate, Duplicate, Delete](docs/editor-mobile.png) | ![The Panels sheet slid up, showing sideways tabs with the Object pane filling it](docs/editor-mobile-sheet.png) | ![Landscape phone: tools on a left rail, actions on a right rail, chrome and contextual buttons on one top row, canvas in the middle](docs/editor-mobile-landscape.png) |
+| Select something and the bar under the canvas already offers what you can do with it — no digging. | The Panels sheet is a **tab strip**, not a stack: pick one and it takes the whole sheet. | Sideways, the buttons **surround** the canvas — the same language as the desktop. |
+
 ## Quick start
+
+**In the browser — nothing to install:** open **[hector-vector.com](https://hector-vector.com)** and draw. Works on a phone or tablet too.
+
+**On your machine — the full build with the AI pipeline:**
 
 ```bash
 git clone https://github.com/asuramaya/hector-vector
@@ -132,6 +156,18 @@ A fully dockable, panel-based workspace (`window.__docks`):
 - **Lean Properties** — each property group has a **collapsible header** (your open/closed choices are remembered), and one-shot object commands (Expand, Outline stroke, Offset path, Pathfinder, Vary width, Make blend / symbol / pattern fill, Reflect, Repeat) live in a context-gated **Actions ▾** menu at the top of the panel rather than as always-on rows.
 - **Memory** — panels remember their last position/size; fresh floats get an ideal, non-overlapping placement.
 - Right-click a panel header to shelve it; right-click a shelf square for open / float / dock options.
+
+### Touch, phone & tablet
+
+A phone gets its own **shell**, not a shrunken desktop — the same editor, re-laid-out for a thumb. A tablet or a touch laptop gets it too; the shell follows the *pointer*, not the user-agent string.
+
+- **The bar reads your selection.** Select one shape and the bar under the canvas offers Scale / Rotate / Duplicate / Delete; select two overlapping ones and the booleans appear on it. The app already knew what you could do — this is that knowledge, ranked and surfaced, instead of buried in a menu.
+- **The Panels sheet is a tab strip.** Swipe up from the logo FAB and one pane — Suggested, Object, Colour, Layers, History — owns the whole sheet. No scrolling past nine stacked panels to find the one you want.
+- **Landscape is its own layout**, with the buttons *surrounding* the canvas (tools left, actions right, chrome on top) — and its own saved arrangement, so how you set up your phone sideways never disturbs your laptop.
+- **Press and hold** is the right-click a finger never had: hold an object for its Actions menu.
+- **Free transform** without a keyboard — the Scale and Rotate tiles toggle the transform box, whose handles carry invisible 44px touch targets over their 9px visuals.
+- **Rearrange the toolbars with your finger** — drag tiles to reorder, tick tools off to trim the strip. Every bar is customizable by touch (HTML5 drag-and-drop never fires from a finger, so the drag engine is pointer-based throughout).
+- **Pinch to zoom**, drag to pan, and the page itself can't be dragged around underneath you.
 
 ### Raster→vector pipeline
 
@@ -253,6 +289,8 @@ The deep research behind pipeline picks — every category, the OSS SOTA, and th
 - [x] **Multiple artboards** — named artboards with per-frame fit-to-view + cropped SVG export, persisted invisibly in `<metadata>`.
 - [x] **Isolation mode & Symbols** — double-click into a group to edit it in place; reusable `<symbol>`/`<use>` instances with live **edit-master** and **break-link**.
 - [x] **Lean inspector** — collapsible property groups (remembered) and one-shot object commands in a context-gated **Actions** menu (toolbar button **and** object right-click), with the Recolor editor reusing the dock Colour panel.
+- [x] **Free in the browser** — a serverless build of the same editor on **[hector-vector.com](https://hector-vector.com)** (Cloudflare Pages, `./deploy-cloud.sh`): the full vector toolset with no install, no account, and nothing leaving the tab. Server-backed panels (Processor / Library / Jobs) gate behind a "get the desktop app" CTA.
+- [x] **Touch & mobile** — a real phone/tablet shell: selection-aware contextual bars, a tabbed Panels sheet, its own landscape layout, press-and-hold → Actions, touch free-transform with 44px targets, and finger-draggable toolbar customization.
 
 ### In progress / open edges
 
@@ -283,10 +321,11 @@ No build step anywhere — the frontend is hand-written ES modules served as-is.
 - **`src/`** — the dependency-free vanilla-JS frontend:
   - **`src/hv/`** — a pure, side-effect-free library: geometry & path math (`path`, `transform`, `shapes`, `shapegen`), colour (`color`), raster sampling (`raster`), and the marching-squares boolean/contour engine with its shared curve-fit core (`contour`, `fitcurve`).
   - **`src/editor.js`** + **`src/editor/`** — the live-SVG editing core (selection, snapshot undo, layers, boolean ops) plus per-feature **tool mixins** under `src/editor/tools/` (`pen`, `text`, `width`, `builder`, `blend`, `colors`, `masks`, `expand`, `effects`, `repeat`, `isolation`, `symbols`, `artboards`, `viewport`, …) `Object.assign`-ed onto one editor object, and inspector row builders in `src/editor/ui-rows.js`.
-  - **`src/app.js`** + **`src/ui/`** — the app shell and UI modules: the dockable-panels system (`ui/docks`, `window.__docks`), the unified colour picker (`ui/colorpicker`), menus (`ui/menus`), the font browser (`ui/fonts`), the Library, the Manage screen, the Processor pipeline UI, Info, and client-side PNG export.
+  - **`src/app.js`** + **`src/ui/`** — the app shell and UI modules: the dockable-panels system (`ui/docks`, `window.__docks`), the unified colour picker (`ui/colorpicker`), menus (`ui/menus`), the font browser (`ui/fonts`), the Library, the Manage screen, the Processor pipeline UI, Info, and client-side PNG export. The **touch shells** live in `ui/formfactor` (which form factor are we, and what furniture goes where), `ui/actions` (one oracle for "what can you do with this selection", read by both the right-click menu and the contextual bars), `ui/adaptive` (bars that re-rank themselves), `ui/layout` (per-shell saved arrangements) and `ui/pointer-drag` (a pointer-based drag engine, because HTML5 DnD never fires from a finger).
 - **`server.py`** — a single-file backend on Python's stdlib `http.server`, with a threaded job queue and a JSON API (`/api/run/pipeline`, `/api/vectorize/engines`, `/api/raster-ops`, `/api/capabilities`, `/api/plan`, `/api/work-items`, `/api/install/*`, `/api/heartbeat`, …). It's organized around pluggable registries: **vectorize engines** (`clean` / `vtracer` / `pixel`), **raster ops** (`upscale` / `removebg` / restoration), and a **capability registry** (outcome→model routing) — adding a model is a registry entry that surfaces in the UI automatically. A heartbeat watchdog spins the server down when the UI closes. No web framework.
-- **`engine.py`, `mask_trace_prep.py`** — classical mask/cutout image ops.
+- **`engine.py`** — classical mask/cutout image ops.
 - **`tools/`** — worker scripts: `pixelvec.py`, `svg_render.py`, `simplify_svg.py` (vector), `ai_cutout.py` (rembg), `upscale_spandrel.py`, `face_restore.py` + `detect_faces.py` (GFPGAN), `inpaint_lama.py` (object removal), and `analyze.py` (the offline analyzer behind the Auto plan). External binaries/weights land here / in `./.venv` / `~/.u2net` at runtime.
+- **The browser build is the same tree.** There is no separate cloud fork: `index.html` detects the deployed host and flips the app into **cloud mode** — the editor runs untouched, while the three server-backed panels (Processor / Library / Jobs) and the save/open paths swap to client-side equivalents (`src/ui/cloud-*.js`). `./deploy-cloud.sh` selects the runtime static files into `dist/` and ships them to Cloudflare Pages. Nothing is compiled; what you read in `src/` is what runs in production.
 - Vector documents save as **`.hv` projects** under `outputs/canvas/`; pipeline outputs under `outputs/<process>-<timestamp>/`. Your source images live in `inputs/` (or any folder you point the Library at).
 
 Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md). The editor has a real-browser E2E suite (`tests/e2e/editor_e2e.py`) and a backend smoke suite (`tests/test_smoke.py`); the README screenshots are regenerated with `tests/e2e/screenshots.py`.
