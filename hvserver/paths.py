@@ -61,12 +61,15 @@ try:
 except OSError:
     APP_VERSION = "0.0.0"
 GITHUB_REPO = "asuramaya/hector-vector"
+# URL path -> file on disk, relative to APP_DIR. The served files live in web/, but the URLs
+# they answer on are unchanged and must stay that way: /sw.js in particular has to be served
+# from the origin root or the service worker's scope silently shrinks to its own directory.
 STATIC_FILES = {
-    "/": "index.html",
-    "/index.html": "index.html",
-    "/style.css": "style.css",
-    "/manifest.webmanifest": "manifest.webmanifest",
-    "/sw.js": "sw.js",
+    "/": "web/index.html",
+    "/index.html": "web/index.html",
+    "/style.css": "web/style.css",
+    "/manifest.webmanifest": "web/manifest.webmanifest",
+    "/sw.js": "web/sw.js",
 }
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 DERIVATIVE_MARKERS = (".cutout.", ".chromakey.", ".mask.", ".newmask.", ".preview.")

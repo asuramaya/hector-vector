@@ -6,11 +6,14 @@
 # automatically on the deployed host via the hostname detect in index.html (*.pages.dev + the
 # custom domain). Re-run any time to redeploy.
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."   # repo root — this script lives in scripts/
 
 DIST="dist"
 rm -rf "$DIST"; mkdir -p "$DIST"
-cp index.html compare.html style.css sw.js manifest.webmanifest _headers robots.txt llms.txt "$DIST"/
+# web/ IS the deploy root: everything in it lands at the top of dist/, so the URLs the browser
+# asks for are the same ones the local server answers. Keep it that way — _headers and robots.txt
+# only work at the root, and sw.js must be at / or its scope shrinks to its own directory.
+cp web/* "$DIST"/
 cp -r assets src "$DIST"/
 cp tests/companion-spike.html "$DIST"/companion-spike.html   # LNA bridge spike, run from the public origin
 cp tests/pen-probe.html "$DIST"/pen-probe.html               # does this device's pen report pressure? (needed on the iPad, which can't reach localhost)

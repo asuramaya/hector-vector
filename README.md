@@ -260,7 +260,7 @@ Heavily *bilinear*-resampled art is genuinely ambiguous; set **Native size (cell
 
 ## Roadmap & status
 
-The deep research behind pipeline picks — every category, the OSS SOTA, and the licensing landmines — lives in **[`ROADMAP.md`](ROADMAP.md)**. This section is the practical board.
+The deep research behind pipeline picks — every category, the OSS SOTA, and the licensing landmines — lives in **[`ROADMAP.md`](docs/ROADMAP.md)**. This section is the practical board.
 
 ### Shipped
 
@@ -289,7 +289,7 @@ The deep research behind pipeline picks — every category, the OSS SOTA, and th
 - [x] **Multiple artboards** — named artboards with per-frame fit-to-view + cropped SVG export, persisted invisibly in `<metadata>`.
 - [x] **Isolation mode & Symbols** — double-click into a group to edit it in place; reusable `<symbol>`/`<use>` instances with live **edit-master** and **break-link**.
 - [x] **Lean inspector** — collapsible property groups (remembered) and one-shot object commands in a context-gated **Actions** menu (toolbar button **and** object right-click), with the Recolor editor reusing the dock Colour panel.
-- [x] **Free in the browser** — a serverless build of the same editor on **[hector-vector.com](https://hector-vector.com)** (Cloudflare Pages, `./deploy-cloud.sh`): the full vector toolset with no install, no account, and nothing leaving the tab. Server-backed panels (Processor / Library / Jobs) gate behind a "get the desktop app" CTA.
+- [x] **Free in the browser** — a serverless build of the same editor on **[hector-vector.com](https://hector-vector.com)** (Cloudflare Pages, `./scripts/deploy-cloud.sh`): the full vector toolset with no install, no account, and nothing leaving the tab. Server-backed panels (Processor / Library / Jobs) gate behind a "get the desktop app" CTA.
 - [x] **Touch & mobile** — a real phone/tablet shell: selection-aware contextual bars, a tabbed Panels sheet, its own landscape layout, press-and-hold → Actions, touch free-transform with 44px targets, and finger-draggable toolbar customization.
 
 ### In progress / open edges
@@ -312,7 +312,7 @@ The deep research behind pipeline picks — every category, the OSS SOTA, and th
 - Pixel-grid recovery is genuinely ambiguous on heavily *bilinear*-resampled art — set the native size manually.
 - Exported VTracer (curved) SVGs need `cairosvg` to rasterize back to PNG; pixel-art SVGs don't.
 - **Text → outlines** needs internet to fetch the font the first time (then it's cached). Without `uharfbuzz`, complex scripts (Arabic / Indic / RTL) get a best-effort outline with a warning rather than browser-exact shaping. System fonts vectorise via a metric-compatible OFL stand-in, not the exact installed face. An area text box's width/height frame is an editing aid — on save the text bakes to positioned lines (the frame bound isn't persisted).
-- Non-commercial models (SUPIR, CodeFormer, BRIA RMBG, MAT, …) are deliberately **not** shipped — see the licensing avoid-list in `ROADMAP.md`.
+- Non-commercial models (SUPIR, CodeFormer, BRIA RMBG, MAT, …) are deliberately **not** shipped — see the licensing avoid-list in [`ROADMAP.md`](docs/ROADMAP.md).
 
 ## Architecture
 
@@ -325,10 +325,10 @@ No build step anywhere — the frontend is hand-written ES modules served as-is.
 - **`server.py`** — a single-file backend on Python's stdlib `http.server`, with a threaded job queue and a JSON API (`/api/run/pipeline`, `/api/vectorize/engines`, `/api/raster-ops`, `/api/capabilities`, `/api/plan`, `/api/work-items`, `/api/install/*`, `/api/heartbeat`, …). It's organized around pluggable registries: **vectorize engines** (`clean` / `vtracer` / `pixel`), **raster ops** (`upscale` / `removebg` / restoration), and a **capability registry** (outcome→model routing) — adding a model is a registry entry that surfaces in the UI automatically. A heartbeat watchdog spins the server down when the UI closes. No web framework.
 - **`engine.py`** — classical mask/cutout image ops.
 - **`tools/`** — worker scripts: `pixelvec.py`, `svg_render.py`, `simplify_svg.py` (vector), `ai_cutout.py` (rembg), `upscale_spandrel.py`, `face_restore.py` + `detect_faces.py` (GFPGAN), `inpaint_lama.py` (object removal), and `analyze.py` (the offline analyzer behind the Auto plan). External binaries/weights land here / in `./.venv` / `~/.u2net` at runtime.
-- **The browser build is the same tree.** There is no separate cloud fork: `index.html` detects the deployed host and flips the app into **cloud mode** — the editor runs untouched, while the three server-backed panels (Processor / Library / Jobs) and the save/open paths swap to client-side equivalents (`src/ui/cloud-*.js`). `./deploy-cloud.sh` selects the runtime static files into `dist/` and ships them to Cloudflare Pages. Nothing is compiled; what you read in `src/` is what runs in production.
+- **The browser build is the same tree.** There is no separate cloud fork: `index.html` detects the deployed host and flips the app into **cloud mode** — the editor runs untouched, while the three server-backed panels (Processor / Library / Jobs) and the save/open paths swap to client-side equivalents (`src/ui/cloud-*.js`). `./scripts/deploy-cloud.sh` selects the runtime static files into `dist/` and ships them to Cloudflare Pages. Nothing is compiled; what you read in `src/` is what runs in production.
 - Vector documents save as **`.hv` projects** under `outputs/canvas/`; pipeline outputs under `outputs/<process>-<timestamp>/`. Your source images live in `inputs/` (or any folder you point the Library at).
 
-Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md). The editor has a real-browser E2E suite (`tests/e2e/editor_e2e.py`) and a backend smoke suite (`tests/test_smoke.py`); the README screenshots are regenerated with `tests/e2e/screenshots.py`.
+Contributions welcome — see [`CONTRIBUTING.md`](.github/CONTRIBUTING.md). The editor has a real-browser E2E suite (`tests/e2e/editor_e2e.py`) and a backend smoke suite (`tests/test_smoke.py`); the README screenshots are regenerated with `tests/e2e/screenshots.py`.
 
 ## Configuration
 
@@ -340,6 +340,6 @@ Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md). The editor h
 
 ## Credits & license
 
-Built on excellent open-source work: [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN), [VTracer](https://github.com/visioncortex/vtracer), [rembg](https://github.com/danielgatis/rembg) & the U²-Net / [BiRefNet](https://github.com/ZhengPeng7/BiRefNet) / [BEN2](https://huggingface.co/PramaLLC/BEN2) cutout families, [spandrel](https://github.com/chaiNNer-org/spandrel) (DAT-2 / SPAN / Real-CUGAN / AuraSR upscalers and SCUNet / FBCNN / NAFNet restorers), [GFPGAN](https://github.com/TencentARC/GFPGAN) face restore, [LaMa](https://github.com/advimman/lama) inpainting, [Pillow](https://python-pillow.org/), and [NumPy](https://numpy.org/). See [`ROADMAP.md`](ROADMAP.md) for the broader landscape and what's planned next.
+Built on excellent open-source work: [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN), [VTracer](https://github.com/visioncortex/vtracer), [rembg](https://github.com/danielgatis/rembg) & the U²-Net / [BiRefNet](https://github.com/ZhengPeng7/BiRefNet) / [BEN2](https://huggingface.co/PramaLLC/BEN2) cutout families, [spandrel](https://github.com/chaiNNer-org/spandrel) (DAT-2 / SPAN / Real-CUGAN / AuraSR upscalers and SCUNet / FBCNN / NAFNet restorers), [GFPGAN](https://github.com/TencentARC/GFPGAN) face restore, [LaMa](https://github.com/advimman/lama) inpainting, [Pillow](https://python-pillow.org/), and [NumPy](https://numpy.org/). See [`ROADMAP.md`](docs/ROADMAP.md) for the broader landscape and what's planned next.
 
 [MIT](LICENSE) © 2026 asuramaya. Bundled-at-runtime tools keep their own licenses (see the table above).
