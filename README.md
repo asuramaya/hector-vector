@@ -1,27 +1,27 @@
 # hector-vector
 
-**A real SVG vector editor that runs in your browser — and an AI raster→vector pipeline folded right into the same canvas.** Draw and edit vectors, *or* drop in a raster and upscale → cut out → trace it in place. Nothing is uploaded: the browser build computes everything in the tab, and the desktop build runs everything on your machine.
+**A real SVG vector editor that runs in your browser, with an AI raster→vector pipeline folded into the same canvas.** Draw and edit vectors, *or* drop in a raster and upscale → cut out → trace it in place. Nothing is uploaded. The browser build computes everything in the tab; the desktop build runs everything on your machine.
 
-### → **[hector-vector.com](https://hector-vector.com)** — free, no install, no account. Just open it and draw.
+### → **[hector-vector.com](https://hector-vector.com)**. Free, no install, no account. Open it and draw.
 
 `v1.0.0` · MIT · stdlib Python backend + dependency-free ES-module frontend · no build step
 
 ![The hector-vector editor: the project logo on the canvas with the Layers and Properties panels docked](docs/editor-hero.png)
 
-It began as a batch "image studio" and grew a real editor — and now the canvas is the product. Pen and shape tools, boolean operations and Pathfinder, a geometric stroker, gradients, masks, live effects, text on a path, direct node editing, layers, and a dockable-panel workspace. It is *not* a Photoshop clone — it does vector editing and a tight set of raster↔vector jobs really well.
+It began as a batch "image studio" and grew an editor, and now the canvas is the product. Pen and shape tools, boolean operations and Pathfinder, a geometric stroker, gradients, masks, live effects, text on a path, direct node editing, layers, a dockable-panel workspace. It is not a Photoshop clone. It does vector editing, plus a tight set of raster↔vector jobs, really well.
 
 **Two ways to run it, one codebase:**
 
 | | **[hector-vector.com](https://hector-vector.com)** (browser) | **The desktop app** (this repo) |
 |---|---|---|
 | | The complete vector toolset, free | Everything in the browser, plus… |
-| | Zero install · any browser · phone, tablet or laptop | The **AI image pipeline** — upscale, background removal, vectorize, restore |
+| | Zero install · any browser · phone, tablet or laptop | The **AI image pipeline**: upscale, background removal, vectorize, restore |
 | | Open `.svg`, export SVG / PNG | Batch job queue · local Library · `.hv` projects with history |
 | | Nothing leaves the tab | 2000+ fonts, complex scripts, fully offline |
 
-The browser build is the *same editor* — it just can't run a 500 MB PyTorch model in a tab. [Full comparison →](https://hector-vector.com/compare)
+The browser build is the *same editor*. It just can't run a 500 MB PyTorch model in a tab. [Full comparison →](https://hector-vector.com/compare)
 
-> **This README is the project's public status surface.** Jump to **[Features](#features)** for everything it does today and **[Roadmap & status](#roadmap--status)** for what's shipped, in progress, and planned.
+> **This README is the project's public status surface.** Jump to **[Features](#features)** for everything it does today, or **[Roadmap & status](#roadmap--status)** for what's shipped, in progress, and planned.
 
 ## Contents
 
@@ -41,20 +41,20 @@ The browser build is the *same editor* — it just can't run a 500 MB PyTorch mo
 | Place a raster, process it in place | Edit nodes on a path | Float & snap panels |
 |---|---|---|
 | ![A raster placed on the canvas with the contextual Processor stage strip](docs/editor-processor.png) | ![The node tool editing bézier anchors on a path](docs/editor-nodes.png) | ![Two panels snapped into a floating locking-bezel group over the canvas](docs/editor-panels.png) |
-| The **Processor** appears on a selected raster: Upscale → Remove BG → Vectorize, run to canvas. | Direct anchor/handle editing; dense traces stay editable (the node tool LOD-culls handles). | Panels tear off, snap into bezel-locked groups, or shelve as squares. |
+| The **Processor** appears on a selected raster: Upscale → Remove BG → Vectorize, run to canvas. | Direct anchor/handle editing. Dense traces stay editable (the node tool LOD-culls handles). | Panels tear off, snap into bezel-locked groups, or shelve as squares. |
 
-It's the same editor on a phone — not a viewer, not a cut-down "mobile version":
+The same editor runs on a phone. Not a viewer, not a cut-down "mobile version":
 
 | The bar reads your selection | One pane owns the sheet | Landscape surrounds the canvas |
 |---|---|---|
 | ![The phone shell: canvas with a quick bar above and a contextual action bar below offering Scale, Rotate, Duplicate, Delete](docs/editor-mobile.png) | ![The Panels sheet slid up, showing sideways tabs with the Object pane filling it](docs/editor-mobile-sheet.png) | ![Landscape phone: tools on a left rail, actions on a right rail, chrome and contextual buttons on one top row, canvas in the middle](docs/editor-mobile-landscape.png) |
-| Select something and the bar under the canvas already offers what you can do with it — no digging. | The Panels sheet is a **tab strip**, not a stack: pick one and it takes the whole sheet. | Sideways, the buttons **surround** the canvas — the same language as the desktop. |
+| Select something and the bar under the canvas already offers what you can do with it. No digging. | The Panels sheet is a **tab strip**, not a stack. Pick one and it takes the whole sheet. | Sideways, the buttons **surround** the canvas, in the same language as the desktop. |
 
 ## Quick start
 
-**In the browser — nothing to install:** open **[hector-vector.com](https://hector-vector.com)** and draw. Works on a phone or tablet too.
+**In the browser, nothing to install:** open **[hector-vector.com](https://hector-vector.com)** and draw. Works on a phone or tablet too.
 
-**On your machine — the full build with the AI pipeline:**
+**On your machine, the full build with the AI pipeline:**
 
 ```bash
 git clone https://github.com/asuramaya/hector-vector
@@ -63,28 +63,28 @@ cd hector-vector
 ./run.sh                          # serves http://localhost:2002
 ```
 
-`./install.sh --desktop` also installs the app-launcher shortcut; `--app` opens the standalone window when done. Prefer your own environment? `pip install -r requirements.txt` still works — `run.sh` uses `.venv` when present and otherwise falls back to system `python3`.
+`./install.sh --desktop` also installs the app-launcher shortcut; `--app` opens the standalone window when done. Prefer your own environment? `pip install -r requirements.txt` still works. `run.sh` uses `.venv` when present and otherwise falls back to system `python3`.
 
 Open **http://localhost:2002**. Draw with the shape/pen tools, or drop an image onto the canvas (or into the Library), select it, and use the **Processor** panel to upscale / cut out / vectorize it.
 
-> First run downloads the heavy external tools into `./tools` and `./.venv` automatically — see [How dependencies bootstrap](#how-dependencies-bootstrap). They are **not** vendored in this repo.
+> First run downloads the heavy external tools into `./tools` and `./.venv` automatically. See [How dependencies bootstrap](#how-dependencies-bootstrap). They are **not** vendored in this repo.
 
 ### Updating
 
-`hector-vector` updates in place from this repo. In the app: **Settings → Updates → Check for updates**; if a newer release exists and your working tree is clean, hit **Update & restart** (runs `git pull` + re-syncs deps). Or `git pull && ./install.sh` yourself. Maintainers cut a release with `./scripts/release.sh X.Y.Z` (bumps `VERSION`, tags `vX.Y.Z`, pushes — the tag triggers the release workflow).
+`hector-vector` updates in place from this repo. In the app: **Settings → Updates → Check for updates**. If a newer release exists and your working tree is clean, hit **Update & restart** (runs `git pull` + re-syncs deps). Or `git pull && ./install.sh` yourself. Maintainers cut a release with `./scripts/release.sh X.Y.Z`, which bumps `VERSION`, tags `vX.Y.Z`, and pushes; the tag triggers the release workflow.
 
 ## Features
 
-The canvas is a live SVG document — everything you see is real DOM you can inspect, select, and edit.
+The canvas is a live SVG document. Everything you see is real DOM you can inspect, select, and edit.
 
 ### Canvas & document
 
 - **Live SVG canvas** with zoom/pan, fit-to-view, optional **rulers** and **smart guides** (snap to edges/centres of other objects).
-- **Artboard as an object** — select it to set its size and background; objects can align to it.
+- **Artboard as an object.** Select it to set its size and background; objects can align to it.
 - **Snapshot undo/redo** over the whole document, with a **History** panel.
-- **Projects** — save/open `.hv` documents (preserves layers + history); "resume last document" on startup is opt-in.
-- **Transparency** — checkerboard backdrop; transparent artboards are first-class.
-- **Load just works** — dropping/loading an image into an empty editor auto-creates a canvas **sized to the image** (no "create a canvas first" step, no cramming into a default box).
+- **Projects.** Save/open `.hv` documents (preserves layers + history). "Resume last document" on startup is opt-in.
+- **Transparency.** Checkerboard backdrop; transparent artboards are first-class.
+- **Load just works.** Dropping an image into an empty editor auto-creates a canvas **sized to the image**: no "create a canvas first" step, no cramming into a default box.
 
 ### Drawing tools
 
@@ -98,80 +98,80 @@ The canvas is a live SVG document — everything you see is real DOM you can ins
 | **Ellipse** | `E` | Drag to draw; Shift-constrain to a circle. |
 | **Line** | `L` | Straight segments. |
 
-Shape tools are **live shapes** — rect/ellipse keep editable parameters (size, corner radius, **polygon** sides, **star** points) until you freeze them into a path. New shapes inherit the last-used style.
+Shape tools make **live shapes**: rect and ellipse keep editable parameters (size, corner radius, **polygon** sides, **star** points) until you freeze them into a path. New shapes inherit the last-used style.
 
 ### Path & node editing
 
-- **Anchors & handles** — drag anchors or their bézier handles; Shift multi-selects; **Alt converts** an anchor between corner and smooth; drag a segment to reshape it.
+- **Anchors & handles.** Drag anchors or their bézier handles; Shift multi-selects; **Alt converts** an anchor between corner and smooth; drag a segment to reshape it.
 - **Join / close** paths (`Ctrl/Cmd+J`), delete selected points, insert points on a segment.
-- **Edits scale to huge paths** — the node tool **LOD-culls** handles so a 10,000-anchor traced path stays editable (zoom in for more detail) instead of refusing to open.
+- **Edits scale to huge paths.** The node tool **LOD-culls** handles, so a 10,000-anchor traced path stays editable (zoom in for more detail) instead of refusing to open.
 
 ### Text & fonts
 
-- **Text tool** (`T`) — click for point text, drag for a wrapping **text box** (with a Width/Height frame + overflow warning), or bind text to a path. Edits in an inline overlay aligned under any zoom/pan/rotate; multi-line, alignment, weight/style, letter- and line-spacing in Properties.
-- **Multi-source font discovery** — search and download from **Fontsource, Fontshare, Google, and Bunny** (2000+ families, no API keys) without leaving the app. Picked fonts install to a local cache and join an **Installed** library that survives reloads; offline, Installed + System fonts still work.
-- **Text on a path** — flow text along any curve (offset / side / detach), with a **live curved preview** as you type.
-- **Convert to outlines** — turn text into editable vector paths that match the rendered glyphs exactly. Shaping (kerning + ligatures) is browser-faithful via **HarfBuzz** when available, with a Latin-grade fallback otherwise; **text-on-path outlines follow the curve**. System fonts vectorise via a free metric-compatible OFL stand-in (Arial→Arimo, Times→Tinos…); missing glyphs and complex scripts are flagged rather than silently dropped.
+- **Text tool** (`T`). Click for point text, drag for a wrapping **text box** (with a Width/Height frame + overflow warning), or bind text to a path. Edits happen in an inline overlay aligned under any zoom/pan/rotate. Multi-line, alignment, weight/style, letter- and line-spacing live in Properties.
+- **Multi-source font discovery.** Search and download from **Fontsource, Fontshare, Google, and Bunny** (2000+ families, no API keys) without leaving the app. Picked fonts install to a local cache and join an **Installed** library that survives reloads. Offline, Installed + System fonts still work.
+- **Text on a path.** Flow text along any curve (offset / side / detach), with a **live curved preview** as you type.
+- **Convert to outlines.** Turn text into editable vector paths that match the rendered glyphs exactly. Shaping (kerning + ligatures) is browser-faithful via **HarfBuzz** when available, with a Latin-grade fallback otherwise, and **text-on-path outlines follow the curve**. System fonts vectorise via a free metric-compatible OFL stand-in (Arial→Arimo, Times→Tinos…). Missing glyphs and complex scripts are flagged rather than silently dropped.
 
 ### Object operations
 
-- **Transform** — move, **scale** (`Ctrl/Cmd+T`), and rotate; numeric X/Y/W/H/rotation in Properties.
-- **Boolean operations** — **Union**, **Subtract**, **Intersect** on any selection, built on a marching-squares engine (robust for any overlap or winding) that refits results to *minimal cubic béziers* with crisp corners — not heavy polylines.
-- **Invert-space** — punch the selection out of its bounds (same boolean engine; overlaps merge into one hole).
-- **Pathfinder** — **Divide** (split overlapping shapes into every face region), **Trim** / **Merge** (remove hidden parts; Merge unites touching same-colour pieces), **Crop** (keep what's inside the front shape), **Minus Back** — the full set, each face coloured by the topmost shape, all on the same crisp-cubic engine.
-- **Outline stroke & Offset path** — convert a stroke into a filled path (honouring width / caps / joins / dashes) via an **analytic geometric stroker** (exact miter / bevel / round joins and butt / square / round caps, with no bitmap quantization — hairlines relative to the artwork stay crisp), or grow/shrink a path's outline by any amount (negative shrinks). **Expand** bakes live shapes, text, and strokes down to plain editable paths in one step.
-- **Width tool (`W`)** — drag a stroke perpendicular to swell or pinch it at that point (**Alt** = one-sided/asymmetric); the variable-width profile renders to a crisp filled ribbon through the same geometric stroker. Set a **uniform** width, **Release** back to a normal stroked path, or **Expand** to plain filled paths in Properties.
-- **Shape Builder · Scissors · Knife · Eraser** — interactive path construction on the same robust engine. **Shape Builder** (`Shift+M`): paint across 2+ overlapping selected shapes to merge the regions you touch into one path (**Alt**-paint removes them). **Scissors** (`Shift+C`): click a path to cut it — a closed shape reopens, an open path splits in two. **Knife** (`Shift+K`): drag across filled shapes to slice them into separate pieces (**Alt** = straight cut). **Eraser** (`Shift+E`): drag a round brush over filled shapes to carve them away (`[` / `]` resize the brush).
-- **Blend** (`Ctrl/Cmd+Alt+B`) — interpolate a chain of intermediate shapes between two objects, morphing geometry *and* colour from one to the other. Adjust the **step count**, **reverse** the direction, or **Expand** to a plain group in Properties; the step count auto-fits the gap when you make it.
-- **Multiple artboards** — add named artboards beside the first; the canvas grows to fit them all, each frame **fits-to-view** and **exports** on its own (cropped SVG). Artboards persist in the saved file (in `<metadata>`, invisible to export) and old single-artboard documents open unchanged.
-- **Reflect / Shear / Transform Each** — mirror a selection (or a copy) across its axis, skew by an angle, or transform every object about its *own* centre; **Transform Again** (`Ctrl/Cmd+Shift+D`) replays the last one.
-- **Repeat** — turn a selection into a live **grid**, **radial**, or **mirror** repeat: edit the count / spacing / radius in Properties and the copies regenerate, then **Expand** to a plain group.
-- **Live effects** — non-destructive **drop shadow**, **blur**, and **glow** stack on any object, rendered as a real SVG `<filter>`. Params are live-editable in Properties, the effects render in PNG export, stay independent when you duplicate, and round-trip **editable** through save/reopen (the filter is rebuilt back into the editor).
-- **Clipping & opacity masks** (`Ctrl/Cmd+7`, release `+Alt`) — make the **top object clip** everything below it (a real `<clipPath>`), or use its **luminance as an opacity mask** (`<mask>`). Both are non-destructive and **releasable** — the masking shape comes back as a normal object. The clipped/masked group moves and scales as one, round-trips into the SVG, renders in PNG export, and stays independent when you duplicate. Layers tag the group; Properties offers Release.
-- **Isolation mode** — **double-click a group** to edit inside it: everything outside dims and goes non-interactive, while selection, marquee, and newly-drawn objects scope to the group's contents. A breadcrumb (or `Esc`, or a double-click outside) exits. The dim is purely an editing view — it never touches the saved file or undo history.
-- **Symbols & instances** (`F8`) — turn a selection into a reusable **symbol** (a real `<symbol>`/`<use>` pair); **duplicate** an instance to place more. **Double-click** an instance to edit the master (it surfaces into isolation and every instance updates live), or **Break link** to make one instance an independent copy. Symbols and instances are standard SVG, so they round-trip through save/reopen untouched.
-- **Align** — left / right / top / bottom / centre / middle, to the selection or to the artboard.
-- **Arrange** — raise / lower / bring-to-front / send-to-back z-ordering.
-- **Layers & groups** — a Layers panel with visibility, lock, rename, drag-reorder, group/ungroup, and merge; **even-odd vs nonzero** fill control.
+- **Transform.** Move, **scale** (`Ctrl/Cmd+T`), rotate; numeric X/Y/W/H/rotation in Properties.
+- **Boolean operations.** **Union**, **Subtract**, **Intersect** on any selection, built on a marching-squares engine that holds up under any overlap or winding, and refits results to *minimal cubic béziers* with crisp corners rather than heavy polylines.
+- **Invert-space.** Punch the selection out of its bounds (same boolean engine; overlaps merge into one hole).
+- **Pathfinder.** The full set: **Divide** (split overlapping shapes into every face region), **Trim** / **Merge** (remove hidden parts; Merge unites touching same-colour pieces), **Crop** (keep what's inside the front shape), **Minus Back**. Each face takes the colour of the topmost shape, all on the same crisp-cubic engine.
+- **Outline stroke & Offset path.** Convert a stroke into a filled path (honouring width / caps / joins / dashes) via an **analytic geometric stroker**: exact miter / bevel / round joins, butt / square / round caps, and no bitmap quantization, so hairlines relative to the artwork stay crisp. Offset path grows or shrinks a path's outline by any amount (negative shrinks). **Expand** bakes live shapes, text, and strokes down to plain editable paths in one step.
+- **Width tool** (`W`). Drag a stroke perpendicular to swell or pinch it at that point (**Alt** = one-sided/asymmetric); the variable-width profile renders to a crisp filled ribbon through the same geometric stroker. Set a **uniform** width, **Release** back to a normal stroked path, or **Expand** to plain filled paths in Properties.
+- **Shape Builder · Scissors · Knife · Eraser.** Interactive path construction on the same engine. **Shape Builder** (`Shift+M`): paint across 2+ overlapping selected shapes to merge the regions you touch into one path (**Alt**-paint removes them). **Scissors** (`Shift+C`): click a path to cut it, and a closed shape reopens while an open path splits in two. **Knife** (`Shift+K`): drag across filled shapes to slice them into separate pieces (**Alt** = straight cut). **Eraser** (`Shift+E`): drag a round brush over filled shapes to carve them away (`[` / `]` resize the brush).
+- **Blend** (`Ctrl/Cmd+Alt+B`). Interpolate a chain of intermediate shapes between two objects, morphing geometry *and* colour from one to the other. Adjust the **step count**, **reverse** the direction, or **Expand** to a plain group in Properties. The step count auto-fits the gap when you make it.
+- **Multiple artboards.** Add named artboards beside the first; the canvas grows to fit them all, and each frame **fits-to-view** and **exports** on its own (cropped SVG). Artboards persist in the saved file (in `<metadata>`, invisible to export), and old single-artboard documents open unchanged.
+- **Reflect / Shear / Transform Each.** Mirror a selection (or a copy) across its axis, skew by an angle, or transform every object about its *own* centre. **Transform Again** (`Ctrl/Cmd+Shift+D`) replays the last one.
+- **Repeat.** Turn a selection into a live **grid**, **radial**, or **mirror** repeat. Edit the count / spacing / radius in Properties and the copies regenerate; **Expand** gives you a plain group.
+- **Live effects.** Non-destructive **drop shadow**, **blur**, and **glow** stack on any object, rendered as a real SVG `<filter>`. Params are live-editable in Properties, the effects render in PNG export, they stay independent when you duplicate, and they round-trip **editable** through save/reopen (the filter is rebuilt back into the editor).
+- **Clipping & opacity masks** (`Ctrl/Cmd+7`, release `+Alt`). Make the **top object clip** everything below it (a real `<clipPath>`), or use its **luminance as an opacity mask** (`<mask>`). Both are non-destructive and **releasable**: the masking shape comes back as a normal object. The clipped/masked group moves and scales as one, round-trips into the SVG, renders in PNG export, and stays independent when you duplicate. Layers tag the group; Properties offers Release.
+- **Isolation mode.** **Double-click a group** to edit inside it. Everything outside dims and goes non-interactive, while selection, marquee, and newly-drawn objects scope to the group's contents. A breadcrumb (or `Esc`, or a double-click outside) exits. The dim is purely an editing view and never touches the saved file or undo history.
+- **Symbols & instances** (`F8`). Turn a selection into a reusable **symbol** (a real `<symbol>`/`<use>` pair), then **duplicate** an instance to place more. **Double-click** an instance to edit the master: it surfaces into isolation and every instance updates live. **Break link** makes one instance an independent copy. Symbols and instances are standard SVG, so they round-trip through save/reopen untouched.
+- **Align.** Left / right / top / bottom / centre / middle, to the selection or to the artboard.
+- **Arrange.** Raise / lower / bring-to-front / send-to-back z-ordering.
+- **Layers & groups.** A Layers panel with visibility, lock, rename, drag-reorder, group/ungroup, and merge, plus **even-odd vs nonzero** fill control.
 - **Duplicate** (`Ctrl/Cmd+D`), copy/cut/paste, delete.
-- **Paste from anywhere** (`Ctrl/Cmd+V`) — paste a copied **image** (screenshot, photo) straight onto the canvas as a placed raster, or paste **vector artwork** copied from another app (Figma, Illustrator, Inkscape, or an `.svg`) — it's sanitised (scripts/handlers stripped) and merged in as a grouped object. With nothing external on the clipboard, paste falls back to the in-editor object clipboard.
+- **Paste from anywhere** (`Ctrl/Cmd+V`). Paste a copied **image** (screenshot, photo) straight onto the canvas as a placed raster, or paste **vector artwork** copied from another app (Figma, Illustrator, Inkscape, or an `.svg`); it's sanitised (scripts/handlers stripped) and merged in as a grouped object. With nothing external on the clipboard, paste falls back to the in-editor object clipboard.
 
 ### Fill, stroke & colour
 
-- **Fill & stroke** with a live colour picker (the **Colour** panel hosts an embedded duo editor — swap fill/stroke with `X`).
-- **Gradients** — fill or stroke with a **linear or radial gradient**: pick the type in the Colour panel, then add/drag/remove colour stops on the gradient strip (each stop edits through the same picker). Gradients scale with the object, save into the SVG, render in PNG export, survive boolean ops, and stay independent when you duplicate.
-- **Pattern fills** — turn the top selected object into a **tiling `<pattern>`** and fill the shapes below it with it, then scale / rotate the tile in Properties. Patterns live in the SVG `<defs>`, so they save, render in export, and stay independent on duplicate.
-- **Recolor Artwork** — Properties harvests every distinct solid colour in the selection into a swatch grid: click one to **remap** all its uses right in the **Colour** panel (it switches to a Recolor editor — *Done* returns to fill/stroke), or shift **Hue / Saturation / Lightness** across the whole palette at once.
+- **Fill & stroke** with a live colour picker. The **Colour** panel hosts an embedded duo editor; swap fill/stroke with `X`.
+- **Gradients.** Fill or stroke with a **linear or radial gradient**: pick the type in the Colour panel, then add/drag/remove colour stops on the gradient strip (each stop edits through the same picker). Gradients scale with the object, save into the SVG, render in PNG export, survive boolean ops, and stay independent when you duplicate.
+- **Pattern fills.** Turn the top selected object into a **tiling `<pattern>`** and fill the shapes below it with it, then scale or rotate the tile in Properties. Patterns live in the SVG `<defs>`, so they save, render in export, and stay independent on duplicate.
+- **Recolor Artwork.** Properties harvests every distinct solid colour in the selection into a swatch grid. Click one to **remap** all its uses right in the **Colour** panel (it switches to a Recolor editor; *Done* returns to fill/stroke), or shift **Hue / Saturation / Lightness** across the whole palette at once.
 - **Stroke** width and **alignment** (centre / inside / outside).
 - **Opacity** and **blend mode** per object.
-- Edits are live — drag a swatch and the canvas updates immediately.
+- Edits are live. Drag a swatch and the canvas updates immediately.
 
 ### Workspace & panels
 
 A fully dockable, panel-based workspace (`window.__docks`):
 
-- **Panels** — Properties, Colour, Layers, History, Library, Processor, Jobs, Info.
-- **Dock / float / group / shelf** — dock panels left or right, tear them off to **float**, snap floats into **locking-bezel groups** that resize and move together (double-click a bezel to split), or park any panel on a **shelf** in the header as a square.
-- **Contextual panels** — Processor and Colour **auto-appear when relevant** (a raster selected, an object selected) and tuck themselves back onto the shelf when there's nothing to act on. A panel you place by hand stays put.
-- **Lean Properties** — each property group has a **collapsible header** (your open/closed choices are remembered), and one-shot object commands (Expand, Outline stroke, Offset path, Pathfinder, Vary width, Make blend / symbol / pattern fill, Reflect, Repeat) live in a context-gated **Actions ▾** menu at the top of the panel rather than as always-on rows.
-- **Memory** — panels remember their last position/size; fresh floats get an ideal, non-overlapping placement.
-- Right-click a panel header to shelve it; right-click a shelf square for open / float / dock options.
+- **Panels.** Properties, Colour, Layers, History, Library, Processor, Jobs, Info.
+- **Dock / float / group / shelf.** Dock panels left or right, tear them off to **float**, snap floats into **locking-bezel groups** that resize and move together (double-click a bezel to split), or park any panel on a **shelf** in the header as a square.
+- **Contextual panels.** Processor and Colour **auto-appear when relevant** (a raster selected, an object selected) and tuck themselves back onto the shelf when there's nothing to act on. A panel you place by hand stays put.
+- **Lean Properties.** Each property group has a **collapsible header** and remembers your open/closed choices. One-shot object commands (Expand, Outline stroke, Offset path, Pathfinder, Vary width, Make blend / symbol / pattern fill, Reflect, Repeat) live in a context-gated **Actions ▾** menu at the top of the panel rather than as always-on rows.
+- **Memory.** Panels remember their last position and size; fresh floats get an ideal, non-overlapping placement.
+- Right-click a panel header to shelve it. Right-click a shelf square for open / float / dock options.
 
 ### Touch, phone & tablet
 
-A phone gets its own **shell**, not a shrunken desktop — the same editor, re-laid-out for a thumb. A tablet or a touch laptop gets it too; the shell follows the *pointer*, not the user-agent string.
+A phone gets its own **shell**: the same editor, re-laid-out for a thumb, rather than a shrunken desktop. A tablet or a touch laptop gets it too, because the shell follows the *pointer*, not the user-agent string.
 
-- **The bar reads your selection.** Select one shape and the bar under the canvas offers Scale / Rotate / Duplicate / Delete; select two overlapping ones and the booleans appear on it. The app already knew what you could do — this is that knowledge, ranked and surfaced, instead of buried in a menu.
-- **The Panels sheet is a tab strip.** Swipe up from the logo FAB and one pane — Suggested, Object, Colour, Layers, History — owns the whole sheet. No scrolling past nine stacked panels to find the one you want.
-- **Landscape is its own layout**, with the buttons *surrounding* the canvas (tools left, actions right, chrome on top) — and its own saved arrangement, so how you set up your phone sideways never disturbs your laptop.
-- **Press and hold** is the right-click a finger never had: hold an object for its Actions menu.
-- **Free transform** without a keyboard — the Scale and Rotate tiles toggle the transform box, whose handles carry invisible 44px touch targets over their 9px visuals.
-- **Rearrange the toolbars with your finger** — drag tiles to reorder, tick tools off to trim the strip. Every bar is customizable by touch (HTML5 drag-and-drop never fires from a finger, so the drag engine is pointer-based throughout).
+- **The bar reads your selection.** Select one shape and the bar under the canvas offers Scale / Rotate / Duplicate / Delete. Select two overlapping ones and the booleans appear on it. The app already knew what you could do; this is that knowledge, ranked and surfaced, instead of buried in a menu.
+- **The Panels sheet is a tab strip.** Swipe up from the logo button and one pane (Suggested, Object, Colour, Layers, History) owns the whole sheet. No scrolling past nine stacked panels to find the one you want.
+- **Landscape is its own layout**, with the buttons *surrounding* the canvas: tools left, actions right, chrome on top. It keeps its own saved arrangement, so how you set up your phone sideways never disturbs your laptop.
+- **Press and hold** is the right-click a finger never had. Hold an object for its Actions menu.
+- **Free transform** without a keyboard. The Scale and Rotate tiles toggle the transform box, whose handles carry invisible 44px touch targets over their 9px visuals.
+- **Rearrange the toolbars with your finger.** Drag tiles to reorder, tick tools off to trim the strip. Every bar is customizable by touch. HTML5 drag-and-drop never fires from a finger, so the drag engine is pointer-based throughout.
 - **Pinch to zoom**, drag to pan, and the page itself can't be dragged around underneath you.
 
 ### Raster→vector pipeline
 
-Drop a raster onto the canvas (it becomes a selectable, movable `<image>` node) and the **Processor** panel becomes relevant. It's a composable stage strip — toggle any stage on/off and reorder them:
+Drop a raster onto the canvas (it becomes a selectable, movable `<image>` node) and the **Processor** panel becomes relevant. It's a composable stage strip: toggle any stage on or off, and reorder them.
 
 | Stage | What it does | Backends |
 |---|---|---|
@@ -180,19 +180,19 @@ Drop a raster onto the canvas (it becomes a selectable, movable `<image>` node) 
 | **Remove BG** | background removal / keying | classical (numpy) · AI (`rembg`: U²-Net, ISNet, **BiRefNet** + HR, **BEN2** hair/4K matting, silueta, portrait/anime) · greenscreen chroma-key |
 | **Vectorize** | raster → SVG | clean colour trace · VTracer · pixel-exact (see below) |
 
-Two more fixers are **one-shot, interactive** (not strip stages): **Remove object** — paint a mask, erased via big-LaMa (`onnxruntime`); and **Restore faces** — GFPGAN (auto-detects faces, no-op if none).
+Two more fixers are one-shot and interactive rather than strip stages. **Remove object**: paint a mask, erased via big-LaMa (`onnxruntime`). **Restore faces**: GFPGAN, which auto-detects faces and no-ops if there are none.
 
-**Auto pipeline.** A classical, offline analyzer (`tools/analyze.py`) reads the image — content class, alpha, resolution, JPEG blocking, faces — and the **Auto** banner proposes a pipeline with *why* for each step, one-click **Apply**. You pick the *outcome* (e.g. "hair" cutout, "anime" upscale) and a router picks the model; the model registry (`/api/capabilities`) drives the picker, so adding a model server-side surfaces it in the UI with no panel changes.
+**Auto pipeline.** A classical, offline analyzer (`tools/analyze.py`) reads the image (content class, alpha, resolution, JPEG blocking, faces) and the **Auto** banner proposes a pipeline with a *why* for each step, plus one-click **Apply**. You pick the *outcome* (say, "hair" cutout or "anime" upscale) and a router picks the model. The model registry (`/api/capabilities`) drives the picker, so adding a model server-side surfaces it in the UI with no panel changes.
 
-Runs target the selected raster or the whole Library (explicit batch toggle), execute in a **background job queue** with live progress and per-job logs (the **Jobs** panel), and **never mutate your live canvas** — you choose when to load the result back in. Live preview is available while you tune a single raster.
+Runs target the selected raster or the whole Library (explicit batch toggle) and execute in a **background job queue** with live progress and per-job logs (the **Jobs** panel). They **never mutate your live canvas**: you choose when to load the result back in. Live preview is available while you tune a single raster.
 
 ### Vectorize engines
 
 One resolver picks the engine from your settings (explicit choice wins; legacy keys derive):
 
-- **Clean colour trace** — hard k-means palette + per-colour B&W mask trace. Drops the background to transparent, keeps pure ink colours, and **preserves holes/counters** (the inside of an "o"). Fixes VTracer's stacked halos and lost counters on flat logos.
-- **VTracer** — general-purpose colour/B&W curve tracing for photos and illustrations.
-- **Pixel-exact** — recovers the native pixel grid (see below).
+- **Clean colour trace.** Hard k-means palette + per-colour B&W mask trace. Drops the background to transparent, keeps pure ink colours, and **preserves holes/counters** (the inside of an "o"). Fixes VTracer's stacked halos and lost counters on flat logos.
+- **VTracer.** General-purpose colour/B&W curve tracing for photos and illustrations.
+- **Pixel-exact.** Recovers the native pixel grid (see below).
 
 Both vectorize engines and the background-removal/upscale ops are **pluggable registries** on the backend (`VECTORIZE_ENGINES`, `RASTER_OPS`) with schema introspection, so adding a model is a registry entry.
 
@@ -202,26 +202,26 @@ Most "vectorizers" smooth pixel art into mush. This one does the opposite: it re
 
 ![A soft raster pixel sprite recovered to an exact vector](docs/demo.png)
 
-1. **Grid recovery.** Block-consistency detection nails clean nearest-neighbour integer upscales exactly (a 16×16 texture saved at 256×256 → recovered to 16×16). Odd, non-integer scales use a spectral (FFT) detector; a confident axis lends its scale to a weak one. True gradients/photos are left untouched.
+1. **Grid recovery.** Block-consistency detection nails clean nearest-neighbour integer upscales exactly (a 16×16 texture saved at 256×256 comes back as 16×16). Odd, non-integer scales use a spectral (FFT) detector, and a confident axis lends its scale to a weak one. True gradients and photos are left untouched.
 2. **Colour recovery.** Per cell: mode (default) / median / center, sampled over an eroded interior so anti-aliased borders don't leak. Optional palette quantization and corner-colour key-out.
-3. **Square emission.** `merged` rects (default), per-colour `path` (fewest nodes), or one rect per pixel — all pixel-exact, with `shape-rendering="crispEdges"` and native-unit coordinates so they scale forever.
+3. **Square emission.** `merged` rects (default), per-colour `path` (fewest nodes), or one rect per pixel. All pixel-exact, with `shape-rendering="crispEdges"` and native-unit coordinates, so they scale forever.
 
-Heavily *bilinear*-resampled art is genuinely ambiguous; set **Native size (cells)** in the trace settings to force the grid.
+Heavily *bilinear*-resampled art is genuinely ambiguous. Set **Native size (cells)** in the trace settings to force the grid.
 
 ### Library & export
 
-- **Library** panel with three modes — **rasters** (source images), **vectors** (output SVGs), **canvases** (`.hv` projects). Thumbnails, search, rename/delete, drag onto the canvas, and an **Info** panel (dimensions, size, path, element/colour counts, reveal-in-file-manager).
-- **Source folder** — point the Library at any directory; uploads land in `inputs/`.
-- **Export PNG** — rasterize any SVG to PNG at *any* size, rendered **client-side** in the browser (vectors are resolution-independent). Pixel-art SVGs export with crisp edges and need nothing extra.
-- **Export / save SVG** — write the document back out.
+- **Library** panel with three modes: **rasters** (source images), **vectors** (output SVGs), **canvases** (`.hv` projects). Thumbnails, search, rename/delete, drag onto the canvas, and an **Info** panel (dimensions, size, path, element/colour counts, reveal-in-file-manager).
+- **Source folder.** Point the Library at any directory; uploads land in `inputs/`.
+- **Export PNG.** Rasterize any SVG to PNG at *any* size, rendered **client-side** in the browser (vectors are resolution-independent). Pixel-art SVGs export with crisp edges and need nothing extra.
+- **Export / save SVG.** Write the document back out.
 
 ### Platform
 
-- **Local job queue** — background workers with cancel/retry/clear and live status; nothing leaves your machine.
-- **Standalone window** — `?app=1` (or `./install.sh --app`) runs it as an app window with a draggable titlebar; native window manager controls.
-- **Tied lifecycle** — the window's keep-alive pings the server; close the window and the server GCs its scratch and **spins itself down** (no orphaned process). `launch.sh` also detects and replaces a *stale* server still bound to the port, so a fresh client never runs against an out-of-date API.
-- **Self-updating** — in-app update check + apply (`git pull` + dep re-sync) gated on a clean tree.
-- **Settings** — install/repair external tools, source folder, startup behaviour, rulers/guides.
+- **Local job queue.** Background workers with cancel/retry/clear and live status. Nothing leaves your machine.
+- **Standalone window.** `?app=1` (or `./install.sh --app`) runs it as an app window with a draggable titlebar and native window-manager controls.
+- **Tied lifecycle.** The window's keep-alive pings the server; close the window and the server GCs its scratch and **spins itself down**, leaving no orphaned process. `launch.sh` also detects and replaces a *stale* server still bound to the port, so a fresh client never runs against an out-of-date API.
+- **Self-updating.** In-app update check and apply (`git pull` + dep re-sync), gated on a clean tree.
+- **Settings.** Install/repair external tools, source folder, startup behaviour, rulers/guides.
 
 ## Keyboard shortcuts
 
@@ -238,11 +238,11 @@ Heavily *bilinear*-resampled art is genuinely ambiguous; set **Native size (cell
 
 - **Python 3.10+** with `pip`. The base runtime (`Pillow`, `numpy`, `scipy`, and `fonttools[woff]` for Text → outlines) is installed by `./install.sh` (or `pip install -r requirements.txt`).
 - For **browser-exact text shaping** of complex scripts (Arabic / Indic / RTL / combining marks) in Text → outlines: optional `uharfbuzz` (`pip install uharfbuzz` into `./.venv`). Without it, Latin shapes faithfully and complex scripts get a best-effort outline plus a warning to verify.
-- **Fonts need internet to discover/download**; once cached they work offline, and System fonts always do.
+- **Fonts need internet to discover and download.** Once cached they work offline, and System fonts always do.
 - For **Upscale / Trace**: `curl` + `unzip` (Real-ESRGAN download) and `cargo` (builds VTracer). Installed on first launch or via the Settings buttons.
-- For **AI Cutout**: nothing up front — click *Install rembg* in Settings to pull `rembg[cpu]` into a project-local `./.venv` (~500 MB, one-time). BiRefNet / BEN2 weights download on first use.
-- For **spandrel upscalers/restorers, face restore, object removal**: a one-time `torch`/`spandrel`/`onnxruntime` install into `./.venv` (from Settings); per-model weights fetch on first use. CPU works; a GPU is faster.
-- For **Export PNG of curved (VTracer) SVGs**: optional `cairosvg` (`pip install cairosvg`, needs system libcairo). Pixel-art SVG export needs nothing extra — it's pure Pillow.
+- For **AI Cutout**: nothing up front. Click *Install rembg* in Settings to pull `rembg[cpu]` into a project-local `./.venv` (~500 MB, one-time). BiRefNet / BEN2 weights download on first use.
+- For **spandrel upscalers/restorers, face restore, object removal**: a one-time `torch`/`spandrel`/`onnxruntime` install into `./.venv` (from Settings); per-model weights fetch on first use. CPU works, a GPU is faster.
+- For **Export PNG of curved (VTracer) SVGs**: optional `cairosvg` (`pip install cairosvg`, needs system libcairo). Pixel-art SVG export needs nothing extra, being pure Pillow.
 - A Vulkan-capable GPU helps Real-ESRGAN but isn't mandatory.
 
 ### How dependencies bootstrap
@@ -260,86 +260,87 @@ Heavily *bilinear*-resampled art is genuinely ambiguous; set **Native size (cell
 
 ## Roadmap & status
 
-The deep research behind pipeline picks — every category, the OSS SOTA, and the licensing landmines — lives in **[`ROADMAP.md`](docs/ROADMAP.md)**. This section is the practical board.
+The deep research behind the pipeline picks (every category, the OSS state of the art, and the licensing landmines) lives in **[`ROADMAP.md`](docs/ROADMAP.md)**. This section is the practical board.
 
 ### Shipped
 
-- [x] **Editor reframe** — single live-SVG canvas, selection, snapshot undo/redo, inspector, artboard-as-object.
-- [x] **Tools** — select, node, pen, curvature, rect, ellipse, line; live shapes (rounded rect, polygon, star).
+- [x] **Editor reframe.** Single live-SVG canvas, selection, snapshot undo/redo, inspector, artboard-as-object.
+- [x] **Tools.** Select, node, pen, curvature, rect, ellipse, line; live shapes (rounded rect, polygon, star).
 - [x] **Path/node editing** with anchor↔handle conversion and LOD culling for huge traced paths.
 - [x] **Boolean ops** (union / subtract / intersect) + invert-space on a marching-squares engine that refits to minimal cubics.
 - [x] **Layers** (visibility / lock / rename / reorder / group / merge), align, arrange, transform.
-- [x] **Dockable workspace** — float / dock / locking-bezel groups / shelf / contextual auto-shelve.
-- [x] **Rasters as canvas objects** — `editor.placeImage()`; the **Processor** pipeline as a contextual in-canvas panel; loading auto-creates a canvas sized to the image.
-- [x] **Pipeline** — De-JPEG/Denoise/Deblur, Upscale, Remove BG, Vectorize as a composable stage strip with a background job queue.
-- [x] **Upscalers** — Real-ESRGAN + `spandrel` tiers (DAT-2 / SPAN / Real-CUGAN) + AuraSR v2.
-- [x] **Better cutout** — BiRefNet (+ HR) and **BEN2** (hair / 4K matting) via `rembg`, opt-in alongside U²-Net / ISNet / chroma-key.
-- [x] **Restoration** — denoise / de-JPEG / deblur pre-pass (SCUNet / FBCNN / NAFNet via `spandrel`); **GFPGAN** face restore; **LaMa** object removal (mask-paint).
-- [x] **Auto pipeline** — classical analyzer → suggested compose with *why* + one-click Apply; outcome→model router driven by a capability registry.
+- [x] **Dockable workspace.** Float / dock / locking-bezel groups / shelf / contextual auto-shelve.
+- [x] **Rasters as canvas objects.** `editor.placeImage()`; the **Processor** pipeline as a contextual in-canvas panel; loading auto-creates a canvas sized to the image.
+- [x] **Pipeline.** De-JPEG/Denoise/Deblur, Upscale, Remove BG, Vectorize as a composable stage strip with a background job queue.
+- [x] **Upscalers.** Real-ESRGAN + `spandrel` tiers (DAT-2 / SPAN / Real-CUGAN) + AuraSR v2.
+- [x] **Better cutout.** BiRefNet (+ HR) and **BEN2** (hair / 4K matting) via `rembg`, opt-in alongside U²-Net / ISNet / chroma-key.
+- [x] **Restoration.** Denoise / de-JPEG / deblur pre-pass (SCUNet / FBCNN / NAFNet via `spandrel`); **GFPGAN** face restore; **LaMa** object removal (mask-paint).
+- [x] **Auto pipeline.** Classical analyzer → suggested compose with a *why* + one-click Apply; outcome→model router driven by a capability registry.
 - [x] **Pixel Art → SVG**, **client-side PNG export**, **`.hv` projects**, **Library**, in-app **self-update**, **app-window** mode with tied server lifecycle.
-- [x] **Text & fonts** — point / box / on-path text, multi-source font discovery (Fontsource / Fontshare / Google / Bunny) with an Installed library, and **Convert to outlines** with browser-faithful shaping (HarfBuzz) and curve-following on-path outlines.
-- [x] **Gradients, patterns & recolor** — linear/radial gradient fill or stroke with an on-strip stop editor; tiling `<pattern>` fills; **Recolor Artwork** (harvest distinct colours → remap one, or HSL-shift the whole palette). All live in `<defs>` and round-trip through save + PNG export.
-- [x] **Clipping & opacity masks** — top object as a `<clipPath>` or luminance `<mask>`, non-destructive and **releasable**.
-- [x] **Pathfinder & path conversion** — Divide / Trim / Merge / Crop / Minus-Back, plus **Outline stroke** / **Offset path** / **Expand**, all on an **analytic geometric stroker** (exact miter / bevel / round joins and caps, no bitmap quantization).
-- [x] **Width tool** — variable-width strokes dragged on-canvas and rendered to crisp filled ribbons through the same stroker.
-- [x] **Shape Builder · Scissors · Knife · Eraser** — interactive path construction / cutting / carving on the boolean engine.
-- [x] **Blend** — interpolate a chain of shapes between two objects, morphing geometry *and* colour (live step count / reverse / expand).
-- [x] **Live effects** — non-destructive drop-shadow / blur / glow as real SVG `<filter>`s, editable in Properties and **reconstructable** on reopen.
-- [x] **Transforms & repeat** — Reflect / Shear / Transform-Each / Transform-Again, plus parametric **grid / radial / mirror** Repeat groups.
-- [x] **Multiple artboards** — named artboards with per-frame fit-to-view + cropped SVG export, persisted invisibly in `<metadata>`.
-- [x] **Isolation mode & Symbols** — double-click into a group to edit it in place; reusable `<symbol>`/`<use>` instances with live **edit-master** and **break-link**.
-- [x] **Lean inspector** — collapsible property groups (remembered) and one-shot object commands in a context-gated **Actions** menu (toolbar button **and** object right-click), with the Recolor editor reusing the dock Colour panel.
-- [x] **Free in the browser** — a serverless build of the same editor on **[hector-vector.com](https://hector-vector.com)** (Cloudflare Pages, `./scripts/deploy-cloud.sh`): the full vector toolset with no install, no account, and nothing leaving the tab. Server-backed panels (Processor / Library / Jobs) gate behind a "get the desktop app" CTA.
-- [x] **Touch & mobile** — a real phone/tablet shell: selection-aware contextual bars, a tabbed Panels sheet, its own landscape layout, press-and-hold → Actions, touch free-transform with 44px targets, and finger-draggable toolbar customization.
+- [x] **Text & fonts.** Point / box / on-path text, multi-source font discovery (Fontsource / Fontshare / Google / Bunny) with an Installed library, and **Convert to outlines** with browser-faithful shaping (HarfBuzz) and curve-following on-path outlines.
+- [x] **Gradients, patterns & recolor.** Linear/radial gradient fill or stroke with an on-strip stop editor; tiling `<pattern>` fills; **Recolor Artwork** (harvest distinct colours, remap one, or HSL-shift the whole palette). All live in `<defs>` and round-trip through save + PNG export.
+- [x] **Clipping & opacity masks.** Top object as a `<clipPath>` or luminance `<mask>`, non-destructive and **releasable**.
+- [x] **Pathfinder & path conversion.** Divide / Trim / Merge / Crop / Minus-Back, plus **Outline stroke** / **Offset path** / **Expand**, all on an **analytic geometric stroker** (exact miter / bevel / round joins and caps, no bitmap quantization).
+- [x] **Width tool.** Variable-width strokes dragged on-canvas and rendered to crisp filled ribbons through the same stroker.
+- [x] **Shape Builder · Scissors · Knife · Eraser.** Interactive path construction, cutting, and carving on the boolean engine.
+- [x] **Blend.** Interpolate a chain of shapes between two objects, morphing geometry *and* colour (live step count / reverse / expand).
+- [x] **Live effects.** Non-destructive drop-shadow / blur / glow as real SVG `<filter>`s, editable in Properties and **reconstructable** on reopen.
+- [x] **Transforms & repeat.** Reflect / Shear / Transform-Each / Transform-Again, plus parametric **grid / radial / mirror** Repeat groups.
+- [x] **Multiple artboards.** Named artboards with per-frame fit-to-view + cropped SVG export, persisted invisibly in `<metadata>`.
+- [x] **Isolation mode & Symbols.** Double-click into a group to edit it in place; reusable `<symbol>`/`<use>` instances with live **edit-master** and **break-link**.
+- [x] **Lean inspector.** Collapsible property groups (remembered) and one-shot object commands in a context-gated **Actions** menu (toolbar button **and** object right-click), with the Recolor editor reusing the dock Colour panel.
+- [x] **Free in the browser.** A serverless build of the same editor at **[hector-vector.com](https://hector-vector.com)** (Cloudflare Pages, `./scripts/deploy-cloud.sh`): the full vector toolset, no install, no account, nothing leaving the tab. Server-backed panels (Processor / Library / Jobs) gate behind a "get the desktop app" CTA.
+- [x] **Touch & mobile.** A real phone/tablet shell: selection-aware contextual bars, a tabbed Panels sheet, its own landscape layout, press-and-hold → Actions, touch free-transform with 44px targets, and finger-draggable toolbar customization.
 
 ### In progress / open edges
 
-- [ ] **Self-contained SVG export** — bake `<image href>` to a data-URI so exported SVGs with embedded rasters stay portable.
-- [ ] **Mixed raster+vector documents** — finish the "raster as a first-class canvas object" track (raster nodes have no meaningful fill/stroke; tighten the model).
-- [ ] **More of the pipeline as contextual panels** — continue dissolving batch-only flows into the editor.
+- [ ] **Self-contained SVG export.** Bake `<image href>` to a data-URI so exported SVGs with embedded rasters stay portable.
+- [ ] **Mixed raster+vector documents.** Finish the "raster as a first-class canvas object" track. Raster nodes have no meaningful fill/stroke, so the model wants tightening.
+- [ ] **More of the pipeline as contextual panels.** Keep dissolving batch-only flows into the editor.
 
 ### Planned
 
-- [ ] **Brushes** — art / scatter / pattern strokes along a path.
-- [ ] **Distort & warp** — envelope / mesh / free-distort deformations.
-- [ ] **Type systems** — character / paragraph styles and threaded text frames.
-- [ ] **More export formats** — PDF / EPS.
+- [ ] **Brushes.** Art / scatter / pattern strokes along a path.
+- [ ] **Distort & warp.** Envelope / mesh / free-distort deformations.
+- [ ] **Type systems.** Character / paragraph styles and threaded text frames.
+- [ ] **More export formats.** PDF / EPS.
 - [ ] **Distribute** spacing + group transform handles (rotate/scale a multi-selection as one).
-- [ ] **Vectorize "quality" tier** — VTracer is the only viable OSS colour vectorizer; closed engines (Vectorizer.ai) are meaningfully better on photos. Optional paid-API fallback is on the table.
+- [ ] **Vectorize "quality" tier.** VTracer is the only viable OSS colour vectorizer, and closed engines (Vectorizer.ai) are meaningfully better on photos. An optional paid-API fallback is on the table.
 
 ### Known limitations
 
-- Pixel-grid recovery is genuinely ambiguous on heavily *bilinear*-resampled art — set the native size manually.
-- Exported VTracer (curved) SVGs need `cairosvg` to rasterize back to PNG; pixel-art SVGs don't.
-- **Text → outlines** needs internet to fetch the font the first time (then it's cached). Without `uharfbuzz`, complex scripts (Arabic / Indic / RTL) get a best-effort outline with a warning rather than browser-exact shaping. System fonts vectorise via a metric-compatible OFL stand-in, not the exact installed face. An area text box's width/height frame is an editing aid — on save the text bakes to positioned lines (the frame bound isn't persisted).
-- Non-commercial models (SUPIR, CodeFormer, BRIA RMBG, MAT, …) are deliberately **not** shipped — see the licensing avoid-list in [`ROADMAP.md`](docs/ROADMAP.md).
+- Pixel-grid recovery is genuinely ambiguous on heavily *bilinear*-resampled art. Set the native size manually.
+- Exported VTracer (curved) SVGs need `cairosvg` to rasterize back to PNG. Pixel-art SVGs don't.
+- **Text → outlines** needs internet to fetch the font the first time, after which it's cached. Without `uharfbuzz`, complex scripts (Arabic / Indic / RTL) get a best-effort outline with a warning rather than browser-exact shaping. System fonts vectorise via a metric-compatible OFL stand-in, not the exact installed face. An area text box's width/height frame is an editing aid: on save the text bakes to positioned lines, and the frame bound isn't persisted.
+- Non-commercial models (SUPIR, CodeFormer, BRIA RMBG, MAT, …) are deliberately **not** shipped. See the licensing avoid-list in [`ROADMAP.md`](docs/ROADMAP.md).
 
 ## Architecture
 
-No build step anywhere — the frontend is hand-written ES modules served as-is.
+No build step anywhere. The frontend is hand-written ES modules, served as-is.
 
-- **`src/`** — the dependency-free vanilla-JS frontend:
-  - **`src/hv/`** — a pure, side-effect-free library: geometry & path math (`path`, `transform`, `shapes`, `shapegen`), colour (`color`), raster sampling (`raster`), and the marching-squares boolean/contour engine with its shared curve-fit core (`contour`, `fitcurve`).
-  - **`src/editor.js`** + **`src/editor/`** — the live-SVG editing core (selection, snapshot undo, layers, boolean ops) plus per-feature **tool mixins** under `src/editor/tools/` (`pen`, `text`, `width`, `builder`, `blend`, `colors`, `masks`, `expand`, `effects`, `repeat`, `isolation`, `symbols`, `artboards`, `viewport`, …) `Object.assign`-ed onto one editor object, and inspector row builders in `src/editor/ui-rows.js`.
-  - **`src/app.js`** + **`src/ui/`** — the app shell and UI modules: the dockable-panels system (`ui/docks`, `window.__docks`), the unified colour picker (`ui/colorpicker`), menus (`ui/menus`), the font browser (`ui/fonts`), the Library, the Manage screen, the Processor pipeline UI, Info, and client-side PNG export. The **touch shells** live in `ui/formfactor` (which form factor are we, and what furniture goes where), `ui/actions` (one oracle for "what can you do with this selection", read by both the right-click menu and the contextual bars), `ui/adaptive` (bars that re-rank themselves), `ui/layout` (per-shell saved arrangements) and `ui/pointer-drag` (a pointer-based drag engine, because HTML5 DnD never fires from a finger).
-- **`server.py`** — a single-file backend on Python's stdlib `http.server`, with a threaded job queue and a JSON API (`/api/run/pipeline`, `/api/vectorize/engines`, `/api/raster-ops`, `/api/capabilities`, `/api/plan`, `/api/work-items`, `/api/install/*`, `/api/heartbeat`, …). It's organized around pluggable registries: **vectorize engines** (`clean` / `vtracer` / `pixel`), **raster ops** (`upscale` / `removebg` / restoration), and a **capability registry** (outcome→model routing) — adding a model is a registry entry that surfaces in the UI automatically. A heartbeat watchdog spins the server down when the UI closes. No web framework.
-- **`engine.py`** — classical mask/cutout image ops.
-- **`tools/`** — worker scripts: `pixelvec.py`, `svg_render.py`, `simplify_svg.py` (vector), `ai_cutout.py` (rembg), `upscale_spandrel.py`, `face_restore.py` + `detect_faces.py` (GFPGAN), `inpaint_lama.py` (object removal), and `analyze.py` (the offline analyzer behind the Auto plan). External binaries/weights land here / in `./.venv` / `~/.u2net` at runtime.
-- **The browser build is the same tree.** There is no separate cloud fork: `index.html` detects the deployed host and flips the app into **cloud mode** — the editor runs untouched, while the three server-backed panels (Processor / Library / Jobs) and the save/open paths swap to client-side equivalents (`src/ui/cloud-*.js`). `./scripts/deploy-cloud.sh` selects the runtime static files into `dist/` and ships them to Cloudflare Pages. Nothing is compiled; what you read in `src/` is what runs in production.
-- Vector documents save as **`.hv` projects** under `outputs/canvas/`; pipeline outputs under `outputs/<process>-<timestamp>/`. Your source images live in `inputs/` (or any folder you point the Library at).
+- **`src/`** is the dependency-free vanilla-JS frontend:
+  - **`src/hv/`** is a pure, side-effect-free library: geometry and path math (`path`, `transform`, `shapes`, `shapegen`), colour (`color`), raster sampling (`raster`), and the marching-squares boolean/contour engine with its shared curve-fit core (`contour`, `fitcurve`).
+  - **`src/editor.js`** + **`src/editor/`** hold the live-SVG editing core (selection, snapshot undo, layers, boolean ops), plus per-feature **tool mixins** under `src/editor/tools/` (`pen`, `text`, `width`, `builder`, `blend`, `colors`, `masks`, `expand`, `effects`, `repeat`, `isolation`, `symbols`, `artboards`, `viewport`, …) `Object.assign`-ed onto one editor object, and inspector row builders in `src/editor/ui-rows.js`.
+  - **`src/app.js`** + **`src/ui/`** are the app shell and UI modules: the dockable-panels system (`ui/docks`, `window.__docks`), the unified colour picker (`ui/colorpicker`), menus (`ui/menus`), the font browser (`ui/fonts`), the Library, the Manage screen, the Processor pipeline UI, Info, and client-side PNG export. The **touch shells** live in `ui/formfactor` (which form factor are we, and what furniture goes where), `ui/actions` (one oracle for "what can you do with this selection", read by both the right-click menu and the contextual bars), `ui/adaptive` (bars that re-rank themselves), `ui/layout` (per-shell saved arrangements) and `ui/pointer-drag` (a pointer-based drag engine, because HTML5 DnD never fires from a finger).
+- **`web/`** holds the eight files the browser actually asks for: `index.html`, `compare.html`, `style.css`, `sw.js`, the manifest, `_headers`, `robots.txt`, `llms.txt`. It doubles as the deploy root, so its contents land at the top of `dist/` and the URLs never change. Keep `sw.js` at the origin root or the service worker's scope quietly shrinks to its own directory.
+- **`server.py`** is a backend on Python's stdlib `http.server`, with a threaded job queue and a JSON API (`/api/run/pipeline`, `/api/vectorize/engines`, `/api/raster-ops`, `/api/capabilities`, `/api/plan`, `/api/work-items`, `/api/install/*`, `/api/heartbeat`, …). It's a thin façade over the `hvserver/` package and is organized around pluggable registries: **vectorize engines** (`clean` / `vtracer` / `pixel`), **raster ops** (`upscale` / `removebg` / restoration), and a **capability registry** (outcome→model routing). Adding a model is a registry entry that surfaces in the UI automatically. A heartbeat watchdog spins the server down when the UI closes. No web framework.
+- **`engine.py`** holds classical mask/cutout image ops.
+- **`tools/`** holds the worker scripts: `pixelvec.py`, `svg_render.py`, `simplify_svg.py` (vector), `ai_cutout.py` (rembg), `upscale_spandrel.py`, `face_restore.py` + `detect_faces.py` (GFPGAN), `inpaint_lama.py` (object removal), and `analyze.py` (the offline analyzer behind the Auto plan). External binaries and weights land here, or in `./.venv`, or in `~/.u2net`, at runtime.
+- **The browser build is the same tree.** There is no separate cloud fork. `index.html` detects the deployed host and flips the app into **cloud mode**: the editor runs untouched, while the three server-backed panels (Processor / Library / Jobs) and the save/open paths swap to client-side equivalents (`src/ui/cloud-*.js`). `./scripts/deploy-cloud.sh` selects the runtime static files into `dist/` and ships them to Cloudflare Pages. Nothing is compiled. What you read in `src/` is what runs in production.
+- Vector documents save as **`.hv` projects** under `outputs/canvas/`, and pipeline outputs under `outputs/<process>-<timestamp>/`. Your source images live in `inputs/`, or any folder you point the Library at.
 
-Contributions welcome — see [`CONTRIBUTING.md`](.github/CONTRIBUTING.md). The editor has a real-browser E2E suite (`tests/e2e/editor_e2e.py`) and a backend smoke suite (`tests/test_smoke.py`); the README screenshots are regenerated with `tests/e2e/screenshots.py`.
+Contributions welcome; see [`CONTRIBUTING.md`](.github/CONTRIBUTING.md). The editor has a real-browser E2E suite (`tests/e2e/editor_e2e.py`) and a backend smoke suite (`tests/test_smoke.py`). The README screenshots are regenerated with `tests/e2e/screenshots.py`.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `PORT` | `2002` | Server port (`PORT=8080 ./run.sh`). |
-| `HECTOR_CONCURRENCY` | `1` | Parallel jobs. Raise carefully — GPU/RAM bound. |
-| `HV_IDLE_SHUTDOWN` | `90` | Seconds of UI silence (window closed) before the server self-spins-down. `0` disables — for a long-lived/headless server or CI. |
+| `HECTOR_CONCURRENCY` | `1` | Parallel jobs. Raise carefully; it's GPU/RAM bound. |
+| `HV_IDLE_SHUTDOWN` | `90` | Seconds of UI silence (window closed) before the server self-spins-down. `0` disables it, for a long-lived/headless server or CI. |
 
 ## Credits & license
 
-Built on excellent open-source work: [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN), [VTracer](https://github.com/visioncortex/vtracer), [rembg](https://github.com/danielgatis/rembg) & the U²-Net / [BiRefNet](https://github.com/ZhengPeng7/BiRefNet) / [BEN2](https://huggingface.co/PramaLLC/BEN2) cutout families, [spandrel](https://github.com/chaiNNer-org/spandrel) (DAT-2 / SPAN / Real-CUGAN / AuraSR upscalers and SCUNet / FBCNN / NAFNet restorers), [GFPGAN](https://github.com/TencentARC/GFPGAN) face restore, [LaMa](https://github.com/advimman/lama) inpainting, [Pillow](https://python-pillow.org/), and [NumPy](https://numpy.org/). See [`ROADMAP.md`](docs/ROADMAP.md) for the broader landscape and what's planned next.
+Built on excellent open-source work: [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN), [VTracer](https://github.com/visioncortex/vtracer), [rembg](https://github.com/danielgatis/rembg) and the U²-Net / [BiRefNet](https://github.com/ZhengPeng7/BiRefNet) / [BEN2](https://huggingface.co/PramaLLC/BEN2) cutout families, [spandrel](https://github.com/chaiNNer-org/spandrel) (DAT-2 / SPAN / Real-CUGAN / AuraSR upscalers and SCUNet / FBCNN / NAFNet restorers), [GFPGAN](https://github.com/TencentARC/GFPGAN) face restore, [LaMa](https://github.com/advimman/lama) inpainting, [Pillow](https://python-pillow.org/), and [NumPy](https://numpy.org/). See [`ROADMAP.md`](docs/ROADMAP.md) for the broader landscape and what's planned next.
 
 [MIT](LICENSE) © 2026 asuramaya. Bundled-at-runtime tools keep their own licenses (see the table above).

@@ -1,37 +1,39 @@
 # hector-vector
 
-> hector-vector is a free, browser-based vector editor. It runs entirely in a modern web browser — no download, no install, no cost — and nothing you draw leaves the tab. It offers a full vector toolset: pen and path tools, boolean operations and Pathfinder, an analytic geometric stroker, variable-width strokes, gradients, tiling patterns, live effects, clipping and opacity masks, blend, symbols, multiple artboards, and text with web fonts and text-to-outlines, plus SVG and PNG export. An open-source desktop app adds AI image processing (upscale, background removal, image vectorization/tracing, restoration), batch processing, and a local library.
+> hector-vector is a free, browser-based vector editor. It runs entirely in a modern web browser, with no download, no install and no cost, and nothing you draw leaves the tab. It offers a full vector toolset: pen and path tools, boolean operations and Pathfinder, an analytic geometric stroker, variable-width strokes, gradients, tiling patterns, live effects, clipping and opacity masks, blend, symbols, multiple artboards, and text with web fonts and text-to-outlines, plus SVG and PNG export. An open-source desktop app adds AI image processing (upscale, background removal, image vectorization/tracing, restoration), batch processing, and a local library.
 
 ## What it is
 
 - **Free**: free to use, no download and no purchase required. Open source (MIT).
-- **Browser-based**: a web app built on SVG and ES modules; open a link and start drawing. Everything is computed locally in your browser — nothing is uploaded.
-- **A real vector editor**: a genuine path-editing toolset — pen, nodes, booleans, strokes, gradients, effects — not a toy. A free alternative to paid tools like Illustrator for the core vector work.
+- **Browser-based**: a web app built on SVG and ES modules. Open a link and start drawing. Everything is computed locally in your browser, and nothing is uploaded.
+- **A real vector editor**: a genuine path-editing toolset (pen, nodes, booleans, strokes, gradients, effects), not a toy. A free alternative to paid tools like Illustrator for the core vector work.
 
 ## Key features
 
 - **Draw** with pen, node, curvature, and shape tools; live shapes (rounded-rect, polygon, star).
-- **Boolean operations & Pathfinder** — union, subtract, intersect; divide, trim, merge, crop, minus-back.
-- **Geometric stroker** — outline stroke, offset path, expand, and **variable-width strokes**.
+- **Boolean operations & Pathfinder**: union, subtract, intersect; divide, trim, merge, crop, minus-back.
+- **Geometric stroker**: outline stroke, offset path, expand, and **variable-width strokes**.
 - **Shape Builder, Scissors, Knife, Eraser** for interactive path construction.
 - **Blend**, **clipping & opacity masks**, and **live effects** (drop shadow, blur, glow).
 - **Gradients**, tiling **pattern fills**, and **Recolor Artwork**.
 - **Transforms & Repeat** (grid / radial / mirror), **Isolation mode**, **Symbols & instances**, **multiple artboards**.
 - **Text** with system and web fonts, and **convert text to outlines**.
 - **Place raster reference images** to trace over.
-- **Open SVG**, and **export SVG or PNG** — entirely client-side.
+- **Open SVG**, and **export SVG or PNG**, entirely client-side.
+- **Works on a phone or tablet**: a real touch shell, with selection-aware toolbars and press-and-hold for the actions menu.
 - **Desktop app (download)** adds AI upscaling, background removal, image vectorization/tracing, restoration, batch, and a local library.
 
 ## Common questions
 
-- **Is there a free vector editor online?** Yes — hector-vector is a free, full-featured vector editor that runs in the browser with nothing to install.
-- **A free alternative to Illustrator?** hector-vector covers the core vector work — pen/paths, booleans, Pathfinder, gradients, effects, text-to-outlines, SVG/PNG export — at no cost, in the browser.
-- **Can I edit an SVG in the browser?** Yes — open an `.svg` and edit it directly; export SVG or PNG when done. All client-side.
+- **Is there a free vector editor online?** Yes. hector-vector is a free, full-featured vector editor that runs in the browser with nothing to install.
+- **A free alternative to Illustrator?** hector-vector covers the core vector work (pen/paths, booleans, Pathfinder, gradients, effects, text-to-outlines, SVG/PNG export) at no cost, in the browser.
+- **Can I edit an SVG in the browser?** Yes. Open an `.svg` and edit it directly, then export SVG or PNG when done. All client-side.
 - **Can I trace/vectorize an image for free?** You can place a raster as a reference layer and draw over it in the browser for free. Automatic image vectorization (tracing) runs in the free open-source **desktop app**.
-- **Is it private?** Yes — the browser editor computes everything locally; your artwork never leaves the tab.
+- **Does it work on a phone?** Yes. The browser build has a real touch layout, not a shrunken desktop one.
+- **Is it private?** Yes. The browser editor computes everything locally, and your artwork never leaves the tab.
 
 ## Links
 
-- [Open the editor](https://hector-vector.com/): the vector editor itself — start drawing in the browser.
-- [Browser vs desktop comparison](https://hector-vector.com/compare): what the free browser build does and what the desktop app unlocks.
+- [Open the editor](https://hector-vector.com/): the vector editor itself. Start drawing in the browser.
+- [Browser vs desktop comparison](https://hector-vector.com/compare): what the free browser build does, and what the desktop app adds.
 - [Source code (MIT)](https://github.com/asuramaya/hector-vector): the open-source repository.
