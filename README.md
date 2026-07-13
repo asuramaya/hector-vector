@@ -291,21 +291,22 @@ The deep research behind the pipeline picks (every category, the OSS state of th
 - [x] **Lean inspector.** Collapsible property groups (remembered) and one-shot object commands in a context-gated **Actions** menu (toolbar button **and** object right-click), with the Recolor editor reusing the dock Colour panel.
 - [x] **Free in the browser.** A serverless build of the same editor at **[hector-vector.com](https://hector-vector.com)** (Cloudflare Pages, `./scripts/deploy-cloud.sh`): the full vector toolset, no install, no account, nothing leaving the tab. Server-backed panels (Processor / Library / Jobs) gate behind a "get the desktop app" CTA.
 - [x] **Touch & mobile.** A real phone/tablet shell: selection-aware contextual bars, a tabbed Panels sheet, its own landscape layout, press-and-hold → Actions, touch free-transform with 44px targets, and finger-draggable toolbar customization.
+- [x] **Self-contained SVG export.** Saves and exports bake placed-raster `<image href>`s to data-URIs, so the file is portable off your machine. Oversized rasters fall back to linked, under a byte cap.
+- [x] **Rasters as first-class objects.** A raster is a real selection kind (`isRaster`): it moves, scales and z-orders like anything else, the object commands that make no sense for it are gated off, the Processor panel appears on it, and it survives save/reopen. Mixed raster+vector documents work.
+- [x] **The pipeline lives in the editor.** The old batch-only "Process" workspace is gone. The Processor is a contextual panel on a selected raster, and Library / Jobs get a roomy **Manage** screen.
+- [x] **Group transform.** Scale or rotate a multi-selection as one, about a shared bounding box.
 
-### In progress / open edges
+### Genuinely unfinished
 
-- [ ] **Self-contained SVG export.** Bake `<image href>` to a data-URI so exported SVGs with embedded rasters stay portable.
-- [ ] **Mixed raster+vector documents.** Finish the "raster as a first-class canvas object" track. Raster nodes have no meaningful fill/stroke, so the model wants tightening.
-- [ ] **More of the pipeline as contextual panels.** Keep dissolving batch-only flows into the editor.
+Ordered by what I'd pick up next. Nothing here is half-built; each is a real piece of work that hasn't started.
 
-### Planned
-
-- [ ] **Brushes.** Art / scatter / pattern strokes along a path.
-- [ ] **Distort & warp.** Envelope / mesh / free-distort deformations.
-- [ ] **Type systems.** Character / paragraph styles and threaded text frames.
-- [ ] **More export formats.** PDF / EPS.
-- [ ] **Distribute** spacing + group transform handles (rotate/scale a multi-selection as one).
-- [ ] **Vectorize "quality" tier.** VTracer is the only viable OSS colour vectorizer, and closed engines (Vectorizer.ai) are meaningfully better on photos. An optional paid-API fallback is on the table.
+- [ ] **Distribute.** Even out spacing across three or more objects. The smallest thing on this list, and the most conspicuously missing next to Align, which shipped long ago.
+- [ ] **Brushes, and pressure.** Art / scatter / pattern strokes along a path, plus a freehand tool that samples pen pressure. Two thirds of this already exists: the Width tool stores a real per-vertex width profile and renders it through the geometric stroker, so the work is "sample a drag into a profile that already exists", not "invent variable-width rendering". What's missing is the freehand tool itself, and `e.pressure` is currently read in exactly zero places. **Blocked on hardware:** run [hector-vector.com/pen-probe](https://hector-vector.com/pen-probe) on the device first, because a tablet in mouse mode reports a flat `0.5` forever and no code can recover an axis that was never sent.
+- [ ] **Distort & warp.** Envelope, mesh and free-distort deformations. The largest unstarted epic, and the one with no existing scaffolding to lean on.
+- [ ] **Type systems.** Named character and paragraph styles, and threaded text frames. Today there's a "last used" text style and nothing more.
+- [ ] **PDF / EPS export.** SVG and PNG only, for now.
+- [ ] **Deferred odds and ends.** A full appearance stack (multiple fills/strokes per object) and Expand-Appearance; a proper artboard *tool* (they're currently managed from a panel); PNG export per artboard (SVG already does it); and Pathfinder's Outline op, the one member of the set that never landed.
+- [ ] **Vectorize "quality" tier.** VTracer is the only viable OSS colour vectorizer, and the closed engines (Vectorizer.ai) are meaningfully better on photos. An optional paid-API fallback is on the table. This is a product call, not an engineering one.
 
 ### Known limitations
 
