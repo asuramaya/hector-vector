@@ -333,7 +333,10 @@ configureDataSync({
 });
 // Jobs state + poll layer live in src/ui/jobs.js (jobsCache, activityState,
 // TERMINAL_STATES imported above as live bindings). Wire its UI seams once.
-configureJobs({ setStatus, renderJobsPanel, revealPanel, canReplaceStatus });
+// idleStatus: with no jobs running the poller has nothing to report, so it hands the strip back to
+// the editor rather than stamping "Ready." over the sentence explaining the current tool.
+configureJobs({ setStatus, renderJobsPanel, revealPanel, canReplaceStatus,
+  idleStatus: () => editor._hint() || "Ready." });
 // Colour picker lives in src/ui/colorpicker.js; inject the two shell helpers it needs
 // (both are hoisted top-level fns, so they're in scope at module-eval time).
 configureColorPicker({ floatingInput, showContextMenu });
@@ -2671,16 +2674,37 @@ loadVersion();   // cache the version early so the About panel shows it instantl
 // a cargo build on every cold start with tools missing. Installs are deliberate now, from
 // Settings → "AI models & tools". refreshAll() still fetches tool status so the UI knows
 // what's available and the stage panels can route to Settings when something's missing.
-refreshAll()
-  .then(async () => {
-    // Startup: resume the last document only if the user opted in AND there is
-    // one to restore; otherwise fall back to a blank canvas. (The Process view is
-    // gone — the pipeline lives in the Processor dock panel, visible alongside.)
+// THE CANVAS DOES NOT WAIT FOR THE SERVER, and it used to.
+//
+// A blank canvas is pure client-side geometry — an <svg> with a white rect in it. But it was minted
+// inside refreshAll()'s .then(), so it queued behind a network round trip it never needed. On the
+// desktop that is merely wrong. In the CLOUD build it is fatal: api() is deliberately gated there
+// ("This needs the hector-vector desktop app"), so refreshAll() REJECTS, the .catch below swallowed
+// the rejection into the status line, and mountBlankCanvas() never ran at all.
+//
+// Which means the free public build — hector-vector.com, the one every single newcomer actually
+// lands on — opened to NO CANVAS, and a status line telling them to go and download something else.
+// The front door of the product was a dead end wearing a download nag.
+//
+// So: mint the document first, unconditionally, and let the tool inventory turn up whenever it turns
+// up. Open the page, get a canvas, start drawing.
+(async () => {
+  try {
+    // Resume the last document only if the user asked for that AND there is one to restore.
     if (prefs.startup === "resume" && (await resumeLastDoc())) return;
-    mountBlankCanvas();
-  })
+  } catch { /* nothing to resume, or no server to resume it from — a blank canvas is the right answer */ }
+  mountBlankCanvas();
+})()
+  // ...and the teaching line starts teaching immediately. It only ever fired on a tool CHANGE, so a
+  // first-time visitor sat looking at "Ready." — which tells them nothing at all — until they
+  // happened to click a tool. The first thing on screen should be the first thing worth knowing.
+  .then(() => editor._showHint())
   .then(() => syncDockContext())   // initial park: shelve contextual panels with nothing selected yet
   .catch((error) => setStatus(error.message, 3000));
+
+// The tool/model inventory. Independent of the document, and in the cloud build there is no server
+// to ask — so its absence is the expected state, not an error worth shouting at a first-time visitor.
+refreshAll().catch((error) => { if (!CLOUD) setStatus(error.message, 3000); });
 
 window.addEventListener("resize", () => {
   Object.values(viewports).forEach((vp) => {

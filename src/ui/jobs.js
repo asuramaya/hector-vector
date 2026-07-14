@@ -29,11 +29,18 @@ let setStatus = () => {};
 let renderJobsPanel = () => {};
 let revealPanel = () => {};
 let canReplaceStatus = () => true;
+// What the strip should say when this module has nothing to say. It used to say "Ready.", which was
+// fine while the strip was a STATUS bar and is wrong now that it is the TEACHING line: the poller
+// runs on a timer, so every few seconds it was quietly wiping out the sentence explaining the tool
+// in the user's hand and replacing it with a word that tells them nothing. A module with no news
+// should hand the surface back, not stamp its own idle message on it.
+let idleStatus = () => "Ready.";
 export function configureJobs(deps) {
   if (deps.setStatus) setStatus = deps.setStatus;
   if (deps.renderJobsPanel) renderJobsPanel = deps.renderJobsPanel;
   if (deps.revealPanel) revealPanel = deps.revealPanel;
   if (deps.canReplaceStatus) canReplaceStatus = deps.canReplaceStatus;
+  if (deps.idleStatus) idleStatus = deps.idleStatus;
 }
 
 // Cleared to 0 by the shell when it kicks off a fresh pipeline run, so the next
@@ -128,7 +135,7 @@ export function applyJobsData(jobs, seq) {
   }
   if (!canReplaceStatus()) return { completionsHappened, completedNow };
   if (!jobs.length) {
-    setStatus("Ready.");
+    setStatus(idleStatus());
     lastBatchFailCount = 0;
     return { completionsHappened, completedNow };
   }

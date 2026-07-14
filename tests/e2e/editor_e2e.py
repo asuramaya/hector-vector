@@ -5381,6 +5381,44 @@ def main():
             tctx.close()
 
         # ---------------------------------------------------------------------------------
+        # What a NEWCOMER lands on. The blank canvas is pure client-side geometry, but it used to be
+        # minted inside refreshAll()'s .then() — so it queued behind a network round trip it never
+        # needed. In the CLOUD build, where api() is deliberately gated, refreshAll() REJECTS: the
+        # .catch swallowed it into the status line and mountBlankCanvas() never ran. So the free
+        # public build — the one every newcomer actually opens — had NO CANVAS AT ALL, and a status
+        # line reading "This needs the hector-vector desktop app". The front door was a dead end.
+        section("First run: open the page, get a canvas, start drawing")
+        for label, url in [("desktop", BASE), ("cloud (the free public build)", BASE + "?cloud")]:
+            nctx = browser.new_context(viewport={"width": 1280, "height": 800})
+            np = nctx.new_page()
+            set_page(np)
+            try:
+                np.goto(url, wait_until="domcontentloaded")
+                np.wait_for_function("() => !!window.__layout", timeout=20000)
+                np.wait_for_timeout(900)
+                first = np.evaluate("""() => {
+                    const a = editor && editor.stage ? editor.stage.querySelector('.hv-artboard') : null;
+                    return {
+                        hasStage: !!(editor && editor.stage),
+                        size: a ? a.getAttribute('width') + 'x' + a.getAttribute('height') : null,
+                        modal: !document.querySelector('#modal-root').hidden,
+                        status: document.querySelector('#status-text').textContent.trim(),
+                    };
+                }""")
+                check(f"{label}: a fresh page opens straight onto a 512x512 canvas",
+                      first["hasStage"] and first["size"] == "512x512", str(first))
+                check(f"{label}: nothing is in the way — no modal, no download nag",
+                      not first["modal"] and "desktop app" not in first["status"], str(first))
+                # And the teaching line is already teaching. It only ever fired on a tool CHANGE, so a
+                # first-time visitor stared at "Ready." — which says nothing — until they happened to
+                # click something. Worse, the job poller stamped "Ready." back over it on a TIMER.
+                check(f"{label}: the strip already says what the tool in your hand does",
+                      "Select" in first["status"] and first["status"] != "Ready.", first["status"])
+            finally:
+                set_page(page)
+                nctx.close()
+
+        # ---------------------------------------------------------------------------------
         # Themes, and the accent that was doing five jobs at once. --accent was ONE variable used 88
         # times and it meant: hovering · switched on · selected · droppable · AND the editor's own
         # furniture on the canvas (anchors, handles, marquee). You cannot add a sixth meaning ("this
