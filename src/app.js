@@ -69,6 +69,7 @@ import {
   saveAsDocument, saveProject, openProject, loadProjects, exportFlow,
 } from "./ui/docio.js";
 import { configureShortcuts, openShortcutsModal } from "./ui/shortcuts.js";
+import { configurePalette, openPalette } from "./ui/palette.js";
 import {
   configureGallery, renderGalleryGrid, loadRasterToCanvas, loadFileToCanvas, canvasIsEmpty,
   copyToClipboard, downloadBlob, downloadUrl, revealInFileManager,
@@ -114,6 +115,7 @@ try {
 const fileInputEl = document.querySelector("#file-input");
 const outputPreviewEl = document.querySelector("#output-preview");
 const statusTextEl = document.querySelector("#status-text");
+const paletteButtonEl = document.querySelector("#palette-button");
 const outputLabelEl = document.querySelector("#output-label");
 const modalRootEl = document.querySelector("#modal-root");
 const modalTitleEl = document.querySelector("#modal-title");
@@ -2689,6 +2691,20 @@ window.addEventListener("resize", () => {
 // (keyboard-shortcuts modal extracted → src/ui/shortcuts.js)
 
 shortcutButtonEl.addEventListener("click", openShortcutsModal);
+
+// The command palette. Ctrl/Cmd+K, and a ⌕ button in the strip so it is reachable with a thumb —
+// a phone has no Ctrl, and "the feature exists but only on a keyboard" is the exact failure this
+// whole epic is about.
+configurePalette({ modalSearchEl, modalBodyEl, modalRootEl, editor });
+paletteButtonEl.addEventListener("click", openPalette);
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "k" && event.key !== "K") return;
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+  const tag = (event.target?.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || event.target?.isContentEditable) return;
+  event.preventDefault();
+  if (modalRootEl.hidden) openPalette();
+});
 
 // (zoom/fit/actual helpers + wheel binding extracted → src/ui/viewport.js)
 

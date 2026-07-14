@@ -137,34 +137,116 @@ export function evaluate(f) {
 // that needs a mouse to hover, on a product whose whole point is that it also runs on a phone. So a
 // tool's purpose was literally unreachable on half our platforms.
 //
-// Same contract as ACTIONS.why: what the thing is FOR, in a sentence, with NO keyboard shortcut in
-// it. The shortcut is a different affordance and it is already printed on the tile.
+// Same contract as ACTIONS: a name and what the thing is FOR, in a sentence, with NO keyboard
+// shortcut in it. The shortcut is a different affordance and it is already printed on the tile.
+// [label, why] — the label is what a command palette calls it, and what you'd search for.
 export const TOOL_WHY = {
-  "tool:select":       "Pick things up and move them around",
-  "tool:node":         "Reshape a path by dragging its points",
-  "tool:pen":          "Draw an exact shape, one point at a time",
-  "tool:curvature":    "Draw smooth curves without wrestling handles",
-  "tool:rect":         "Drag out a rectangle",
-  "tool:ellipse":      "Drag out a circle or an oval",
-  "tool:line":         "Drag out a straight line",
-  "tool:text":         "Place some type and start typing",
-  "tool:width":        "Make a stroke thicker in some places than others",
-  "tool:shapebuilder": "Merge overlapping shapes by painting across them",
-  "tool:scissors":     "Snip a path open at a single point",
-  "tool:knife":        "Slice clean through a shape",
-  "tool:eraser":       "Rub parts of a shape away",
+  "tool:select":       ["Select", "Pick things up and move them around"],
+  "tool:node":         ["Edit points", "Reshape a path by dragging its points"],
+  "tool:pen":          ["Pen", "Draw an exact shape, one point at a time"],
+  "tool:curvature":    ["Curvature", "Draw smooth curves without wrestling handles"],
+  "tool:rect":         ["Rectangle", "Drag out a rectangle"],
+  "tool:ellipse":      ["Ellipse", "Drag out a circle or an oval"],
+  "tool:line":         ["Line", "Drag out a straight line"],
+  "tool:text":         ["Text", "Place some type and start typing"],
+  "tool:width":        ["Width", "Make a stroke thicker in some places than others"],
+  "tool:shapebuilder": ["Shape Builder", "Merge overlapping shapes by painting across them"],
+  "tool:scissors":     ["Scissors", "Snip a path open at a single point"],
+  "tool:knife":        ["Knife", "Slice clean through a shape"],
+  "tool:eraser":       ["Eraser", "Rub parts of a shape away"],
 };
 export const VIEW_WHY = {
-  "vp:zoom-out":   "See more of the canvas at once",
-  "vp:zoom-in":    "Get a closer look",
-  "vp:fit":        "Fit the whole canvas on screen",
-  "vp:actual":     "Back to actual size",
-  "#vp-selectall": "Select everything on the canvas",
-  "#vp-rulers":    "Show rulers down the edges",
-  "#vp-guides":    "Snap to guides while you drag",
-  "#undo-button":  "Take back the last thing you did",
-  "#redo-button":  "Put back what you just undid",
+  "vp:zoom-out":   ["Zoom out", "See more of the canvas at once"],
+  "vp:zoom-in":    ["Zoom in", "Get a closer look"],
+  "vp:fit":        ["Fit to view", "Fit the whole canvas on screen"],
+  "vp:actual":     ["Actual size", "Back to 100%"],
+  "#vp-selectall": ["Select all", "Select everything on the canvas"],
+  "#vp-rulers":    ["Rulers", "Show rulers down the edges"],
+  "#vp-guides":    ["Smart guides", "Snap to guides while you drag"],
+  "#undo-button":  ["Undo", "Take back the last thing you did"],
+  "#redo-button":  ["Redo", "Put back what you just undid"],
 };
+
+// THE WORDS A NEWCOMER ACTUALLY REACHES FOR, which are almost never the words on the button.
+//
+// This is the half of a command palette that decides whether it works, and it is the half that is
+// easy to skip. Search only the name and the description and you serve only the people who already
+// know the vocabulary: nobody types "subtract", they type "hole". Nobody types "scale", they type
+// "bigger". A palette without this list feels broken in a way that looks like a search bug and is
+// really a content gap — which is exactly how it first behaved: "hole" matched *Fit to view*, on the
+// "w-hole canvas", and missed Subtract entirely.
+//
+// Keyed by tile key, or (for the menu-only verbs, which have no tile) by label prefix.
+const FIND = {
+  "#act-union":      "merge combine join weld fuse one",
+  "#act-subtract":   "hole punch knockout cutout notch remove minus",
+  "#act-intersect":  "overlap common shared inside",
+  "#act-clip":       "crop frame hide mask window trim",
+  "#act-duplicate":  "copy clone repeat another",
+  "#layer-delete":   "remove erase bin trash get rid",
+  "#act-cut":        "move clipboard",
+  "#act-copy":       "clipboard",
+  "#act-paste":      "clipboard",
+  "#act-scale":      "bigger smaller resize size grow shrink stretch",
+  "#act-rotate":     "turn angle spin tilt",
+  "#act-rotate-cw":  "turn right quarter",
+  "#act-rotate-ccw": "turn left quarter",
+  "#act-flip-h":     "mirror reflect reverse sideways",
+  "#act-flip-v":     "mirror reflect reverse upside down",
+  "#layer-group":    "combine together lock",
+  "#layer-ungroup":  "split apart separate break",
+  "#layer-front":    "top above stack order raise",
+  "#layer-back":     "bottom behind stack order lower",
+  "#layer-forward":  "up above raise stack order",
+  "#layer-backward": "down behind lower stack order",
+  "#layer-rename":   "name title",
+  "#hdr-invert":     "negative inside out background",
+  "#layer-merge":    "combine same colour color flatten",
+  "#layer-cleanup":  "tidy empty stray remove junk",
+  "tool:select":     "move arrow pointer pick drag",
+  "tool:node":       "anchor handle vertex direct bezier reshape",
+  "tool:pen":        "draw path bezier vector outline",
+  "tool:curvature":  "draw curve smooth round bend",
+  "tool:rect":       "square box block",
+  "tool:ellipse":    "circle oval round dot",
+  "tool:line":       "stroke straight rule",
+  "tool:text":       "type font write letters words label title",
+  "tool:width":      "thick thin taper swell weight",
+  "tool:shapebuilder": "merge combine paint join",
+  "tool:scissors":   "snip open split break path",
+  "tool:knife":      "slice cut split divide",
+  "tool:eraser":     "rub remove delete",
+  "vp:zoom-in":      "magnify closer bigger in",
+  "vp:zoom-out":     "smaller further away out",
+  "vp:fit":          "zoom fit whole all see everything",
+  "vp:actual":       "100 percent real one to one",
+  "#vp-selectall":   "everything all",
+  "#vp-rulers":      "measure guides edges",
+  "#vp-guides":      "snap align smart",
+  "#undo-button":    "back mistake revert oops",
+  "#redo-button":    "forward again",
+};
+// The menu-only verbs have no tile and so no key — match them by the same label prefix VERB_WHY uses.
+const VERB_FIND = [
+  ["Expand object", "convert paths outline flatten editable"],
+  ["Outline stroke", "convert stroke to shape thicken"],
+  ["Offset path", "grow shrink inset outset bigger smaller"],
+  ["Pathfinder: Divide", "split cut regions pieces"],
+  ["Pathfinder: Trim", "remove hidden underneath"],
+  ["Pathfinder: Merge", "combine same colour color"],
+  ["Pathfinder: Crop", "keep inside clip"],
+  ["Pathfinder: Minus Back", "hole subtract knockout"],
+  ["Vary width", "thick thin taper swell"],
+  ["Make blend", "morph between transition tween"],
+  ["Pattern fill", "tile repeat texture wallpaper"],
+  ["Make symbol", "reuse instance component library"],
+  ["Reflect", "mirror flip"],
+  ["Shear", "slant skew italic"],
+  ["Transform again", "repeat last"],
+  ["Repeat", "grid radial mirror array duplicate many"],
+];
+const verbFind = (label) => (VERB_FIND.find(([p]) => label.startsWith(p)) || [null, ""])[1];
+export const findWords = (key, label) => FIND[key] || (label ? verbFind(label) : "") || "";
 
 // One question — "what is this tile FOR?" — and one answer, whatever kind of tile it is: a tool, a
 // view control, or an action. `f` (selection facts) is optional and only matters for the handful of
@@ -177,8 +259,26 @@ export function whyFor(key, f) {
     const d = a.dynamic && f ? a.dynamic(f) : null;
     return { label: (d && d.label) || a.label, why: (d && d.why) || a.why };
   }
-  const why = TOOL_WHY[key] || VIEW_WHY[key];
-  return why ? { label: null, why } : null;
+  const pair = TOOL_WHY[key] || VIEW_WHY[key];
+  return pair ? { label: pair[0], why: pair[1] } : null;
+}
+
+// Every tile this app has, named and explained, in one list. The palette enumerates THIS — not a
+// hand-kept menu that would drift the moment someone adds a tool — so a command that exists but has
+// never been given a sentence shows up as a gap you can see, rather than a hole nobody notices.
+export function everyTile(f) {
+  const out = [];
+  for (const el of document.querySelectorAll(".tool-button")) {
+    if (el.classList.contains("panel-x")) continue;
+    const key = el.id ? "#" + el.id
+      : el.dataset.tool ? "tool:" + el.dataset.tool
+        : (el.dataset.vp && el.dataset.action) ? "vp:" + el.dataset.action : null;
+    if (!key) continue;
+    const info = whyFor(key, f);
+    if (!info || !info.label) continue;   // an unnamed tile has nothing to say; don't fake it
+    out.push({ key, label: info.label, why: info.why, find: findWords(key), el, available: !el.disabled });
+  }
+  return out;
 }
 
 // Why a VERB (from editor._objectActions) is worth doing. Keyed by its label — matched by prefix so

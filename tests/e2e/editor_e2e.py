@@ -5381,6 +5381,88 @@ def main():
             tctx.close()
 
         # ---------------------------------------------------------------------------------
+        # The command palette. This app has 100+ commands and, until now, exactly two ways to reach
+        # any of them: find its rune on a toolbar, or find its row in a menu. Both require you to
+        # already know where it lives — and the toolbars are runes. A newcomer does not think "I want
+        # Pathfinder ▸ Minus Back". They think "I want to cut a hole in this".
+        section("Command palette: type what you want, in the words you'd use")
+        page.evaluate("() => { if (!document.querySelector('#modal-root').hidden) closeModal(); editor.selection = new Set(); editor._renderSelection(); }")
+        page.wait_for_timeout(100)
+
+        def palette(query, sel_ids=None):
+            page.evaluate("() => { if (!document.querySelector('#modal-root').hidden) closeModal(); }")
+            page.wait_for_timeout(60)
+            if sel_ids is not None:
+                page.evaluate(f"() => {{ editor.selection = new Set({sel_ids!r}); editor.artboardSelected = false;"
+                              "  editor._renderSelection(); editor._renderInspector(); }")
+                page.wait_for_timeout(120)
+            page.keyboard.press("Control+k")
+            page.wait_for_timeout(180)
+            page.fill("#modal-search", query)
+            page.wait_for_timeout(180)
+            return page.evaluate("""() => [...document.querySelectorAll('.palette-row')].map((r) => ({
+                label: r.querySelector('.palette-label').textContent,
+                available: !r.classList.contains('unavailable'),
+            }))""")
+
+        check("Ctrl+K opens the palette",
+              bool(palette("")) and page.evaluate("() => !document.querySelector('#modal-root').hidden"))
+
+        # THE test. Nobody types "subtract" — they type "hole". Neither the command's NAME nor its
+        # description contains that word; it is reachable only because actions.js carries the words a
+        # newcomer actually reaches for, alongside the words the app uses.
+        hole = palette("hole")
+        check("searching a beginner's word ('hole') finds the right command (Subtract)",
+              bool(hole) and hole[0]["label"] == "Subtract", str(hole[:3]))
+
+        # And the counter-test, which is why the matcher can't use `includes`: the FIRST version of
+        # this returned "Fit to view" for "hole", off the "w-HOLE canvas", and missed Subtract.
+        check("...and does not match mid-word ('hole' must never match 'the whole canvas')",
+              all(h["label"] != "Fit to view" for h in hole), str([h["label"] for h in hole]))
+
+        for q, want in [("bigger", "Scale"), ("mirror", "Flip"), ("hide", "Clipping mask"),
+                        ("turn", "Rotate"), ("rub", "Eraser")]:
+            hits = palette(q)
+            check(f"plain-word search: {q!r} finds {want!r}",
+                  any(h["label"].startswith(want) for h in hits),
+                  str([h["label"] for h in hits[:4]]))
+
+        # An unavailable command is still LISTED, greyed. A palette that hid what you can't currently
+        # do would only ever show you what you already know how to reach — and the whole point of
+        # searching "hole" with nothing selected is to be TOLD that Subtract exists.
+        page.evaluate("() => { closeModal(); editor.selection = new Set(); editor._renderSelection(); }")
+        hits = palette("hole")
+        check("an unavailable command is still listed (greyed), not hidden — that's how you learn it exists",
+              bool(hits) and hits[0]["label"] == "Subtract" and not hits[0]["available"], str(hits[:2]))
+
+        # The menu-only VERBS (Expand, Outline stroke, Pathfinder, Make symbol…) have no tile at all,
+        # so they were previously unreachable except by knowing the Actions menu existed. They are
+        # computed from the SELECTION, so this needs a real shape — and it mounts its own rather than
+        # borrowing an id from a document twenty sections upstream that may no longer be loaded.
+        page.evaluate("""() => { closeModal();
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
+              + '<rect class="hv-artboard" x="0" y="0" width="200" height="200" fill="#fff"/>'
+              + '<rect data-hv-id="pal1" x="20" y="20" width="80" height="80" fill="#444"/></svg>',
+              'palette-probe.svg'); }""")
+        page.wait_for_function("() => editor && editor.stage && editor.stage.querySelector('[data-hv-id=\"pal1\"]')", timeout=4000)
+        verbs = palette("reuse", sel_ids=["pal1"])
+        check("menu-only verbs are searchable too ('reuse' → Make symbol)",
+              any(h["label"].startswith("Make symbol") for h in verbs),
+              str([h["label"] for h in verbs[:4]]))
+
+        # Enter runs the top hit.
+        page.evaluate("() => { closeModal(); editor.setTool('select'); }")
+        page.wait_for_timeout(80)
+        page.keyboard.press("Control+k"); page.wait_for_timeout(180)
+        page.fill("#modal-search", "rub"); page.wait_for_timeout(180)
+        page.keyboard.press("Enter"); page.wait_for_timeout(200)
+        check("Enter runs the top hit (and closes the palette)",
+              page.evaluate("() => editor.tool") == "eraser"
+              and page.evaluate("() => document.querySelector('#modal-root').hidden"),
+              page.evaluate("() => editor.tool"))
+        page.evaluate("() => { editor.setTool('select'); }")
+
+        # ---------------------------------------------------------------------------------
         # Crossing the breakpoint and coming BACK. This suite had never once resized a window,
         # which is exactly how 526 green checks coexisted with a wrecked desktop toolbar: the
         # phone composition remembers each moved element's {parent, next} sibling, but it moves

@@ -2025,6 +2025,31 @@ text.hv-text-editing { visibility: hidden; }
 .shortcut-grid { grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; }
 .shortcut-grid .info-key { white-space: nowrap; color: var(--fg); }
 .shortcut-grid .info-val { word-break: normal; }
+
+/* ---- Command palette: type what you want, in the words you'd use ---- */
+.palette-list { display: flex; flex-direction: column; }
+.palette-row {
+  display: grid; grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
+  align-items: baseline; gap: 12px; width: 100%; text-align: left;
+  padding: 8px 10px; border: 0; border-bottom: 1px solid var(--line);
+  background: transparent; color: var(--fg); font: inherit; cursor: pointer;
+}
+.palette-row:last-child { border-bottom: 0; }
+.palette-row.on { background: var(--accent); color: #fff; }
+.palette-label { font-weight: 600; font-size: 13px; }
+.palette-why { font-size: 12px; color: var(--muted); min-width: 0; }
+.palette-row.on .palette-why { color: rgba(255, 255, 255, 0.85); }
+/* An unavailable command is dimmed but NOT hidden. A palette that showed only what you can already
+   do would only ever tell you what you already know — the whole value of searching "hole" with
+   nothing selected is being told that Subtract exists, and what it wants. */
+.palette-row.unavailable .palette-label { color: var(--muted); font-weight: 500; }
+.palette-row.unavailable.on { background: var(--muted); }
+/* A phone opens this with a thumb, so the rows have to be thumb-sized, and the reason wraps under
+   the name rather than fighting it for a 390px row. */
+@media (max-width: 620px) {
+  .palette-row { grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 10px 12px; }
+  .palette-label { font-size: 14px; }
+}
 .shortcut-section {
   grid-column: 1 / -1;
   margin-top: 12px;
