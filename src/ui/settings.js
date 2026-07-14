@@ -12,6 +12,23 @@ import { loadJobs, installJobActive } from "./jobs.js";
 import { CLOUD } from "./env.js";
 import { getTouchDebugSnapshot, formatTouchDebugSnapshot, setTouchDebugVisual, isTouchDebugVisualOn } from "./touchdebug.js";
 import { openLayoutPicker } from "./layout-picker.js";
+import { THEMES, currentTheme, setTheme, currentHighlight, setHighlight } from "./theme.js";
+
+// The CURRENT theme's own accent, resolved to a hex an <input type="color"> will accept (it refuses
+// "var(--accent)" and every other CSS form). Only ever called when the user has NOT set a custom
+// highlight — either at first render, or right after Reset has removed the override — so the value
+// it reads back is the theme's, which is exactly what the swatch should be showing.
+function readAccent() {
+  const probe = document.createElement("div");
+  probe.style.color = "var(--accent)";
+  probe.style.display = "none";
+  document.body.appendChild(probe);
+  const rgb = getComputedStyle(probe).color;
+  probe.remove();
+  const m = rgb.match(/\d+/g);
+  if (!m) return "#1b73e8";
+  return "#" + m.slice(0, 3).map((n) => Number(n).toString(16).padStart(2, "0")).join("");
+}
 
 let setStatus, openModal, closeModal, modalSearchEl, modalBodyEl,
     prefs, persistPrefs, getWorkspace, refreshAll, fetchStatus, applyStatusData;
@@ -88,6 +105,30 @@ export function openAppSettings(opts = {}) {
     "What to show when the app opens. Blank starts fresh with an empty canvas."));
   root.appendChild(prefToggleRow("Smart guides", editor.smartGuides,
     (v) => { editor.smartGuides = v; prefs.smartGuides = v; persistPrefs(); }, "Snap to other objects' edges/centres while moving."));
+
+  // ---- Appearance ----
+  // The app had exactly one look and no way to have another, because its colours had never been
+  // named. Now they are, so this is a picker rather than a project.
+  root.appendChild(sectionTitle("Appearance"));
+  root.appendChild(fieldRow("Theme",
+    makeSelectRaw(currentTheme(), THEMES, (v) => setTheme(v)),
+    "Inverted is pure black paper and white ink — the same hard edges, cut the other way."));
+
+  // A native colour input on purpose. The in-app picker is a rich panel editor built to live INSIDE
+  // a dock, and hosting it in a settings row is exactly the mistake that produced the Recolor
+  // "rainbow bar" (a whole picker embedded into a 20px swatch, collapsing its own fields). One
+  // control, both platforms, and it opens the OS picker on a phone.
+  const hlRow = document.createElement("div");
+  hlRow.className = "hl-pick";
+  const hl = document.createElement("input");
+  hl.type = "color";
+  hl.value = currentHighlight() || readAccent();
+  hl.addEventListener("input", () => setHighlight(hl.value));
+  const reset = ghostBtn("Reset", () => { setHighlight(""); hl.value = readAccent(); });
+  hlRow.appendChild(hl);
+  hlRow.appendChild(reset);
+  root.appendChild(fieldRow("Highlight colour", hlRow,
+    "Recolours everything the app uses to point at things: hover, what's switched on, what's selected, and the handles on the canvas."));
 
   // Where the library reads source images from (the backend /api/source endpoint) — desktop
   // only, there's no disk library in the pure-client cloud build.

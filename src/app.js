@@ -70,6 +70,10 @@ import {
 } from "./ui/docio.js";
 import { configureShortcuts, openShortcutsModal } from "./ui/shortcuts.js";
 import { configurePalette, openPalette } from "./ui/palette.js";
+// Side-effect import: theme.js re-applies the stored theme and starts tracking the OS setting when
+// "Match the system" is chosen. index.html has already painted the right one (an inline script, so
+// there is no white flash before the modules resolve); this is the module taking ownership of it.
+import "./ui/theme.js";
 import {
   configureGallery, renderGalleryGrid, loadRasterToCanvas, loadFileToCanvas, canvasIsEmpty,
   copyToClipboard, downloadBlob, downloadUrl, revealInFileManager,

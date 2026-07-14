@@ -16,6 +16,19 @@
         var h = location.hostname;
         if (/\.pages\.dev$/.test(h) || h === "hector-vector.com" || h === "www.hector-vector.com") window.__HV_CLOUD__ = true;
       })();
+      // Theme, BEFORE first paint. src/ui/theme.js owns this properly, but it is an ES module and so
+      // cannot run until the module graph resolves — by which time the browser has already painted a
+      // white page. On a dark theme that is a full-screen white flash on every single load, which is
+      // worse than having no dark theme at all. Twelve lines here buy one honest paint.
+      (function () {
+        try {
+          var t = localStorage.getItem("hector-vector:theme") || "light";
+          if (t === "system") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          document.documentElement.setAttribute("data-theme", t);
+          var hl = localStorage.getItem("hector-vector:highlight");
+          if (hl) document.documentElement.style.setProperty("--accent", hl);
+        } catch (e) { /* private mode / no storage: the light theme is the default anyway */ }
+      })();
     </script>
     <title>hector-vector: free vector editor in your browser</title>
 

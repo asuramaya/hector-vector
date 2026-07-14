@@ -5381,6 +5381,94 @@ def main():
             tctx.close()
 
         # ---------------------------------------------------------------------------------
+        # Themes, and the accent that was doing five jobs at once. --accent was ONE variable used 88
+        # times and it meant: hovering · switched on · selected · droppable · AND the editor's own
+        # furniture on the canvas (anchors, handles, marquee). You cannot add a sixth meaning ("this
+        # just became possible") to a colour already carrying five, which is why the token split had
+        # to come before the suggestion work.
+        section("Themes: the accent was five colours wearing one name")
+        tctx2 = browser.new_context(viewport={"width": 1280, "height": 800})
+
+        def theme_probe(theme, highlight=None):
+            pg2 = tctx2.new_page()
+            script = f"localStorage.setItem('hector-vector:theme', '{theme}');"
+            if highlight:
+                script += f"localStorage.setItem('hector-vector:highlight', '{highlight}');"
+            else:
+                script += "localStorage.removeItem('hector-vector:highlight');"
+            pg2.add_init_script(script)
+            pg2.goto(BASE, wait_until="domcontentloaded")
+            pg2.wait_for_function("() => !!window.__layout", timeout=20000)
+            pg2.wait_for_timeout(200)
+            out = pg2.evaluate("""() => {
+                const cs = getComputedStyle(document.documentElement);
+                const v = (n) => cs.getPropertyValue(n).trim();
+                // resolve a token to real rgb (var() chains don't resolve in getPropertyValue)
+                const solve = (n) => { const d = document.createElement('div');
+                    d.style.color = `var(${n})`; d.style.display = 'none';
+                    document.body.appendChild(d); const c = getComputedStyle(d).color; d.remove(); return c; };
+                const btn = document.querySelector('.view-swap .icon-btn.hdr-text.active')
+                         || document.querySelector('.tool-button.on');
+                const b = btn ? getComputedStyle(btn) : null;
+                return {
+                    attr: document.documentElement.getAttribute('data-theme'),
+                    accent: solve('--accent'), hover: solve('--hl-hover'), on: solve('--hl-on'),
+                    drop: solve('--hl-drop'), edit: solve('--hl-edit'), suggest: solve('--hl-suggest'),
+                    onInk: solve('--on-ink'), bg: solve('--bg'),
+                    activeBtnBg: b ? b.backgroundColor : null,
+                    activeBtnFg: b ? b.color : null,
+                };
+            }""")
+            pg2.close()
+            return out
+
+        try:
+            light = theme_probe("light")
+            check("the theme lands on <html> before anything else can paint",
+                  light["attr"] == "light", str(light["attr"]))
+            # The split is a SEMANTICS change, not a repaint: every role still defaults to the accent,
+            # so the app looks exactly as it did. That is the point — it buys a vocabulary, not a look.
+            check("the split is behaviour-preserving: every highlight role still defaults to the accent",
+                  light["hover"] == light["accent"] and light["on"] == light["accent"]
+                  and light["drop"] == light["accent"] and light["edit"] == light["accent"],
+                  str({k: light[k] for k in ("accent", "hover", "on", "drop", "edit")}))
+            # ...except the one that had to be different, which is the entire reason for the epic.
+            check("--hl-suggest is NOT the accent (or 'you can do this now' looks like 'you're hovering this')",
+                  light["suggest"] != light["accent"], f"suggest={light['suggest']} accent={light['accent']}")
+
+            dark = theme_probe("dark")
+            check("dark theme applies and inverts the paper",
+                  dark["attr"] == "dark" and dark["bg"] != light["bg"], str(dark["bg"]))
+
+            inv = theme_probe("invert")
+            check("inverted theme applies (black paper, white ink)",
+                  inv["attr"] == "invert" and inv["bg"] == "rgb(0, 0, 0)", str(inv["bg"]))
+            # THE inverted-theme trap. --ink is "the opposite of the paper", not "the dark colour". 39
+            # rules knocked their text out as a hardcoded #fff, which is fine until --ink IS #fff —
+            # then every active button is white-on-white and simply disappears. It did.
+            check("inverted: an active button is not white-on-white (it had 39 ways to be)",
+                  inv["activeBtnBg"] != inv["activeBtnFg"],
+                  f"bg={inv['activeBtnBg']} fg={inv['activeBtnFg']}")
+            # And the one place a theme must break its own rule: the canvas furniture sits on the
+            # USER'S artwork, not on our chrome, and the default artboard is white. Let --hl-edit
+            # follow an all-white accent and the selection box draws white on white and vanishes.
+            check("inverted: the canvas handles do not follow the accent (they'd vanish on a white artboard)",
+                  inv["edit"] != inv["accent"] and inv["edit"] != "rgb(255, 255, 255)",
+                  f"edit={inv['edit']} accent={inv['accent']}")
+
+            custom = theme_probe("light", highlight="#c2185b")
+            check("a custom highlight repaints every role that points at something",
+                  custom["accent"] == "rgb(194, 24, 91)" and custom["hover"] == custom["accent"]
+                  and custom["on"] == custom["accent"] and custom["edit"] == custom["accent"],
+                  str({k: custom[k] for k in ("accent", "hover", "on", "edit")}))
+            check("...but never the suggestion colour, or it collides with hover again",
+                  custom["suggest"] != custom["accent"],
+                  f"suggest={custom['suggest']} accent={custom['accent']}")
+        finally:
+            set_page(page)
+            tctx2.close()
+
+        # ---------------------------------------------------------------------------------
         # The command palette. This app has 100+ commands and, until now, exactly two ways to reach
         # any of them: find its rune on a toolbar, or find its row in a menu. Both require you to
         # already know where it lives — and the toolbars are runes. A newcomer does not think "I want
