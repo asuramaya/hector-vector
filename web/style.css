@@ -2297,9 +2297,45 @@ text.hv-text-editing { visibility: hidden; }
     gap: 0;
     padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
   }
-  /* the status strip ("Ready." / transient messages) is a whole band we can't spare on a phone —
-     feedback still fires; it's just not a permanent row here. */
-  .app.editor > .status-bar { display: none; }
+  /* This used to be `display: none`, on the reasoning that a status strip ("Ready.", "Saved.") is a
+     whole band a phone can't spare. That misread what the band IS. It is the TEACHING line: the app
+     writes the current tool's purpose into it in plain English on every tool change, and it is the
+     only plain English this app puts on screen anywhere. Hiding it meant a phone COMPUTED the
+     sentence ("Rectangle — drag on the canvas") and rendered it into a hidden element, on the one
+     platform with no hover, no tooltips and no keyboard shortcuts — the platform that needed the
+     words most. It also took the ? (help) button down with it, to a 0x0 rect.
+     So the band is spent, deliberately, and kept cheap: one line, 30px, at the foot where the
+     desktop puts it too. The FAB offsets below account for it via --strip-h. */
+  :root { --strip-h: 44px; }
+  .app.editor > .status-bar {
+    min-height: var(--strip-h);
+    gap: 8px;
+    padding: 4px 10px calc(env(safe-area-inset-bottom)) 10px;   /* now the last band → clear the home indicator */
+    align-items: center;
+    /* The base rule wraps. Here that is fatal: the sentence asks for its full content width, blows
+       the row, and the ? button drops to a SECOND line — a 71px strip instead of 44. One row, and
+       let the sentence shrink into it (see `flex: 1 1 0` below). */
+    flex-wrap: nowrap;
+  }
+  .app.editor > .status-bar #status-text {
+    /* Three things, and all three are load-bearing. `flex: 1 1 auto` + `min-width: 0`: without them
+       the text sizes to its own content in this flex row and shoves the ? button clean off the right
+       edge of the phone. `white-space: normal`: the desktop rule sets `nowrap`, which makes wrapping
+       impossible, so a hint could only ever be one clipped line. And the 2-line clamp caps it — the
+       band's height is quoted to the FAB as --strip-h, so a strip free to grow to four lines would
+       silently put the FAB on top of the tools it is supposed to float above. Two lines at 390px is
+       ~110 characters, which is the real budget every touch hint is written to. */
+    flex: 1 1 0; min-width: 0;   /* basis 0, not auto: auto asks for the content width and wraps the row */
+    white-space: normal;
+    font-size: 12px; line-height: 1.3;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  /* ◫ collapses the side rails. A phone HAS no side rails — the dock is a sheet — so the button is
+     meaningless here and the 30px is better spent on the sentence. ? stays: it is the way in to help,
+     and on a phone it was previously unreachable at any size. */
+  .app.editor > .status-bar #rail-toggle { display: none; }
+  .app.editor > .status-bar .bar-btn { width: 26px; height: 26px; font-size: 13px; }
   /* The Arrange strip becomes the CONTEXTUAL bar: hidden while you draw, and slid in under the
      canvas the moment something is selected (order:3 drops it below .stage-body). It carries the
      ops you can only want with a selection — arrange, rename, duplicate and, crucially, DELETE,
@@ -2380,8 +2416,9 @@ text.hv-text-editing { visibility: hidden; }
     -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent 100%);
     mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent 100%);
   }
-  /* toolstrip is the last band → pad past the home indicator */
-  .editor-grid > .toolstrip { padding-bottom: calc(7px + env(safe-area-inset-bottom)); }
+  /* The toolstrip is no longer the last band — the teaching strip sits under it now and carries the
+     home-indicator inset instead. Padding past the indicator HERE as well would double it. */
+  .editor-grid > .toolstrip { padding-bottom: 7px; }
   .editor-grid > .toolstrip .tool-button.tool-primary { width: 48px; height: 48px; font-size: 21px; }
   /* separators were horizontal hairlines in the vertical bars → make them vertical */
   .editor-grid > .toolstrip .tool-sep,
@@ -2485,7 +2522,7 @@ text.hv-text-editing { visibility: hidden; }
      FAB spot). The fill/stroke swatches move LEFT below so they don't sit under it. */
   .mobile-fab {
     display: grid; place-items: center;
-    position: fixed; right: 14px; bottom: calc(76px + env(safe-area-inset-bottom));
+    position: fixed; right: 14px; bottom: calc(76px + var(--strip-h) + env(safe-area-inset-bottom));
     width: 50px; height: 50px; border-radius: 50%;
     background: var(--ink); color: #fff; border: 0;
     font-size: 21px; line-height: 1; cursor: pointer;
@@ -2495,7 +2532,7 @@ text.hv-text-editing { visibility: hidden; }
   .mobile-fab .brand-logo { display: block; width: 26px; height: 26px; filter: invert(1); }
   /* the contextual bar slides in beneath the canvas, so lift the FAB clear of it or it lands on
      top of Delete — the one control it must never cover. */
-  .app.has-selection .mobile-fab { bottom: calc(140px + env(safe-area-inset-bottom)); }
+  .app.has-selection .mobile-fab { bottom: calc(140px + var(--strip-h) + env(safe-area-inset-bottom)); }
   .app.sheet-open .mobile-fab { display: none; }   /* tap the scrim to dismiss */
   .app.sheet-open .mobile-scrim { display: block; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); z-index: 58; }
   .stage-body .tool-swatches { left: 12px; right: auto; }
@@ -2541,6 +2578,25 @@ text.hv-text-editing { visibility: hidden; }
     grid-template-columns: auto minmax(0, 1fr) auto !important;
     grid-template-rows: auto minmax(0, 1fr);
   }
+  /* The teaching strip FLOATS here instead of taking a band, and the rule above is why: this shell
+     exists precisely because stacking things under the canvas spends "the one axis a 390px-tall
+     screen hasn't got". A 44px band is that same mistake wearing a better hat — it costs 11% of the
+     height, and the e2e's "keeps most of the height" guard caught me doing it.
+     Sideways there are 844px of WIDTH, so the sentence fits on one line and can simply lie along the
+     bottom edge of the canvas, over it, costing zero layout height. The bar is transparent to touch
+     so it can't steal a tap meant for the artwork; only the ? button takes one back. */
+  :root { --strip-h: 24px; }
+  .app.editor > .status-bar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 45;
+    min-height: var(--strip-h);
+    padding: 0 10px calc(env(safe-area-inset-bottom)) 10px;
+    border-width: 1px 0 0 0;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    pointer-events: none;
+  }
+  .app.editor > .status-bar #status-text { -webkit-line-clamp: 1; }
+  .app.editor > .status-bar .status-tools { pointer-events: auto; }
   .editor-grid > .leftdock { display: none !important; }
   .editor-grid > .mobilebar { grid-row: 1; grid-column: 1 / -1; min-width: 0; }
   .editor-grid > .toolstrip { grid-row: 2; grid-column: 1; min-width: 0; }
@@ -2608,7 +2664,7 @@ text.hv-text-editing { visibility: hidden; }
      the rail, over the canvas: 51px of rail (40px tile + 5px padding either side + the 1px border)
      plus a gap, plus whatever the notch takes. */
   .mobile-fab {
-    bottom: calc(16px + env(safe-area-inset-bottom));
+    bottom: calc(16px + var(--strip-h) + env(safe-area-inset-bottom));   /* the teaching strip is the last band here too */
     right: calc(66px + env(safe-area-inset-right));
   }
   .stage-wrap .panel-foot { padding-right: 64px; }

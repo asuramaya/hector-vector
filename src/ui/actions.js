@@ -131,6 +131,56 @@ export function evaluate(f) {
   return m;
 }
 
+// The TOOLS and the VIEW controls were never in this registry — it only ever knew the 27 tile
+// ACTIONS. But a newcomer's first question is not "can I unite these two", it is "what on earth is
+// that ⌇ for", and the only answer this app has ever had for that is a `title=` tooltip: a surface
+// that needs a mouse to hover, on a product whose whole point is that it also runs on a phone. So a
+// tool's purpose was literally unreachable on half our platforms.
+//
+// Same contract as ACTIONS.why: what the thing is FOR, in a sentence, with NO keyboard shortcut in
+// it. The shortcut is a different affordance and it is already printed on the tile.
+export const TOOL_WHY = {
+  "tool:select":       "Pick things up and move them around",
+  "tool:node":         "Reshape a path by dragging its points",
+  "tool:pen":          "Draw an exact shape, one point at a time",
+  "tool:curvature":    "Draw smooth curves without wrestling handles",
+  "tool:rect":         "Drag out a rectangle",
+  "tool:ellipse":      "Drag out a circle or an oval",
+  "tool:line":         "Drag out a straight line",
+  "tool:text":         "Place some type and start typing",
+  "tool:width":        "Make a stroke thicker in some places than others",
+  "tool:shapebuilder": "Merge overlapping shapes by painting across them",
+  "tool:scissors":     "Snip a path open at a single point",
+  "tool:knife":        "Slice clean through a shape",
+  "tool:eraser":       "Rub parts of a shape away",
+};
+export const VIEW_WHY = {
+  "vp:zoom-out":   "See more of the canvas at once",
+  "vp:zoom-in":    "Get a closer look",
+  "vp:fit":        "Fit the whole canvas on screen",
+  "vp:actual":     "Back to actual size",
+  "#vp-selectall": "Select everything on the canvas",
+  "#vp-rulers":    "Show rulers down the edges",
+  "#vp-guides":    "Snap to guides while you drag",
+  "#undo-button":  "Take back the last thing you did",
+  "#redo-button":  "Put back what you just undid",
+};
+
+// One question — "what is this tile FOR?" — and one answer, whatever kind of tile it is: a tool, a
+// view control, or an action. `f` (selection facts) is optional and only matters for the handful of
+// actions whose meaning changes with the selection (#act-clip becomes Release mask). This is the
+// lookup the teaching strip reads on hover and on press-and-hold, and it is the same registry a
+// command palette (and, later, an agent) would enumerate.
+export function whyFor(key, f) {
+  const a = BY_KEY.get(key);
+  if (a) {
+    const d = a.dynamic && f ? a.dynamic(f) : null;
+    return { label: (d && d.label) || a.label, why: (d && d.why) || a.why };
+  }
+  const why = TOOL_WHY[key] || VIEW_WHY[key];
+  return why ? { label: null, why } : null;
+}
+
 // Why a VERB (from editor._objectActions) is worth doing. Keyed by its label — matched by prefix so
 // "Pathfinder: Trim" and "Reflect — vertical axis" both land. A verb with no entry still renders,
 // reason-less, rather than vanishing: a new verb added to editor.js must never silently disappear.

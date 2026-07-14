@@ -56,7 +56,7 @@ import { configureLayoutPicker, openLayoutPicker } from "./ui/layout-picker.js";
 import { setCustomizeHandler, onFormFactorChange, refreshSheetTabs, showSheetTab } from "./ui/formfactor.js";
 import { createPointerDrag } from "./ui/pointer-drag.js";
 import { bindLongPress } from "./ui/longpress.js";
-import { selectionFacts, evaluate, rankFor, selectionKind, describeSelection } from "./ui/actions.js";
+import { selectionFacts, evaluate, rankFor, selectionKind, describeSelection, whyFor } from "./ui/actions.js";
 import { configureAdaptive, sync as syncAdaptive, suspendAdaptive } from "./ui/adaptive.js";
 import { configureSuggest, render as renderSuggest, rehomeSuggest } from "./ui/suggest.js";
 import {
@@ -1388,6 +1388,70 @@ function openStageContext(clientX, clientY, target) {
         || (e.target.closest && e.target.closest('[contenteditable="true"], input, textarea'))
       ),
       onLongPress: (x, y, target) => openStageContext(x, y, target),
+    });
+  }
+}
+
+// ---- The teaching line -------------------------------------------------------------------------
+//
+// The strip at the foot of the app was built as a STATUS bar ("Ready.", "Saved."), and it has been
+// quietly doing a second, better job all along: editor._hint() writes the current tool's purpose
+// into it on every tool change. That sentence is the only plain English this app has ever put on
+// screen. Everything else is a rune — ⧉⁺ ✕ ✂ ∪ − ∩ ⛶ ⊞ ⊟ ⤒ ⤓ ⊠ — and the only way to learn a rune
+// was to hover it and read a `title=` tooltip, which is a surface a phone does not have. (On a
+// phone the strip was `display:none` outright, so the app was COMPUTING the sentence and rendering
+// it into a hidden element. The ? button was 0×0. Both fixed in style.css.)
+//
+// So: promote it. Point at any tile and the strip tells you what that tile is FOR, in words, from
+// the same registry (src/ui/actions.js) the toolbars and the Actions menu already read. Two gestures
+// for the same question, one per platform:
+//   · mouse   — hover. Free, discoverable, and it costs the user nothing to sweep a toolbar.
+//   · finger  — press and hold. Already the app's "tell me more" gesture on the canvas (it opens the
+//               Actions menu), so a hold on a BUTTON meaning "explain this button" is the same idea
+//               pointed at a different target. The hold suppresses the tap, so you can read what a
+//               button does WITHOUT firing it — which is the entire point, and is the one thing a
+//               phone could never do before.
+{
+  const BAR_SEL = ".toolstrip, .actionbar, .stage-toolbar, .viewport-controls, #mobile-top, .panel-actions";
+  // Restore whatever the strip was saying before we hijacked it. editor._hint() is the resting
+  // state (the current tool's purpose); a transient message with a hold (e.g. "Saved.") outranks us
+  // and is left alone.
+  const restore = () => { if (canReplaceStatus()) editor._showHint(); };
+  const explain = (tile) => {
+    const key = tile.id ? "#" + tile.id
+      : tile.dataset.tool ? "tool:" + tile.dataset.tool
+        : (tile.dataset.vp && tile.dataset.action) ? "vp:" + tile.dataset.action : null;
+    if (!key) return false;
+    const info = whyFor(key, selectionFacts(editor));
+    if (!info) return false;
+    // A disabled tile still explains itself. "What is this and why is it greyed out" is the most
+    // common question a beginner has, and refusing to answer it is how a toolbar stays alien.
+    const dim = tile.disabled ? " (not available right now)" : "";
+    setStatus(info.label ? `${info.label}: ${info.why}${dim}` : `${info.why}${dim}`);
+    return true;
+  };
+  const tileUnder = (e) => e.target && e.target.closest && e.target.closest(".tool-button");
+
+  for (const bar of document.querySelectorAll(BAR_SEL)) {
+    bar.addEventListener("pointerover", (e) => {
+      if (e.pointerType !== "mouse") return;   // a touch "hover" is the tap itself; that's the hold's job
+      const tile = tileUnder(e);
+      if (tile && canReplaceStatus()) explain(tile);
+    });
+    bar.addEventListener("pointerout", (e) => {
+      if (e.pointerType !== "mouse") return;
+      if (tileUnder(e)) restore();
+    });
+    // Hold a button to find out what it does, without doing it.
+    bindLongPress(bar, {
+      shouldIgnore: (e) => !tileUnder(e) || (window.__layout && window.__layout.isEditing()),
+      onLongPress: (x, y, target) => {
+        const tile = target && target.closest && target.closest(".tool-button");
+        if (!tile || !explain(tile)) return;
+        // Hold the explanation on screen long enough to actually read it — the finger is still on
+        // the button, and lifting must not snap the strip straight back to the tool hint.
+        statusHoldUntil = Date.now() + 4000;
+      },
     });
   }
 }

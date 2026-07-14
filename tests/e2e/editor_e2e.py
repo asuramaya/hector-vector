@@ -5259,6 +5259,128 @@ def main():
                 lctx.close()
 
         # ---------------------------------------------------------------------------------
+        # The teaching line. hector-vector is a GLYPH app — ⧉⁺ ✕ ✂ ∪ − ∩ ⛶ ⊞ ⊟ ⤒ ⤓ ⊠ — and the only
+        # plain English it has ever put on screen is the strip at the foot of the window. On a phone
+        # that strip was display:none, so the app COMPUTED the sentence ("Rectangle — drag on the
+        # canvas") and rendered it into a hidden element, on the one platform with no hover, no
+        # tooltips and no keyboard. The ? button went down with it, to a 0x0 rect.
+        section("The teaching line: the app says, in words, what each button is for")
+        # Desktop first: hover any tile and the strip explains it, from the actions.js registry.
+        page.evaluate("() => editor.setTool('select')"); page.wait_for_timeout(80)
+        rest = page.evaluate("() => document.querySelector('#status-text').textContent.trim()")
+        page.hover('.toolstrip [data-tool="pen"]'); page.wait_for_timeout(150)
+        hovered = page.evaluate("() => document.querySelector('#status-text').textContent.trim()")
+        check("desktop: hovering a tool explains what it is FOR (not a keyboard shortcut)",
+              "one point at a time" in hovered, hovered)
+        page.hover(".stage-wrap"); page.wait_for_timeout(200)
+        back_at_rest = page.evaluate("() => document.querySelector('#status-text').textContent.trim()")
+        check("desktop: moving off the tile restores the current tool's hint",
+              back_at_rest == rest, f"{back_at_rest!r} != {rest!r}")
+        # A DISABLED tile still explains itself — "what is this and why is it greyed out" is the most
+        # common beginner question, and refusing to answer it is how a toolbar stays alien.
+        page.hover("#act-subtract"); page.wait_for_timeout(150)
+        dis = page.evaluate("() => document.querySelector('#status-text').textContent.trim()")
+        check("desktop: a greyed-out tile explains itself too, and says it isn't available",
+              "front shape out of the back" in dis and "not available" in dis, dis)
+
+        tctx = browser.new_context(viewport={"width": 390, "height": 844}, has_touch=True,
+                                   is_mobile=True, device_scale_factor=2)
+        tp = tctx.new_page()
+        set_page(tp)
+        try:
+            tp.goto(BASE, wait_until="domcontentloaded")
+            # __layout is published at the FOOT of app.js, so it is the honest "the shell is fully
+            # wired" signal. Waiting on `editor` alone is not enough: it exists as soon as the module
+            # graph resolves, while the ? button's click handler is bound hundreds of lines later —
+            # click it in that gap and nothing happens, silently.
+            tp.wait_for_function("() => typeof editor !== 'undefined' && !!window.__layout", timeout=20000)
+            tp.wait_for_timeout(250)
+            tp.evaluate("() => editor.setTool('rect')"); tp.wait_for_timeout(120)
+            strip = tp.evaluate("""() => {
+                const vis = (el) => { if (!el) return false; const r = el.getBoundingClientRect();
+                    return getComputedStyle(el).display !== 'none' && r.width > 0 && r.height > 0; };
+                const bar = document.querySelector('.status-bar');
+                const help = document.querySelector('#shortcut-button');
+                const hr = help ? help.getBoundingClientRect() : null;
+                return { visible: vis(bar), h: bar ? Math.round(bar.getBoundingClientRect().height) : 0,
+                         text: document.querySelector('#status-text').textContent.trim(),
+                         helpVisible: vis(help),
+                         helpOnScreen: !!hr && hr.x >= 0 && hr.x + hr.width <= 390 };
+            }""")
+            check("phone: the teaching strip is on screen (it used to be display:none)",
+                  strip["visible"] and strip["h"] > 0, str(strip))
+            check("phone: the ? button is reachable (it used to be a 0x0 rect)",
+                  strip["helpVisible"] and strip["helpOnScreen"], str(strip))
+            # The desktop hints spend their words on Shift/Alt/Ctrl/Esc — keys a phone hasn't got.
+            # Touch gets its own sentences, in the gestures it actually has.
+            hints = {}
+            for t in ["rect", "pen", "select", "node"]:
+                tp.evaluate(f"() => editor.setTool('{t}')"); tp.wait_for_timeout(90)
+                hints[t] = tp.evaluate("() => document.querySelector('#status-text').textContent.trim()")
+            keyboardy = {t: h for t, h in hints.items()
+                         if re.search(r"\b(Shift|Alt|Ctrl|Cmd|Esc|Enter)\b", h)}
+            check("phone: the hints are written in GESTURES, never in keys the device hasn't got",
+                  not keyboardy, str(keyboardy))
+            check("phone: the hint actually says what the tool does",
+                  "tap" in hints["pen"].lower() and "drag" in hints["rect"].lower(), str(hints))
+
+            # Help on a phone was a table of KEYBOARD SHORTCUTS: a document about a machine the reader
+            # is not holding. It asks what device it is now.
+            #
+            # This runs BEFORE the long-press check on purpose. A long-press arms a one-shot click
+            # eater (longpress.js) to swallow the release-click, so the finger that opens a menu can't
+            # also press whatever appears under it. Hold a button in a test and never lift, and that
+            # eater is still armed — it will silently swallow the NEXT click the test makes, which is
+            # this one. That is the eater doing its job; the test just has to not leave a finger down.
+            tp.evaluate("() => document.querySelector('#shortcut-button').click()")
+            tp.wait_for_timeout(300)
+            hlp = tp.evaluate("""() => ({
+                title: document.querySelector('#modal-title').textContent.trim(),
+                first: (document.querySelector('#modal-body .info-key') || {}).textContent || '',
+                body: (document.querySelector('#modal-body') || {}).textContent || '',
+            })""")
+            check("phone: ? opens GESTURES, not a keyboard-shortcut table",
+                  hlp["title"] == "Gestures" and "Ctrl" not in hlp["body"] and "⌘" not in hlp["body"],
+                  f"title={hlp['title']!r}")
+            check("phone: the gesture help leads with the one gesture nothing else can teach",
+                  hlp["first"] == "Hold a button", f"first row = {hlp['first']!r}")
+            tp.evaluate("() => closeModal()")
+            tp.wait_for_timeout(120)
+
+            # THE gesture: hold a button to find out what it does, WITHOUT doing it. This is the one
+            # thing a phone could never do — no hover means no way to ask "what is this?" of a rune.
+            tp.evaluate("() => editor.setTool('select')"); tp.wait_for_timeout(80)
+            tp.evaluate("""() => {
+                const el = document.querySelector('.toolstrip [data-tool="eraser"]');
+                const b = el.getBoundingClientRect();
+                window.__hvHoldPt = {x: b.x + b.width / 2, y: b.y + b.height / 2};
+                el.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true,
+                    pointerId: 11, pointerType: 'touch',
+                    clientX: window.__hvHoldPt.x, clientY: window.__hvHoldPt.y}));
+            }""")
+            tp.wait_for_timeout(750)   # past the 500ms hold
+            held = tp.evaluate("() => document.querySelector('#status-text').textContent.trim()")
+            tool_after = tp.evaluate("() => editor.tool")
+            check("phone: HOLDING a button explains it, and does not fire it",
+                  "Rub parts of a shape away" in held and tool_after == "select",
+                  f"strip={held!r} tool={tool_after!r}")
+            # Lift the finger, and let the release-click be eaten as the real gesture would.
+            tp.evaluate("""() => {
+                const el = document.querySelector('.toolstrip [data-tool="eraser"]');
+                const p = window.__hvHoldPt;
+                el.dispatchEvent(new PointerEvent('pointerup', {bubbles: true, cancelable: true,
+                    pointerId: 11, pointerType: 'touch', clientX: p.x, clientY: p.y}));
+                el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true,
+                    clientX: p.x, clientY: p.y}));
+            }""")
+            tp.wait_for_timeout(120)
+            check("phone: the release after a hold is swallowed — reading a button never fires it",
+                  tp.evaluate("() => editor.tool") == "select", tp.evaluate("() => editor.tool"))
+        finally:
+            set_page(page)
+            tctx.close()
+
+        # ---------------------------------------------------------------------------------
         # Crossing the breakpoint and coming BACK. This suite had never once resized a window,
         # which is exactly how 526 green checks coexisted with a wrecked desktop toolbar: the
         # phone composition remembers each moved element's {parent, next} sibling, but it moves

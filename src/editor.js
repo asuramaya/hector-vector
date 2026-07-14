@@ -488,8 +488,42 @@ const editor = {
     if (this.stage) this._renderSelection();   // show/hide the transform bbox handles
     this._showHint();
   },
-  // The bottom ready-bar shows a contextual hint for the current tool / state.
+  // The bottom bar shows a contextual hint for the current tool / state.
+  //
+  // TOUCH GETS ITS OWN SENTENCES, and this is not politeness. Every hint below is written for a
+  // desktop: it spends most of its words on Shift, Alt, Ctrl, Esc and Enter. Handed to a phone —
+  // which is exactly where the strip matters most, being the only surface there with no hover, no
+  // tooltips and no shortcuts — those clauses are not merely useless, they are instructions to press
+  // keys that do not exist. So on a coarse pointer we say the same thing in the gestures that ARE
+  // there, and say less of it: the strip clamps to two lines at 390px, and a sentence that gets cut
+  // off mid-clause teaches nothing.
+  _touchHint() {
+    const t = this.tool;
+    if (t === "select") {
+      if (this._xformMode === "scale") return "Scale: drag the corner handles. Tap ⤢ again when you're done.";
+      if (this._xformMode === "rotate") return "Rotate: drag the round corner handles. Tap ⟳ again when you're done.";
+      if (this.artboardSelected) return "Artboard selected. Set its size in the panel, or tap a shape to select that instead.";
+      if (this.selection.size) return `${this.selection.size} selected. Drag to move · hold for more actions · ⤢ resize · ⟳ turn`;
+      return "Select: tap a shape to pick it up. Drag empty space to sweep up several. Hold anything for its actions.";
+    }
+    if (t === "node") return "Points: drag the dots to reshape. Drag the line between two dots to bend it.";
+    if (t === "width") return "Width: drag sideways across a stroke to make it swell or pinch.";
+    if (t === "shapebuilder") return "Shape Builder: select 2+ overlapping shapes, then paint across them to merge.";
+    if (t === "scissors") return "Scissors: tap a path to snip it open.";
+    if (t === "knife") return "Knife: drag right across a shape to slice it in two.";
+    if (t === "eraser") return `Eraser (${this._eraserR}px): drag over a shape to rub it away.`;
+    if (t === "pen") return "Pen: tap to place corners, drag to curve. Tap the first point to close the shape.";
+    if (t === "curvature") return "Curvature: tap to place points and they smooth themselves. Tap the first point to close.";
+    if (t === "rect") return "Rectangle: drag on the canvas.";
+    if (t === "ellipse") return "Ellipse: drag on the canvas.";
+    if (t === "line") return "Line: drag on the canvas.";
+    return "";
+  },
   _hint() {
+    if (this._coarse === undefined) {
+      this._coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+    }
+    if (this._coarse) return this._touchHint();
     const t = this.tool;
     if (t === "select") {
       if (this._xformMode === "scale") return "Scale — drag the box handles · Shift keeps aspect · Alt from centre · Esc to finish";
