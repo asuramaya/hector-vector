@@ -110,15 +110,30 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
     for (const b of BARS) { const c = barOf(b); if (c) for (const t of c.querySelectorAll(".tool-button")) if (isTile(t)) m.set(tileKey(t), t); }
     return m;
   }
+  // A divider only means something BETWEEN two tiles, so resolve the tiles FIRST and only then decide
+  // which dividers survive. SEP has always been a first-class slot here and nothing ever normalized
+  // it: a slot whose tile doesn't resolve (removed in a newer build, renamed, or stranded by a shell
+  // transition that died halfway) was silently skipped while its divider was still placed. Three naked
+  // rules stacked in an action bar is what that looks like on screen.
   function applyBar(bar, list, tiles) {
     const cont = barOf(bar); if (!cont) return;
     tiles = tiles || collectTiles();
     const tail = tailEl(cont, bar);
     const pool = [...cont.children].filter(isSep);   // reuse existing separators, create more on demand
     let pi = 0;
+    const slots = [];
     for (const key of (list || [])) {
-      const el = key === SEP ? (pool[pi++] || makeSep(bar)) : tiles.get(key);
-      if (el) cont.insertBefore(el, tail);   // insertBefore(el, null) appends
+      if (key === SEP) {
+        if (slots.length && slots[slots.length - 1] !== SEP) slots.push(SEP);   // no leading, no doubles
+        continue;
+      }
+      const el = tiles.get(key);
+      if (el) slots.push(el);
+    }
+    while (slots.length && slots[slots.length - 1] === SEP) slots.pop();   // no trailing
+    for (const slot of slots) {
+      const el = slot === SEP ? (pool[pi++] || makeSep(bar)) : slot;
+      cont.insertBefore(el, tail);   // insertBefore(el, null) appends
     }
     for (; pi < pool.length; pi++) pool[pi].remove();   // drop separators the layout no longer wants
   }

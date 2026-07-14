@@ -5258,6 +5258,83 @@ def main():
                 set_page(page)
                 lctx.close()
 
+        # ---------------------------------------------------------------------------------
+        # Crossing the breakpoint and coming BACK. This suite had never once resized a window,
+        # which is exactly how 526 green checks coexisted with a wrecked desktop toolbar: the
+        # phone composition remembers each moved element's {parent, next} sibling, but it moves
+        # tiles in GROUPS — so by the time #act-scale went home, the #act-rotate it remembered
+        # standing in front of had left .actionbar too. insertBefore threw ("the node before
+        # which the new node is to be inserted is not a child of this node"), which killed the
+        # form-factor handler MID-FLIGHT, so the apply() that restores the desktop arrangement
+        # never ran. Every tile stayed in the phone's bars: the zoom cluster stranded invisible
+        # inside #mobile-top (display:none above 620px), leaving .viewport-controls holding a
+        # naked leading rule and two survivors, and .actionbar holding three stacked rules.
+        # Only a reload healed it. Assert the round trip is a no-op, and that nothing threw.
+        section("Form-factor round trip: leaving the phone shell restores the desktop bars")
+        rctx = browser.new_context(viewport={"width": 1440, "height": 900})
+        rp = rctx.new_page()
+        set_page(rp)
+        page_errors = []
+        rp.on("pageerror", lambda e: page_errors.append(str(e)))
+        try:
+            rp.goto(BASE, wait_until="domcontentloaded")
+            rp.wait_for_function("typeof editor!=='undefined' && !!window.__layout", timeout=20000)
+            rp.wait_for_timeout(250)
+
+            # Every bar's slot list (tiles by key + '|' for dividers), visible children only.
+            SLOTS = """() => {
+                const isSep = (el) => el.classList && (el.classList.contains('tool-sep')
+                    || el.classList.contains('tool-vsep') || el.classList.contains('vp-sep'));
+                const vis = (el) => { const r = el.getBoundingClientRect();
+                    return getComputedStyle(el).display !== 'none' && r.width > 0 && r.height > 0; };
+                const key = (t) => t.id ? '#' + t.id : t.dataset.tool ? 'tool:' + t.dataset.tool
+                    : (t.dataset.vp && t.dataset.action) ? 'vp:' + t.dataset.action : 't:' + (t.textContent || '').trim();
+                const out = {};
+                for (const sel of ['.toolstrip', '.actionbar', '.stage-toolbar', '.viewport-controls']) {
+                    const bar = document.querySelector(sel);
+                    if (!bar || !vis(bar)) { out[sel] = null; continue; }
+                    out[sel] = [...bar.children].filter(vis).map((k) => isSep(k) ? '|' : key(k));
+                }
+                return out;
+            }"""
+            boot = rp.evaluate(SLOTS)
+            rp.set_viewport_size({"width": 500, "height": 900}); rp.wait_for_timeout(500)
+            rp.set_viewport_size({"width": 1440, "height": 900}); rp.wait_for_timeout(600)
+            back = rp.evaluate(SLOTS)
+
+            check("no exception is thrown crossing the breakpoint in either direction",
+                  not page_errors, "; ".join(page_errors[:2]))
+            same = [s for s in boot if boot[s] == back[s]]
+            check("desktop bars come back byte-identical after a phone round trip (no reload)",
+                  boot == back,
+                  "; ".join(f"{s}: {boot[s]} -> {back[s]}" for s in boot if boot[s] != back[s]) or f"{len(same)} bars intact")
+            # The zoom cluster is the tell: it is the group that used to strand inside #mobile-top.
+            vp = back.get(".viewport-controls") or []
+            check("the zoom cluster is back in the viewport bar, not stranded in #mobile-top",
+                  "vp:zoom-in" in vp and "vp:fit" in vp, str(vp))
+
+            # A divider only means something BETWEEN two tiles: none may lead, trail or double up.
+            # This is the guard for the naked-rule class generally, not just for the round trip —
+            # applyBar used to place a divider even when the tile beside it never resolved.
+            orphans = {}
+            for sel, slots in back.items():
+                if not slots:
+                    continue
+                bad = []
+                if slots[0] == "|":
+                    bad.append("leading")
+                if slots[-1] == "|":
+                    bad.append("trailing")
+                if any(slots[i] == "|" and slots[i - 1] == "|" for i in range(1, len(slots))):
+                    bad.append("adjacent")
+                if bad:
+                    orphans[sel] = bad
+            check("no orphan dividers anywhere (none leading, trailing, or doubled)",
+                  not orphans, str(orphans))
+        finally:
+            set_page(page)
+            rctx.close()
+
         browser.close()
 
     n_fail = sum(1 for _, ok, _ in results if not ok)

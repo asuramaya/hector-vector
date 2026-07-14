@@ -44,7 +44,25 @@ export function onFormFactorChange(cb) {
 // post-layout parent.
 const homes = new Map();
 const remember = (el) => { if (el && !homes.has(el)) homes.set(el, { parent: el.parentNode, next: el.nextSibling }); };
-const goHome = (el) => { const h = homes.get(el); if (h && h.parent) h.parent.insertBefore(el, h.next); };
+// The remembered `next` sibling goes STALE, and it is not an edge case: the composition relocates
+// tiles in GROUPS (every boolean leaves .actionbar for the contextual bar together), so by the time
+// #act-scale goes home, the #act-rotate it remembered standing in front of has left too. A saved
+// layout being re-applied reorders them as well. insertBefore then throws "the node before which the
+// new node is to be inserted is not a child of this node" — which used to kill the whole
+// form-factor handler MID-FLIGHT, so the apply() that restores the outgoing shell's arrangement
+// never ran and every tile stayed in the bars of the shell we were leaving (stranded invisible in
+// #mobile-top, with their separators left behind as naked rules). Widening a window past 620px did
+// that; only a reload healed it.
+//
+// So: honour the position when the anchor still stands, and APPEND when it doesn't (insertBefore
+// with a null ref appends). Order is not lost by the fallback — layout.js re-applies the saved
+// arrangement immediately after composeShell returns, and that is the authority on order anyway.
+const goHome = (el) => {
+  const h = homes.get(el);
+  if (!h || !h.parent) return;
+  const ref = h.next && h.next.parentNode === h.parent ? h.next : null;
+  h.parent.insertBefore(el, ref);
+};
 
 const q = (s) => document.querySelector(s);
 const mkSep = () => { const s = document.createElement("span"); s.className = "tool-sep mobile-made"; s.setAttribute("aria-hidden", "true"); return s; };
