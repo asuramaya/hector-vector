@@ -32,6 +32,7 @@ import { expandMixin } from "./editor/tools/expand.js";
 import { widthMixin } from "./editor/tools/width.js";
 import { builderMixin } from "./editor/tools/builder.js";
 import { blendMixin } from "./editor/tools/blend.js";
+import { warpMixin, WARP_TYPES, WARP_LABELS } from "./editor/tools/warp.js";
 import { colorsMixin } from "./editor/tools/colors.js";
 import { isolationMixin } from "./editor/tools/isolation.js";
 import { symbolsMixin } from "./editor/tools/symbols.js";
@@ -2070,6 +2071,7 @@ const editor = {
     if (fillable === 2 && !isBlend) makes.push({ label: "Make blend", onClick: () => this.makeBlend() });
     if (nodes.length >= 2) makes.push({ label: "Pattern fill", onClick: () => this.fillWithPattern() });
     if (!anyInstance) makes.push({ label: "Make symbol", onClick: () => this.makeSymbol() });
+    if (fillable >= 1) for (const t of WARP_TYPES) makes.push({ label: "Warp: " + WARP_LABELS[t], onClick: () => this.makeWarp(t) });
     if (makes.length) { items.push({ type: "sep" }, ...makes); }
     if (!isRepeat) {
       items.push({ type: "sep" },
@@ -2349,6 +2351,20 @@ const editor = {
       brows.push(inspRow("", bx));
       wrap.appendChild(inspGroup("Blend", brows));
     }   // "Make blend" moved to the Actions menu (_objectActions)
+    // WARP (Epic D.1). A selected warp group gets its preset + amount + Expand. ("Make Warp" —
+    //  one entry per preset, from any fillable selection — is in the Actions menu.)
+    if (nodes.length === 1 && this.isWarpGroup(nodes[0])) {
+      const g = nodes[0], spec = this._warpSpec(g), wrows = [];
+      wrows.push(selectRow("Style", spec.type, WARP_TYPES.map((t) => [t, WARP_LABELS[t]]),
+        (v) => { this.beginCoalesce(); this.setWarpParam(g, "type", v); this.commitCoalesce("Warp style"); this._renderInspector(); }));
+      wrows.push(numRow("Amount", Math.round((spec.amount || 0) * 100), -100, 5,
+        (v) => { this.beginCoalesce(); this.setWarpParam(g, "amount", Math.max(-1, Math.min(1, v / 100))); }, null,
+        () => this.commitCoalesce("Warp amount")));
+      const wx = document.createElement("button"); wx.type = "button"; wx.className = "insp-action"; wx.textContent = "Expand";
+      wx.title = "Bake the warp into a plain group"; wx.addEventListener("click", () => this.expandWarp(g));
+      wrows.push(inspRow("", wx));
+      wrap.appendChild(inspGroup("Warp", wrows));
+    }
     // COLOUR SYSTEMS (Epic C). Pattern fill: a selected pattern-filled object gets tile
     //  scale/rotate; 2+ objects get "Pattern fill" (top = tile). Recolor: a selection with 2+
     //  distinct solid colours gets a swatch remap grid + Hue/Sat/Light shift.
@@ -2754,7 +2770,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, colorsMixin, isolationMixin, symbolsMixin, effectsMixin, repeatMixin, artboardsMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, warpMixin, colorsMixin, isolationMixin, symbolsMixin, effectsMixin, repeatMixin, artboardsMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 

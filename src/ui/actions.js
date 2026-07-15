@@ -251,6 +251,10 @@ const VERB_FIND = [
   ["Shear", "slant skew italic"],
   ["Transform again", "repeat last"],
   ["Repeat", "grid radial mirror array duplicate many"],
+  ["Warp: Arc", "bend curve banner distort"],
+  ["Warp: Bulge", "inflate push swell distort"],
+  ["Warp: Flag", "ripple wave wavy distort"],
+  ["Warp: Fisheye", "lens magnify bulge distort"],
 ];
 const verbFind = (label) => (VERB_FIND.find(([p]) => label.startsWith(p)) || [null, ""])[1];
 export const findWords = (key, label) => FIND[key] || (label ? verbFind(label) : "") || "";
@@ -308,6 +312,10 @@ const VERB_WHY = [
   ["Shear", "Slant it"],
   ["Transform again", "Repeat the last transform"],
   ["Repeat", "Duplicate it in a pattern"],
+  ["Warp: Arc", "Bend it along a smooth curve, like a banner"],
+  ["Warp: Bulge", "Push the middle outward, like it's inflated"],
+  ["Warp: Flag", "Ripple it side to side, like cloth in the wind"],
+  ["Warp: Fisheye", "Magnify the centre, like a wide-angle lens"],
 ];
 const verbWhy = (label) => (VERB_WHY.find(([p]) => label.startsWith(p)) || [null, ""])[1];
 

@@ -2403,6 +2403,50 @@ def main():
         check("blend: 2 shapes → parametric group (endpoints+steps), colour+shape interp, steps regen, reverse, expand+undo, round-trips",
               bn["group"] and bn["origGone"] and bn["childCount"] and bn["midPlaced"] and bn["midColour"]
               and bn["regen"] and bn["reverse"] and bn["serOk"] and bn["expanded"] and bn["undoOk"], str(bn))
+
+        # Warp (Epic D.1): parametric preset deformation (arc/bulge/flag/fisheye) over the
+        # selection's combined bbox, as one data-hv-warp group — same shape as Blend above.
+        # flattenSubpaths only returns a path's OWN vertices (a plain rect has just 4), and this
+        # module's formulas are all zero at x=0/x=1 or r=maxR — so the group must DENSELY
+        # resample before deforming, or a rectangle would render completely untouched. That was
+        # the actual bug caught while building this (see src/editor/tools/warp.js's resample()).
+        section("Warp: parametric preset deformation — arc, bulge, flag, fisheye (Epic D.1)")
+        wp = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100"><rect data-hv-id="r" x="10" y="10" width="80" height="80" fill="#3366cc"/></svg>','wp');
+            editor.setTool('select'); editor.selection = new Set(['r']); editor.artboardSelected = false;
+            const acts = editor._objectActions(editor.selectedNodes()).map((a) => a.label);
+            o.menuHasAll = ['Warp: Arc', 'Warp: Bulge', 'Warp: Flag', 'Warp: Fisheye'].every((l) => acts.includes(l));
+            editor.makeWarp('arc');
+            const g = editor.nodeById([...editor.selection][0]);
+            o.group = !!g && g.tagName.toLowerCase() === 'g' && g.hasAttribute('data-hv-warp');
+            o.origGone = !editor.stage.querySelector('rect[data-hv-id]');
+            o.oneChild = g.querySelectorAll('path[data-hv-id]').length === 1;
+            // The whole point of the fix above: a plain rectangle must actually DEFORM, not just
+            // reproduce its own 4 corners untouched (bbox height changes; width (the arc's own
+            // axis) does not, since Arc only bends vertically).
+            const bbArc = g.children[0].getBBox();
+            o.arcBent = Math.round(bbArc.width) === 80 && Math.abs(bbArc.height - 80) > 5;
+            editor.setWarpParam(g, 'type', 'bulge');
+            editor.setWarpParam(g, 'amount', 0.8);
+            const bbBulge = g.children[0].getBBox();
+            o.bulgeGrows = bbBulge.width > 90 && bbBulge.height > 90;   // pushed outward on both axes
+            const ser = editor.serialize();
+            o.serOk = ser.includes('<path') && !ser.includes('data-hv-') && !ser.includes('data-hv-warp');
+            editor.expandWarp(g);
+            o.expanded = !g.hasAttribute('data-hv-warp') && g.querySelectorAll('path').length === 1;
+            editor.undo(); o.undoOk = editor.stage.querySelector('[data-hv-warp]') !== null;
+            return o; }""")
+        check("warp: Actions menu offers all 4 presets for a fillable selection",
+              wp["menuHasAll"])
+        check("warp: preset → parametric group, original gone, ONE deformed child (a rect's own 4 corners are not enough to bend — must resample)",
+              wp["group"] and wp["origGone"] and wp["oneChild"] and wp["arcBent"], str(wp))
+        check("warp: setWarpParam regenerates (type + amount), Bulge pushes the bbox outward on both axes",
+              wp["bulgeGrows"], str(wp))
+        check("warp: round-trips clean (no data-hv-* survives save), Expand bakes the spec, undo restores it",
+              wp["serOk"] and wp["expanded"] and wp["undoOk"], str(wp))
+        mount_ctl(page)
+
         # Colour systems (Epic C): Pattern fills (top object → <pattern> in defs applied below;
         # tile scale/rotate via patternTransform; round-trips) + Recolor Artwork (harvest distinct
         # solid colours, remap one exactly, Hue/Sat/Light shift over all). (Global colours deferred.)
