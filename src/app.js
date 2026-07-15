@@ -1656,6 +1656,39 @@ function _geomResults() {
     return { d: n.getAttribute("d"), bbox: { x: bb.x, y: bb.y, width: bb.width, height: bb.height } };
   });
 }
+// Epic A3 — the addressable document: query/mutate by data-hv-id. The real agent job is
+// precision tedium at volume ("normalize every stroke in this icon set to 1.5px") — not
+// illustration, at which an agent would be mediocre. tools/doc_op.py mounts a REAL document
+// (a file on disk, via mountStageFromText) in an isolated Playwright page, lists/edits nodes
+// by their editing id, then serialize()s the clean result (serialize() strips data-hv-id —
+// it's an editing-session handle, never meant to leak into saved output).
+function _docDescribe(n) {
+  const attrs = {};
+  for (const a of n.attributes) { if (a.name !== "data-hv-id") attrs[a.name] = a.value; }
+  let bbox = null;
+  try { const bb = n.getBBox(); bbox = { x: bb.x, y: bb.y, width: bb.width, height: bb.height }; } catch { /* not all nodes have geometry (e.g. defs) */ }
+  return { id: n.getAttribute("data-hv-id"), tag: n.tagName.toLowerCase(), attrs, bbox };
+}
+window.__doc = {
+  open: (svgText, name) => { mountStageFromText(svgText, name || "doc-op.svg"); },
+  // Every editable node, in document order. Flat (groups included as their own "g" entries;
+  // this is a query/mutate primitive, not a layout tool — a caller wanting only leaves can
+  // filter tag !== "g" itself).
+  list: () => (editor.stage ? [...editor.stage.querySelectorAll("[data-hv-id]")].map(_docDescribe) : []),
+  get: (id) => { const n = editor.nodeById(id); return n ? _docDescribe(n) : null; },
+  // attrs: a plain {name: value} object. `null` as a value REMOVES that attribute. One undo
+  // step per node touched, same as any other editor mutation — so this is undo-able, not a
+  // silent DOM poke.
+  set: (id, attrs) => {
+    const n = editor.nodeById(id);
+    if (!n) throw new Error(`No node with id "${id}"`);
+    editor.push("Set attributes");
+    for (const [k, v] of Object.entries(attrs || {})) { if (v == null) n.removeAttribute(k); else n.setAttribute(k, String(v)); }
+    editor._renderSelection(); editor._renderInspector();
+    return _docDescribe(n);
+  },
+  serialize: () => editor.serialize(),
+};
 window.__geom = {
   // op: "union" | "subtract" | "intersect". booleanOp sorts inputs by DOCUMENT position, and
   // shapes are mounted in array order, so shapes[0] is the BACK shape — for "subtract" it's
