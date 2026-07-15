@@ -905,7 +905,9 @@ const editor = {
     const RES_TAGS = new Set(["lineargradient", "radialgradient", "pattern", "mask", "filter", "clippath"]);
     for (const c of [...defs.children]) {
       const id = c.getAttribute("id");
-      if (id && RES_TAGS.has(c.tagName.toLowerCase()) && !used.has(id)) c.remove();
+      if (!id || !RES_TAGS.has(c.tagName.toLowerCase()) || used.has(id)) continue;
+      if (id.indexOf("hvgc") === 0) continue;   // a global colour persists until explicitly deleted (Epic C.1), like a saved swatch — being momentarily unused by anything is not the same as being unwanted
+      c.remove();
     }
   },
   _ensureStrokeClip(n) {
@@ -1018,6 +1020,12 @@ const editor = {
       if (!id) return null;
       if (map.has(id)) return map.get(id);             // intra-subtree → already re-id'd above
       if (id.indexOf("hvsa-") === 0) return null;      // stroke-align clip → managed elsewhere
+      // A global colour (Epic C.1) is meant to stay SHARED across every shape that uses it —
+      // that's the entire point of "global". Forking a private copy on duplicate/paste (which
+      // is exactly right for a per-shape gradient) would silently break the link: editing the
+      // original would no longer touch the copy, and nobody asked for that. Leave the reference
+      // untouched so the clone keeps pointing at the SAME def.
+      if (id.indexOf("hvgc") === 0) return null;
       if (extMap.has(id)) return extMap.get(id);
       const src = this.stage.querySelector("#" + CSS.escape(id));
       if (!src || !RES_TAGS.has(src.tagName.toLowerCase())) return null;   // not a copyable resource
