@@ -2065,11 +2065,16 @@ const editor = {
       for (const [op, lab] of [["divide", "Divide"], ["trim", "Trim"], ["merge", "Merge"], ["crop", "Crop"], ["minus-back", "Minus Back"]])
         items.push({ label: "Pathfinder: " + lab, onClick: () => this.pathfinder(op) });
     }
+    const areaTexts = nodes.length === 2 && nodes.every((n) => this._isAreaText && this._isAreaText(n));
+    const singleThreadable = single && this._isAreaText && this._isAreaText(single)
+      && (single.getAttribute("data-hv-text-next") || (this._isThreadTarget && this._isThreadTarget(single)));
     const makes = [];
     if (reads.some((n) => this._isStroked(n)) && !anyWs) makes.push({ label: "Vary width", onClick: () => { this.makeWidthStroke(); this.setTool("width"); } });
     if (fillable === 2 && !isBlend) makes.push({ label: "Make blend", onClick: () => this.makeBlend() });
     if (nodes.length >= 2) makes.push({ label: "Pattern fill", onClick: () => this.fillWithPattern() });
     if (!anyInstance) makes.push({ label: "Make symbol", onClick: () => this.makeSymbol() });
+    if (areaTexts) makes.push({ label: "Thread text", onClick: () => this.linkTextFrames() });
+    if (singleThreadable) makes.push({ label: "Unthread text", onClick: () => this.unlinkTextFrames() });
     if (makes.length) { items.push({ type: "sep" }, ...makes); }
     if (!isRepeat) {
       items.push({ type: "sep" },

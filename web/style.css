@@ -2079,6 +2079,17 @@ input.insp-ab-name { background: var(--field-bg); color: inherit; border: 1px so
 text.hv-text-editing { visibility: hidden; }
 /* The drag-to-create rubber-band for an AREA text box (lives in the overlay layer). */
 .hv-textbox-preview { fill: none; stroke: var(--hl-edit); stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+/* Threaded text (Epic P): a dashed connector + in/out port dots between linked boxes,
+   shown only while one end is selected (overlay chrome, never in saved output). */
+.hv-thread-link { fill: none; stroke: var(--hl-edit); stroke-width: 1.5; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; pointer-events: none; }
+.hv-thread-port { stroke: var(--hl-edit); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
+.hv-thread-port-out { fill: var(--hl-edit); }
+.hv-thread-port-in { fill: #fff; }
+/* Text inspector's "Thread" row: chain-state note + an inline Unthread button (not the
+   full-width .insp-action a standalone action button uses). */
+.insp-thread { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.insp-thread .insp-note { flex: 1 1 auto; }
+.insp-thread .insp-action { width: auto; flex: 0 0 auto; padding: 4px 8px; font-size: 11px; }
 
 /* Font picker: the Text inspector's Font row is a button (current family, shown in its own
    face) that opens a searchable Google-Fonts browser popover. */

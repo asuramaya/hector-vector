@@ -187,6 +187,8 @@ export const curvatureMixin = {
     // Pen tool: show the selected object's anchors so add/remove is obvious (read-only —
     // the actual add/delete is the pen's hover+click affordance).
     if (this.tool === "pen") this._renderPenPoints();
+    // Threaded text (Epic P): a dashed connector between linked boxes, while one's selected.
+    if (this._renderThreadLinks) this._renderThreadLinks();
   },
   // Read-only anchor dots for the selected path(s) while the pen tool is active, so it's
   // clear where points sit (and thus where the +/− hover affordance will add/remove them).
