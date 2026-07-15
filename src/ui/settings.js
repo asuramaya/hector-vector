@@ -12,12 +12,12 @@ import { loadJobs, installJobActive } from "./jobs.js";
 import { CLOUD } from "./env.js";
 import { getTouchDebugSnapshot, formatTouchDebugSnapshot, setTouchDebugVisual, isTouchDebugVisualOn } from "./touchdebug.js";
 import { openLayoutPicker } from "./layout-picker.js";
-import { THEMES, currentTheme, setTheme, currentHighlight, setHighlight } from "./theme.js";
+import { THEMES, HIGHLIGHTS, currentTheme, setTheme, currentHighlight, setHighlight } from "./theme.js";
 
 // The CURRENT theme's own accent, resolved to a hex an <input type="color"> will accept (it refuses
-// "var(--accent)" and every other CSS form). Only ever called when the user has NOT set a custom
-// highlight — either at first render, or right after Reset has removed the override — so the value
-// it reads back is the theme's, which is exactly what the swatch should be showing.
+// "var(--accent)" and every other CSS form). Only ever called when there is NO custom highlight set
+// — either at first render, or straight after the "Default" swatch has cleared the override — so
+// what it reads back is the theme's own colour, which is exactly what the well should be showing.
 function readAccent() {
   const probe = document.createElement("div");
   probe.style.color = "var(--accent)";
@@ -114,20 +114,45 @@ export function openAppSettings(opts = {}) {
     makeSelectRaw(currentTheme(), THEMES, (v) => setTheme(v)),
     "Inverted is pure black paper and white ink — the same hard edges, cut the other way."));
 
-  // A native colour input on purpose. The in-app picker is a rich panel editor built to live INSIDE
-  // a dock, and hosting it in a settings row is exactly the mistake that produced the Recolor
-  // "rainbow bar" (a whole picker embedded into a 20px swatch, collapsing its own fields). One
-  // control, both platforms, and it opens the OS picker on a phone.
+  // A shelf of curated swatches, then a custom well. "Pick any of 16 million" is not a choice, it is
+  // a chore, and every preset here has been checked as text-on-fill in all three themes — the
+  // highlight is a BACKGROUND with knocked-out text as often as it is a line.
+  //
+  // The custom well is a NATIVE <input type="color"> on purpose. The in-app picker is a rich panel
+  // editor built to live inside a dock, and hosting it in a settings row is exactly the mistake that
+  // produced the Recolor "rainbow bar" — a whole picker embedded into a 20px swatch, collapsing its
+  // own fields into a sliver. One control, both platforms, and on a phone it opens the OS picker.
   const hlRow = document.createElement("div");
   hlRow.className = "hl-pick";
+  const swatches = document.createElement("div");
+  swatches.className = "hl-swatches";
   const hl = document.createElement("input");
   hl.type = "color";
-  hl.value = currentHighlight() || readAccent();
-  hl.addEventListener("input", () => setHighlight(hl.value));
-  const reset = ghostBtn("Reset", () => { setHighlight(""); hl.value = readAccent(); });
+  hl.title = "Any colour you like";
+
+  const paint = () => {
+    const cur = currentHighlight();
+    for (const b of swatches.querySelectorAll(".hl-sw")) {
+      b.classList.toggle("on", (b.dataset.hex || "") === cur);
+    }
+    hl.value = cur || readAccent();
+  };
+  for (const [hex, name] of HIGHLIGHTS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "hl-sw" + (hex ? "" : " hl-sw-default");
+    b.dataset.hex = hex;
+    b.title = name;
+    b.setAttribute("aria-label", name);
+    if (hex) b.style.background = hex;
+    b.addEventListener("click", () => { setHighlight(hex); paint(); });
+    swatches.appendChild(b);
+  }
+  hl.addEventListener("input", () => { setHighlight(hl.value); paint(); });
+  hlRow.appendChild(swatches);
   hlRow.appendChild(hl);
-  hlRow.appendChild(reset);
-  root.appendChild(fieldRow("Highlight colour", hlRow,
+  paint();
+  root.appendChild(fieldRow("Highlight", hlRow,
     "Recolours everything the app uses to point at things: hover, what's switched on, what's selected, and the handles on the canvas."));
 
   // Where the library reads source images from (the backend /api/source endpoint) — desktop

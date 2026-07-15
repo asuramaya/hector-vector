@@ -298,6 +298,79 @@ def sel_node(page):
 def n_nodes(page):
     return page.evaluate("editor.stage.querySelectorAll('[data-hv-id]').length")
 
+# Resolve a LIST of custom properties, in one theme, to real rgb — in ONE page load.
+# getPropertyValue returns the raw text ("var(--bg)"), so a token that chains through others has to
+# be resolved by the engine, which means a real element in a real document. Doing that per-token
+# opened a fresh page for each one; seven tokens across two themes was fourteen page loads, and it
+# ran the machine out of sockets (ERR_INSUFFICIENT_RESOURCES). One page, all the tokens.
+def theme_probe_tokens(ctx, theme, tokens):
+    p = ctx.new_page()
+    p.add_init_script(f"localStorage.setItem('hector-vector:theme', '{theme}')")
+    p.goto(BASE, wait_until="domcontentloaded")
+    p.wait_for_function("() => !!window.__layout", timeout=20000)
+    vals = p.evaluate("""(ts) => {
+        const d = document.createElement('div');
+        d.style.display = 'none';
+        document.body.appendChild(d);
+        const out = {};
+        for (const t of ts) { d.style.color = `var(${t})`; out[t] = getComputedStyle(d).color; }
+        d.remove();
+        return out;
+    }""", tokens)
+    p.close()
+    return vals
+
+
+# Walk every visible element, climb to its effective (opaque) background, and compute the WCAG
+# contrast of its own text against it. Anything under 2.5:1 is, in practice, invisible. This is the
+# sweep that caught the hardcoded-#fafafa suggestion card and the white-on-white palette row.
+def contrast_sweep(ctx, theme):
+    p = ctx.new_page()
+    p.add_init_script(f"localStorage.setItem('hector-vector:theme', '{theme}')")
+    p.goto(BASE, wait_until="domcontentloaded")
+    p.wait_for_function("() => !!window.__layout", timeout=20000)
+    p.wait_for_timeout(500)
+    p.evaluate("""() => { mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
+        + '<rect class="hv-artboard" x="0" y="0" width="200" height="200" fill="#fff"/>'
+        + '<rect data-hv-id="k1" x="20" y="20" width="90" height="90" fill="#666"/></svg>', 'k.svg'); }""")
+    p.wait_for_timeout(300)
+    p.evaluate("() => { editor.selection = new Set(['k1']); editor.artboardSelected = false;"
+               "  editor._renderSelection(); editor._renderInspector(); }")
+    p.wait_for_timeout(300)
+    p.evaluate("() => document.querySelector('#palette-button').click()")   # the palette too
+    p.wait_for_timeout(300)
+    bad = p.evaluate("""() => {
+        const lum = (r, g, b) => { const f = (c) => { c /= 255;
+            return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+            return 0.2126*f(r) + 0.7152*f(g) + 0.0722*f(b); };
+        const parse = (s) => { const m = (s || '').match(/[\\d.]+/g); return m ? m.map(Number) : null; };
+        const ratio = (a, b) => { const l1 = lum(...a), l2 = lum(...b);
+            const [hi, lo] = l1 > l2 ? [l1, l2] : [l2, l1]; return (hi + 0.05) / (lo + 0.05); };
+        const effBg = (el) => { for (let n = el; n; n = n.parentElement) {
+            const c = parse(getComputedStyle(n).backgroundColor);
+            if (c && (c.length < 4 || c[3] > 0.5)) return c.slice(0, 3); } return [255, 255, 255]; };
+        const vis = (el) => { const cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) < 0.15) return false;
+            const r = el.getBoundingClientRect(); return r.width > 3 && r.height > 3; };
+        const own = (el) => [...el.childNodes].filter((n) => n.nodeType === 3 && n.textContent.trim())
+            .map((n) => n.textContent.trim()).join(' ');
+        const out = [];
+        for (const el of document.querySelectorAll('*')) {
+            if (!vis(el)) continue;
+            const txt = own(el); if (!txt) continue;
+            const cs = getComputedStyle(el); const fg = parse(cs.color); if (!fg) continue;
+            if (fg.length > 3 && fg[3] < 0.5) continue;       // deliberately faded
+            const r = ratio(fg.slice(0, 3), effBg(el));
+            if (r < 2.5) out.push({ sel: el.tagName.toLowerCase() + '.' +
+                (el.id || (el.className || '').toString().trim().split(/\\s+/)[0] || '?'),
+                txt: txt.slice(0, 20), ratio: +r.toFixed(2) });
+        }
+        return out;
+    }""")
+    p.close()
+    return bad
+
+
 def file_menu_click(page, label):
     """Open the header File menu and click the item whose label contains `label`."""
     page.click('.menu[data-menu="file"] .menu-trigger'); page.wait_for_timeout(60)
@@ -5502,6 +5575,47 @@ def main():
             check("...but never the suggestion colour, or it collides with hover again",
                   custom["suggest"] != custom["accent"],
                   f"suggest={custom['suggest']} accent={custom['accent']}")
+
+            # THE GHOST TOKENS. Seven properties were referenced and never declared —
+            # `var(--paper, #fafafa)`, `var(--panel, #fff)`, `var(--hover, #f0f0f0)` — so each one
+            # rendered its hardcoded light fallback forever and no theme could move it. That is why
+            # the suggestion block stayed a white card on a black app. tests/test_css_tokens.py is
+            # the static guard; this is the behavioural one: they must actually MOVE.
+            ghosts = ["--paper", "--panel", "--hover", "--field-bg", "--border", "--fg-muted", "--danger"]
+            g_light = theme_probe_tokens(tctx2, "light", ghosts)
+            g_dark = theme_probe_tokens(tctx2, "dark", ghosts)
+            stuck = [t for t in ghosts if g_light[t] == g_dark[t]]
+            check("the ghost tokens are real now: every one of them moves when the theme moves",
+                  not stuck, f"still frozen across themes: {stuck}")
+
+            # A contrast sweep, per theme, over everything on screen. This is what found the two real
+            # failures: the suggestion block's rows (themed white text on a hardcoded #fafafa card)
+            # and — three commits after introducing --on-ink to fix exactly this — my own
+            # `.palette-row.on .palette-why { color: rgba(255,255,255,.85) }` sitting on a ground the
+            # inverted theme paints WHITE. Contrast ratio 1.00. Perfectly invisible.
+            for th in ("light", "dark", "invert"):
+                bad = contrast_sweep(tctx2, th)
+                check(f"{th}: nothing on screen is invisible against its own background",
+                      not bad, "; ".join(f"{b['sel']} {b['txt']!r} @{b['ratio']}:1" for b in bad[:3]))
+
+            # The highlight shelf: presets, one click, no colour theory required.
+            pg3 = tctx2.new_page()
+            pg3.goto(BASE, wait_until="domcontentloaded")
+            pg3.wait_for_function("() => !!window.__layout", timeout=20000)
+            pg3.wait_for_timeout(200)
+            pg3.evaluate("""() => { document.querySelector('.menu[data-menu="file"] .menu-trigger').click();
+                const i = [...document.querySelectorAll('.menu-list .menu-item')].find((e) => /Settings/.test(e.textContent));
+                if (i) i.click(); }""")
+            pg3.wait_for_timeout(400)
+            n_sw = pg3.evaluate("() => document.querySelectorAll('.hl-sw').length")
+            pg3.evaluate("() => document.querySelector('.hl-sw[data-hex=\"#c2185b\"]').click()")
+            pg3.wait_for_timeout(250)
+            picked = pg3.evaluate("""() => { const d = document.createElement('div');
+                d.style.color = 'var(--accent)'; document.body.appendChild(d);
+                const c = getComputedStyle(d).color; d.remove(); return c; }""")
+            check("the highlight shelf offers presets, and picking one repaints the app",
+                  n_sw >= 6 and picked == "rgb(194, 24, 91)", f"{n_sw} swatches, accent={picked}")
+            pg3.close()
         finally:
             set_page(page)
             tctx2.close()

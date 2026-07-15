@@ -198,6 +198,25 @@ button:disabled {
   --on-ink: #fff;                 /* text knocked OUT of an ink or highlight fill. 39 rules hardcoded
                                      this as #fff, which is fine right up until --ink IS #fff — then
                                      every active button becomes white-on-white and simply vanishes. */
+
+  /* ---- The ghost tokens -------------------------------------------------------------------------
+   * These seven were REFERENCED and never DEFINED: `var(--panel)`, `var(--paper)`,
+   * `var(--hover)`. Someone meant them to be themeable, wrote the var() and never wrote the
+   * declaration — so every one of them has been silently rendering its hardcoded light-theme
+   * fallback, forever, and no theme could ever move them. That is why the suggestion block stayed a
+   * white card on a black app: `background: var(--paper)` was never anything but #fafafa.
+   *
+   * A var() fallback is a safety net that hides exactly this. The fallbacks are stripped at the call
+   * sites now: an undefined token should fail LOUDLY (the property drops) rather than quietly paint
+   * the wrong theme. --field-bg was the tell — its fallback was #2a2a2e, a DARK value, sitting in an
+   * app that only had a light theme. Nobody could have seen it. */
+  --paper: #fafafa;               /* a surface lifted slightly off the page (cards, callouts) */
+  --panel: var(--bg);             /* panel/menu ground */
+  --hover: rgba(0, 0, 0, 0.05);   /* the faint tint under a pointer */
+  --field-bg: var(--bg);          /* an input's own paper */
+  --border: var(--line);
+  --fg-muted: var(--muted);
+  --danger: #c33;
 }
 
 /* ---- Themes -----------------------------------------------------------------------------------
@@ -229,6 +248,9 @@ button:disabled {
   --accent: #4c9aff;       /* the light-theme blue is muddy on a dark ground; lift it */
   --hl-suggest: #f0883e;
   --on-ink: #17181a;       /* ink is nearly white here, so its knocked-out text must be the paper */
+  --paper: #1e2023;        /* lifted OFF a dark page means lighter, not darker */
+  --hover: rgba(255, 255, 255, 0.07);
+  --danger: #ff6b6b;       /* #c33 on a dark ground is a bruise, not a warning */
 }
 /* Inverted: not "dark mode", a STATEMENT. Pure black paper, pure white ink, the same hard edges and
    square corners the light theme has. The monochrome design finally cuts both ways. */
@@ -258,6 +280,9 @@ button:disabled {
      white on white and vanish. The editor's furniture has to read against the artwork, not against
      the app, so it stays a colour that survives on both black and white ground. */
   --hl-edit: #4c9aff;
+  --paper: #0e0e0e;        /* the only grey a two-tone world allows: just enough to read as a card */
+  --hover: #1c1c1c;
+  --danger: #ff5555;
 }
 
 .app.editor { grid-template-rows: auto 1fr auto; }
@@ -421,7 +446,7 @@ button:disabled {
   font: inherit; font-size: 16px; line-height: 1; cursor: pointer; display: grid; place-items: center;
 }
 .view-btn + .view-btn { border-left: 0; }
-.view-btn:hover:not(.active) { background: var(--hover, #f0f0f0); }
+.view-btn:hover:not(.active) { background: var(--hover); }
 .view-btn.active { background: #000; color: #fff; border-color: #000; }
 .view-btn.active[data-key]::after { color: rgba(255, 255, 255, 0.7); }
 .view-count {
@@ -511,7 +536,7 @@ button:disabled {
 .shelf-sq.dimmed { opacity: 0.5; }   /* a shelved contextual panel that isn't currently relevant */
 /* Auto-parked (contextual/idle) square: dashed + muted, to read as "available, nothing to
    act on yet" — distinct from a solid square (a panel you closed by hand). */
-.shelf-sq.auto { border-style: dashed; color: var(--muted, #8a8f98); }
+.shelf-sq.auto { border-style: dashed; color: var(--muted); }
 .shelf-sq.auto:hover { color: var(--ink); }
 /* Colour panel: the picker editor embedded in a panel body (no backdrop/window chrome). */
 .color .fp-body { padding: 0; }
@@ -665,7 +690,7 @@ button:disabled {
 .rt-stage-body { display: flex; flex-direction: column; gap: 6px; }
 .rt-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 .rt-actions .primary-button, .rt-actions .ghost-button { font-size: 12px; padding: 6px 10px; flex: 1 1 auto; }
-.rt-stage + .rt-stage { padding-top: 10px; border-top: 1px dashed var(--hair, rgba(0,0,0,0.12)); }
+.rt-stage + .rt-stage { padding-top: 10px; border-top: 1px dashed var(--hair); }
 
 .insp-group { display: flex; flex-direction: column; gap: 6px; }
 /* Sections are siblings inside one wrap div, so they need an explicit gap — without
@@ -1178,7 +1203,7 @@ button:disabled {
 svg.hv-iso > [data-hv-id]:not(.hv-iso-keep) { opacity: 0.25; pointer-events: none; }
 svg.hv-iso > .hv-ablayer, svg.hv-iso > rect.hv-artboard { opacity: 0.4; }
 .hv-iso-crumb { position: absolute; top: 8px; left: 8px; z-index: 7; display: flex; align-items: center; gap: 8px;
-  background: var(--panel, #fff); border: 1px solid var(--hair); border-radius: var(--r); padding: 3px 8px 3px 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); }
+  background: var(--panel); border: 1px solid var(--hair); border-radius: var(--r); padding: 3px 8px 3px 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); }
 .hv-iso-back { font: inherit; font-size: 12px; line-height: 1; cursor: pointer; border: 1px solid var(--hair); border-radius: 3px; background: var(--bg); color: var(--ink); padding: 3px 7px; }
 .hv-iso-back:hover { border-color: var(--hl-hover); color: var(--hl-hover); }
 .hv-iso-name { font-size: 12px; color: var(--muted); }
@@ -1234,7 +1259,7 @@ svg.hv-iso > .hv-ablayer, svg.hv-iso > rect.hv-artboard { opacity: 0.4; }
 .hv-abframe { fill: none; stroke: #4a90d9; stroke-width: 1.5; stroke-dasharray: 5 3; vector-effect: non-scaling-stroke; pointer-events: none; }
 .hv-ablabel { fill: #4a90d9; font: 12px var(--ui-font, system-ui, sans-serif); pointer-events: none; }
 .insp-ab-row .insp-ab-name { flex: 1; min-width: 0; }
-input.insp-ab-name { background: var(--field-bg, #2a2a2e); color: inherit; border: 1px solid var(--border, #3a3a3e); border-radius: 4px; padding: 2px 6px; }
+input.insp-ab-name { background: var(--field-bg); color: inherit; border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; }
 .xform-readout { position: fixed; z-index: 1100; background: rgba(0, 0, 0, 0.82); color: #fff; font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 3px 7px; pointer-events: none; white-space: nowrap; }
 .xform-readout[hidden] { display: none; }
 
@@ -1345,7 +1370,7 @@ input.insp-ab-name { background: var(--field-bg, #2a2a2e); color: inherit; borde
   user-select: none;
   padding: 0 6px;
   cursor: pointer;
-  color: var(--fg-muted, #c9c9c9);
+  color: var(--fg-muted);
 }
 
 .force-toggle input {
@@ -1422,7 +1447,7 @@ input.insp-ab-name { background: var(--field-bg, #2a2a2e); color: inherit; borde
 .proc-foot-load { font: inherit; font-size: 11px; height: 24px; padding: 0 10px; border: 1px solid var(--ink); background: var(--bg); color: var(--ink); cursor: pointer; border-radius: var(--r); }
 .proc-foot-load:hover { background: var(--ink); color: var(--on-ink); }
 /* Auto-pipeline surface (#50): the analyzer's read + suggested compose, above the strip. */
-.proc-auto { display: flex; flex-direction: column; gap: 8px; padding: 9px 10px; border: 1px solid var(--hair-2); border-radius: var(--r); background: var(--paper, #fafafa); }
+.proc-auto { display: flex; flex-direction: column; gap: 8px; padding: 9px 10px; border: 1px solid var(--hair-2); border-radius: var(--r); background: var(--paper); }
 .proc-auto.muted { color: var(--muted); font-size: 11.5px; font-style: italic; }
 .proc-auto-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .proc-auto-badge { flex: 0 0 auto; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 6px; border-radius: 9px; background: var(--ink); color: var(--on-ink); }
@@ -1516,7 +1541,7 @@ input.insp-ab-name { background: var(--field-bg, #2a2a2e); color: inherit; borde
 .jobs-empty {
   padding: 18px;
   text-align: center;
-  color: var(--fg-muted, #888);
+  color: var(--fg-muted);
 }
 
 .job-row {
@@ -1900,7 +1925,7 @@ input.insp-ab-name { background: var(--field-bg, #2a2a2e); color: inherit; borde
    install a missing tool), so the user lands exactly where the action is. */
 .form-section.settings-focus { animation: settings-focus-pulse 1.5s ease-out; border-radius: 4px; }
 @keyframes settings-focus-pulse {
-  0%, 30% { background: var(--accent, #2f7fe0); color: #fff; box-shadow: 0 0 0 4px var(--accent, #2f7fe0); }
+  0%, 30% { background: var(--accent); color: #fff; box-shadow: 0 0 0 4px var(--accent); }
   100% { background: transparent; box-shadow: 0 0 0 0 transparent; }
 }
 /* A stage whose tool is missing: the "set up in Settings" affordance stacks the note + button. */
@@ -2083,7 +2108,7 @@ text.hv-text-editing { visibility: hidden; }
 .font-results { overflow-y: auto; padding: 0 4px 6px; }
 .font-sec { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); padding: 6px 8px 2px; position: sticky; top: 0; background: var(--bg); }
 .font-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; width: 100%; text-align: left; padding: 6px 8px; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: 15px; cursor: pointer; border-radius: 3px; }
-.font-row:hover { background: var(--hover, rgba(0, 0, 0, 0.05)); }
+.font-row:hover { background: var(--hover); }
 .font-row.active { background: var(--hl-on); color: var(--on-ink); }
 .font-row.loading { opacity: 0.5; cursor: progress; }
 .font-row.err { color: #c0392b; }
@@ -2118,10 +2143,27 @@ text.hv-text-editing { visibility: hidden; }
 .shortcut-grid .info-key { white-space: nowrap; color: var(--fg); }
 .shortcut-grid .info-val { word-break: normal; }
 
-/* Highlight-colour row in Settings: the swatch, and the way back to the theme's own. */
-.hl-pick { display: flex; align-items: center; gap: 8px; }
+/* Highlight row in Settings: a curated shelf, then a well for anything else. */
+.hl-pick { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.hl-swatches { display: flex; align-items: center; gap: 3px; }
+/* 22px, not the 26px field height: eight swatches plus the custom well have to sit on ONE line in a
+   settings column, and at 26px the well wrapped underneath and read as an accident. */
+.hl-sw {
+  width: 22px; height: 22px; padding: 0;
+  border: 1px solid var(--hair); border-radius: var(--r);
+  cursor: pointer; position: relative;
+}
+/* The way back. A diagonal through the theme's own paper reads as "no override" without needing a
+   word for it, and it stays legible on black as readily as on white. */
+.hl-sw-default {
+  background: var(--bg);
+  background-image: linear-gradient(to top right, transparent 45%, var(--ink) 46%, var(--ink) 54%, transparent 55%);
+}
+/* The chosen one gets a ring OUTSIDE its own edge — an inset ring on a dark swatch is invisible,
+   and this control is nothing but dark swatches half the time. */
+.hl-sw.on { outline: 2px solid var(--ink); outline-offset: 2px; }
 .hl-pick input[type="color"] {
-  width: 44px; height: var(--field-h); padding: 0;
+  width: 34px; height: 22px; padding: 0;
   border: 1px solid var(--hair); background: var(--bg); cursor: pointer;
 }
 
@@ -2137,7 +2179,11 @@ text.hv-text-editing { visibility: hidden; }
 .palette-row.on { background: var(--hl-on); color: var(--on-ink); }
 .palette-label { font-weight: 600; font-size: 13px; }
 .palette-why { font-size: 12px; color: var(--muted); min-width: 0; }
-.palette-row.on .palette-why { color: rgba(255, 255, 255, 0.85); }
+/* Not rgba(255,255,255,.85). The selected row's ground is --hl-on, which the inverted theme paints
+   WHITE — so hardcoded white text on it scored a contrast ratio of 1.00, i.e. perfectly invisible.
+   The same mistake as the 39 rules the --on-ink token was introduced to fix, made again, by me,
+   three commits later. Knock it out of the ink like everything else. */
+.palette-row.on .palette-why { color: color-mix(in srgb, var(--on-ink) 85%, transparent); }
 /* An unavailable command is dimmed but NOT hidden. A palette that showed only what you can already
    do would only ever tell you what you already know — the whole value of searching "hole" with
    nothing selected is being told that Subtract exists, and what it wants. */
@@ -2284,7 +2330,7 @@ text.hv-text-editing { visibility: hidden; }
 .app.editor.customizing .vp-sep { touch-action: none; }
 .app.editor.customizing .tool-button.dragging { pointer-events: none; position: relative; z-index: 3; }
 /* a bar refusing the drop (a panel header already at its tile cap) — replaces DnD's dropEffect */
-.app.editor.customizing .no-drop { outline: 1px dashed var(--danger, #c33) !important; cursor: no-drop; }
+.app.editor.customizing .no-drop { outline: 1px dashed var(--danger) !important; cursor: no-drop; }
 /* disabled tiles stay draggable in customize mode (you're arranging, not using them) */
 .app.editor.customizing .tool-button:disabled { opacity: 1; cursor: grab; }
 /* dividers become visible, grabbable chips while customizing (drag to move,

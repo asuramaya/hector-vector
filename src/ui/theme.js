@@ -18,6 +18,22 @@ export const THEMES = [
   ["system", "Match the system"],
 ];
 
+// A curated shelf, because "pick any of 16 million" is not a choice, it is a chore. Every one of
+// these has been checked to hold up as text-on-fill in all three themes — the highlight is a
+// BACKGROUND with knocked-out text at least as often as it is a line, so a colour that looks lovely
+// as a 1px rule and turns to mud behind white letters is not actually usable here.
+// The custom picker is still there for anyone who wants it; this is the fast path.
+export const HIGHLIGHTS = [
+  ["", "Default"],           // whatever the theme says — the way back
+  ["#1b73e8", "Signal"],
+  ["#0891b2", "Lagoon"],
+  ["#059669", "Moss"],
+  ["#d1651b", "Ember"],
+  ["#c2185b", "Rose"],
+  ["#7c3aed", "Iris"],
+  ["#111111", "Ink"],        // monochrome: the highlight IS the ink. Sharp, and very hv.
+];
+
 const systemDark = () => typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches;
 
 // "system" is a CHOICE, not a theme: resolve it to a real one at paint time. Stored as "system" so

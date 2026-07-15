@@ -48,6 +48,11 @@ jobs:
       - name: Import guard (no undefined module globals after a split)
         run: python3 tests/test_imports.py
 
+      # Third build-free static gate. A `var(--paper, #fafafa)` whose token is never declared renders
+      # its fallback forever, in silence, and no theme can move it — seven tokens were in that state.
+      - name: CSS token guard (no ghost tokens, no colour fallbacks)
+        run: python3 tests/test_css_tokens.py
+
       - name: Smoke tests (parse + pixelvec + render)
         run: python3 tests/test_smoke.py
 
