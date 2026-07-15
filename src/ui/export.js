@@ -146,6 +146,27 @@ function blobToDataUrl(blob) {
   return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error("Could not read the rendered image.")); r.readAsDataURL(blob); });
 }
 
+// Epic A1 — "render -> png", headless-callable. Same pipeline the Export modal drives
+// (inline placed rasters, embed used web fonts, rasterise on the browser's OWN SVG
+// renderer), but parameterized instead of reading/writing the modal's shared exportState,
+// and returning a data URL instead of opening a dialog. This is the seam a script driving a
+// headless browser (tools/render_png.py) calls to get real EYES on the live canvas — the
+// same rendering a user would see, not a second, different renderer (see tools/svg_render.py's
+// own docstring: it's a narrow Pillow/cairosvg tool for axis-aligned pixel-art SVGs, and would
+// silently mis-render gradients, masks, filters, live shapes, symbols, text-on-path...).
+export async function renderCurrentPngDataUrl({ scale = 1, width = 0, height = 0, background = "transparent" } = {}) {
+  const src = currentExportSource();
+  if (!src) throw new Error("No document is open.");
+  const [nw, nh] = src.native || [0, 0];
+  const w = width || Math.max(1, Math.round((nw || 512) * scale));
+  const h = height || Math.max(1, Math.round((nh || 512) * scale));
+  if (window.__fonts) await window.__fonts.fontsReady();
+  let svgText = await inlineSvgImages(src.svg);
+  svgText = await withEmbeddedFonts(svgText);
+  const blob = await renderSvgToPngBlob(svgText, w, h, background);
+  return { dataUrl: await blobToDataUrl(blob), w, h };
+}
+
 export function openExportModal() {
   const src = currentExportSource();
   if (!src) { setStatus("Open or create a canvas first.", 2500); return; }

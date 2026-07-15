@@ -44,6 +44,7 @@ import {
 } from "./ui/menus.js";
 import {
   configureExport, inlineSvgImages, serializeForSave, openExportModal, setSaveByteCap,
+  renderCurrentPngDataUrl,
 } from "./ui/export.js";
 import {
   configureModal, floatingInput, openModal, closeModal, confirmDialog,
@@ -1621,6 +1622,9 @@ async function pasteCommand() {
 }
 // Test hook (mirrors window.__fonts/__manage): exercise the sanitize + place path deterministically.
 window.__paste = { extractSvg: _extractSvgMarkup, sanitize: _sanitizeSvgMarkup, svgIntoCanvas: pasteSvgIntoCanvas };
+// Epic A1 — "render -> png": the seam tools/render_png.py drives headlessly to get real eyes
+// on the live canvas (the browser's own renderer, not a second one). See ui/export.js.
+window.__render = { png: (opts) => renderCurrentPngDataUrl(opts) };
 
 fileInputEl.addEventListener("change", async () => {
   const count = fileInputEl.files.length;
