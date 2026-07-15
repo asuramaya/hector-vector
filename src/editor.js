@@ -267,7 +267,13 @@ const editor = {
     c.querySelectorAll("g.hv-overlay, g.hv-guideslayer, g.hv-ablayer, g.hv-preview").forEach((g) => g.remove());
     c.querySelectorAll(".hv-raster-hidden").forEach((n) => { n.classList.remove("hv-raster-hidden"); if (!n.getAttribute("class")) n.removeAttribute("class"); });
     c.querySelectorAll(".hv-iso-keep").forEach((n) => { n.classList.remove("hv-iso-keep"); if (!n.getAttribute("class")) n.removeAttribute("class"); });   // isolation dim is editor-only (Epic I)
-    c.classList.remove("hv-pickable", "hv-iso");
+    // inline-svg is a query-selector hook (editor.js's own outputPreviewEl.querySelector("svg.inline-svg"))
+    // and transparent-board is a CSS hook for the editor's checkerboard-behind-transparency chin — neither
+    // means anything outside this app's own stylesheet/DOM queries, so both leaked into every saved/exported
+    // file (verified: a plain 2-shape test document round-tripped through Save came back class="inline-svg
+    // transparent-board" on the root <svg>). Strip them the same way hv-pickable/hv-iso already are.
+    c.classList.remove("hv-pickable", "hv-iso", "inline-svg", "transparent-board");
+    if (!c.getAttribute("class")) c.removeAttribute("class");   // don't leave a dangling class=""
     // Strip ALL editor metadata, including parametric live-shape params (data-hv-shape,
     // data-hv-bx, …): the `d` is the rendering truth, so exported SVG stays standard.
     c.querySelectorAll("[data-hv-id], [data-hv-shape]").forEach((n) => {
