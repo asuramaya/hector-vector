@@ -1626,6 +1626,48 @@ window.__paste = { extractSvg: _extractSvgMarkup, sanitize: _sanitizeSvgMarkup, 
 // on the live canvas (the browser's own renderer, not a second one). See ui/export.js.
 window.__render = { png: (opts) => renderCurrentPngDataUrl(opts) };
 
+// Epic A2 — the geometry kernel, headless-callable. hv's booleans are marching-squares
+// point-in-fill sampling against a REAL attached SVG element (SVGGeometryElement.isPointInFill,
+// editor.js's _fillTester) — there's no pure-Node equivalent to call, so this drives the SAME
+// live engine the toolbar buttons do, via a scratch mount. mountStageFromText REPLACES
+// whatever document is open, which is why every caller (tools/geom_op.py) MUST be its own
+// isolated Playwright page — never a real user's tab (same discipline as window.__render).
+async function _geomScratch(shapes, strokeWidths) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 2000">${
+    shapes.map((d, i) => {
+      const safe = String(d).replace(/"/g, "&quot;");
+      return strokeWidths
+        ? `<path data-hv-id="g${i}" d="${safe}" fill="none" stroke="#000" stroke-width="${strokeWidths[i] ?? 4}"/>`
+        : `<path data-hv-id="g${i}" d="${safe}" fill="#000"/>`;
+    }).join("")
+  }</svg>`;
+  mountStageFromText(svg, "geom-scratch.svg");
+  // Warm-up settle: the very first mount's getBBox()/isPointInFill can read a degenerate box
+  // before layout lands (see [[hv-e2e-env-flake]] — the same trap the e2e probes document).
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  editor.selection = new Set(shapes.map((_, i) => "g" + i));
+  editor._renderInspector();
+}
+function _geomResults() {
+  const nodes = editor.selectedNodes();
+  if (!nodes.length) throw new Error("The op produced no result (empty selection afterward — probably an empty/degenerate shape).");
+  return nodes.map((n) => {
+    const bb = n.getBBox();
+    return { d: n.getAttribute("d"), bbox: { x: bb.x, y: bb.y, width: bb.width, height: bb.height } };
+  });
+}
+window.__geom = {
+  // op: "union" | "subtract" | "intersect". booleanOp sorts inputs by DOCUMENT position, and
+  // shapes are mounted in array order, so shapes[0] is the BACK shape — for "subtract" it's
+  // the one kept, with the rest cut out of it. Exactly one result (booleans always merge to one).
+  boolean: (shapes, op) => _geomScratch(shapes).then(() => { editor.booleanOp(op); return _geomResults()[0]; }),
+  // Adds an offset copy beside each input (originals are kept, Illustrator-style) — one
+  // result per input shape, same order.
+  offset: (shapes, amt) => _geomScratch(shapes).then(() => { editor.offsetPath(amt); return _geomResults(); }),
+  // strokeWidths: optional array parallel to shapes (default 4). One result per input.
+  outlineStroke: (shapes, strokeWidths) => _geomScratch(shapes, strokeWidths || shapes.map(() => 4)).then(() => { editor.outlineStroke(); return _geomResults(); }),
+};
+
 fileInputEl.addEventListener("change", async () => {
   const count = fileInputEl.files.length;
   if (!count) return;
