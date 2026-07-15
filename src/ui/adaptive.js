@@ -29,8 +29,9 @@ const ADAPTIVE_BARS = new Set(["arrange", "actions"]);
 // How many actions a bar will show at once on a PHONE. With two overlapping shapes selected, fifteen
 // different actions are genuinely valid — ranking puts the right ones first, but fifteen 44px tiles
 // still need 700px in a 390px strip, and the tail is a scroll nobody performs. So the bar carries the
-// best few and the SUGGESTED block in the sheet carries the complete ranked list, labels and all.
-// No cap on desktop: a vertical rail has the room.
+// best few; the rest stay one tap away, uncapped, in the sheet's Actions tab (the SAME "actions" bar,
+// just reparented — see ADAPTIVE_BARS below), and the command palette can search the complete list
+// by label. No cap on desktop: a vertical rail has the room.
 const PHONE_BAR_CAP = 7;
 
 let getLayout = () => null, getPref = () => "off";
@@ -72,7 +73,7 @@ export function suspendAdaptive(on) {
 }
 
 // The engine. `facts` comes from the shared oracle (src/ui/actions.js) — the same answer the toolbars
-// grey-out and the suggestion block are reading, so they can't disagree.
+// grey-out and the suggestion pulse (src/ui/pulse.js) are reading, so they can't disagree.
 export function sync(facts) {
   if (suspended) return;
   const L = getLayout();

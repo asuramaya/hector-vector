@@ -86,30 +86,29 @@ export function setCustomizeHandler(fn) { onCustomize = fn; }
 // The panes ARE the sheet's own children — nothing is rebuilt, cloned or re-implemented, so every
 // id-wired handler still fires and every layout.js tileKey still resolves. A tab is only a view onto
 // a child that was already there.
-const TAB_ORDER = ["suggested", "properties", "color", "layers", "history", "actions", "view", "library", "processor", "jobs", "info"];
-const TAB_NAMES = { suggested: "Suggested", view: "View", actions: "Actions" };
+const TAB_ORDER = ["properties", "color", "layers", "history", "actions", "view", "library", "processor", "jobs", "info"];
+const TAB_NAMES = { view: "View", actions: "Actions" };
 
 let sheeted = false;
 let barEl = null, tabsEl = null, tabSig = "", userTab = null, activeTab = null, watcher = null;
 
-// The three reparented bars have no data-section — they're bars, not panels. Everything else in the
+// The two reparented bars have no data-section — they're bars, not panels. Everything else in the
 // sheet is a rail-section and names itself.
 const paneKey = (el) => (
-  el.classList.contains("suggest") ? "suggested"
-    : el.classList.contains("panel-foot") ? "view"
-      : el.classList.contains("actionbar") ? "actions"
-        : el.dataset.section || null
+  el.classList.contains("panel-foot") ? "view"
+    : el.classList.contains("actionbar") ? "actions"
+      : el.dataset.section || null
 );
 const paneLabel = (el, key) => TAB_NAMES[key] || el.querySelector(".sec-label")?.textContent.trim() || key;
 // The tab bar, the resizers and the section separators aren't panes — none of them name themselves.
 const panesOf = (sheet) => [...sheet.children].filter((el) => paneKey(el));
 
 // Where you land when you haven't picked a tab yourself. With something selected, the sheet is
-// almost always "what can I do with this" → SUGGESTED (Properties if there's nothing to suggest);
+// almost always "what can I do with this" → Properties (it hosts the object actions);
 // with nothing selected it's "where is my stuff" → Layers.
 function defaultTab(keys) {
   const hasSel = document.querySelector("main.app")?.classList.contains("has-selection");
-  const wish = hasSel ? ["suggested", "properties"] : ["layers", "properties"];
+  const wish = hasSel ? ["properties"] : ["layers", "properties"];
   return wish.find((k) => keys.includes(k)) || keys[0] || null;
 }
 
@@ -133,13 +132,13 @@ function activate(sheet, key) {
 }
 
 // Rebuild the strip from what is ACTUALLY in the sheet right now. Panels come and go under us:
-// SUGGESTED tracks the selection, Manage borrows Library/Processor/Jobs, the cloud build has no
-// server panels at all — and a tab pointing at nothing is worse than no tab.
+// Manage borrows Library/Processor/Jobs, the cloud build has no server panels at all — and a tab
+// pointing at nothing is worse than no tab.
 //
 // `reset` is the difference between opening the sheet and the sheet changing while you're reading
 // it. On open we re-derive the default (the selection may have changed since you last looked). While
-// open we hold whatever pane you're on — otherwise selecting a layer FROM the Layers tab would make
-// SUGGESTED appear and yank the sheet out from under your thumb.
+// open we hold whatever pane you're on — otherwise selecting a layer FROM the Layers tab would yank
+// the sheet over to Properties, out from under your thumb.
 export function refreshSheetTabs({ reset = false } = {}) {
   const sheet = q("#rightdock");
   if (!sheeted || !sheet || !tabsEl) return;
@@ -211,7 +210,7 @@ function buildTabs(sheet) {
   // what's there.
   sheet.querySelectorAll(":scope > .rail-section").forEach((s) => { s.style.flex = ""; });
   // Watch the sheet's own children rather than trying to find every code path that adds or removes a
-  // panel (suggest.js, docks' shelve/float/close, manage.js's borrow, the cloud build's panel purge).
+  // panel (docks' shelve/float/close, manage.js's borrow, the cloud build's panel purge).
   watcher = new MutationObserver(() => refreshSheetTabs());
   watcher.observe(sheet, { childList: true });
 }

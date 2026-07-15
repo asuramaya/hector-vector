@@ -182,7 +182,8 @@ button:disabled {
  * So each job gets a name. They all still default to --accent, so nothing changes appearance today —
  * this is a semantics split, not a repaint. What it buys: a theme can retint any one role (dark
  * canvases need different handle colours than light ones), the user can pick their own highlight,
- * and --hl-suggest is a colour nothing else is using.
+ * and --hl-suggest is a colour nothing else uses — src/ui/pulse.js spends it on exactly one thing:
+ * a button that just became possible.
  *
  * --hl-on merges "toggled on" with "selected" and "current" on purpose. They are one idea — THIS is
  * the chosen one — and three tokens nobody can tell apart is worse than one that is honest.
@@ -380,6 +381,15 @@ button:disabled {
 .tool-button:disabled { opacity: 0.3; cursor: default; }
 .tool-button.on { background: var(--hl-on); color: var(--on-ink); border-color: var(--hl-on); }
 .tool-button.on[data-key]::after { color: rgba(255, 255, 255, 0.8); }
+/* A suggestion is a TRANSITION: src/ui/pulse.js adds this class to the real button (never a second
+   copy of it) the moment the button flips impossible -> possible, and removes it a couple seconds
+   later. One glow in --hl-suggest, then gone — a suggestion that lingers turns into a fixture nobody
+   reads twice. Duration must match pulse.js's PULSE_MS. */
+.tool-button.hl-pulse { animation: hl-pulse 2.2s ease-out; }
+@keyframes hl-pulse {
+  0%, 20% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--hl-suggest) 45%, transparent); border-color: var(--hl-suggest); }
+  100% { box-shadow: 0 0 0 0 transparent; border-color: var(--line); }
+}
 /* right-side object action bar — mirrors the left toolstrip (clipboard / boolean /
    transform actions for the selection). Buttons are the same square objects as the
    tools, and as action buttons they get a hover + disabled state. */
@@ -1463,21 +1473,6 @@ input.insp-ab-name { background: var(--field-bg); color: inherit; border: 1px so
 .proc-plan-badge.needs { flex: 0 0 auto; font-size: 10px; padding: 0 5px; border: 1px solid var(--hair-2); border-radius: 8px; color: var(--muted); white-space: nowrap; }
 .proc-plan-add { flex: 0 0 auto; font: inherit; font-size: 10.5px; height: 19px; padding: 0 8px; border: 1px solid var(--ink); background: var(--bg); color: var(--ink); cursor: pointer; border-radius: var(--r); }
 
-/* The SUGGESTED block (src/ui/suggest.js) — deliberately the same species as the raster auto-plan
-   banner above, because it's the same idea: read the subject, propose what to do about it. */
-.proc-auto.suggest { margin: 0 0 8px; }
-.suggest-row { cursor: pointer; padding: 3px 4px; border-radius: var(--r); align-items: center; }
-.suggest-row:hover { background: var(--surface); }
-.suggest-more { margin-top: 2px; padding-top: 6px; border-top: 1px dashed var(--hair-2); }
-.suggest-more-lbl { font: inherit; font-size: 11px; color: var(--muted); background: none; border: 0; padding: 2px 0; cursor: pointer; text-align: left; }
-.suggest-more-lbl:hover { color: var(--ink); }
-/* on a phone it's the first band in the sheet, and the rows need real touch targets */
-.proc-auto.suggest.in-sheet { margin: 10px 12px; }
-@media (pointer: coarse) {
-  .suggest-row { padding: 8px 6px; font-size: 13px; }
-  .suggest-row .proc-plan-add { height: 30px; font-size: 12px; padding: 0 12px; }
-  .suggest-more-lbl { padding: 8px 0; font-size: 12.5px; }
-}
 .proc-plan-add:hover { background: var(--ink); color: var(--on-ink); }
 .proc-auto-apply { align-self: flex-start; height: 24px; padding: 0 14px; font-size: 11.5px; font-weight: 600; border: 1px solid var(--ink); background: var(--ink); color: var(--on-ink); cursor: pointer; border-radius: var(--r); }
 .proc-auto-apply:hover:not(:disabled) { opacity: 0.85; }
@@ -2641,9 +2636,9 @@ text.hv-text-editing { visibility: hidden; }
      panes are the sheet's own children, moved by nobody.) */
   .editor-grid > .rightdock.sheet-tabbed { display: flex; flex-direction: column; overflow: hidden; }
   .editor-grid > .rightdock.sheet-tabbed::before { order: -2; }   /* the grab handle stays on top */
-  /* SUGGESTED inserts itself at the head of the sheet, so the bar holds its place by order, not by
-     DOM position. The strip scrolls; the gear does NOT (it's the only way into Customize on a phone
-     — it must never scroll out of reach). */
+  /* A pane can insert itself anywhere and still land at the head of the sheet — TAB_ORDER decides
+     rank, not DOM position. The strip scrolls; the gear does NOT (it's the only way into Customize on
+     a phone — it must never scroll out of reach). */
   .sheet-tabbar {
     order: -1; flex: 0 0 auto;
     display: flex; align-items: center; gap: 8px;

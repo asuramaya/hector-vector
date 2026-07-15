@@ -53,12 +53,12 @@ import {
   appSettingsOpen, setAppSettingsOpen, setPwaInstallPrompt,
 } from "./ui/settings.js";
 import { configureLayoutPicker, openLayoutPicker } from "./ui/layout-picker.js";
-import { setCustomizeHandler, onFormFactorChange, refreshSheetTabs, showSheetTab } from "./ui/formfactor.js";
+import { setCustomizeHandler, refreshSheetTabs, showSheetTab } from "./ui/formfactor.js";
 import { createPointerDrag } from "./ui/pointer-drag.js";
 import { bindLongPress } from "./ui/longpress.js";
 import { selectionFacts, evaluate, rankFor, selectionKind, describeSelection, whyFor } from "./ui/actions.js";
 import { configureAdaptive, sync as syncAdaptive, suspendAdaptive } from "./ui/adaptive.js";
-import { configureSuggest, render as renderSuggest, rehomeSuggest } from "./ui/suggest.js";
+import { configurePulse, syncPulse, PULSE_MS as PULSE_HOLD_MS } from "./ui/pulse.js";
 import {
   workItems, outputs, projects, selectedName, selectedOutput, manualOutputName,
   setWorkItems, setOutputs, setProjects, setSelectedName, setSelectedOutput, setManualOutputName,
@@ -188,12 +188,13 @@ const PREFS_KEY = "hector-vector:prefs";
 // `startup`: what to show on launch — "blank" (a fresh canvas + the Process
 // workspace, the default) or "resume" (reopen the last document). Migrates the
 // old boolean `resume` pref for anyone who had set it.
-// adaptiveBars: "off" (bars never change) | "suggest-only" (the SUGGESTED block, but bars stay put)
-// | "full" (bars rearrange by what's selected). Desktop defaults to suggest-only: the block is pure
-// addition — nothing you already know how to hit moves — whereas bar reflow is the one part that
-// costs muscle memory, and .actionbar has been in the same order for the life of the project. A
-// PHONE is always "full" regardless (see adaptive.js): there, space is genuinely scarce and there is
-// no muscle memory to protect.
+// adaptiveBars: "off" (bars never change, no pulse either) | "suggest-only" (a newly-possible action
+// can still pulse — src/ui/pulse.js — but bars stay put) | "full" (bars rearrange by what's selected
+// too). Desktop defaults to suggest-only: a pulse is pure addition — nothing you already know how to
+// hit moves, and it decays on its own — whereas bar reflow is the one part that costs muscle memory,
+// and .actionbar has been in the same order for the life of the project. A PHONE is always "full"
+// regardless (see adaptive.js): there, space is genuinely scarce and there is no muscle memory to
+// protect.
 const PREFS_DEFAULTS = { startup: "blank", smartGuides: true, rulers: false, touchDebug: false, adaptiveBars: "suggest-only" };
 let prefs = (() => {
   try {
@@ -414,9 +415,9 @@ let setSheet = () => {};
   setSheet = (open) => {
     appEl.classList.toggle("sheet-open", open);
     fab.setAttribute("aria-expanded", open ? "true" : "false");
-    // Rebuild the tab strip at the moment you look at it: panels come and go (SUGGESTED tracks the
-    // selection, Manage borrows the server panels), and reset the default tab — the selection may
-    // well have changed since you last had the sheet open.
+    // Rebuild the tab strip at the moment you look at it: panels come and go (Manage borrows the
+    // server panels), and reset the default tab — the selection may well have changed since you last
+    // had the sheet open.
     if (open) refreshSheetTabs({ reset: true });
   };
   fab.addEventListener("click", () => setSheet(!appEl.classList.contains("sheet-open")));
@@ -1022,9 +1023,9 @@ function buildRasterTools(node) {
   wire("#layer-merge", () => editor.consolidateByColor());
 
   const set = (id, on) => { const b = document.querySelector(id); if (b) b.disabled = !on; };
-  let lastFacts = null;   // most recent selection facts — the adaptive engine + suggestion block read this
+  let lastFacts = null;   // most recent selection facts — the adaptive engine + the pulse read this
   // The predicates behind this now live in src/ui/actions.js, computed ONCE per selection change and
-  // shared with the Actions menu and the suggestion block — they used to be recomputed privately in
+  // shared with the Actions menu and the suggestion pulse — they used to be recomputed privately in
   // two places that could not see each other, free to drift. This is the thin consumer: it still
   // sets .disabled on every gated button exactly as before, which is what keeps the desktop's
   // grey-out behaviour intact (and what layout.js relies on to restore states after customizing).
@@ -1033,7 +1034,7 @@ function buildRasterTools(node) {
     const st = evaluate(facts);
     for (const [key, s] of st) set(key, s.valid);
     // Clip is the one button that changes MEANING with context (release vs make). Its label comes
-    // from the same oracle the suggestion block reads, so the two can never disagree.
+    // from the same oracle the pulse reads, so the two can never disagree.
     const clipBtn = document.querySelector("#act-clip");
     if (clipBtn) {
       const c = st.get("#act-clip");
@@ -1054,16 +1055,20 @@ function buildRasterTools(node) {
     // The bars rearrange themselves from the SAME facts — one pass, one answer. (No third link on the
     // onInspect chain: this block already owns action state and already runs on every selection change.)
     syncAdaptive(facts);
+    // A suggestion is a TRANSITION: pulse whatever just flipped impossible->possible, on the real
+    // buttons where they already live, and say so on the strip — unless something with a hold (e.g.
+    // "Saved.") is already occupying it.
+    const news = syncPulse(facts);
+    if (news && canReplaceStatus()) setStatus(news, PULSE_HOLD_MS);
   };
-  // exposed for the adaptive engine, the suggestion block, and the e2e — one oracle, one answer
+  // exposed for the adaptive engine and the e2e — one oracle, one answer
   window.__actions = { facts: () => lastFacts, rank: (opts) => rankFor(lastFacts || selectionFacts(editor), opts),
                        kind: () => selectionKind(lastFacts || selectionFacts(editor)),
                        describe: () => describeSelection(lastFacts || selectionFacts(editor)) };
   // getLayout is a GETTER: layoutCtl isn't built until further down this file, and this codebase has
   // been bitten by exactly that ordering class before.
   configureAdaptive({ getLayout: () => layoutCtl, getPref: () => prefs.adaptiveBars });
-  configureSuggest({ getLayout: () => layoutCtl, getPref: () => prefs.adaptiveBars, getEditor: () => editor });
-  onFormFactorChange(() => { rehomeSuggest(); if (lastFacts) renderSuggest(lastFacts); });
+  configurePulse({ getPref: () => prefs.adaptiveBars });
   window.__adaptive = { sync: () => syncAdaptive(lastFacts), suspend: suspendAdaptive };
   const prevOnInspect = editor.onInspect;
   editor.onInspect = () => {
@@ -1076,10 +1081,6 @@ function buildRasterTools(node) {
     syncDockContext();        // park/return contextual panels (Processor, Colour) for the new selection
     // (The phone sheet used to auto-fold the panels that didn't relate to the selection. It's a tab
     // surface now — one panel at a time — so there is nothing left to fold. See ui/formfactor.js.)
-    // LAST, deliberately. The suggestion block lives inside the Properties panel body, and both
-    // renderProps() and syncDockContext()'s reconcile empty that body when they rebuild — anything
-    // inserted earlier in this chain gets wiped in the same tick.
-    renderSuggest(lastFacts);
   };
   refreshActionButtons();
 }

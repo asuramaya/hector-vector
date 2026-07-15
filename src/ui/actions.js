@@ -73,14 +73,20 @@ export function selectionKind(f) {
 // `why` is AUTHORED. It has to be: a tile's title attribute is a terse restatement plus a keyboard
 // shortcut ("Unite — combine shapes"), and _objectActions() carries a bare label. Neither says what
 // the thing is FOR. Where a tile changes meaning with context (#act-clip), `dynamic` supplies the
-// label/glyph/why, so the suggestion block asks the same question the button does instead of
-// re-deriving it and drifting.
+// label/glyph/why, so the suggestion pulse (src/ui/pulse.js) asks the same question the button does
+// instead of re-deriving it and drifting.
+//
+// `noisy: true` marks a gate so broad it goes valid on nearly EVERY selection ("you selected
+// something", "a document exists") — pulse.js excludes these, or clicking any one shape would light
+// up a dozen buttons at once and "just became possible" would stop meaning anything. The unmarked
+// entries are gated on something genuinely narrow (an overlap, a group, a clipboard) — that scarcity
+// is exactly what makes their transition worth a glance.
 export const ACTIONS = [
-  { key: "#act-duplicate", glyph: "⧉⁺", label: "Duplicate",  why: "Make a copy on top",                 valid: (f) => f.hasSel },
-  { key: "#layer-delete",  glyph: "✕",  label: "Delete",     why: "Remove it from the canvas",          valid: (f) => f.hasSel },
-  { key: "#act-cut",       glyph: "✂",  label: "Cut",        why: "Remove it and hold it on the clipboard", valid: (f) => f.hasSel },
-  { key: "#act-copy",      glyph: "⧉",  label: "Copy",       why: "Hold a copy on the clipboard",       valid: (f) => f.hasSel },
-  { key: "#act-paste",     glyph: "❏",  label: "Paste",      why: "Drop in what's on the clipboard",    valid: (f) => f.has && f.hasClip },
+  { key: "#act-duplicate", glyph: "⧉⁺", label: "Duplicate",  why: "Make a copy on top",                 valid: (f) => f.hasSel, noisy: true },
+  { key: "#layer-delete",  glyph: "✕",  label: "Delete",     why: "Remove it from the canvas",          valid: (f) => f.hasSel, noisy: true },
+  { key: "#act-cut",       glyph: "✂",  label: "Cut",        why: "Remove it and hold it on the clipboard", valid: (f) => f.hasSel, noisy: true },
+  { key: "#act-copy",      glyph: "⧉",  label: "Copy",       why: "Hold a copy on the clipboard",       valid: (f) => f.hasSel, noisy: true },
+  { key: "#act-paste",     glyph: "❏",  label: "Paste",      why: "Drop in what's on the clipboard",    valid: (f) => f.has && f.hasClip, noisy: true },
 
   { key: "#act-union",     glyph: "∪",  label: "Unite",      why: "Merge the shapes into one",          valid: (f) => f.fillable },
   { key: "#act-subtract",  glyph: "−",  label: "Subtract",   why: "Cut the front shape out of the back", valid: (f) => f.fillable },
@@ -93,26 +99,26 @@ export const ACTIONS = [
 
   { key: "#layer-group",   glyph: "⊞",  label: "Group",      why: "Treat them as one object",           valid: (f) => f.n >= 2 },
   { key: "#layer-ungroup", glyph: "⊟",  label: "Ungroup",    why: "Break it back into its parts",       valid: (f) => f.hasGroup },
-  { key: "#layer-rename",  glyph: "✎",  label: "Rename",     why: "Give it a name in the Layers list",  valid: (f) => f.n === 1 },
+  { key: "#layer-rename",  glyph: "✎",  label: "Rename",     why: "Give it a name in the Layers list",  valid: (f) => f.n === 1, noisy: true },
 
-  { key: "#layer-front",   glyph: "⤒",  label: "Bring to front", why: "Put it above everything",        valid: (f) => f.hasSel },
-  { key: "#layer-forward", glyph: "↑",  label: "Bring forward",  why: "Move it up one",                 valid: (f) => f.hasSel },
-  { key: "#layer-backward", glyph: "↓", label: "Send backward",  why: "Move it down one",               valid: (f) => f.hasSel },
-  { key: "#layer-back",    glyph: "⤓",  label: "Send to back",   why: "Put it behind everything",       valid: (f) => f.hasSel },
+  { key: "#layer-front",   glyph: "⤒",  label: "Bring to front", why: "Put it above everything",        valid: (f) => f.hasSel, noisy: true },
+  { key: "#layer-forward", glyph: "↑",  label: "Bring forward",  why: "Move it up one",                 valid: (f) => f.hasSel, noisy: true },
+  { key: "#layer-backward", glyph: "↓", label: "Send backward",  why: "Move it down one",               valid: (f) => f.hasSel, noisy: true },
+  { key: "#layer-back",    glyph: "⤓",  label: "Send to back",   why: "Put it behind everything",       valid: (f) => f.hasSel, noisy: true },
 
   // Free transform ranks ABOVE the 90° nudges: "make it bigger" and "turn it a bit" are what people
   // actually reach for, and on a phone these two buttons ARE the only way in (no Ctrl+T) and the only
   // way back out (no Esc).
-  { key: "#act-scale",     glyph: "⤢",  label: "Scale",        why: "Drag the handles to resize it",    valid: (f) => f.canXform },
-  { key: "#act-rotate",    glyph: "⟳",  label: "Rotate",       why: "Drag the corners to turn it",      valid: (f) => f.canXform },
-  { key: "#act-rotate-cw", glyph: "↻",  label: "Rotate right", why: "Turn it 90° clockwise",            valid: (f) => f.canXform },
-  { key: "#act-rotate-ccw", glyph: "↺", label: "Rotate left",  why: "Turn it 90° anticlockwise",        valid: (f) => f.canXform },
-  { key: "#act-flip-h",    glyph: "⇄",  label: "Flip across",  why: "Mirror it left-to-right",          valid: (f) => f.canXform },
-  { key: "#act-flip-v",    glyph: "⇅",  label: "Flip over",    why: "Mirror it top-to-bottom",          valid: (f) => f.canXform },
+  { key: "#act-scale",     glyph: "⤢",  label: "Scale",        why: "Drag the handles to resize it",    valid: (f) => f.canXform, noisy: true },
+  { key: "#act-rotate",    glyph: "⟳",  label: "Rotate",       why: "Drag the corners to turn it",      valid: (f) => f.canXform, noisy: true },
+  { key: "#act-rotate-cw", glyph: "↻",  label: "Rotate right", why: "Turn it 90° clockwise",            valid: (f) => f.canXform, noisy: true },
+  { key: "#act-rotate-ccw", glyph: "↺", label: "Rotate left",  why: "Turn it 90° anticlockwise",        valid: (f) => f.canXform, noisy: true },
+  { key: "#act-flip-h",    glyph: "⇄",  label: "Flip across",  why: "Mirror it left-to-right",          valid: (f) => f.canXform, noisy: true },
+  { key: "#act-flip-v",    glyph: "⇅",  label: "Flip over",    why: "Mirror it top-to-bottom",          valid: (f) => f.canXform, noisy: true },
 
-  { key: "#hdr-invert",    glyph: "⊠",  label: "Invert space", why: "Fill the gaps instead of the shapes", valid: (f) => f.canInvert },
-  { key: "#layer-cleanup", glyph: "⌫",  label: "Clean up",     why: "Drop empty and stray layers",      valid: (f) => f.has },
-  { key: "#layer-merge",   glyph: "≡",  label: "Merge by colour", why: "Combine layers that share a fill", valid: (f) => f.has },
+  { key: "#hdr-invert",    glyph: "⊠",  label: "Invert space", why: "Fill the gaps instead of the shapes", valid: (f) => f.canInvert, noisy: true },
+  { key: "#layer-cleanup", glyph: "⌫",  label: "Clean up",     why: "Drop empty and stray layers",      valid: (f) => f.has, noisy: true },
+  { key: "#layer-merge",   glyph: "≡",  label: "Merge by colour", why: "Combine layers that share a fill", valid: (f) => f.has, noisy: true },
 ];
 const BY_KEY = new Map(ACTIONS.map((a) => [a.key, a]));
 
@@ -126,6 +132,7 @@ export function evaluate(f) {
       glyph: (d && d.glyph) || a.glyph,
       label: (d && d.label) || a.label,
       why: (d && d.why) || a.why,
+      noisy: !!a.noisy,
     });
   }
   return m;

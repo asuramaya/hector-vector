@@ -3865,41 +3865,59 @@ def main():
         page.wait_for_timeout(300)
         mount_ctl(page)
 
-        section("The SUGGESTED block: says out loud what the bars only imply")
+        section("The suggestion pulse: a transition, not a second copy of the buttons")
+        # suggest.js is dead (Epic N ruling: don't build a second surface, light up the first one).
         mount_ctl(page)
-        sug = page.evaluate("""async () => {
-            const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
-              + '<rect data-hv-id="a" x="10" y="10" width="40" height="40" fill="#111"/>'
-              + '<rect data-hv-id="b" x="30" y="30" width="40" height="40" fill="#222"/></svg>';
-            mountStageFromText(svg, 't.svg');
+        pulse = page.evaluate("""async () => {
             const wait = () => new Promise((r) => setTimeout(r, 250));
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+              + '<rect data-hv-id="a" x="10" y="10" width="40" height="40" fill="#111"/>'
+              + '<rect data-hv-id="b" x="70" y="70" width="20" height="20" fill="#222"/></svg>', 't.svg');
+            // One shape alone can't overlap itself — Union stays invalid, so this is also the clean
+            // "before" baseline the next step's diff needs.
+            editor.selection = new Set(['a']); editor._renderInspector(); await wait();
+            const oneShapeNoPulse = document.querySelector('#act-union').classList.contains('hl-pulse');
+            const statusBefore = document.querySelector('#status-text')?.textContent;
+            // Move b on top of a: still the SAME two ids selected, but overlap just became true —
+            // the transition the whole module exists to catch (a moved shape, not a changed id set).
+            const b = editor.stage.querySelector('[data-hv-id=\"b\"]');
+            b.setAttribute('x', '30'); b.setAttribute('y', '30');
             editor.selection = new Set(['a', 'b']); editor._renderInspector(); await wait();
-            const box = document.querySelector('.proc-auto.suggest');
-            if (!box) return { found: false };
-            const rows = [...box.querySelectorAll('.suggest-row')].map((r) => ({
-                cap: r.querySelector('.proc-plan-cap').textContent.trim(),
-                why: r.querySelector('.proc-plan-why').textContent.trim() }));
-            const sum = box.querySelector('.proc-auto-sum').textContent;
-            // running a suggestion CLICKS THE REAL BUTTON — so it can never offer something the
-            // toolbar can't actually do, and it inherits the wired handler's error handling.
-            const before = editor.stage.querySelectorAll('[data-hv-id]').length;
-            box.querySelector('[data-suggest-key="#act-union"] .proc-plan-add').click();
-            await wait();
-            const after = editor.stage.querySelectorAll('[data-hv-id]').length;
-            return { found: true, sum, rows, before, after,
-                     hasMore: !!box.querySelector('.suggest-more-lbl') };
+            return {
+                oneShapeNoPulse,
+                statusBefore,
+                unionPulsed: document.querySelector('#act-union').classList.contains('hl-pulse'),
+                subtractPulsed: document.querySelector('#act-subtract').classList.contains('hl-pulse'),
+                deletePulsed: document.querySelector('#layer-delete').classList.contains('hl-pulse'),
+                says: document.querySelector('#status-text')?.textContent,
+            };
         }""")
-        check("suggested: reads the selection back and leads with the booleans, WITH reasons",
-              sug["found"] and sug["sum"] == "2 overlapping shapes"
-              and [r["cap"].split()[-1] for r in sug["rows"][:3]] == ["Unite", "Subtract", "Intersect"]
-              and all(r["why"] for r in sug["rows"][:3]),
-              str(sug.get("rows", [])[:2]))
-        check("suggested: 'Do it' actually does it (it clicks the real button, so it can't offer a lie)",
-              sug["before"] == 2 and sug["after"] == 1, f"{sug.get('before')} -> {sug.get('after')} nodes")
-        check("suggested: the menu-only verbs get a home ('Also possible' — they have no toolbar tile)",
-              sug["hasMore"])
-        # A clipping mask is the one action that changes MEANING with context. The block must ask the
-        # same question the button does, not re-derive it.
+        check("pulse: one shape alone never lights Union (it can't overlap itself)",
+              not pulse["oneShapeNoPulse"])
+        check("pulse: two shapes moving into overlap lights up the REAL button (no second surface to build)",
+              pulse["unionPulsed"] and pulse["subtractPulsed"], str(pulse))
+        # Delete is valid the instant ANYTHING is selected — "noisy" in actions.js. Pulsing it on
+        # every single click would be the exact noise the transition rule exists to filter out.
+        check("pulse: never lights up a 'noisy' gate (nobody is stuck on Delete)",
+              not pulse["deletePulsed"])
+        check("pulse: the strip narrates the transition, not just the state",
+              pulse["says"] and pulse["says"] != pulse["statusBefore"] and "possible" in pulse["says"],
+              repr(pulse.get("says")))
+        # The cap: with a THIRD action reachable (Group, since n>=2 as well as fillable), still only
+        # up to 3 pulse — more than that reads as noise, not news (Epic N ruling).
+        capped = page.evaluate("""async () => {
+            const wait = () => new Promise((r) => setTimeout(r, 250));
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+              + '<rect data-hv-id=\"a\" x=\"70\" y=\"70\" width=\"20\" height=\"20\" fill=\"#111\"/>'
+              + '<rect data-hv-id=\"b\" x=\"71\" y=\"71\" width=\"20\" height=\"20\" fill=\"#222\"/></svg>', 't.svg');
+            editor.selection = new Set([]); editor._renderInspector(); await wait();
+            editor.selection = new Set(['a', 'b']); editor._renderInspector(); await wait();
+            return document.querySelectorAll('.tool-button.hl-pulse').length;
+        }""")
+        check("pulse: caps at 3 lit buttons even when more became valid at once",
+              capped <= 3, str(capped))
+        # A clipping mask is the one action that changes MEANING with context (Release vs Make) — the
+        # pulse must ask the oracle the same question the button does, not offer a stale glyph.
         relabel = page.evaluate("""async () => {
             const wait = () => new Promise((r) => setTimeout(r, 250));
             mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
@@ -3908,25 +3926,13 @@ def main():
             editor.selection = new Set(['a', 'b']); editor._renderInspector(); await wait();
             editor.makeClipMask(); await wait();
             const g = editor.stage.querySelector('g[data-hv-id]');
+            editor.selection = new Set([]); editor._renderInspector(); await wait();
             editor.selection = new Set([g.getAttribute('data-hv-id')]); editor._renderInspector(); await wait();
-            const row = document.querySelector('.proc-auto.suggest [data-suggest-key="#act-clip"] .proc-plan-cap');
-            return { text: row ? row.textContent.trim() : null,
-                     button: document.querySelector('#act-clip').textContent.trim() };
+            return { button: document.querySelector('#act-clip').textContent.trim(),
+                     pulsed: document.querySelector('#act-clip').classList.contains('hl-pulse') };
         }""")
-        check("suggested: a clipped group offers 'Release mask' — the block and the button agree",
-              relabel["text"] and "Release" in relabel["text"] and relabel["button"] == "↺", str(relabel))
-        # Images already have a BETTER suggester (the auto-plan banner reads the actual pixels).
-        # Don't put a worse second opinion next to it.
-        raster_quiet = page.evaluate("""async () => {
-            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
-              + '<image data-hv-id="im" x="0" y="0" width="10" height="10" href="data:image/png;base64,'
-              + 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="/></svg>', 't.svg');
-            editor.selection = new Set(['im']); editor._renderInspector();
-            await new Promise((r) => setTimeout(r, 300));
-            return !document.querySelector('.proc-auto.suggest');
-        }""")
-        check("suggested: stays quiet for an image — the Processor's auto-plan banner already reads the pixels",
-              raster_quiet)
+        check("pulse: a clipped group's Release-mask button is the one that lights (glyph already flipped)",
+              relabel["button"] == "↺" and relabel["pulsed"], str(relabel))
         mount_ctl(page)
 
         section("Customize layout: draggable dividers + right-click add/remove")
@@ -4802,16 +4808,18 @@ def main():
                 # THE contextual ask: with two overlapping shapes, the booleans must be RIGHT THERE —
                 # not buried in the sheet. And the strip must still be one row that fits.
                 ctx = mp.evaluate("""async () => {
+                    const wait = () => new Promise((r) => setTimeout(r, 400));
                     mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
                       + '<rect data-hv-id="p" x="15" y="20" width="45" height="45" fill="#666"/>'
                       + '<rect data-hv-id="q" x="40" y="40" width="45" height="45" fill="#999"/></svg>', 't.svg');
-                    editor.selection = new Set(['p', 'q']); editor._renderInspector();
-                    await new Promise((r) => setTimeout(r, 400));
+                    // Clean baseline: nothing overlapping yet selected, so the pulse below is a real
+                    // transition and not a leftover from whatever the previous check left selected.
+                    editor.selection = new Set([]); editor._renderInspector(); await wait();
+                    editor.selection = new Set(['p', 'q']); editor._renderInspector(); await wait();
                     const bar = document.querySelector('.stage-wrap > .stage-toolbar');
                     const vis = (el) => !!el && el.offsetParent !== null;
                     const shown = [...bar.children].filter((e) => vis(e) && e.id)
                         .sort((x, y) => (+getComputedStyle(x).order) - (+getComputedStyle(y).order)).map((e) => '#' + e.id);
-                    const sug = document.querySelector('.proc-auto.suggest');
                     // The cap is PER BAR: capping the global ranked list would have made cut/copy
                     // (which rank low) vanish from the sheet too — i.e. unreachable anywhere. They
                     // live on the Actions bar, which the tabbed sheet shows one tap away, so "still
@@ -4819,12 +4827,14 @@ def main():
                     // now. That it's genuinely VISIBLE once you tap Actions is asserted below.
                     const abar = document.querySelector('#rightdock > .actionbar');
                     const off = (s) => { const e = abar && abar.querySelector(s); return !e || e.classList.contains('act-off'); };
+                    // The teaching strip and the pulse work exactly the same on a phone — no second
+                    // "Suggested" surface needed: the booleans are already right there, on the bar.
                     return { shown, overflow: bar.scrollWidth - bar.clientWidth,
                              rows: Math.round(bar.getBoundingClientRect().height),
                              cutOffered: !!abar && !off('#act-cut'),
                              pasteHidden: off('#act-paste') && !vis(document.querySelector('#act-paste')),
-                             suggested: !!sug,
-                             suggestSays: sug ? sug.querySelector('.proc-auto-sum').textContent : null };
+                             unionPulsed: document.querySelector('#act-union').classList.contains('hl-pulse'),
+                             says: document.querySelector('#status-text')?.textContent };
                 }""")
                 check("mobile: two overlapping shapes put the booleans on the bar under the canvas, no sheet needed",
                       ctx["shown"][:3] == ["#act-union", "#act-subtract", "#act-intersect"], str(ctx["shown"][:4]))
@@ -4833,8 +4843,8 @@ def main():
                       f"overflow={ctx['overflow']} rows={ctx['rows']} n={len(ctx['shown'])}")
                 check("mobile: capping the bar doesn't make anything unreachable (cut/copy still offered in the sheet)",
                       ctx["cutOffered"] and ctx["pasteHidden"], str(ctx))
-                check("mobile: the sheet leads with SUGGESTED, reading the selection back",
-                      ctx["suggested"] and ctx["suggestSays"] == "2 overlapping shapes", str(ctx["suggestSays"]))
+                check("mobile: the pulse lights the SAME bar (no second Suggested surface) and the strip narrates it",
+                      ctx["unionPulsed"] and ctx["says"] and "possible" in ctx["says"], str(ctx))
                 # The sheet was a STACK: ten panels in a 480px window, so you scrolled the sheet to find
                 # a panel and then scrolled inside the panel to read it — two scrollers, one thumb, and
                 # whatever you wanted below the fold. It's a tab surface now: the strip scrolls
