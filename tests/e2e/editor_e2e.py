@@ -517,6 +517,65 @@ def main():
         check("saving a swatch persists it", bool(saved) and first_hex.lower() == "#123456", f"saved={saved}")
         page.evaluate("window.__docks.close('color')"); page.wait_for_timeout(40)
 
+        section("Colour panel: personal swatches can be organised into folders (Epic C.4)")
+        # A folder is just a `group` string shared by its members (no separate registry),
+        # so new swatches are always ungrouped by default and get filed away afterward via
+        # each swatch's right-click menu.
+        page.evaluate("() => localStorage.removeItem('hector-vector:swatches')")
+        page.click("#swatch-fill")
+        page.wait_for_function("!!document.querySelector('.cp-window')", timeout=4000)
+        for h in ["aa0000", "00aa00", "0000aa"]:
+            page.evaluate("""(v) => { const el = document.querySelector('.cp-hex input');
+                el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }""", h)
+            page.click(".cp-swatches .cp-sw-add"); page.wait_for_timeout(30)
+        saved = page.evaluate("() => JSON.parse(localStorage.getItem('hector-vector:swatches')||'[]')")
+        check("3 personal swatches saved, all ungrouped by default",
+              len(saved) == 3 and all("group" not in s for s in saved), f"{saved}")
+
+        def swatch_btn(hexval):
+            return page.evaluate("""(hex) => { const b = [...document.querySelectorAll('.cp-swatches .cp-sw')]
+                .find(el => (el.title||'').toLowerCase().includes(hex));
+                if (!b) return null; const r = b.getBoundingClientRect(); return {x: r.x+r.width/2, y: r.y+r.height/2}; }""", hexval)
+
+        b = swatch_btn("#aa0000")
+        page.mouse.click(b["x"], b["y"], button="right")
+        page.wait_for_selector(".context-menu", timeout=2000)
+        items = page.eval_on_selector_all(".context-menu .menu-item .menu-label", "els => els.map(e => e.textContent)")
+        check("swatch context menu offers New folder…", "New folder…" in items, f"{items}")
+        page.click(".context-menu .menu-item:has-text('New folder…')")
+        page.wait_for_selector(".hv-float-input input", timeout=2000)
+        page.fill(".hv-float-input input", "Brand"); page.keyboard.press("Enter"); page.wait_for_timeout(60)
+        saved = page.evaluate("() => JSON.parse(localStorage.getItem('hector-vector:swatches')||'[]')")
+        member = next((s for s in saved if s.get("c", "").lower() == "#aa0000"), None)
+        check("swatch moved into a new folder 'Brand'", member is not None and member.get("group") == "Brand", f"{saved}")
+        grp = page.evaluate("""() => { const g = [...document.querySelectorAll('.cp-swgroup')]
+            .find(el => el.querySelector('.cp-swgroup-head').textContent === 'Brand');
+            return g ? g.querySelectorAll('.cp-swgroup-row .cp-sw').length : null; }""")
+        check("folder renders as its own labelled row inside the swatch grid", grp == 1, f"{grp}")
+
+        b2 = swatch_btn("#00aa00")
+        page.mouse.click(b2["x"], b2["y"], button="right")
+        page.wait_for_selector(".context-menu", timeout=2000)
+        items2 = page.eval_on_selector_all(".context-menu .menu-item .menu-label", "els => els.map(e => e.textContent)")
+        check("an existing folder shows up as a one-click Move-to target", any("Brand" in i for i in items2), f"{items2}")
+        page.click(".context-menu .menu-item:has-text('Brand')"); page.wait_for_timeout(60)
+        grp2 = page.evaluate("() => document.querySelectorAll('.cp-swgroup .cp-sw').length")
+        check("a 2nd swatch joins the same existing folder", grp2 == 2, f"{grp2}")
+
+        head = page.evaluate("""() => { const h = [...document.querySelectorAll('.cp-swgroup-head')].find(e => e.textContent === 'Brand');
+            const r = h.getBoundingClientRect(); return {x: r.x + 5, y: r.y + 5}; }""")
+        page.mouse.click(head["x"], head["y"], button="right")
+        page.wait_for_selector(".context-menu", timeout=2000)
+        head_items = page.eval_on_selector_all(".context-menu .menu-item .menu-label", "els => els.map(e => e.textContent)")
+        check("a folder header's own menu offers rename/remove",
+              any("Rename folder" in i for i in head_items) and any("Remove folder" in i for i in head_items), f"{head_items}")
+        page.click(".context-menu .menu-item:has-text('Remove folder')"); page.wait_for_timeout(60)
+        saved = page.evaluate("() => JSON.parse(localStorage.getItem('hector-vector:swatches')||'[]')")
+        check("removing a folder ungroups its swatches but never deletes them",
+              len(saved) == 3 and all("group" not in s for s in saved)
+              and page.evaluate("document.querySelectorAll('.cp-swgroup').length") == 0, f"{saved}")
+        page.evaluate("window.__docks.close('color')"); page.wait_for_timeout(40)
+
         section("Colour panel: RGB/HSL/HSB model tabs + recent-colours strip")
         page.evaluate("() => { localStorage.removeItem('hector-vector:swatches-recent'); localStorage.removeItem('hector-vector:cp-model'); }")
         page.click("#swatch-fill"); page.wait_for_function("!!document.querySelector('.cp-window')", timeout=4000)
