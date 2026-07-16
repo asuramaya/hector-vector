@@ -4490,6 +4490,50 @@ def main():
             " editor._setAreaHeight(400); const cleared=t.getAttribute('data-hv-overflow')!=='1';"
             " const ok=over && hasH && note && cleared;"
             " t.remove(); editor.selection=new Set(); editor._renderSelection(); return ok; }") is True)
+        # Text styles (Epic P.1): a named, whole-object font bundle shared across text
+        # objects — save one from a selection, apply it to another, edit either instance and
+        # BOTH follow (mirrors Global Colours' live-link for paint, now for type). Scoped to
+        # whole-object styling (no per-run/per-character formatting exists in this text model).
+        ts = page.evaluate(
+            "() => { const NS='http://www.w3.org/2000/svg';"
+            " const mk=(id,x,y,txt,fs)=>{ const t=document.createElementNS(NS,'text'); t.setAttribute('data-hv-id',id);"
+            "   t.setAttribute('x',x); t.setAttribute('y',y); t.setAttribute('font-family','Arial, sans-serif'); t.setAttribute('font-size',String(fs));"
+            "   t.textContent=txt; editor.stage.insertBefore(t, editor._overlayEl()); return t; };"
+            " const a=mk('tsa',20,240,'Heading A',32), b=mk('tsb',20,280,'Heading B',18);"
+            " editor.selection=new Set(['tsa']); editor.artboardSelected=false;"
+            " const id=editor.makeTextStyle('Heading');"
+            " const afterMake={ id, styles: editor._textStyles().map(s=>s.name), taStyle: a.getAttribute('data-hv-text-style-id') };"
+            " editor.selection=new Set(['tsb']); editor.artboardSelected=false; editor.applyTextStyle(id);"
+            " const afterApply={ size: b.getAttribute('font-size'), styleId: b.getAttribute('data-hv-text-style-id') };"
+            " editor._setTextAttr('font-weight','700',{styleKey:'fontWeight',label:'Weight'});"
+            " const afterPropagate={ aWeight: a.getAttribute('font-weight'), bWeight: b.getAttribute('font-weight') };"
+            " editor.selection=new Set(['tsa','tsb']); editor.artboardSelected=false;"
+            " const panel1=editor._objectPanel(editor.selectedNodes());"
+            " const styleBtnText=(row=>row?row.querySelector('button').textContent:null)([...panel1.querySelectorAll('.insp-row')].find(r=>r.querySelector('span')&&r.querySelector('span').textContent==='Text style'));"
+            " editor.detachTextStyle(b);"
+            " const afterDetach={ styleId: b.getAttribute('data-hv-text-style-id'), weight: b.getAttribute('font-weight') };"
+            " editor.selection=new Set(['tsb']); editor.artboardSelected=false;"
+            " editor._applyTextNum('font-size',64,{reflow:true,styleKey:'fontSize'});"
+            " const afterUnlinkedEdit={ aSize: a.getAttribute('font-size'), bSize: b.getAttribute('font-size') };"
+            " editor.deleteTextStyle(id);"
+            " const afterDelete={ styles: editor._textStyles().length, aStyleId: a.getAttribute('data-hv-text-style-id'), aSize: a.getAttribute('font-size') };"
+            " a.remove(); b.remove(); editor.selection=new Set(); editor._renderSelection();"
+            " return { afterMake, afterApply, afterPropagate, styleBtnText, afterDetach, afterUnlinkedEdit, afterDelete }; }")
+        check("makeTextStyle names a style from the selection and tags the source object",
+              ts["afterMake"]["id"] and ts["afterMake"]["styles"] == ["Heading"] and ts["afterMake"]["taStyle"] == ts["afterMake"]["id"], str(ts))
+        check("applyTextStyle stamps the style's font-size onto a differently-sized object",
+              ts["afterApply"]["size"] == "32" and ts["afterApply"]["styleId"] == ts["afterMake"]["id"], str(ts))
+        check("editing one styled object's weight propagates to every other object sharing the style",
+              ts["afterPropagate"]["aWeight"] == "700" and ts["afterPropagate"]["bWeight"] == "700", str(ts))
+        check("inspector Text-style row shows the shared style's name for a same-style multi-selection",
+              ts["styleBtnText"] == "Heading", str(ts))
+        check("detaching drops the tag but keeps the object's current (propagated) look",
+              ts["afterDetach"]["styleId"] is None and ts["afterDetach"]["weight"] == "700", str(ts))
+        check("a detached object's own edits no longer cascade to the style's other users",
+              ts["afterUnlinkedEdit"]["aSize"] == "32" and ts["afterUnlinkedEdit"]["bSize"] == "64", str(ts))
+        check("deleting a style removes it from the list and unlinks remaining users without changing their look",
+              ts["afterDelete"]["styles"] == 0 and ts["afterDelete"]["aStyleId"] is None and ts["afterDelete"]["aSize"] == "32", str(ts))
+
         # T19 text-on-path: bind a text to a path → a <textPath href="#pathId"> that lays out
         # along the curve; the path gains a referencable id. Self-contained.
         check("text-on-path binds text to a path via <textPath> (T19)", page.evaluate(
