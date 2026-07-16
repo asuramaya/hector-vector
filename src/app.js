@@ -606,6 +606,27 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
         onChange: (h) => editor.recolorApply(targets, h || hex) });
       return;
     }
+    // Fill-layer edit mode (Epic K.1): a layer swatch in the Fills inspector group routes
+    // here — same solo-picker idiom as Recolor above, editing one layer of a fill stack.
+    if (editor._fillLayerTarget) {
+      const { gid, index } = editor._fillLayerTarget;
+      const g = editor.nodeById(gid);
+      const layers = g ? editor._fillLayers(g) : null;
+      if (g && layers && layers[index]) {
+        if (ftitle) ftitle.textContent = "Fill layer";
+        hostEl.innerHTML = "";
+        const bar = document.createElement("div"); bar.className = "cp-recolor-bar";
+        const done = document.createElement("button"); done.type = "button"; done.className = "ghost-button cp-recolor-done"; done.textContent = "‹ Done";
+        done.addEventListener("click", () => { editor._fillLayerTarget = null; editor._renderColorPanel(hostEl); });
+        const lab = document.createElement("span"); lab.className = "cp-recolor-lab"; lab.textContent = `Layer ${index + 1}`;
+        bar.append(done, lab); hostEl.appendChild(bar);
+        const pickerHost = document.createElement("div"); pickerHost.className = "cp-recolor-host"; hostEl.appendChild(pickerHost);
+        colorCtl = openColorPicker({ title: "Fill layer", host: pickerHost, color: layers[index].fill, alpha: layers[index].opacity, allowNone: false,
+          onChange: (h, a) => editor.setFillLayer(g, index, { fill: h || layers[index].fill, opacity: a }) });
+        return;
+      }
+      editor._fillLayerTarget = null;
+    }
     // Nothing selected → an empty state, NOT the full (tall) duo picker. Rendering the
     // picker with no target made the panel overflow when expanded-but-empty.
     if (!editor.artboardSelected && (!editor.selection || editor.selection.size === 0)) {

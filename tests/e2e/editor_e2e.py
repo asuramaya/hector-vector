@@ -2422,6 +2422,65 @@ def main():
         check("blend: 2 shapes → parametric group (endpoints+steps), colour+shape interp, steps regen, reverse, expand+undo, round-trips",
               bn["group"] and bn["origGone"] and bn["childCount"] and bn["midPlaced"] and bn["midColour"]
               and bn["regen"] and bn["reverse"] and bn["serOk"] and bn["expanded"] and bn["undoOk"], str(bn))
+        # Appearance stack v1 (Epic K.1, SCOPED to fills-only — no strokes/blend-modes/per-layer
+        # effects, same "ship a v1" pattern as the rest of this backlog). A <g data-hv-fills>
+        # holds ordered {fill,opacity} layers over one shared shape; _regenFills rebuilds one
+        # <path> per layer (paint order = list order). Also exercises a real bug this session
+        # found in passing: docks.js's live Properties panel renders _effectiveLeaves()-unwrapped
+        # nodes, so a parametric <g>'s OWN inspector section (Blend/Repeat/Fills) never matched
+        # nodes.length===1 through the real UI — fixed via a raw-selection check in _objectPanel.
+        section("Appearance stack: ordered fill layers (Epic K.1)")
+        mf = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="40" y="40" width="80" height="80" fill="#3366cc"/></svg>','k1');
+            editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false;
+            const acts0 = editor._objectActions(editor.selectedNodes()).map(a=>a.label);
+            o.gateBefore = acts0.includes('Add fill') && !acts0.includes('Add fill layer') && !acts0.includes('Expand fill stack');
+            editor.makeMultiFill();
+            const gid=[...editor.selection][0], g=editor.nodeById(gid);
+            o.isGroup = !!g && g.tagName.toLowerCase()==='g' && editor.isMultiFillGroup(g);
+            o.origGone = !editor.stage.querySelector('rect[data-hv-id="r1"]');
+            o.twoLayers = g.querySelectorAll('path[data-hv-id]').length===2;
+            const acts1 = editor._objectActions(editor.selectedNodes()).map(a=>a.label);
+            o.gateAfter = acts1.includes('Add fill layer') && acts1.includes('Expand fill stack') && !acts1.includes('Add fill');
+            editor.addFillLayer(g); o.threeLayers = g.querySelectorAll('path[data-hv-id]').length===3;
+            editor.setFillLayer(g,1,{fill:'#ff0000',opacity:0.5});
+            const kids=[...g.querySelectorAll('path[data-hv-id]')];
+            o.setLayer = kids[1].getAttribute('fill')==='#ff0000' && kids[1].getAttribute('fill-opacity')==='0.5';
+            editor.moveFillLayer(g,1,1); o.moved = editor._fillsSpec(g).layers[2].fill==='#ff0000';
+            editor.removeFillLayer(g,2); o.removed = g.querySelectorAll('path[data-hv-id]').length===2;
+            editor.removeFillLayer(g,0); editor.removeFillLayer(g,0);
+            o.floorAtOne = g.querySelectorAll('path[data-hv-id]').length===1;   // never below 1 layer
+            const ser = editor.serialize(); o.serStripped = !ser.includes('data-hv-fills');
+            editor.expandMultiFill(editor.nodeById(gid));
+            const gAfterExpand = editor.nodeById(gid);
+            o.expanded = !gAfterExpand.hasAttribute('data-hv-fills') && gAfterExpand.querySelectorAll('path[data-hv-id]').length>=1;
+            editor.undo();
+            const gAfterUndo = editor.nodeById(gid);
+            o.undoExpand = !!gAfterUndo && gAfterUndo.hasAttribute('data-hv-fills');
+            return o; }""")
+        check("multi-fill: Actions-menu gate (Add fill / Add fill layer+Expand), stack of layers, set/move/remove (floors at 1), expand+undo, round-trips",
+              mf["gateBefore"] and mf["isGroup"] and mf["origGone"] and mf["twoLayers"] and mf["gateAfter"]
+              and mf["threeLayers"] and mf["setLayer"] and mf["moved"] and mf["removed"] and mf["floorAtOne"]
+              and mf["serStripped"] and mf["expanded"] and mf["undoExpand"], str(mf))
+        # Real-UI path: the Fills inspector group only renders through docks.js's live Properties
+        # panel if _objectPanel's group-detection survives the _effectiveLeaves() unwrap (the bug
+        # above) — open the ACTUAL panel (not a direct _objectPanel() call) and click a real swatch.
+        open_ctx_panel(page)
+        page.wait_for_timeout(150)
+        rows = page.query_selector_all(".insp-fill-row .insp-swatch")
+        # State at this point is post floor-at-1 + expand/undo, so exactly 1 layer survives.
+        check("multi-fill: Fills group renders through the live Properties panel (1 layer row)", len(rows) == 1, f"found {len(rows)}")
+        if rows:
+            rows[0].scroll_into_view_if_needed()
+            rows[0].click()
+            page.wait_for_timeout(150)
+            target = page.evaluate("() => editor._fillLayerTarget")
+            check("clicking a layer swatch enters the solo fill-layer colour-panel mode", target is not None, str(target))
+            done = page.query_selector(".cp-recolor-done")
+            if done:
+                done.scroll_into_view_if_needed(); done.click(); page.wait_for_timeout(150)
+            check("'‹ Done' clears fill-layer edit mode", page.evaluate("() => editor._fillLayerTarget") is None)
         # Colour systems (Epic C): Pattern fills (top object → <pattern> in defs applied below;
         # tile scale/rotate via patternTransform; round-trips) + Recolor Artwork (harvest distinct
         # solid colours, remap one exactly, Hue/Sat/Light shift over all). (Global colours deferred.)

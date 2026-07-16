@@ -38,6 +38,7 @@ import { symbolsMixin } from "./editor/tools/symbols.js";
 import { effectsMixin } from "./editor/tools/effects.js";
 import { repeatMixin } from "./editor/tools/repeat.js";
 import { artboardsMixin } from "./editor/tools/artboards.js";
+import { multiFillMixin } from "./editor/tools/multifill.js";
 import { snap45 } from "./editor/snap.js";
 import {
   CAP_GLYPH, JOIN_GLYPH, DASH_GLYPH, ALIGN_ICON, AB_FIT_ICON, BLEND_MODES,
@@ -2060,6 +2061,7 @@ const editor = {
     const isRepeat = single && this.isRepeatGroup(single);
     const anyInstance = nodes.some((n) => this.isSymbolInstance(n));
     const hasEffects = reads.some((n) => this.effectsOf(n).length);
+    const isMultiFill = single && this.isMultiFillGroup(single);
     const items = [];
     if (expandable) items.push({ label: "Expand object", onClick: () => this.expandSelection() });
     if (hasEffects) items.push({ label: "Expand appearance", onClick: () => this.expandAppearance() });
@@ -2075,6 +2077,8 @@ const editor = {
     if (fillable === 2 && !isBlend) makes.push({ label: "Make blend", onClick: () => this.makeBlend() });
     if (nodes.length >= 2) makes.push({ label: "Pattern fill", onClick: () => this.fillWithPattern() });
     if (!anyInstance) makes.push({ label: "Make symbol", onClick: () => this.makeSymbol() });
+    if (single && !isMultiFill && shapeToAbsPath(single)) makes.push({ label: "Add fill", onClick: () => this.makeMultiFill() });
+    if (isMultiFill) { makes.push({ label: "Add fill layer", onClick: () => this.addFillLayer(single) }); makes.push({ label: "Expand fill stack", onClick: () => this.expandMultiFill(single) }); }
     if (makes.length) { items.push({ type: "sep" }, ...makes); }
     if (!isRepeat) {
       items.push({ type: "sep" },
@@ -2107,6 +2111,13 @@ const editor = {
     // {mixed:true, value:<first>} — so a multi-selection with different fills/widths
     // shows an indeterminate "Mixed" state instead of silently showing just the first.
     const reads = (() => { const l = this._effectiveLeaves(nodes); return l.length ? l : nodes; })();
+    // The caller (docks.js renderProps) passes _effectiveLeaves()-unwrapped nodes, not the
+    // raw selection — fine for style reads above, but a parametric <g> (blend/repeat/fill
+    // stack) unwraps into its N generated children, so `nodes.length===1 && isXGroup(nodes[0])`
+    // would never match through the real UI (found while wiring up Fills below: the panel
+    // silently never appeared). Blend/Repeat's own-group panels below had the same latent
+    // bug — fixed here alongside, using the RAW selection for group identity instead.
+    const rawSel = this.selectedNodes();
     const first = reads[0];
     const common = (read) => { let v, set = false; for (const n of reads) { const c = read(n); if (!set) { v = c; set = true; } else if (c !== v) return { mixed: true, value: read(first) }; } return { value: v }; };
     const wrap = document.createElement("div");
@@ -2343,8 +2354,8 @@ const editor = {
     if (!isRaster && nodes.length >= 1) wrap.appendChild(inspGroup("Effects", this._effectsPanel(nodes)));
     // BLEND (Epic L). A selected blend group gets steps + reverse + Expand. ("Make blend" — from
     //  exactly 2 fillable shapes — is in the Actions menu, also Ctrl/Cmd+Alt+B.)
-    if (nodes.length === 1 && this.isBlendGroup(nodes[0])) {
-      const g = nodes[0], spec = this._blendSpec(g), brows = [];
+    if (rawSel.length === 1 && this.isBlendGroup(rawSel[0])) {
+      const g = rawSel[0], spec = this._blendSpec(g), brows = [];
       brows.push(numRow("Steps", spec.steps || 6, 1, 1,
         (v) => { this.beginCoalesce(); this.setBlendParam(g, "steps", Math.max(1, Math.min(60, Math.round(v)))); }, null,
         () => { this.commitCoalesce("Blend steps"); this._renderInspector(); }));
@@ -2354,6 +2365,32 @@ const editor = {
       brows.push(inspRow("", bx));
       wrap.appendChild(inspGroup("Blend", brows));
     }   // "Make blend" moved to the Actions menu (_objectActions)
+    // FILLS (Epic K.1, scoped): a selected fill-stack group gets one row per layer — a
+    // swatch (opens the dock Colour panel in a solo edit mode, _fillLayerTarget below),
+    // an inline opacity %, and reorder/remove. ("Add fill" / "Add fill layer" / "Expand
+    // fill stack" live in the Actions menu, matching Blend/Warp/Symbol's own convention.)
+    if (rawSel.length === 1 && this.isMultiFillGroup(rawSel[0])) {
+      const g = rawSel[0], spec = this._fillsSpec(g) || { layers: [] }, frows = [];
+      spec.layers.forEach((layer, i) => {
+        const row = document.createElement("div"); row.className = "insp-row insp-fill-row";
+        const sw = document.createElement("button"); sw.type = "button"; sw.className = "insp-swatch"; sw.style.background = layer.fill;
+        sw.title = `Layer ${i + 1} — click to edit its colour`;
+        sw.addEventListener("click", () => { this._fillLayerTarget = { gid: g.getAttribute("data-hv-id"), index: i }; if (this._summonColor) this._summonColor(); });
+        const opInp = document.createElement("input"); opInp.type = "number"; opInp.min = "0"; opInp.max = "100"; opInp.className = "insp-fill-opacity";
+        opInp.value = String(Math.round((layer.opacity == null ? 1 : layer.opacity) * 100));
+        opInp.title = "Layer opacity %";
+        opInp.addEventListener("input", () => { this.beginCoalesce(); this.setFillLayer(g, i, { opacity: Math.max(0, Math.min(100, parseFloat(opInp.value) || 0)) / 100 }); });
+        opInp.addEventListener("change", () => this.commitCoalesce("Fill layer opacity"));
+        const btns = document.createElement("div"); btns.className = "insp-btns";
+        const mk = (glyph, title, fn, disabled) => { const b = document.createElement("button"); b.type = "button"; b.className = "insp-iconbtn"; b.textContent = glyph; b.title = title; b.disabled = !!disabled; b.addEventListener("click", fn); btns.appendChild(b); };
+        mk("↑", "Move layer up", () => this.moveFillLayer(g, i, -1), i === 0);
+        mk("↓", "Move layer down", () => this.moveFillLayer(g, i, 1), i === spec.layers.length - 1);
+        mk("✕", "Remove this layer", () => this.removeFillLayer(g, i), spec.layers.length <= 1);
+        row.append(sw, opInp, btns);
+        frows.push(row);
+      });
+      wrap.appendChild(inspGroup("Fills", frows));
+    }
     // COLOUR SYSTEMS (Epic C). Pattern fill: a selected pattern-filled object gets tile
     //  scale/rotate; 2+ objects get "Pattern fill" (top = tile). Recolor: a selection with 2+
     //  distinct solid colours gets a swatch remap grid + Hue/Sat/Light shift.
@@ -2376,8 +2413,8 @@ const editor = {
     }   // "Make symbol" moved to the Actions menu (_objectActions)
     // TRANSFORMS+ / REPEAT (Epic T). A selected repeat group gets its param editor + Expand;
     //  any selection gets reflect / shear / transform-again + the repeat generators.
-    if (nodes.length === 1 && this.isRepeatGroup(nodes[0])) {
-      wrap.appendChild(inspGroup("Repeat", this._repeatPanel(nodes[0])));
+    if (rawSel.length === 1 && this.isRepeatGroup(rawSel[0])) {
+      wrap.appendChild(inspGroup("Repeat", this._repeatPanel(rawSel[0])));
     }   // Reflect / Shear / Transform-again / Repeat moved to the Actions menu (_objectActions)
     // PROCESS — a single raster gets the pipeline stages (upscale / remove-bg /
     // vectorize) inline. app.js owns the jobs + live trace, so it's injected via a
@@ -2760,7 +2797,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, colorsMixin, isolationMixin, symbolsMixin, effectsMixin, repeatMixin, artboardsMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, colorsMixin, isolationMixin, symbolsMixin, effectsMixin, repeatMixin, artboardsMixin, multiFillMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 
