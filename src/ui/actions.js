@@ -157,6 +157,7 @@ export const TOOL_WHY = {
   "tool:line":         ["Line", "Drag out a straight line"],
   "tool:text":         ["Text", "Place some type and start typing"],
   "tool:width":        ["Width", "Make a stroke thicker in some places than others"],
+  "tool:envelope":     ["Envelope", "Drag a grid to bend everything inside it"],
   "tool:shapebuilder": ["Shape Builder", "Merge overlapping shapes by painting across them"],
   "tool:scissors":     ["Scissors", "Snip a path open at a single point"],
   "tool:knife":        ["Knife", "Slice clean through a shape"],
@@ -219,6 +220,7 @@ const FIND = {
   "tool:line":       "stroke straight rule",
   "tool:text":       "type font write letters words label title",
   "tool:width":      "thick thin taper swell weight",
+  "tool:envelope":   "mesh grid bend distort warp cage",
   "tool:shapebuilder": "merge combine paint join",
   "tool:scissors":   "snip open split break path",
   "tool:knife":      "slice cut split divide",
@@ -255,6 +257,8 @@ const VERB_FIND = [
   ["Warp: Bulge", "inflate push swell distort"],
   ["Warp: Flag", "ripple wave wavy distort"],
   ["Warp: Fisheye", "lens magnify bulge distort"],
+  ["Make envelope with top object", "mesh grid bend distort cage conform fit"],
+  ["Make envelope", "mesh grid bend distort cage"],
 ];
 const verbFind = (label) => (VERB_FIND.find(([p]) => label.startsWith(p)) || [null, ""])[1];
 export const findWords = (key, label) => FIND[key] || (label ? verbFind(label) : "") || "";
@@ -316,6 +320,8 @@ const VERB_WHY = [
   ["Warp: Bulge", "Push the middle outward, like it's inflated"],
   ["Warp: Flag", "Ripple it side to side, like cloth in the wind"],
   ["Warp: Fisheye", "Magnify the centre, like a wide-angle lens"],
+  ["Make envelope with top object", "Fit everything else inside the topmost shape's bounds"],
+  ["Make envelope", "Add a draggable grid to bend it"],
 ];
 const verbWhy = (label) => (VERB_WHY.find(([p]) => label.startsWith(p)) || [null, ""])[1];
 

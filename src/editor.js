@@ -33,6 +33,7 @@ import { widthMixin } from "./editor/tools/width.js";
 import { builderMixin } from "./editor/tools/builder.js";
 import { blendMixin } from "./editor/tools/blend.js";
 import { warpMixin, WARP_TYPES, WARP_LABELS } from "./editor/tools/warp.js";
+import { envelopeMixin } from "./editor/tools/envelope.js";
 import { colorsMixin } from "./editor/tools/colors.js";
 import { isolationMixin } from "./editor/tools/isolation.js";
 import { symbolsMixin } from "./editor/tools/symbols.js";
@@ -311,6 +312,7 @@ const editor = {
     if (this.tool === "curvature") { this._curvDown(e); return; }
     if (this.tool === "text") { this._textDown(e); return; }
     if (this.tool === "width") { this._widthDown(e); return; }
+    if (this.tool === "envelope") { this._envDown(e); return; }
     if (this.tool === "shapebuilder") { this._builderDown(e); return; }
     if (this.tool === "scissors") { this._scissorsDown(e); return; }
     if (this.tool === "knife") { this._knifeDown(e); return; }
@@ -472,7 +474,7 @@ const editor = {
   // creation sub-tools. Marquee + transform are folded into select (empty-drag
   // rubber-bands; Ctrl+T/Ctrl+R toggle the scale/rotate sub-mode).
   setTool(t) {
-    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "text" && t !== "width" && !BUILDER_TOOLS.has(t) && !SHAPE_TOOLS.has(t)) return;
+    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "text" && t !== "width" && t !== "envelope" && !BUILDER_TOOLS.has(t) && !SHAPE_TOOLS.has(t)) return;
     if (this._pen && t !== "pen") this._finishPen(true);   // keep any in-progress path
     if (this._curv && t !== "curvature") this._curvFinish(true);
     if (this._textEdit && t !== "text") this._commitText();   // leaving the text tool finishes the edit in progress
@@ -491,6 +493,7 @@ const editor = {
     }
     if (t === "node") this.mountNodeHandles(); else this.unmountNodeHandles();
     if (t === "width") this._mountWidthHandles(); else this._unmountWidthHandles();
+    if (t === "envelope") this._mountEnvelopeHandles(); else this._unmountEnvelopeHandles();
     if (!BUILDER_TOOLS.has(t)) this._bTrail(null);   // clear any leftover knife/eraser trail
     if (this.stage) this._renderSelection();   // show/hide the transform bbox handles
     this._showHint();
@@ -515,6 +518,7 @@ const editor = {
     }
     if (t === "node") return "Points: drag the dots to reshape. Drag the line between two dots to bend it.";
     if (t === "width") return "Width: drag sideways across a stroke to make it swell or pinch.";
+    if (t === "envelope") return "Envelope: drag any grid dot to bend everything inside it.";
     if (t === "shapebuilder") return "Shape Builder: select 2+ overlapping shapes, then paint across them to merge.";
     if (t === "scissors") return "Scissors: tap a path to snip it open.";
     if (t === "knife") return "Knife: drag right across a shape to slice it in two.";
@@ -543,6 +547,7 @@ const editor = {
     }
     if (t === "node") return "Points (A) — drag anchors/handles · Shift multi-selects · Alt converts · drag a segment to reshape · ⌫ deletes";
     if (t === "width") return "Width (W) — drag a stroke ⊥ to swell/pinch it · Alt = one side · Uniform/Release/Expand in Properties";
+    if (t === "envelope") return "Envelope (⇧W) — drag any grid point to bend everything inside it · Reset/Expand in Properties";
     if (t === "shapebuilder") return "Shape Builder — paint across 2+ selected overlapping shapes to merge regions · Alt-paint removes them";
     if (t === "scissors") return "Scissors — click a path to cut it (closed → opens · open → splits in two)";
     if (t === "knife") return "Knife — drag across filled shapes to cut them · Alt = straight cut";
@@ -560,6 +565,7 @@ const editor = {
     if (this._handleDragging) return;   // a zoom/pan mid-drag must not re-mount and yank the dragged handle
     if (this.tool === "node" && this.stage) this.mountNodeHandles();
     if (this.tool === "width" && this.stage) this._mountWidthHandles();   // width-stop diamonds stay constant-screen-size
+    if (this.tool === "envelope" && this.stage) this._mountEnvelopeHandles();   // grid handles stay constant-screen-size
     if (this.tool === "select" && this._xformMode && this.stage) this._renderSelection();   // handles are constant-screen-size
     if (this.tool === "pen" && !this._pen && this.stage) this._renderPenPoints();   // anchor dots stay constant-screen-size
     if (this._pen) { this._redrawPen(); this._renderPenMarks(); }
@@ -2056,6 +2062,7 @@ const editor = {
     const anyWs = nodes.some((n) => this._wsGroupOf(n));
     const isBlend = single && this.isBlendGroup(single);
     const isRepeat = single && this.isRepeatGroup(single);
+    const isEnvelope = single && this.isEnvelopeGroup(single);
     const anyInstance = nodes.some((n) => this.isSymbolInstance(n));
     const items = [];
     if (expandable) items.push({ label: "Expand object", onClick: () => this.expandSelection() });
@@ -2072,6 +2079,8 @@ const editor = {
     if (nodes.length >= 2) makes.push({ label: "Pattern fill", onClick: () => this.fillWithPattern() });
     if (!anyInstance) makes.push({ label: "Make symbol", onClick: () => this.makeSymbol() });
     if (fillable >= 1) for (const t of WARP_TYPES) makes.push({ label: "Warp: " + WARP_LABELS[t], onClick: () => this.makeWarp(t) });
+    if (fillable >= 1 && !isEnvelope) makes.push({ label: "Make envelope", onClick: () => { this.makeEnvelope(); this.setTool("envelope"); } });
+    if (fillable >= 2 && !isEnvelope) makes.push({ label: "Make envelope with top object", onClick: () => { this.makeEnvelopeWithTopObject(); this.setTool("envelope"); } });
     if (makes.length) { items.push({ type: "sep" }, ...makes); }
     if (!isRepeat) {
       items.push({ type: "sep" },
@@ -2105,6 +2114,13 @@ const editor = {
     // shows an indeterminate "Mixed" state instead of silently showing just the first.
     const reads = (() => { const l = this._effectiveLeaves(nodes); return l.length ? l : nodes; })();
     const first = reads[0];
+    // The caller (docks.js renderProps) passes _effectiveLeaves()-unwrapped nodes, not the
+    // raw selection — fine for style reads above, but a parametric <g> (blend/warp/repeat/
+    // envelope) unwraps into its N generated children, so `nodes.length===1 && isXGroup(nodes[0])`
+    // never matches through the real UI (found while wiring up Envelope below: its own panel
+    // silently never appeared). Blend/Warp/Repeat's own-group panels below had the same latent
+    // bug — fixed here alongside, using the RAW selection for group identity instead.
+    const rawSel = this.selectedNodes();
     const common = (read) => { let v, set = false; for (const n of reads) { const c = read(n); if (!set) { v = c; set = true; } else if (c !== v) return { mixed: true, value: read(first) }; } return { value: v }; };
     const wrap = document.createElement("div");
     const tags = new Set(reads.map((n) => n.tagName.toLowerCase()));
@@ -2340,8 +2356,8 @@ const editor = {
     if (!isRaster && nodes.length >= 1) wrap.appendChild(inspGroup("Effects", this._effectsPanel(nodes)));
     // BLEND (Epic L). A selected blend group gets steps + reverse + Expand. ("Make blend" — from
     //  exactly 2 fillable shapes — is in the Actions menu, also Ctrl/Cmd+Alt+B.)
-    if (nodes.length === 1 && this.isBlendGroup(nodes[0])) {
-      const g = nodes[0], spec = this._blendSpec(g), brows = [];
+    if (rawSel.length === 1 && this.isBlendGroup(rawSel[0])) {
+      const g = rawSel[0], spec = this._blendSpec(g), brows = [];
       brows.push(numRow("Steps", spec.steps || 6, 1, 1,
         (v) => { this.beginCoalesce(); this.setBlendParam(g, "steps", Math.max(1, Math.min(60, Math.round(v)))); }, null,
         () => { this.commitCoalesce("Blend steps"); this._renderInspector(); }));
@@ -2353,8 +2369,8 @@ const editor = {
     }   // "Make blend" moved to the Actions menu (_objectActions)
     // WARP (Epic D.1). A selected warp group gets its preset + amount + Expand. ("Make Warp" —
     //  one entry per preset, from any fillable selection — is in the Actions menu.)
-    if (nodes.length === 1 && this.isWarpGroup(nodes[0])) {
-      const g = nodes[0], spec = this._warpSpec(g), wrows = [];
+    if (rawSel.length === 1 && this.isWarpGroup(rawSel[0])) {
+      const g = rawSel[0], spec = this._warpSpec(g), wrows = [];
       wrows.push(selectRow("Style", spec.type, WARP_TYPES.map((t) => [t, WARP_LABELS[t]]),
         (v) => { this.beginCoalesce(); this.setWarpParam(g, "type", v); this.commitCoalesce("Warp style"); this._renderInspector(); }));
       wrows.push(numRow("Amount", Math.round((spec.amount || 0) * 100), -100, 5,
@@ -2364,6 +2380,21 @@ const editor = {
       wx.title = "Bake the warp into a plain group"; wx.addEventListener("click", () => this.expandWarp(g));
       wrows.push(inspRow("", wx));
       wrap.appendChild(inspGroup("Warp", wrows));
+    }
+    // ENVELOPE (Epic D.2/D.3). A selected envelope group gets a status line + Reset + Expand;
+    //  the grid itself is dragged on-canvas with the Envelope tool. ("Make envelope" / "...with
+    //  top object" are in the Actions menu.)
+    if (rawSel.length === 1 && this.isEnvelopeGroup(rawSel[0])) {
+      const g = rawSel[0], spec = this._envSpec(g), erows = [];
+      const note = document.createElement("span"); note.className = "insp-note"; note.textContent = `${spec.rows}×${spec.cols} grid — pick the Envelope tool (⇧W) to drag its points`;
+      erows.push(inspRow("", note));
+      const rb = document.createElement("button"); rb.type = "button"; rb.className = "insp-action"; rb.textContent = "Reset points";
+      rb.title = "Put every grid point back to its resting position"; rb.addEventListener("click", () => this.resetEnvelope(g));
+      erows.push(inspRow("", rb));
+      const ex = document.createElement("button"); ex.type = "button"; ex.className = "insp-action"; ex.textContent = "Expand";
+      ex.title = "Bake the envelope into a plain group"; ex.addEventListener("click", () => this.expandEnvelope(g));
+      erows.push(inspRow("", ex));
+      wrap.appendChild(inspGroup("Envelope", erows));
     }
     // COLOUR SYSTEMS (Epic C). Pattern fill: a selected pattern-filled object gets tile
     //  scale/rotate; 2+ objects get "Pattern fill" (top = tile). Recolor: a selection with 2+
@@ -2387,8 +2418,8 @@ const editor = {
     }   // "Make symbol" moved to the Actions menu (_objectActions)
     // TRANSFORMS+ / REPEAT (Epic T). A selected repeat group gets its param editor + Expand;
     //  any selection gets reflect / shear / transform-again + the repeat generators.
-    if (nodes.length === 1 && this.isRepeatGroup(nodes[0])) {
-      wrap.appendChild(inspGroup("Repeat", this._repeatPanel(nodes[0])));
+    if (rawSel.length === 1 && this.isRepeatGroup(rawSel[0])) {
+      wrap.appendChild(inspGroup("Repeat", this._repeatPanel(rawSel[0])));
     }   // Reflect / Shear / Transform-again / Repeat moved to the Actions menu (_objectActions)
     // PROCESS — a single raster gets the pipeline stages (upscale / remove-bg /
     // vectorize) inline. app.js owns the jobs + live trace, so it's injected via a
@@ -2770,7 +2801,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, warpMixin, colorsMixin, isolationMixin, symbolsMixin, effectsMixin, repeatMixin, artboardsMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, warpMixin, envelopeMixin, colorsMixin, isolationMixin, symbolsMixin, effectsMixin, repeatMixin, artboardsMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 

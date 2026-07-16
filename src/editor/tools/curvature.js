@@ -187,6 +187,13 @@ export const curvatureMixin = {
     // Pen tool: show the selected object's anchors so add/remove is obvious (read-only —
     // the actual add/delete is the pen's hover+click affordance).
     if (this.tool === "pen") this._renderPenPoints();
+    // Width / Envelope: re-mount their on-canvas handles here too — this method's own
+    // `ov.innerHTML = ""` above wipes whatever setTool() mounted just before calling it
+    // (a real, pre-existing gap: Width's diamonds silently vanished the instant you
+    // switched to the tool, self-healing only on your first click/drag; found while
+    // wiring up Envelope's identical mount-then-getWiped ordering — fixed for both here).
+    if (this.tool === "width") this._mountWidthHandles();
+    if (this.tool === "envelope") this._mountEnvelopeHandles();
   },
   // Read-only anchor dots for the selected path(s) while the pen tool is active, so it's
   // clear where points sit (and thus where the +/− hover affordance will add/remove them).

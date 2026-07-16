@@ -1258,6 +1258,7 @@ document.addEventListener("keydown", (e) => {
   if (e.shiftKey && e.key === "E") { editor.setTool("eraser"); return; }         // Shift+E
   if (e.shiftKey && e.key === "C") { editor.setTool("scissors"); return; }       // Shift+C
   if (e.shiftKey && e.key === "K") { editor.setTool("knife"); return; }          // Shift+K
+  if (e.shiftKey && e.key === "W") { editor.setTool("envelope"); return; }       // Shift+W
   if (editor.tool === "eraser" && (e.key === "[" || e.key === "]")) { e.preventDefault(); editor.adjustEraser(e.key === "]" ? 3 : -3); editor._showHint(); return; }
   if (e.key === "v" || e.key === "V") { editor.setTool("select"); editor.clearXform(); return; }
   if (e.key === "a" || e.key === "A") { editor.setTool("node"); return; }

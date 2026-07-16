@@ -1202,6 +1202,12 @@ button:disabled {
 .hv-whandles { pointer-events: none; }
 .hv-whandle { fill: #fff; stroke: var(--hl-edit); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .stage-wrap[data-tool="width"] svg { cursor: crosshair; }
+/* Envelope distort (Epic D.2/D.3): the RxC grid — thin dashed cage lines + square handles,
+   same non-scaling/pointer-events-none idiom as the width tool's on-spine diamonds. */
+.hv-envhandles { pointer-events: none; }
+.hv-envgridline { stroke: var(--hl-edit); stroke-width: 1; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; opacity: 0.6; }
+.hv-envhandle { fill: #fff; stroke: var(--hl-edit); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.stage-wrap[data-tool="envelope"] svg { cursor: crosshair; }
 /* Epic B path-construction tools: live drag trail + cursors */
 .hv-btrail { fill: none; stroke: var(--hl-edit); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
 .hv-btrail-knife { stroke: #e23; stroke-dasharray: 4 3; }

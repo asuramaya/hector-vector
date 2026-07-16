@@ -2445,6 +2445,77 @@ def main():
               wp["bulgeGrows"], str(wp))
         check("warp: round-trips clean (no data-hv-* survives save), Expand bakes the spec, undo restores it",
               wp["serOk"] and wp["expanded"] and wp["undoOk"], str(wp))
+
+        # Envelope distort (Epic D.2/D.3): a draggable 3x3 control grid bilinearly warps
+        # whatever's wrapped in it, cell by cell (not one global bbox scale — the CENTER grid
+        # point genuinely bends a circle, which a corners-only implementation couldn't do).
+        # "...with top object" seeds the grid's rest bounds from the topmost selected shape and
+        # consumes it. Also exercises a real bug this session found in passing: _renderSelection()
+        # unconditionally wipes the overlay right after setTool() mounts width/envelope handles,
+        # silently erasing them until the tool's first click/drag self-healed it — fixed by
+        # re-mounting both there too (curvature.js).
+        section("Envelope distort: draggable grid + make-with-top-object (Epic D.2/D.3)")
+        ev = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="40" y="40" width="80" height="80" fill="#3366cc"/></svg>','ev1');
+            editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false;
+            const acts0 = editor._objectActions(editor.selectedNodes()).map(a=>a.label);
+            o.gateBefore = acts0.includes('Make envelope') && !acts0.includes('Make envelope with top object');
+            editor.makeEnvelope();
+            const gid=[...editor.selection][0], g=editor.nodeById(gid);
+            o.isGroup = !!g && g.tagName.toLowerCase()==='g' && editor.isEnvelopeGroup(g);
+            o.origGone = !editor.stage.querySelector('rect[data-hv-id="r1"]');
+            const spec0 = editor._envSpec(g);
+            o.grid3x3 = spec0.rows===3 && spec0.cols===3;
+            const acts1 = editor._objectActions(editor.selectedNodes()).map(a=>a.label);
+            o.gateAfter = !acts1.includes('Make envelope') && !acts1.includes('Make envelope with top object');
+            const bboxBefore = g.querySelector('path[data-hv-id]').getBBox();
+            editor.setEnvelopePoint(g, 2, 2, 160, 160);
+            const bboxAfter = g.querySelector('path[data-hv-id]').getBBox();
+            o.deforms = (bboxAfter.width > bboxBefore.width + 10) && (bboxAfter.height > bboxBefore.height + 10);
+            editor.resetEnvelope(g);
+            const bboxReset = g.querySelector('path[data-hv-id]').getBBox();
+            o.resetOk = Math.abs(bboxReset.width-80)<1 && Math.abs(bboxReset.height-80)<1;
+            const ser = editor.serialize(); o.serStripped = !ser.includes('data-hv-env');
+            editor.expandEnvelope(editor.nodeById(gid));
+            const gAfterExpand = editor.nodeById(gid);
+            o.expanded = !gAfterExpand.hasAttribute('data-hv-env');
+            editor.undo();
+            o.undoExpand = !!editor.nodeById(gid) && editor.nodeById(gid).hasAttribute('data-hv-env');
+            // a circle's boundary never sits exactly on a grid corner — proves the CENTER point
+            // (unreachable by a corners-only bbox scale) genuinely participates in the warp
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><circle data-hv-id="c1" cx="80" cy="80" r="40" fill="#9933cc"/></svg>','evc');
+            editor.setTool('select'); editor.selection=new Set(['c1']); editor.artboardSelected=false;
+            editor.makeEnvelope();
+            const gc = editor.nodeById([...editor.selection][0]);
+            const cBefore = gc.querySelector('path[data-hv-id]').getBBox();
+            editor.setEnvelopePoint(gc, 1, 1, 40, 190);
+            const cAfter = gc.querySelector('path[data-hv-id]').getBBox();
+            o.centerPointBendsCircle = cAfter.height > cBefore.height + 1.0;
+            // "with top object": topmost shape lends its bounds, then both inputs are consumed
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="big" x="10" y="10" width="150" height="150" fill="#3366cc"/><circle data-hv-id="top" cx="100" cy="80" r="30" fill="#cc3333"/></svg>','ev2');
+            editor.setTool('select'); editor.selection=new Set(['big','top']); editor.artboardSelected=false;
+            const acts2 = editor._objectActions(editor.selectedNodes()).map(a=>a.label);
+            o.gate2plus = acts2.includes('Make envelope with top object');
+            editor.makeEnvelopeWithTopObject();
+            o.bothGone = !editor.stage.querySelector('rect[data-hv-id="big"]') && !editor.stage.querySelector('circle[data-hv-id="top"]');
+            const gt = editor.nodeById([...editor.selection][0]);
+            const specT = editor._envSpec(gt);
+            o.seededFromTop = Math.abs(specT.bbox.x0-70)<2 && Math.abs(specT.bbox.y0-50)<2 && Math.abs(specT.bbox.x1-130)<2 && Math.abs(specT.bbox.y1-110)<2;
+            o.onlyBigWarped = specT.items.length===1;
+            // on-canvas tool: switching to it mounts 9 draggable grid handles (found+fixed a real
+            // bug in passing: _renderSelection() was wiping them the instant the tool was picked)
+            editor.setTool('envelope');
+            return o; }""")
+        check("envelope: Actions-menu gate (Make envelope / with-top-object), 3x3 grid, corner+circle-center deform, reset, expand+undo, round-trips",
+              ev["gateBefore"] and ev["isGroup"] and ev["origGone"] and ev["grid3x3"] and ev["gateAfter"] and ev["deforms"]
+              and ev["resetOk"] and ev["serStripped"] and ev["expanded"] and ev["undoExpand"] and ev["centerPointBendsCircle"], str(ev))
+        check("envelope with top object: 2+ gate, topmost shape's bounds seed the grid + both inputs consumed into one group",
+              ev["gate2plus"] and ev["bothGone"] and ev["seededFromTop"] and ev["onlyBigWarped"], str(ev))
+        page.wait_for_timeout(120)
+        handleCount = page.evaluate("() => document.querySelectorAll('.hv-envhandle').length")
+        check("envelope tool: switching to it actually mounts 9 grid handles in the live overlay (not wiped by _renderSelection)",
+              handleCount == 9, f"found {handleCount}")
         mount_ctl(page)
 
         # Colour systems (Epic C): Pattern fills (top object → <pattern> in defs applied below;
@@ -4808,7 +4879,7 @@ def main():
                 trim = mp.evaluate("""() => {
                     const t = document.querySelector('.toolstrip');
                     const before = t.scrollWidth - t.clientWidth;
-                    for (const k of ['tool:curvature','tool:line','tool:width','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser'])
+                    for (const k of ['tool:curvature','tool:line','tool:width','tool:envelope','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser'])
                         __layout.setHidden(k, true);
                     return { before, after: t.scrollWidth - t.clientWidth };
                 }""")
@@ -5014,14 +5085,14 @@ def main():
                     const t = document.querySelector('.toolstrip');
                     const before = t.scrollWidth - t.clientWidth;
                     let clicked = 0;
-                    for (const k of ['tool:curvature','tool:line','tool:width','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser']) {
+                    for (const k of ['tool:curvature','tool:line','tool:width','tool:envelope','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser']) {
                         const row = document.querySelector(`.picker-row[data-key="${k}"]`);
                         if (row) { row.querySelector('input[type=checkbox]').click(); clicked++; }
                     }
                     return { clicked, before, after: t.scrollWidth - t.clientWidth };
                 }""")
                 check("mobile: unticking tools in the picker trims the real strip — 711px-in-390px, solved through the UI",
-                      trimmed["clicked"] == 7 and trimmed["before"] > 300 and trimmed["after"] == 0, str(trimmed))
+                      trimmed["clicked"] == 8 and trimmed["before"] > 300 and trimmed["after"] == 0, str(trimmed))
                 mp.evaluate("() => { const b = document.querySelector('[data-modal-close]'); if (b) b.click(); }")
                 mp.evaluate("() => __layout.reset()")
                 mp.wait_for_timeout(200)
