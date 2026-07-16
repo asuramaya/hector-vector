@@ -2516,6 +2516,63 @@ def main():
         handleCount = page.evaluate("() => document.querySelectorAll('.hv-envhandle').length")
         check("envelope tool: switching to it actually mounts 9 grid handles in the live overlay (not wiped by _renderSelection)",
               handleCount == 9, f"found {handleCount}")
+
+        # Gradient mesh (Epic D.4, SCOPED v1): a 4x4 colour-only grid, blended bilinearly per
+        # cell (same math as Envelope's position grid) and rasterized into an <image> clipped
+        # to the shape's own outline via a real <clipPath> in defs — SVG has no native mesh-
+        # gradient primitive, so this is the honest v1 (no draggable geometry, colour only).
+        section("Gradient mesh: colour-blended grid clipped to the shape (Epic D.4)")
+        gm = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="40" y="40" width="80" height="80" fill="#3366cc"/></svg>','gm1');
+            editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false;
+            const acts0 = editor._objectActions(editor.selectedNodes()).map(a=>a.label);
+            o.gateBefore = acts0.includes('Make gradient mesh');
+            editor.makeGradientMesh();
+            const gid=[...editor.selection][0], g=editor.nodeById(gid);
+            o.isGroup = !!g && g.tagName.toLowerCase()==='g' && editor.isMeshGroup(g);
+            o.origGone = !editor.stage.querySelector('rect[data-hv-id="r1"]');
+            const spec0 = editor._meshSpec(g);
+            o.grid4x4 = spec0.rows===4 && spec0.cols===4;
+            o.seededUniform = spec0.colors.flat().every(c => c === '#3366cc');
+            const acts1 = editor._objectActions(editor.selectedNodes()).map(a=>a.label);
+            o.gateAfter = !acts1.includes('Make gradient mesh');
+            const img = g.querySelector('image[data-hv-id]');
+            o.hasImage = !!img && (img.getAttribute('href')||'').startsWith('data:image/png');
+            o.clipped = /url\(#/.test(img.getAttribute('clip-path')||'');
+            o.clipDefExists = !!editor.stage.querySelector('clipPath#'+CSS.escape(spec0.clipId));
+            const hrefBefore = img.getAttribute('href');
+            editor.setMeshColor(g, 0, 0, '#ff0000');
+            o.colorEditRegen = g.querySelector('image[data-hv-id]').getAttribute('href') !== hrefBefore;
+            o.othersUnchanged = editor._meshSpec(g).colors[3][3] === '#3366cc';
+            const ser = editor.serialize();
+            o.serStripped = !ser.includes('data-hv-mesh'); o.serHasImage = ser.includes('<image') && ser.includes('clip-path');
+            editor.expandGradientMesh(editor.nodeById(gid));
+            o.expanded = !editor.nodeById(gid).hasAttribute('data-hv-mesh');
+            editor.undo();
+            o.undoExpand = !!editor.nodeById(gid) && editor.nodeById(gid).hasAttribute('data-hv-mesh');
+            return o; }""")
+        check("gradient mesh: Actions-menu gate, 4x4 uniform-seeded grid, real clip in defs, colour edit re-rasterizes (others untouched), expand+undo, round-trips",
+              gm["gateBefore"] and gm["isGroup"] and gm["origGone"] and gm["grid4x4"] and gm["seededUniform"] and gm["gateAfter"]
+              and gm["hasImage"] and gm["clipped"] and gm["clipDefExists"] and gm["colorEditRegen"] and gm["othersUnchanged"]
+              and gm["serStripped"] and gm["serHasImage"] and gm["expanded"] and gm["undoExpand"], str(gm))
+        # Real-UI path: the Mesh swatch grid only renders through docks.js's live Properties
+        # panel if the group-detection uses the raw selection (the same class of bug this
+        # session found for Blend/Repeat/Envelope) — open the ACTUAL panel and click a swatch.
+        open_ctx_panel(page)
+        page.wait_for_timeout(150)
+        meshSwatches = page.query_selector_all(".insp-mesh-swatch")
+        check("gradient mesh: 16 swatches render through the live Properties panel", len(meshSwatches) == 16, f"found {len(meshSwatches)}")
+        if meshSwatches:
+            meshSwatches[0].scroll_into_view_if_needed()
+            meshSwatches[0].click()
+            page.wait_for_timeout(150)
+            check("clicking a mesh swatch enters the solo mesh-point colour-panel mode",
+                  page.evaluate("() => editor._meshPointTarget") is not None)
+            done = page.query_selector(".cp-recolor-done")
+            if done:
+                done.scroll_into_view_if_needed(); done.click(); page.wait_for_timeout(150)
+            check("'‹ Done' clears mesh-point edit mode", page.evaluate("() => editor._meshPointTarget") is None)
         mount_ctl(page)
 
         # Colour systems (Epic C): Pattern fills (top object → <pattern> in defs applied below;

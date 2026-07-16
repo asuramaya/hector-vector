@@ -34,6 +34,7 @@ import { builderMixin } from "./editor/tools/builder.js";
 import { blendMixin } from "./editor/tools/blend.js";
 import { warpMixin, WARP_TYPES, WARP_LABELS } from "./editor/tools/warp.js";
 import { envelopeMixin } from "./editor/tools/envelope.js";
+import { meshMixin } from "./editor/tools/mesh.js";
 import { colorsMixin } from "./editor/tools/colors.js";
 import { isolationMixin } from "./editor/tools/isolation.js";
 import { symbolsMixin } from "./editor/tools/symbols.js";
@@ -2063,6 +2064,7 @@ const editor = {
     const isBlend = single && this.isBlendGroup(single);
     const isRepeat = single && this.isRepeatGroup(single);
     const isEnvelope = single && this.isEnvelopeGroup(single);
+    const isMesh = single && this.isMeshGroup(single);
     const anyInstance = nodes.some((n) => this.isSymbolInstance(n));
     const items = [];
     if (expandable) items.push({ label: "Expand object", onClick: () => this.expandSelection() });
@@ -2081,6 +2083,7 @@ const editor = {
     if (fillable >= 1) for (const t of WARP_TYPES) makes.push({ label: "Warp: " + WARP_LABELS[t], onClick: () => this.makeWarp(t) });
     if (fillable >= 1 && !isEnvelope) makes.push({ label: "Make envelope", onClick: () => { this.makeEnvelope(); this.setTool("envelope"); } });
     if (fillable >= 2 && !isEnvelope) makes.push({ label: "Make envelope with top object", onClick: () => { this.makeEnvelopeWithTopObject(); this.setTool("envelope"); } });
+    if (single && !isMesh && shapeToAbsPath(single)) makes.push({ label: "Make gradient mesh", onClick: () => this.makeGradientMesh() });
     if (makes.length) { items.push({ type: "sep" }, ...makes); }
     if (!isRepeat) {
       items.push({ type: "sep" },
@@ -2395,6 +2398,26 @@ const editor = {
       ex.title = "Bake the envelope into a plain group"; ex.addEventListener("click", () => this.expandEnvelope(g));
       erows.push(inspRow("", ex));
       wrap.appendChild(inspGroup("Envelope", erows));
+    }
+    // GRADIENT MESH (Epic D.4, scoped v1). A selected mesh group gets a grid of colour
+    //  swatches (one per control point — click to edit, mirrors the Fills-layer solo-picker
+    //  pattern) + Expand. ("Make gradient mesh" is in the Actions menu.)
+    if (rawSel.length === 1 && this.isMeshGroup(rawSel[0])) {
+      const g = rawSel[0], spec = this._meshSpec(g), mrows = [];
+      const grid = document.createElement("div"); grid.className = "insp-mesh-grid";
+      grid.style.gridTemplateColumns = `repeat(${spec.cols}, 1fr)`;
+      for (let r = 0; r < spec.rows; r++) for (let c = 0; c < spec.cols; c++) {
+        const sw = document.createElement("button"); sw.type = "button"; sw.className = "insp-swatch insp-mesh-swatch";
+        sw.style.background = spec.colors[r][c];
+        sw.title = `Mesh point (${r + 1}, ${c + 1}) — click to edit its colour`;
+        sw.addEventListener("click", () => { this._meshPointTarget = { gid: g.getAttribute("data-hv-id"), row: r, col: c }; if (this._summonColor) this._summonColor(); });
+        grid.appendChild(sw);
+      }
+      mrows.push(inspRow("", grid));
+      const mx = document.createElement("button"); mx.type = "button"; mx.className = "insp-action"; mx.textContent = "Expand";
+      mx.title = "Bake the mesh into a plain clipped image"; mx.addEventListener("click", () => this.expandGradientMesh(g));
+      mrows.push(inspRow("", mx));
+      wrap.appendChild(inspGroup("Gradient mesh", mrows));
     }
     // COLOUR SYSTEMS (Epic C). Pattern fill: a selected pattern-filled object gets tile
     //  scale/rotate; 2+ objects get "Pattern fill" (top = tile). Recolor: a selection with 2+
@@ -2801,7 +2824,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, warpMixin, envelopeMixin, colorsMixin, isolationMixin, symbolsMixin, effectsMixin, repeatMixin, artboardsMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, warpMixin, envelopeMixin, meshMixin, colorsMixin, isolationMixin, symbolsMixin, effectsMixin, repeatMixin, artboardsMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 

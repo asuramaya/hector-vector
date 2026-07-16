@@ -606,6 +606,27 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
         onChange: (h) => editor.recolorApply(targets, h || hex) });
       return;
     }
+    // Mesh-point edit mode (Epic D.4): a swatch in the Gradient Mesh inspector group routes
+    // here — same solo-picker idiom as Recolor above, editing one control point's colour.
+    if (editor._meshPointTarget) {
+      const { gid, row, col } = editor._meshPointTarget;
+      const g = editor.nodeById(gid);
+      const spec = g ? editor._meshSpec(g) : null;
+      if (g && spec && spec.colors[row] && spec.colors[row][col] != null) {
+        if (ftitle) ftitle.textContent = "Mesh point";
+        hostEl.innerHTML = "";
+        const bar = document.createElement("div"); bar.className = "cp-recolor-bar";
+        const done = document.createElement("button"); done.type = "button"; done.className = "ghost-button cp-recolor-done"; done.textContent = "‹ Done";
+        done.addEventListener("click", () => { editor._meshPointTarget = null; editor._renderColorPanel(hostEl); });
+        const lab = document.createElement("span"); lab.className = "cp-recolor-lab"; lab.textContent = `Point ${row + 1}, ${col + 1}`;
+        bar.append(done, lab); hostEl.appendChild(bar);
+        const pickerHost = document.createElement("div"); pickerHost.className = "cp-recolor-host"; hostEl.appendChild(pickerHost);
+        colorCtl = openColorPicker({ title: "Mesh point", host: pickerHost, color: spec.colors[row][col], allowNone: false,
+          onChange: (h) => editor.setMeshColor(g, row, col, h || spec.colors[row][col]) });
+        return;
+      }
+      editor._meshPointTarget = null;
+    }
     // Nothing selected → an empty state, NOT the full (tall) duo picker. Rendering the
     // picker with no target made the panel overflow when expanded-but-empty.
     if (!editor.artboardSelected && (!editor.selection || editor.selection.size === 0)) {

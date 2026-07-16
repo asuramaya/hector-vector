@@ -259,6 +259,7 @@ const VERB_FIND = [
   ["Warp: Fisheye", "lens magnify bulge distort"],
   ["Make envelope with top object", "mesh grid bend distort cage conform fit"],
   ["Make envelope", "mesh grid bend distort cage"],
+  ["Make gradient mesh", "colour color blend patch multi"],
 ];
 const verbFind = (label) => (VERB_FIND.find(([p]) => label.startsWith(p)) || [null, ""])[1];
 export const findWords = (key, label) => FIND[key] || (label ? verbFind(label) : "") || "";
@@ -322,6 +323,7 @@ const VERB_WHY = [
   ["Warp: Fisheye", "Magnify the centre, like a wide-angle lens"],
   ["Make envelope with top object", "Fit everything else inside the topmost shape's bounds"],
   ["Make envelope", "Add a draggable grid to bend it"],
+  ["Make gradient mesh", "Blend several colours across it, corner to corner"],
 ];
 const verbWhy = (label) => (VERB_WHY.find(([p]) => label.startsWith(p)) || [null, ""])[1];
 
