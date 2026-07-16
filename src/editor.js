@@ -2062,7 +2062,7 @@ const editor = {
     if (hasPath) items.push({ label: "Offset path…", onClick: () => this._promptOffsetPath() });
     if (fillable >= 2) {
       items.push({ type: "sep" });
-      for (const [op, lab] of [["divide", "Divide"], ["trim", "Trim"], ["merge", "Merge"], ["crop", "Crop"], ["minus-back", "Minus Back"]])
+      for (const [op, lab] of [["divide", "Divide"], ["trim", "Trim"], ["merge", "Merge"], ["crop", "Crop"], ["minus-back", "Minus Back"], ["outline", "Outline"]])
         items.push({ label: "Pathfinder: " + lab, onClick: () => this.pathfinder(op) });
     }
     const makes = [];
@@ -2727,6 +2727,7 @@ const editor = {
       const mk = (glyph, title, fn) => { const b = document.createElement("button"); b.type = "button"; b.className = "insp-iconbtn"; b.textContent = glyph; b.title = title; b.addEventListener("click", fn); btns.appendChild(b); };
       mk("⊕", "Fit this artboard in view", () => this.fitToArtboard(a));
       mk("⤓", "Export this artboard as SVG", () => this.exportArtboardSVG(a, a.name));
+      mk("🖼", "Export this artboard as PNG", () => { if (this._exportArtboardPNG) this._exportArtboardPNG(a, a.name); });
       if (!a.primary) mk("✕", "Delete artboard", () => this.deleteArtboard(a.index));
       row.appendChild(btns); abRows.push(row);
     }

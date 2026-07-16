@@ -2234,6 +2234,25 @@ def main():
               and pf["crop"]["isG"] and pf["crop"]["colours"]==1 and pf["crop"]["gone"]
               and (not pf["minusB"]["isG"]) and pf["minusB"]["paths"]==1 and pf["minusB"]["colours"]==1 and pf["minusB"]["gone"]
               and pf["merge"]["isG"] and pf["merge"]["colours"]==2 and pf["merge"]["gone"], str(pf))
+        # Pathfinder Outline (Epic K.5): the same Divide face decomposition, but every face
+        # traces as an unfilled STROKE (fill=none) instead of a filled region — colours moved
+        # from fill to stroke, so overlapping shapes read as a wireframe of their boundaries.
+        pfo = page.evaluate(r"""() => {
+            const D2 = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="a" x="30" y="60" width="90" height="80" fill="#ee5555"/><rect data-hv-id="b" x="90" y="60" width="90" height="80" fill="#55ee55"/></svg>';
+            window.mountStageFromText(D2,'pfo'); editor.setTool('select'); editor.selection=new Set(['a','b']); editor.artboardSelected=false;
+            const actionLabels = editor._objectActions(editor.selectedNodes()).map(x=>x.label);
+            editor.pathfinder('outline');
+            const ids=[...editor.selection]; const g=editor.nodeById(ids[0]); const isG=!!g&&g.tagName.toLowerCase()==='g';
+            const paths = isG ? [...g.querySelectorAll('path')] : [];
+            const allUnfilled = paths.length>0 && paths.every(p=>p.getAttribute('fill')==='none');
+            const allStroked = paths.every(p=>{ const s=p.getAttribute('stroke'); return s && s!=='none'; });
+            const strokeColours = new Set(paths.map(p=>p.getAttribute('stroke')));
+            const gone = !editor.stage.querySelector('[data-hv-id="a"]') && !editor.stage.querySelector('[data-hv-id="b"]');
+            return { actionLabels, isG, faces: paths.length, allUnfilled, allStroked, strokeColours: [...strokeColours], gone }; }""")
+        check("Actions menu offers 'Pathfinder: Outline' + it traces every face as an unfilled, coloured-stroke wireframe",
+              pfo["actionLabels"].count("Pathfinder: Outline") == 1 and pfo["isG"] and pfo["faces"] == 3
+              and pfo["allUnfilled"] and pfo["allStroked"]
+              and "#ee5555" in pfo["strokeColours"] and "#55ee55" in pfo["strokeColours"] and pfo["gone"], str(pfo))
         # Expand (X.2): a live-shape <path> + a primitive <circle>, one stroked — expand bakes
         # all to plain <path> (no data-hv-shape, no primitives), outlining the stroke; round-trips.
         ex = page.evaluate(r"""() => {
@@ -2755,6 +2774,23 @@ def main():
             return { multi, resize, fit, noClip, exportCrop, undoOk, backcompat }; }""")
         check("artboard hardening: 3 extras grow union, resize reflows, fit moves viewport, no-clip, export-crop, undo-add, back-compat single",
               ah["multi"] and ah["resize"] and ah["fit"] and ah["noClip"] and ah["exportCrop"] and ah["undoOk"] and ah["backcompat"], str(ah))
+        # PNG-per-artboard (Epic K.4): the same crop as exportArtboardSVG, rasterised through the
+        # SAME client-side canvas pipeline the Export PNG modal uses (editor._exportArtboardPNG,
+        # a UI-layer hook app.js wires — mirrors _summonColor's dependency-injection pattern).
+        ap = page.evaluate(r"""async () => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="20" y="20" width="120" height="120" fill="#3399cc"/></svg>','k4');
+            editor.setTool('select'); editor.artboardSelected=true; editor.selection=new Set();
+            editor.addArtboard({ name: 'Board 2' });
+            window.__png=null; const real=HTMLAnchorElement.prototype.click;
+            HTMLAnchorElement.prototype.click=function(){ if(this.download){ window.__png={name:this.download, blob:this.href.startsWith('blob:')}; return; } return real.call(this); };
+            const rect = editor.allArtboards().find(a => a.name === 'Board 2');
+            await editor._exportArtboardPNG(rect, rect.name);
+            HTMLAnchorElement.prototype.click = real;
+            const p = editor._artboardPanel();
+            const hasBtn = [...p.querySelectorAll('.insp-iconbtn')].some(b => /Export this artboard as PNG/.test(b.title));
+            return { png: window.__png, hasBtn }; }""")
+        check("PNG-per-artboard downloads a correctly-named a[download$=.png] blob, panel offers the button",
+              bool(ap["png"]) and ap["png"]["name"] == "Board-2.png" and ap["png"]["blob"] and ap["hasBtn"], str(ap))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)

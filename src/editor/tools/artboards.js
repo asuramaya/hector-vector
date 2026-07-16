@@ -95,9 +95,12 @@ export const artboardsMixin = {
     setStatus("Artboard removed.", 1500);
   },
   fitToArtboard(rect) { if (rect) try { frameRect(viewports.output, rect.x, rect.y, rect.w, rect.h); } catch {} },
-  // Export one artboard's region as a cropped SVG (downloads). PNG-per-artboard reuses this crop.
-  exportArtboardSVG(rect, name) {
-    if (!rect) return;
+  // Crop the current document to one artboard's region (its own viewBox, not the union canvas
+  // every OTHER artboard also occupies). Shared by the SVG download below and PNG-per-artboard
+  // (app.js wires editor._exportArtboardPNG through this — the client-side rasterizer lives in
+  // ui/export.js, a layer above editor.js, so it can't be called from here without a cycle).
+  _croppedArtboardSVG(rect) {
+    if (!rect) return null;
     let svg = this.serialize();
     try {
       const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
@@ -106,6 +109,12 @@ export const artboardsMixin = {
       root.setAttribute("width", nfmt(rect.w)); root.setAttribute("height", nfmt(rect.h));
       svg = new XMLSerializer().serializeToString(root);
     } catch {}
+    return svg;
+  },
+  // Export one artboard's region as a cropped SVG (downloads).
+  exportArtboardSVG(rect, name) {
+    if (!rect) return;
+    const svg = this._croppedArtboardSVG(rect);
     const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob); a.download = `${(name || "artboard").replace(/\s+/g, "-")}.svg`;
@@ -113,4 +122,8 @@ export const artboardsMixin = {
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     setStatus(`Exported ${name || "artboard"} as SVG.`, 2000);
   },
+  // PNG-per-artboard (Epic K.4): a UI-layer hook, like _summonColor — app.js wires it to the
+  // SAME client-side canvas rasteriser the main Export PNG modal uses (no cairosvg, no second
+  // renderer), fed by _croppedArtboardSVG above. Lives one layer up (ui/export.js) so it can't
+  // be reached from here without a cycle back through editor.js.
 };

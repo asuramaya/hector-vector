@@ -96,7 +96,7 @@ export async function serializeForSave() {
 // SVG (both the save file off-machine AND the export canvas) is an ISOLATED document — it
 // can't see document.fonts, so the faces must live inside the markup or text falls back to a
 // system font. Returns the SVG unchanged when no web fonts are in play.
-async function withEmbeddedFonts(svgText) {
+export async function withEmbeddedFonts(svgText) {
   try {
     const css = window.__fonts ? await window.__fonts.embedFontFaceCSS(svgText) : "";
     if (!css) return svgText;
@@ -109,7 +109,7 @@ async function withEmbeddedFonts(svgText) {
 
 // Rasterise an SVG string to a PNG Blob on a canvas — the browser's own SVG renderer,
 // so curves/strokes/gradients all work without cairosvg or any system tool.
-function renderSvgToPngBlob(svgText, w, h, background) {
+export function renderSvgToPngBlob(svgText, w, h, background) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(new Blob([svgText], { type: "image/svg+xml;charset=utf-8" }));
     const img = new Image();

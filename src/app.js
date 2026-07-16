@@ -44,7 +44,7 @@ import {
 } from "./ui/menus.js";
 import {
   configureExport, inlineSvgImages, serializeForSave, openExportModal, setSaveByteCap,
-  renderCurrentPngDataUrl,
+  renderCurrentPngDataUrl, renderSvgToPngBlob, withEmbeddedFonts,
 } from "./ui/export.js";
 import {
   configureModal, floatingInput, openModal, closeModal, confirmDialog,
@@ -637,6 +637,17 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     });
   };
   editor._summonColor = () => { if (window.__docks) window.__docks.showColor(); };
+  // PNG-per-artboard (Epic K.4): same crop editor._croppedArtboardSVG already does for the SVG
+  // download, rasterised through the SAME client-side canvas pipeline the Export PNG modal
+  // uses (font embed + inline placed rasters first, so neither drops out of the isolated render).
+  editor._exportArtboardPNG = async (rect, name) => {
+    if (window.__fonts) await window.__fonts.fontsReady();
+    let svgText = await inlineSvgImages(editor._croppedArtboardSVG(rect));
+    svgText = await withEmbeddedFonts(svgText);
+    const blob = await renderSvgToPngBlob(svgText, Math.max(1, Math.round(rect.w)), Math.max(1, Math.round(rect.h)), "transparent");
+    downloadBlob(`${(name || "artboard").replace(/\s+/g, "-")}.png`, blob, "image/png");
+    setStatus(`Exported ${name || "artboard"} as PNG.`, 2000);
+  };
   const pickFor = (which) => { active = which; refreshSwatches(); if (window.__docks) window.__docks.showColor(); };
   const doSwap = () => {
     const f = cur("fill"), s = cur("stroke");
