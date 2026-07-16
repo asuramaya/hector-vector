@@ -161,6 +161,7 @@ export const TOOL_WHY = {
   "tool:scissors":     ["Scissors", "Snip a path open at a single point"],
   "tool:knife":        ["Knife", "Slice clean through a shape"],
   "tool:eraser":       ["Eraser", "Rub parts of a shape away"],
+  "tool:artboard":     ["Artboard", "Drag out a new artboard exactly where and how big you want it"],
 };
 export const VIEW_WHY = {
   "vp:zoom-out":   ["Zoom out", "See more of the canvas at once"],
@@ -223,6 +224,7 @@ const FIND = {
   "tool:scissors":   "snip open split break path",
   "tool:knife":      "slice cut split divide",
   "tool:eraser":     "rub remove delete",
+  "tool:artboard":   "canvas page board frame new size document",
   "vp:zoom-in":      "magnify closer bigger in",
   "vp:zoom-out":     "smaller further away out",
   "vp:fit":          "zoom fit whole all see everything",

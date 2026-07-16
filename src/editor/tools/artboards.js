@@ -85,6 +85,44 @@ export const artboardsMixin = {
     setStatus(`Added artboard (${this.artboards.length + 1} total).`, 1800);
     return this.artboards.length - 1;
   },
+  // On-canvas artboard tool (Epic K.3): drag to create a new artboard at exactly that
+  // position and size — the panel's "Add artboard" button can only auto-place a
+  // default-sized one beside the rest. Mirrors the shape tools' click-vs-drag contract
+  // (_beginDraw in editor.js, text.js's _textDown): a bare click makes nothing, same as
+  // dragging out a rectangle; only a real drag commits. A live dashed preview rect lives
+  // in the overlay layer while dragging, same idea as the text tool's box-preview.
+  // DEFERRED (not in this pass): moving/resizing an EXISTING artboard by dragging its
+  // frame/handles on-canvas — today that's still panel-only (resizeArtboard/moveArtboard
+  // already support it programmatically; only the on-canvas handles are missing).
+  _artboardDown(e) {
+    if (e.button !== 0 || !this.stage) return;
+    e.stopPropagation(); e.preventDefault();
+    const inv = () => this.stageCTM().inverse();
+    const start = new DOMPoint(e.clientX, e.clientY).matrixTransform(inv());
+    const ov = this._overlayEl();
+    let box = null;
+    const move = (ev) => {
+      const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
+      const x = Math.min(start.x, p.x), y = Math.min(start.y, p.y);
+      const w = Math.abs(p.x - start.x), h = Math.abs(p.y - start.y);
+      if (!box && (w > 3 || h > 3) && ov) { box = document.createElementNS(SVG_NS, "rect"); box.setAttribute("class", "hv-artboard-preview"); box.setAttribute("fill", "none"); ov.appendChild(box); }
+      if (box) { box.setAttribute("x", nfmt(x)); box.setAttribute("y", nfmt(y)); box.setAttribute("width", nfmt(w)); box.setAttribute("height", nfmt(h)); }
+    };
+    const up = (ev) => {
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+      if (box) box.remove();
+      const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
+      const x = Math.min(start.x, p.x), y = Math.min(start.y, p.y);
+      const w = Math.abs(p.x - start.x), h = Math.abs(p.y - start.y);
+      if (w < 8 || h < 8) return;   // a bare click/tiny drag makes nothing
+      const idx = this.addArtboard({ w, h });   // pushes its own undo step
+      this.artboards[idx].x = x; this.artboards[idx].y = y;   // place it exactly as drawn
+      this._reflowCanvas();
+      this.selection = new Set(); this.artboardSelected = true;
+      this._renderSelection(); this._renderInspector();
+    };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  },
   renameArtboard(i, name) { if (!this.artboards || !this.artboards[i]) return; this.push("Rename artboard"); this.artboards[i].name = name || `Artboard ${i + 2}`; this._reflowCanvas(); },
   resizeArtboard(i, w, h) { if (!this.artboards || !this.artboards[i]) return; if (!this._coalescing) this.push("Resize artboard"); if (w > 0) this.artboards[i].w = w; if (h > 0) this.artboards[i].h = h; this._reflowCanvas(); },
   moveArtboard(i, x, y) { if (!this.artboards || !this.artboards[i]) return; if (!this._coalescing) this.push("Move artboard"); if (x != null) this.artboards[i].x = x; if (y != null) this.artboards[i].y = y; this._reflowCanvas(); },

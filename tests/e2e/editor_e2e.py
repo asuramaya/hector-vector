@@ -2791,6 +2791,40 @@ def main():
             return { png: window.__png, hasBtn }; }""")
         check("PNG-per-artboard downloads a correctly-named a[download$=.png] blob, panel offers the button",
               bool(ap["png"]) and ap["png"]["name"] == "Board-2.png" and ap["png"]["blob"] and ap["hasBtn"], str(ap))
+        # On-canvas artboard tool (Epic K.3): drag to create a new artboard at exactly that
+        # position/size — previously only reachable via the panel's auto-placed "Add artboard".
+        # Same click-vs-drag contract as the shape tools (a bare click makes nothing).
+        k3 = page.evaluate(r"""() => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="400" height="300"><rect data-hv-id="r1" x="40" y="40" width="100" height="100" fill="#3399cc"/></svg>','k3');
+            editor.setTool('select');
+            editor.setTool('artboard');
+            const stageRect = editor.stage.getBoundingClientRect();
+            const pe = (t, ty, x, y) => t.dispatchEvent(new PointerEvent(ty, { pointerId: 0, pointerType: 'mouse', button: 0, isPrimary: true, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+            const cx = stageRect.left + stageRect.width * 0.7, cy = stageRect.top + stageRect.height * 0.7;
+            pe(editor.stage, 'pointerdown', cx, cy); pe(window, 'pointerup', cx, cy);
+            const noneFromClick = (editor.artboards || []).length === 0;
+            const x0 = stageRect.left + stageRect.width * 0.55, y0 = stageRect.top + stageRect.height * 0.15;
+            const x1 = stageRect.left + stageRect.width * 0.95, y1 = stageRect.top + stageRect.height * 0.55;
+            // Capture the CTM BEFORE the drag — adding the artboard grows the viewBox to the new
+            // union, changing scale, so converting AFTER would compare against the wrong mapping.
+            const m = editor.stageCTM().inverse();
+            const p0 = new DOMPoint(x0, y0).matrixTransform(m), p1 = new DOMPoint(x1, y1).matrixTransform(m);
+            pe(editor.stage, 'pointerdown', x0, y0);
+            pe(window, 'pointermove', (x0 + x1) / 2, (y0 + y1) / 2);
+            const previewDuring = !!document.querySelector('.hv-artboard-preview');
+            pe(window, 'pointermove', x1, y1);
+            pe(window, 'pointerup', x1, y1);
+            const previewGone = !document.querySelector('.hv-artboard-preview');
+            const abs = editor.allArtboards(); const extra = abs.find(a => !a.primary);
+            const wOk = !!extra && Math.abs(extra.w - Math.abs(p1.x - p0.x)) < 5;
+            const hOk = !!extra && Math.abs(extra.h - Math.abs(p1.y - p0.y)) < 5;
+            const historyLabel = editor._curLabel, artboardSelected = editor.artboardSelected;
+            editor.undo();
+            const undoOk = editor.allArtboards().length === 1;
+            return { noneFromClick, previewDuring, previewGone, count: abs.length, wOk, hOk, artboardSelected, historyLabel, undoOk }; }""")
+        check("on-canvas artboard tool: bare click makes nothing; a real drag creates+places+sizes one artboard exactly there, in one undo step",
+              k3["noneFromClick"] and k3["previewDuring"] and k3["previewGone"] and k3["count"] == 2
+              and k3["wOk"] and k3["hOk"] and k3["artboardSelected"] and k3["historyLabel"] == "Add artboard" and k3["undoOk"], str(k3))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)

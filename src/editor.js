@@ -314,6 +314,7 @@ const editor = {
     if (this.tool === "scissors") { this._scissorsDown(e); return; }
     if (this.tool === "knife") { this._knifeDown(e); return; }
     if (this.tool === "eraser") { this._eraserDown(e); return; }
+    if (this.tool === "artboard") { this._artboardDown(e); return; }
     if (SHAPE_TOOLS.has(this.tool)) {
       if (e.button !== 0) return;
       e.stopPropagation(); e.preventDefault();   // draw, don't pan
@@ -471,7 +472,7 @@ const editor = {
   // creation sub-tools. Marquee + transform are folded into select (empty-drag
   // rubber-bands; Ctrl+T/Ctrl+R toggle the scale/rotate sub-mode).
   setTool(t) {
-    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "text" && t !== "width" && !BUILDER_TOOLS.has(t) && !SHAPE_TOOLS.has(t)) return;
+    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "text" && t !== "width" && t !== "artboard" && !BUILDER_TOOLS.has(t) && !SHAPE_TOOLS.has(t)) return;
     if (this._pen && t !== "pen") this._finishPen(true);   // keep any in-progress path
     if (this._curv && t !== "curvature") this._curvFinish(true);
     if (this._textEdit && t !== "text") this._commitText();   // leaving the text tool finishes the edit in progress
@@ -523,6 +524,7 @@ const editor = {
     if (t === "rect") return "Rectangle: drag on the canvas.";
     if (t === "ellipse") return "Ellipse: drag on the canvas.";
     if (t === "line") return "Line: drag on the canvas.";
+    if (t === "artboard") return "Artboard: drag on the canvas to add one, sized and placed exactly there.";
     return "";
   },
   _hint() {
@@ -551,6 +553,7 @@ const editor = {
     if (t === "rect") return "Rectangle (R) — drag on the canvas · Shift = square";
     if (t === "ellipse") return "Ellipse (E) — drag on the canvas · Shift = circle";
     if (t === "line") return "Line (L) — drag on the canvas · Shift = 45°";
+    if (t === "artboard") return "Artboard (Shift+O) — drag on the canvas to add one, sized and placed exactly there";
     return "";
   },
   _showHint() { const h = this._hint(); if (h) setStatus(h, 0); },
