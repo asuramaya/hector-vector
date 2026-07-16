@@ -238,6 +238,7 @@ const FIND = {
 // The menu-only verbs have no tile and so no key — match them by the same label prefix VERB_WHY uses.
 const VERB_FIND = [
   ["Expand object", "convert paths outline flatten editable"],
+  ["Expand appearance", "bake flatten effect filter shadow blur glow raster"],
   ["Outline stroke", "convert stroke to shape thicken"],
   ["Offset path", "grow shrink inset outset bigger smaller"],
   ["Pathfinder: Divide", "split cut regions pieces"],
@@ -296,6 +297,7 @@ export function everyTile(f) {
 // reason-less, rather than vanishing: a new verb added to editor.js must never silently disappear.
 const VERB_WHY = [
   ["Expand object", "Turn it into plain editable paths"],
+  ["Expand appearance", "Bake its blur/shadow/glow into a flat image"],
   ["Outline stroke", "Turn the stroke itself into a shape"],
   ["Offset path", "Grow or shrink the outline"],
   ["Pathfinder: Divide", "Cut it into every separate region"],

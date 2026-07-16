@@ -2059,8 +2059,10 @@ const editor = {
     const isBlend = single && this.isBlendGroup(single);
     const isRepeat = single && this.isRepeatGroup(single);
     const anyInstance = nodes.some((n) => this.isSymbolInstance(n));
+    const hasEffects = reads.some((n) => this.effectsOf(n).length);
     const items = [];
     if (expandable) items.push({ label: "Expand object", onClick: () => this.expandSelection() });
+    if (hasEffects) items.push({ label: "Expand appearance", onClick: () => this.expandAppearance() });
     if (hasStroke) items.push({ label: "Outline stroke", onClick: () => this.outlineStroke() });
     if (hasPath) items.push({ label: "Offset path…", onClick: () => this._promptOffsetPath() });
     if (fillable >= 2) {

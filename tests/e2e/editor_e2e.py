@@ -2666,6 +2666,33 @@ def main():
             return { groupOk, undoOk, sameType, boolGc, appendOk }; }""")
         check("effects hardening: group filter, undo drops it, same-type stack chains, boolean leaves no orphan, reopen+append",
               eh["groupOk"] and eh["undoOk"] and eh["sameType"] and eh["boolGc"] and eh["appendOk"], str(eh))
+        # Expand Appearance (Epic K.2): bake a live filter (blur/shadow/glow) into a flat raster
+        # <image> — the one bake X's own expand can't do (no vector form for feGaussianBlur).
+        ea = page.evaluate(r"""async () => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="60" y="60" width="80" height="80" fill="#3399cc"/></svg>','k2');
+            editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false;
+            editor.addEffect('shadow');
+            const actionLabels = editor._objectActions(editor.selectedNodes()).map(x=>x.label);
+            const before = editor.stage.querySelectorAll('[data-hv-id]').length;
+            const historyBefore = editor.history.length;
+            await editor.expandAppearance();
+            const r1Gone = !editor.nodeById('r1');
+            const ids = [...editor.selection]; const img = ids.length===1 ? editor.nodeById(ids[0]) : null;
+            const isImage = !!img && img.tagName.toLowerCase()==='image';
+            const hasHref = !!img && (img.getAttribute('href')||'').startsWith('data:image/png');
+            const biggerThanRaw = !!img && parseFloat(img.getAttribute('width'))>80 && parseFloat(img.getAttribute('height'))>80;
+            const nodeCountSame = editor.stage.querySelectorAll('[data-hv-id]').length===before;
+            const oneUndoStep = editor.history.length===historyBefore+1;
+            editor.undo();
+            const restored = editor.nodeById('r1'); const undoOk = !!restored && !!restored.getAttribute('filter') && restored.getAttribute('fill')==='#3399cc';
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100"><rect data-hv-id="p1" x="10" y="10" width="50" height="50" fill="#c33"/></svg>','k2b');
+            editor.selection=new Set(['p1']); editor.artboardSelected=false;
+            const noFxLabels = editor._objectActions(editor.selectedNodes()).map(x=>x.label);
+            return { hasExpandAppearance: actionLabels.includes('Expand appearance'), r1Gone, isImage, hasHref, biggerThanRaw,
+                     nodeCountSame, oneUndoStep, undoOk, noFxOffersNothing: !noFxLabels.includes('Expand appearance') }; }""")
+        check("Expand Appearance: menu gated on having an effect, bakes to a correctly-sized <image>, one undo step, undo restores the filter, ungated for a plain object",
+              ea["hasExpandAppearance"] and ea["r1Gone"] and ea["isImage"] and ea["hasHref"] and ea["biggerThanRaw"]
+              and ea["nodeCountSame"] and ea["oneUndoStep"] and ea["undoOk"] and ea["noFxOffersNothing"], str(ea))
         # Transforms & Repeat (Epic T): reflect (+copy), shear, transform-each (own centre),
         # transform-again, and parametric repeat (grid/radial/mirror) with live count + expand.
         section("Transforms & Repeat: reflect / shear / each / again / repeat (Epic T)")
@@ -4834,7 +4861,7 @@ def main():
                 trim = mp.evaluate("""() => {
                     const t = document.querySelector('.toolstrip');
                     const before = t.scrollWidth - t.clientWidth;
-                    for (const k of ['tool:curvature','tool:line','tool:width','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser'])
+                    for (const k of ['tool:curvature','tool:line','tool:width','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser','tool:artboard'])
                         __layout.setHidden(k, true);
                     return { before, after: t.scrollWidth - t.clientWidth };
                 }""")
@@ -5040,14 +5067,14 @@ def main():
                     const t = document.querySelector('.toolstrip');
                     const before = t.scrollWidth - t.clientWidth;
                     let clicked = 0;
-                    for (const k of ['tool:curvature','tool:line','tool:width','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser']) {
+                    for (const k of ['tool:curvature','tool:line','tool:width','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser','tool:artboard']) {
                         const row = document.querySelector(`.picker-row[data-key="${k}"]`);
                         if (row) { row.querySelector('input[type=checkbox]').click(); clicked++; }
                     }
                     return { clicked, before, after: t.scrollWidth - t.clientWidth };
                 }""")
                 check("mobile: unticking tools in the picker trims the real strip — 711px-in-390px, solved through the UI",
-                      trimmed["clicked"] == 7 and trimmed["before"] > 300 and trimmed["after"] == 0, str(trimmed))
+                      trimmed["clicked"] == 8 and trimmed["before"] > 300 and trimmed["after"] == 0, str(trimmed))
                 mp.evaluate("() => { const b = document.querySelector('[data-modal-close]'); if (b) b.click(); }")
                 mp.evaluate("() => __layout.reset()")
                 mp.wait_for_timeout(200)

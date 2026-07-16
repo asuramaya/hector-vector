@@ -262,4 +262,24 @@ export const expandMixin = {
     this._renderSelection(); this._renderInspector(); this._renderLayers();
     setStatus(`${ops[op]} → ${made.length} path${made.length > 1 ? "s" : ""}.`, 2500);
   },
+  // Expand Appearance (Epic K.2): bake a live filter/effect stack (drop shadow/blur/glow —
+  // Epic E) into flat, plain-<image> geometry — mirrors X's own expand (live shape/stroke →
+  // plain path), but for effects there's no vector equivalent to bake TO (feGaussianBlur has
+  // no path form), so this is lossy-by-necessity: a raster snapshot, sized to the filter's own
+  // rendered extent (shadows/blur spread beyond the raw geometry). The actual rasterisation is
+  // a UI-layer hook (app.js wires it, same pattern as _summonColor/_exportArtboardPNG) since it
+  // needs ui/export.js's canvas pipeline, a layer above editor.js.
+  async expandAppearance() {
+    const nodes = this.selectedNodes().filter((n) => this.effectsOf(n).length);
+    if (!nodes.length) { setStatus("Select an object with an effect (blur, shadow, or glow) to expand.", 3000); return; }
+    if (!this._expandAppearanceHook) { setStatus("Expand Appearance isn't available.", 2500); return; }
+    this.push("Expand appearance");
+    const ids = [];
+    for (const n of nodes) { const id = await this._expandAppearanceHook(n); if (id) ids.push(id); }
+    if (!ids.length) { this.undo(); setStatus("Nothing to expand.", 2000); return; }
+    this._gcDefs();
+    this.selection = new Set(ids); this.artboardSelected = false;
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+    setStatus(`Expanded appearance on ${ids.length} object${ids.length > 1 ? "s" : ""}.`, 2500);
+  },
 };
