@@ -16,8 +16,10 @@ const CP_BASE_SWATCHES = ["#000000", "#ffffff", "#808080", "#e23b3b", "#f6a623",
 const CP_PIPETTE_SVG = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M10.5 1.8a1.7 1.7 0 0 1 2.4 2.4l-1.2 1.2 1 1-1.1 1.1-1-1-5 5L3 13l-1.8.6.6-1.8.5-1.6 5-5-1-1L7.4 4.2l1 1 1.1-1.1z" fill="currentColor"/></svg>`;
 const CP_SWATCH_KEY = "hector-vector:swatches";
 const CP_RECENT_KEY = "hector-vector:swatches-recent";
-// Saved swatches can carry a name now; legacy entries are plain hex strings, so
-// loadSwatches normalises both to { c, name? }. saveSwatches keeps the raw array.
+// Saved swatches can carry a name and a folder (group) now; legacy entries are plain hex
+// strings, so loadSwatches normalises all of them to { c, name?, group? }. saveSwatches
+// keeps the raw array — a folder is just a `group` string shared by its members, there is
+// no separate folder registry.
 function loadSwatches() { try { const a = JSON.parse(localStorage.getItem(CP_SWATCH_KEY)); return Array.isArray(a) ? a.map((x) => (typeof x === "string" ? { c: x } : x)).filter((x) => x && typeof x.c === "string") : []; } catch (_) { return []; } }
 function saveSwatches(arr) { try { localStorage.setItem(CP_SWATCH_KEY, JSON.stringify(arr.slice(0, 24))); } catch (_) {} }
 function loadRecent() { try { const a = JSON.parse(localStorage.getItem(CP_RECENT_KEY)); return Array.isArray(a) ? a.filter((c) => typeof c === "string") : []; } catch (_) { return []; } }
@@ -354,8 +356,12 @@ export function openColorPicker(opts) {
     const rec = loadRecent(); recentWrap.hidden = rec.length === 0; recentRow.innerHTML = "";
     rec.forEach((c) => recentRow.appendChild(mkSw(c)));
   }
-  // Eyedropper + base palette + saved (nameable) swatches. Right-click a saved swatch
-  // for Rename / Remove; "+" saves the current colour.
+  // Set a swatch's group by hex (re-reads storage so callers never hold a stale array).
+  const setSwatchGroup = (hex, group) => { const arr = loadSwatches(); const m = arr.find((x) => x.c === hex); if (m) { if (group) m.group = group; else delete m.group; saveSwatches(arr); renderSwatches(); } };
+  // Eyedropper + base palette + saved (nameable, foldable) swatches. Right-click a saved
+  // swatch for Rename / move-to-folder / Remove; a folder header's right-click renames or
+  // ungroups (a folder is just a `group` string shared by its members, not its own storage
+  // record — renaming/ungrouping is rewriting that string, no separate registry to keep in sync).
   const renderSwatches = () => {
     sw.innerHTML = "";
     if (window.EyeDropper) {
@@ -369,20 +375,43 @@ export function openColorPicker(opts) {
       sw.appendChild(eye);
     }
     CP_BASE_SWATCHES.forEach((c) => sw.appendChild(mkSw(c)));
-    loadSwatches().forEach((it) => {
+    const all = loadSwatches();
+    const groups = []; for (const it of all) if (it.group && !groups.includes(it.group)) groups.push(it.group);
+    const mkSaved = (it) => {
       const b = mkSw(it.c, it.name);
       b.addEventListener("contextmenu", (e) => {
         e.preventDefault();
-        showContextMenu(e.clientX, e.clientY, [
+        const items = [
           { label: "Rename…", onClick: () => floatingInput({ title: "Swatch name", value: it.name || "", onCommit: (n) => { const arr = loadSwatches(); const m = arr.find((x) => x.c === it.c); if (m) { m.name = n || undefined; saveSwatches(arr); renderSwatches(); } } }) },
-          { label: "Remove", onClick: () => { saveSwatches(loadSwatches().filter((x) => x.c !== it.c)); renderSwatches(); } },
-        ]);
+          { type: "sep" },
+        ];
+        groups.filter((g) => g !== it.group).forEach((g) => items.push({ label: `Move to “${g}”`, onClick: () => setSwatchGroup(it.c, g) }));
+        items.push({ label: "New folder…", onClick: () => floatingInput({ title: "New folder name", onCommit: (n) => setSwatchGroup(it.c, n) }) });
+        if (it.group) items.push({ label: "Remove from folder", onClick: () => setSwatchGroup(it.c, null) });
+        items.push({ type: "sep" }, { label: "Remove", onClick: () => { saveSwatches(loadSwatches().filter((x) => x.c !== it.c)); renderSwatches(); } });
+        showContextMenu(e.clientX, e.clientY, items);
       });
-      sw.appendChild(b);
-    });
+      return b;
+    };
+    all.filter((it) => !it.group).forEach((it) => sw.appendChild(mkSaved(it)));
     const add = document.createElement("button"); add.type = "button"; add.className = "cp-sw cp-sw-add"; add.textContent = "+"; add.title = "Save current colour";
     add.addEventListener("click", () => { const hex = curHex(); const u = loadSwatches().filter((x) => x.c.toLowerCase() !== hex.toLowerCase()); u.unshift({ c: hex }); saveSwatches(u); renderSwatches(); });
     sw.appendChild(add);
+    groups.forEach((gname) => {
+      const grp = document.createElement("div"); grp.className = "cp-swgroup";
+      const head = document.createElement("div"); head.className = "cp-swgroup-head cp-strip-lab"; head.textContent = gname; head.title = "Right-click to rename or ungroup this folder";
+      head.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        showContextMenu(e.clientX, e.clientY, [
+          { label: "Rename folder…", onClick: () => floatingInput({ title: "Folder name", value: gname, onCommit: (n) => { const arr = loadSwatches(); arr.forEach((x) => { if (x.group === gname) x.group = n; }); saveSwatches(arr); renderSwatches(); } }) },
+          { label: "Remove folder (keeps swatches)", onClick: () => { const arr = loadSwatches(); arr.forEach((x) => { if (x.group === gname) delete x.group; }); saveSwatches(arr); renderSwatches(); } },
+        ]);
+      });
+      const row = document.createElement("div"); row.className = "cp-swgroup-row";
+      all.filter((it) => it.group === gname).forEach((it) => row.appendChild(mkSaved(it)));
+      grp.append(head, row);
+      sw.appendChild(grp);
+    });
   };
   renderSwatches(); renderRecent();
   // Record a settled colour into recents (debounced so live dragging doesn't spam it).
