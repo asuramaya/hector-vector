@@ -11,7 +11,7 @@
 // read the typed string back and write it into the <text> as a tspan-per-line. The
 // contentEditable also gates every global editor shortcut for free (app.js keydown handlers
 // all early-return on isContentEditable), so typing "v" inserts a letter, not the select tool.
-import { SVG_NS, bakeMatrixInto } from "../../hv/index.js";
+import { SVG_NS, bakeMatrixInto, nfmt } from "../../hv/index.js";
 import { setStatus } from "../../app.js";
 import { platform } from "../../ui/platform.js";
 import { numRow, selectRow, inspRow } from "../ui-rows.js";
@@ -55,7 +55,10 @@ export const textMixin = {
     // the overlay, not the stage, so reaching here means "elsewhere" → commit then act).
     if (this._textEdit) this._commitText();
     const hit = e.target.closest && e.target.closest("text[data-hv-id]");
-    if (hit && this.stage.contains(hit) && hit.getAttribute("data-hv-locked") !== "1") { this._editText(hit, false); return; }
+    if (hit && this.stage.contains(hit) && hit.getAttribute("data-hv-locked") !== "1") {
+      if (this._isThreadTarget(hit)) { this._selectThreadTarget(hit); return; }
+      this._editText(hit, false); return;
+    }
     // Click = point text (grows freely). Drag = AREA text: the dragged box sets the wrap width
     // (Illustrator's two text modes). We disambiguate on pointerup by how far the pointer moved.
     const start = this._textStagePoint(e);
@@ -106,9 +109,20 @@ export const textMixin = {
     const hit = e.target.closest && e.target.closest("text[data-hv-id]");
     if (hit && this.stage.contains(hit) && hit.getAttribute("data-hv-locked") !== "1") {
       e.stopPropagation(); e.preventDefault();
+      if (this._isThreadTarget(hit)) { this._selectThreadTarget(hit); return; }
       this.setTool("text"); this._editText(hit, false); return;
     }
     if (this._isoDblClick) this._isoDblClick(e);   // not text → enter/exit isolation (Epic I)
+  },
+  // A threaded frame's content is system-derived (fed by the box before it in the chain),
+  // so a click/double-click never opens it for typing — select it instead and point back
+  // at the box that actually owns the text, same idea as clicking a symbol instance vs its
+  // master (Epic Y).
+  _selectThreadTarget(node) {
+    this.selection = new Set([node.getAttribute("data-hv-id")]); this.artboardSelected = false;
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+    const src = this._threadPrevOf(node);
+    setStatus(`This box is threaded — edit the text in ${src ? "“" + (this.nodeName(src) || "the linked box") + "”" : "the linked box"} instead.`, 3200);
   },
   _textStagePoint(e) {
     const m = this.stageCTM();
@@ -326,11 +340,71 @@ export const textMixin = {
     });
     return out;
   },
-  // Write wrapped area text: always tspan-per-line (stable x/dy for re-wrap). Paragraph-start
-  // lines carry data-hv-br so _readTextContent can rebuild the hard breaks on re-edit.
-  _writeAreaContent(node, str) {
-    const width = parseFloat(node.getAttribute("data-hv-text-width")) || 200;
-    const lines = this._wrapLines(node, str, width);
+  // ---------- threaded text (Epic P.2/P.3) ----------
+  // A chain is just a forward pointer: data-hv-text-next names the successor's data-hv-id.
+  // Each box has at most one outbound link and at most one inbound one (no branching, no
+  // cycles — enforced in linkTextFrames). Only the un-linked HEAD of a chain is ever typed
+  // into directly; every downstream box is fed by _writeAreaContent's cascade below and
+  // can't be edited on its own (see _selectThreadTarget). Like every other parametric spec
+  // in this app (blend/warp/repeat/width all work the same way), the link lives only in the
+  // live session — editor.js's serialize() strips every data-hv-* attribute on save/export
+  // by design, so a saved-and-reopened document's boxes come back independent, holding
+  // whatever text was last rendered into them. That's an accepted, existing trade-off here,
+  // not something new this feature has to solve.
+  _isAreaText(n) { return !!(n && n.tagName && n.tagName.toLowerCase() === "text" && parseFloat(n.getAttribute("data-hv-text-width")) > 0); },
+  _threadNextOf(node) { const id = node && node.getAttribute("data-hv-text-next"); return id ? this.nodeById(id) : null; },
+  _threadPrevOf(node) {
+    if (!this.stage || !node) return null;
+    const id = node.getAttribute("data-hv-id");
+    for (const n of this.stage.querySelectorAll("text[data-hv-text-next]")) if (n.getAttribute("data-hv-text-next") === id) return n;
+    return null;
+  },
+  _isThreadTarget(node) { return !!this._threadPrevOf(node); },
+  // Thread the FIRST-selected box's overflow into the SECOND (selection order is click
+  // order — select the overflowing box, then shift-click its destination, matching how
+  // Illustrator's own "select source then destination" gesture reads).
+  linkTextFrames() {
+    const nodes = this.selectedNodes();
+    if (nodes.length !== 2 || !nodes.every((n) => this._isAreaText(n))) { setStatus("Select two text boxes (the overflowing one first) to thread them.", 3000); return; }
+    const [a, b] = nodes;
+    if (a === b) return;
+    const existingSource = this._threadPrevOf(b);
+    if (existingSource && existingSource !== a) { setStatus("That box is already threaded from another box — unthread it first.", 3200); return; }
+    let cur = b, guard = 0;   // cycle guard: walking forward from b must never reach a
+    while (cur && guard++ < 500) { if (cur === a) { setStatus("That would thread the boxes in a loop.", 3200); return; } cur = this._threadNextOf(cur); }
+    this.push("Thread text");
+    a.setAttribute("data-hv-text-next", b.getAttribute("data-hv-id"));
+    this._writeAreaContent(a, this._readTextContent(a));   // cascades into b right away
+    this._renderSelection(); this._renderInspector();
+    setStatus("Threaded — overflow now flows from the first box into the second.", 2600);
+  },
+  // Unthread the link touching `node` (defaults to the selection): works from either end —
+  // if node is a source, drop its own link; if it's a target, drop the link feeding it.
+  unlinkTextFrames(node) {
+    node = node || this.selectedNodes().find((n) => this._isAreaText(n) && (n.getAttribute("data-hv-text-next") || this._isThreadTarget(n)));
+    if (!node) return;
+    const source = node.getAttribute("data-hv-text-next") ? node : this._threadPrevOf(node);
+    if (!source) return;
+    this.push("Unthread text");
+    source.removeAttribute("data-hv-text-next");
+    this._writeAreaContent(source, this._readTextContent(source));
+    this._renderSelection(); this._renderInspector();
+    setStatus("Unthreaded.", 2000);
+  },
+  // How many of `lineCount` wrapped lines fit this node's own box height — the same math
+  // _areaOverflows uses, walked one line at a time. No height set → everything "fits"
+  // (unbounded box), matching _areaOverflows treating boxH<=0 as never overflowing.
+  _fitLineCount(node, lineCount) {
+    const boxH = parseFloat(node.getAttribute("data-hv-text-height")) || 0;
+    if (!(boxH > 0)) return lineCount;
+    const fs = parseFloat(node.getAttribute("font-size")) || 16;
+    const lh = this._lineHeightOf(node);
+    for (let n = lineCount; n > 0; n--) if (((n - 1) * fs * lh + fs) <= boxH + 0.5) return n;
+    return 0;
+  },
+  // Render exactly these wrapped lines as tspans — the write half of _writeAreaContent,
+  // split out so a threaded box can render only the prefix that fits its own height.
+  _renderAreaLines(node, lines) {
     while (node.firstChild) node.removeChild(node.firstChild);
     const x = node.getAttribute("x") || "0";
     const fs = parseFloat(node.getAttribute("font-size")) || 16;
@@ -344,10 +418,66 @@ export const textMixin = {
       ts.textContent = ln.text;
       node.appendChild(ts);
     });
-    // Flag vertical overflow against the box height so the inspector + canvas frame can warn:
-    // the wrapped lines occupy (n-1)·lineHeight + one line; if that exceeds the box, it overflows.
-    if (this._areaOverflows(node, lines.length)) node.setAttribute("data-hv-overflow", "1");
+  },
+  // Reassemble a wrapped-lines array back into a logical string — soft-wrapped lines
+  // rejoin with a space, hard breaks (br) with "\n". Mirrors _readTextContent's own tspan
+  // loop exactly, so a threaded tail re-wraps at the next box's width the same way
+  // re-editing the source would.
+  _linesToText(lines) {
+    let s = "";
+    lines.forEach((ln, i) => { if (i > 0) s += ln.br ? "\n" : " "; s += ln.text; });
+    return s;
+  },
+  // A dashed connector between threaded boxes, drawn only while one end is selected (a
+  // permanent line per pair would clutter a canvas with several threads — Illustrator's own
+  // thread-line view works the same way). Read-only overlay chrome, never in saved output.
+  _renderThreadLinks() {
+    const ov = this._overlayEl(); if (!ov || !this.stage) return;
+    const pairs = [];
+    for (const n of this.selectedNodes()) {
+      if (!this._isAreaText(n)) continue;
+      const next = this._threadNextOf(n); if (next) pairs.push([n, next]);
+      const prev = this._threadPrevOf(n); if (prev) pairs.push([prev, n]);
+    }
+    if (!pairs.length) return;
+    const ctm = this.stageCTM(); if (!ctm) return;
+    const inv = ctm.inverse();
+    const seen = new Set();
+    for (const [a, b] of pairs) {
+      const key = (a.getAttribute("data-hv-id") || "") + ">" + (b.getAttribute("data-hv-id") || "");
+      if (seen.has(key)) continue; seen.add(key);
+      let ra, rb; try { ra = a.getBoundingClientRect(); rb = b.getBoundingClientRect(); } catch { continue; }
+      const p1 = new DOMPoint(ra.right, ra.bottom).matrixTransform(inv);
+      const p2 = new DOMPoint(rb.left, rb.top).matrixTransform(inv);
+      const line = document.createElementNS(SVG_NS, "line");
+      line.setAttribute("class", "hv-thread-link");
+      line.setAttribute("x1", nfmt(p1.x)); line.setAttribute("y1", nfmt(p1.y));
+      line.setAttribute("x2", nfmt(p2.x)); line.setAttribute("y2", nfmt(p2.y));
+      ov.appendChild(line);
+      const dot = (p, cls) => { const c = document.createElementNS(SVG_NS, "circle"); c.setAttribute("class", cls); c.setAttribute("cx", nfmt(p.x)); c.setAttribute("cy", nfmt(p.y)); c.setAttribute("r", "3"); ov.appendChild(c); };
+      dot(p1, "hv-thread-port hv-thread-port-out"); dot(p2, "hv-thread-port hv-thread-port-in");
+    }
+  },
+  // Write wrapped area text: always tspan-per-line (stable x/dy for re-wrap). Paragraph-start
+  // lines carry data-hv-br so _readTextContent can rebuild the hard breaks on re-edit.
+  // Threaded (has data-hv-text-next): only the prefix that fits THIS box's own height is
+  // rendered here; whatever's left over is reassembled and cascaded into the next box —
+  // recursively, so a whole chain reflows from one edit at its head.
+  _writeAreaContent(node, str) {
+    const width = parseFloat(node.getAttribute("data-hv-text-width")) || 200;
+    const lines = this._wrapLines(node, str, width);
+    const next = this._threadNextOf(node);
+    let shown = lines, tail = null;
+    if (next) {
+      const fit = this._fitLineCount(node, lines.length);
+      if (fit < lines.length) { shown = lines.slice(0, fit); tail = lines.slice(fit); }
+    }
+    this._renderAreaLines(node, shown);
+    // Unthreaded (or the tail end of a chain): keep flagging overflow the old way. Threaded
+    // boxes with somewhere for the overflow to go aren't "overflowing" — they're flowing.
+    if (!next && this._areaOverflows(node, lines.length)) node.setAttribute("data-hv-overflow", "1");
     else node.removeAttribute("data-hv-overflow");
+    if (next) this._writeAreaContent(next, tail ? this._linesToText(tail) : "");
   },
   // True when the wrapped area text is taller than its box height (0/unset height never overflows).
   _areaOverflows(node, lineCount) {
@@ -549,6 +679,25 @@ export const textMixin = {
         note.className = "insp-note insp-note-warn";
         note.textContent = "Text overflows the box — enlarge the height or trim the text.";
         rows.push(inspRow("", note));
+      }
+      // Threaded text (Epic P): link/unlink itself lives in the Actions menu (2-selection
+      // "Thread text" / 1-selection "Unthread text") — this just surfaces the chain state so
+      // it's never a silent, undiscoverable attribute, with a quick Unthread right here too.
+      if (reads.length === 1) {
+        const node = reads[0];
+        const next = this._threadNextOf(node), prev = this._threadPrevOf(node);
+        if (next || prev) {
+          const box = document.createElement("div"); box.className = "insp-thread";
+          const lab = document.createElement("span"); lab.className = "insp-note";
+          const parts = [];
+          if (prev) parts.push("← flows from “" + (this.nodeName(prev) || "a linked box") + "”");
+          if (next) parts.push("→ overflow flows to “" + (this.nodeName(next) || "a linked box") + "”");
+          lab.textContent = parts.join(" · ");
+          const un = document.createElement("button"); un.type = "button"; un.className = "insp-action"; un.textContent = "Unthread";
+          un.addEventListener("click", () => this.unlinkTextFrames(node));
+          box.append(lab, un);
+          rows.push(inspRow("Thread", box));
+        }
       }
     }
     // On-path controls (T19): a single text bound to a path gets offset / side / detach.

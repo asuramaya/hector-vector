@@ -4625,6 +4625,57 @@ def main():
         check("deleting a style removes it from the list and unlinks remaining users without changing their look",
               ts["afterDelete"]["styles"] == 0 and ts["afterDelete"]["aStyleId"] is None and ts["afterDelete"]["aSize"] == "32", str(ts))
 
+        # Threaded text (Epic P.2/P.3): area-text boxes chained so overflow that doesn't fit
+        # one box flows into the next (data-hv-text-next names the successor). Deterministic —
+        # system-font measure, no network.
+        thread = page.evaluate(
+            "() => { const NS='http://www.w3.org/2000/svg';"
+            " const mk=(id,x,y,w,h)=>{ const t=document.createElementNS(NS,'text'); t.setAttribute('data-hv-id',id);"
+            "   t.setAttribute('x',x); t.setAttribute('y',y+16); t.setAttribute('font-family','Arial, sans-serif'); t.setAttribute('font-size','16');"
+            "   t.setAttribute('data-hv-text-width',String(w)); t.setAttribute('data-hv-text-height',String(h));"
+            "   editor.stage.insertBefore(t, editor._overlayEl()); return t; };"
+            " const a=mk('pa1',20,20,100,40), b=mk('pb1',160,20,120,200);"
+            " const long='one two three four five six seven eight nine ten eleven twelve thirteen fourteen';"
+            " editor._writeAreaContent(a, long);"
+            " const linesBefore=a.querySelectorAll('tspan').length, overBefore=a.getAttribute('data-hv-overflow');"
+            " editor.selection=new Set(['pa1','pb1']); editor.artboardSelected=false; editor._renderSelection();"
+            " const actsBoth=editor._objectActions(editor.selectedNodes()).some(x=>x.label==='Thread text');"
+            " editor.linkTextFrames();"
+            " const linked=a.getAttribute('data-hv-text-next')==='pb1';"
+            " const linesAfter=a.querySelectorAll('tspan').length, overAfter=a.getAttribute('data-hv-overflow');"
+            " const aWords=editor._readTextContent(a).replace(/\\n/g,' ').split(' ').filter(Boolean);"
+            " const bWords=editor._readTextContent(b).replace(/\\n/g,' ').split(' ').filter(Boolean);"
+            " const wordsMatch = JSON.stringify([...aWords,...bWords].sort()) === JSON.stringify(long.split(' ').sort());"
+            " const bHasContent = b.querySelectorAll('tspan').length>0;"
+            " editor.selection=new Set(['pb1']); editor._renderSelection();"
+            " editor.setTool('select'); editor._onDblClick({button:0, target:b, stopPropagation(){}, preventDefault(){}});"
+            " const targetBlockedEdit = !editor._textEdit;"
+            " editor.selection=new Set(['pa1']); editor._renderSelection();"
+            " const actsSrc=editor._objectActions(editor.selectedNodes());"
+            " const unthreadOnSrc=actsSrc.some(x=>x.label==='Unthread text');"
+            " const p=editor._objectPanel(editor.selectedNodes());"
+            " const threadRow=!!p.querySelector('.insp-thread');"
+            " editor.unlinkTextFrames(a);"
+            " const unlinked = a.getAttribute('data-hv-text-next')===null;"
+            " editor.setTool('select'); editor._onDblClick({button:0, target:b, stopPropagation(){}, preventDefault(){}});"
+            " const targetEditableAfterUnlink = !!editor._textEdit;"
+            " if (editor._textEdit) editor._commitText();"
+            " a.remove(); b.remove(); editor.selection=new Set(); editor._renderSelection();"
+            " return { linesBefore, overBefore, actsBoth, linked, linesAfter, overAfter, wordsMatch, bHasContent,"
+            "   targetBlockedEdit, unthreadOnSrc, threadRow, unlinked, targetEditableAfterUnlink }; }")
+        check("unthreaded box overflows and shows all wrapped lines", thread["linesBefore"] > 2 and thread["overBefore"] == "1", str(thread))
+        check("Actions menu offers 'Thread text' for two selected area-text boxes", thread["actsBoth"], str(thread))
+        check("linkTextFrames threads the first-selected box into the second", thread["linked"], str(thread))
+        check("threaded box now shows only the lines that fit its own height",
+              thread["linesAfter"] < thread["linesBefore"] and thread["overAfter"] is None, str(thread))
+        check("overflow tail flows into the linked box intact (no words lost or duplicated)",
+              thread["wordsMatch"] and thread["bHasContent"], str(thread))
+        check("double-clicking a threaded TARGET box never opens it for editing", thread["targetBlockedEdit"], str(thread))
+        check("Actions menu offers 'Unthread text' + the inspector shows a Thread status row",
+              thread["unthreadOnSrc"] and thread["threadRow"], str(thread))
+        check("unlinkTextFrames clears the link, and the box is independently editable again",
+              thread["unlinked"] and thread["targetEditableAfterUnlink"], str(thread))
+
         # T19 text-on-path: bind a text to a path → a <textPath href="#pathId"> that lays out
         # along the curve; the path gains a referencable id. Self-contained.
         check("text-on-path binds text to a path via <textPath> (T19)", page.evaluate(
