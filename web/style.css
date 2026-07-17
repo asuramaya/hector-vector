@@ -909,6 +909,12 @@ button:disabled {
 .cp-sw:hover { box-shadow: 0 0 0 1px var(--ink); }
 .cp-sw-add { background: var(--bg); color: var(--label); font-size: 14px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; border-color: var(--hair); }
 .cp-sw-add:hover { color: var(--ink); border-color: var(--ink); box-shadow: none; }
+/* Global colours (Epic C.1) — a shared, document-scoped row above the personal swatches:
+   same tile object (.cp-sw), plus an "on" ring when the active fill/stroke is currently
+   linked to it (so linked-vs-just-the-same-hex reads as visibly different at a glance). */
+.cp-globals-lab { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+.cp-globals-row { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; margin-bottom: 8px; }
+.cp-global.on { box-shadow: 0 0 0 2px var(--hl-on); }
 /* eyedropper sits in the swatch row as a clearly-bordered icon (first item) */
 .cp-eyedrop { background: var(--bg); color: var(--ink); display: inline-flex; align-items: center; justify-content: center; margin-right: 2px; border-color: var(--hair); }
 .cp-eyedrop:hover { background: var(--ink); color: var(--on-ink); border-color: var(--ink); box-shadow: none; }

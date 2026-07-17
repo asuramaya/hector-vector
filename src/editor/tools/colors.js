@@ -1,9 +1,7 @@
-// Colour systems (Epic C): Pattern fills + Recolor Artwork. Both build on the existing
-// defs foundation (_defs / _mintDefId / _gcDefs covers `pattern`; _reidRealIds keeps clones
-// independent) and the colour helpers in hv/color.js. Object.assign MIXIN — `this===editor`.
-//
-// (Global colours — C.1 — are deferred: SVG has no native named-colour primitive, so an
-//  edit-once-update-all swatch needs a colour-panel re-architecture out of scope here.)
+// Colour systems (Epic C): Global colours + Pattern fills + Recolor Artwork. All three build
+// on the existing defs foundation (_defs / _mintDefId / _gcDefs covers `pattern`/`linearGradient`;
+// _reidRealIds keeps ordinary clones independent) and the colour helpers in hv/color.js.
+// Object.assign MIXIN — `this===editor`.
 import { SVG_NS, nfmt, toHexColor, hexToRgb, rgbToHex, rgbToHsl, hslToRgb } from "../../hv/index.js";
 import { setStatus } from "../../app.js";
 
@@ -104,6 +102,20 @@ export const colorsMixin = {
     }
     this.pickColor({ title: "Recolor " + hex, color: hex, allowNone: false, onChange: (h) => this.recolorApply(targets, h || hex) });
   },
+  // Edit a global's OWN colour through the dock Colour panel (same "‹ Done" solo-picker idiom
+  // as recolor, above) — every shape referencing it re-renders live since they share the one def.
+  _editGlobalViaPanel(id) {
+    const g = this.listGlobalColors().find((x) => x.id === id); if (!g) return;
+    this.push("Edit global colour");
+    if (this._summonColor) this._summonColor();
+    const body = document.querySelector(".rail-section.color .section-body");
+    if (body && typeof this._renderColorPanel === "function") {
+      this._globalEditTarget = id;
+      this._renderColorPanel(body);
+      return;
+    }
+    this.pickColor({ title: "Edit " + (g.name || "global colour"), color: g.hex, allowNone: false, onChange: (h) => this.setGlobalColorHex(id, h || g.hex) });
+  },
   // H/S/L shift over ALL harvested colours, re-applied from a base snapshot each scrub so the
   // slider is absolute (coalesced into one undo). `kind` ∈ "h"|"s"|"l".
   _recolorEnsureBase() {
@@ -117,4 +129,83 @@ export const colorsMixin = {
     for (const b of this._recolorBase) b.el.setAttribute(b.attr, fromHSL(b.h + dh, b.s + ds, b.l + dl));
   },
   _recolorClearBase() { this._recolorBase = null; },
+
+  // ---------------- Global colours (C.1) ----------------
+  // A global colour is a single-stop <linearGradient id="hvgc{N}"> in defs, referenced by
+  // shapes via fill/stroke="url(#hvgc{N})" — exactly the same url() mechanism patterns and
+  // per-shape gradients already use, so it round-trips, garbage-collects, and clone-handles
+  // through the SAME existing machinery, not a parallel one. SVG's own spec-native "named
+  // solid colour" element is <solidColor>, but Chromium has never implemented it; a
+  // single-stop gradient is the portable equivalent every SVG renderer already draws as a
+  // flat fill. Two exemptions elsewhere make "global" actually mean global:
+  //   - _gcDefs() leaves "hvgc*" ids alone (a global must survive having zero current users —
+  //     it's a saved palette entry, not a per-shape resource that's orphaned garbage the
+  //     moment nothing points at it).
+  //   - _reidRealIds() leaves "hvgc*" refs alone on clone/paste (duplicating a shape must
+  //     keep SHARING the global, not fork a private copy — the opposite of an ordinary
+  //     per-shape gradient, where forking on duplicate is exactly the right behaviour).
+  _globalColorEl(id) { return this.stage && this.stage.querySelector("linearGradient#" + CSS.escape(id)); },
+  // The global a fill/stroke value references, or null (mirrors _patternOf's own parse).
+  _globalRefOf(n, attr) {
+    const v = ((n && n.getAttribute && n.getAttribute(attr)) || "").trim();
+    const m = /^url\(["']?#([^"')]+)["']?\)$/.exec(v);
+    return m && m[1].indexOf("hvgc") === 0 ? m[1] : null;
+  },
+  listGlobalColors() {
+    if (!this.stage) return [];
+    return [...this.stage.querySelectorAll('defs.hv-defs > linearGradient[id^="hvgc"]')].map((g) => {
+      const stop = g.querySelector("stop");
+      return { id: g.getAttribute("id"), name: g.getAttribute("data-name") || "", hex: (stop && stop.getAttribute("stop-color")) || "#000000" };
+    });
+  },
+  makeGlobalColor(hex, name) {
+    this.push("New global colour");
+    const id = this._mintDefId("hvgc");
+    const g = document.createElementNS(SVG_NS, "linearGradient");
+    g.setAttribute("id", id);
+    if (name) g.setAttribute("data-name", name);
+    const stop = document.createElementNS(SVG_NS, "stop");
+    stop.setAttribute("offset", "0"); stop.setAttribute("stop-color", hex || "#000000");
+    g.appendChild(stop);
+    this._defs().appendChild(g);
+    return id;
+  },
+  // Apply an existing global to `attr` ("fill" or "stroke") across the current selection. No
+  // push() here on purpose — this is called through the SAME live-coalescing path a plain
+  // colour swatch click already goes through (src/app.js's colApply-equivalent wraps it in
+  // beginCoalesce/commitCoalesce), so a click and a would-be drag both collapse into one undo.
+  applyGlobalColor(attr, id) {
+    if (!this._globalColorEl(id)) return;
+    this._eachSel((n) => { if (!this.isRaster(n)) n.setAttribute(attr, `url(#${id})`); });
+    this._renderInspector();
+  },
+  // Change what a global itself IS (affects every shape using it, live, via native SVG
+  // re-render — no re-walk needed since they all reference this ONE def). No push() here
+  // either: the caller pushes once on entering "edit this global" mode, same convention as
+  // recolorApply/recolorShift above.
+  setGlobalColorHex(id, hex) {
+    const g = this._globalColorEl(id); const stop = g && g.querySelector("stop"); if (!stop) return;
+    stop.setAttribute("stop-color", hex);
+    this._renderSelection();
+  },
+  renameGlobalColor(id, name) {
+    const g = this._globalColorEl(id); if (!g) return;
+    this.push("Rename global colour");
+    if (name) g.setAttribute("data-name", name); else g.removeAttribute("data-name");
+  },
+  // Unlink every shape currently pointing at this global to its OWN literal hex first — a
+  // colour a shape HAD is not a colour it should lose just because the global registry entry
+  // is going away — then remove the def.
+  deleteGlobalColor(id) {
+    const g = this._globalColorEl(id); if (!g || !this.stage) return;
+    const stop = g.querySelector("stop"); const hex = (stop && stop.getAttribute("stop-color")) || "#000000";
+    this.push("Delete global colour");
+    // `id` is always editor-minted (_mintDefId → "hvgc" + a number), never user text, so it's
+    // safe to embed directly in the attribute-value selector below.
+    for (const attr of ["fill", "stroke"]) {
+      this.stage.querySelectorAll(`[${attr}="url(#${id})"]`).forEach((n) => n.setAttribute(attr, hex));
+    }
+    g.remove();
+    this._renderSelection(); this._renderInspector();
+  },
 };

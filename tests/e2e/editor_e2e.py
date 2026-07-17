@@ -511,7 +511,7 @@ def main():
         check("picker shows a base swatch palette", picker["base"] >= 10, f"base={picker['base']}")
         page.evaluate("""() => { const el = document.querySelector('.cp-hex input');
             el.value = '123456'; el.dispatchEvent(new Event('input', { bubbles: true })); }""")
-        page.click(".cp-sw-add"); page.wait_for_timeout(40)
+        page.click(".cp-swatches .cp-sw-add"); page.wait_for_timeout(40)   # scoped: Epic C.1's Global Colours row now has its OWN .cp-sw-add too
         saved = page.evaluate("() => JSON.parse(localStorage.getItem('hector-vector:swatches') || '[]')")
         first_hex = (saved[0].get("c") if (saved and isinstance(saved[0], dict)) else (saved[0] if saved else None))
         check("saving a swatch persists it", bool(saved) and first_hex.lower() == "#123456", f"saved={saved}")
@@ -2523,6 +2523,131 @@ def main():
         check("recolor swatch click → contextual dock Colour panel (Recolor mode, not modal/embedded), live-applies, Done returns to duo",
               rcui["hasSwatch"] and rcui["targetSet"] and rcui["noModal"] and rcui["notEmbedded"] and rcui["inDockColour"]
               and rcui["hasDoneBar"] and rcui["fieldWide"] and rcui["swIntact"] and rcui["liveApply"] and rcui["doneClears"], str(rcui))
+
+        # Global colours (Epic C.1): a shared, DOCUMENT-scoped palette (unlike the personal
+        # localStorage swatches above) — a single-stop <linearGradient id="hvgcN"> in defs,
+        # referenced via fill/stroke="url(#hvgcN)". Editing it updates every shape sharing it
+        # LIVE (same def, native SVG re-render — no re-walk). The two integration points that
+        # make "global" actually mean global: _gcDefs() must never reap an hvgc* entry just
+        # because nothing currently points at it, and _reidRealIds() must never fork a private
+        # copy when a globally-coloured shape is duplicated (the opposite of an ordinary
+        # per-shape gradient, where forking on duplicate is exactly right).
+        section("Global colours: a shared, document-scoped, live-linked palette (Epic C.1)")
+        gc = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+              + '<rect data-hv-id="a" x="10" y="10" width="20" height="20" fill="#ff0000"/>'
+              + '<rect data-hv-id="b" x="40" y="10" width="20" height="20" fill="#00ff00"/></svg>', 'gc1');
+            editor.selection = new Set(['a']); editor._renderInspector();
+            const id = editor.makeGlobalColor('#ff0000', 'Brand Red');
+            editor.applyGlobalColor('fill', id);
+            o.aLinked = editor.nodeById('a').getAttribute('fill') === 'url(#'+id+')';
+            o.listedOnce = editor.listGlobalColors().length === 1 && editor.listGlobalColors()[0].name === 'Brand Red';
+
+            editor.selection = new Set(['b']); editor._renderInspector();
+            editor.applyGlobalColor('fill', id);
+            o.bLinked = editor.nodeById('b').getAttribute('fill') === 'url(#'+id+')';
+
+            // Editing the global updates the ONE def both shapes share — no per-shape re-apply.
+            editor.setGlobalColorHex(id, '#123456');
+            o.stopUpdated = editor.stage.querySelector('linearGradient#'+id+' stop').getAttribute('stop-color') === '#123456';
+
+            // Duplicating a globally-coloured shape must keep SHARING it, not fork a private
+            // copy (_reidRealIds' ordinary clone-independence behaviour, deliberately skipped
+            // for "hvgc*" ids) — the opposite bug would silently break "global" the first time
+            // anyone duplicated an object.
+            editor.selection = new Set(['a']); editor._renderInspector();
+            editor.duplicate();
+            const dupId = [...editor.selection][0];
+            o.dupShares = editor.nodeById(dupId).getAttribute('fill') === 'url(#'+id+')';
+            o.stillOneDef = editor.stage.querySelectorAll('defs [id^="hvgc"]').length === 1;
+            editor.undo();
+
+            // _gcDefs() must not reap a global just because nothing points at it right now —
+            // it's a saved palette entry, not per-shape garbage. (applyFill/applyGlobalColor
+            // push no undo entry of their own by design — the real UI wraps them in begin/
+            // commitCoalesce — so re-linking explicitly here, not undo(), is what actually
+            // gets both shapes back onto the global for the round-trip check below.)
+            editor.selection = new Set(['a']); editor._renderInspector();
+            editor.applyFill('#ff9900');   // 'a' no longer references the global...
+            editor.selection = new Set(['b']); editor._renderInspector();
+            editor.applyFill('#ff9900');   // ...neither does 'b' now: zero current references
+            o.survivesZeroRefs = editor.listGlobalColors().length === 1;
+            editor.applyGlobalColor('fill', id);
+            editor.selection = new Set(['a']); editor._renderInspector();
+            editor.applyGlobalColor('fill', id);
+
+            // Round-trip: the registry AND every link are ordinary SVG/CSS-free markup, so
+            // serialize()/reopen must carry both through with no special-casing at all.
+            const saved = editor.serialize();
+            window.mountStageFromText(saved, 'gc1-roundtrip');
+            o.roundtripList = editor.listGlobalColors();
+            o.roundtripLinks = editor.stage.querySelectorAll('[fill^="url(#hvgc"]').length;
+
+            editor.renameGlobalColor(id, 'Renamed');
+            o.renamed = editor.listGlobalColors()[0].name === 'Renamed';
+
+            // Delete unlinks every referencing shape to its OWN literal hex first — a colour a
+            // shape HAD is not a colour it should lose just because the registry entry is gone.
+            editor.deleteGlobalColor(id);
+            o.afterDeleteFills = [...editor.stage.querySelectorAll('[data-hv-id]')].map((n) => n.getAttribute('fill'));
+            o.defGone = editor.stage.querySelectorAll('defs [id^="hvgc"]').length === 0;
+            return o; }""")
+        check("global colours: create+apply, shared by 2 shapes, editing the def updates both live",
+              gc["aLinked"] and gc["listedOnce"] and gc["bLinked"] and gc["stopUpdated"], str(gc))
+        check("global colours: duplicating a linked shape SHARES the global, never forks a private copy",
+              gc["dupShares"] and gc["stillOneDef"], str(gc))
+        check("global colours: survive having zero current references (not per-shape garbage)",
+              gc["survivesZeroRefs"])
+        check("global colours: registry + every link round-trip through serialize()/reopen untouched",
+              len(gc["roundtripList"]) == 1 and gc["roundtripList"][0]["hex"] == "#123456" and gc["roundtripLinks"] == 2,
+              str(gc["roundtripList"]))
+        check("global colours: rename updates the registry entry",
+              gc["renamed"])
+        check("global colours: delete unlinks every referencing shape to a literal hex and removes the def",
+              gc["afterDeleteFills"] == ["#123456", "#123456"] and gc["defGone"], str(gc["afterDeleteFills"]))
+
+        # The same thing, through the REAL Colour panel UI (real clicks, not editor.* calls) —
+        # the wiring in src/ui/colorpicker.js + src/app.js is what a user actually touches.
+        gcui = page.evaluate(r"""async () => {
+            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+              + '<rect data-hv-id="a" x="10" y="10" width="20" height="20" fill="#ff0000"/></svg>', 'gcui');
+            editor.selection = new Set(['a']); editor._renderInspector();
+            await wait(50);
+            if (window.__docks) window.__docks.showColor();
+            await wait(50);
+            return { rowVisible: !!document.querySelector('.rail-section.color .cp-globals') && !document.querySelector('.rail-section.color .cp-globals').hidden,
+                     addVisible: !!document.querySelector('.rail-section.color .cp-globals-row .cp-sw-add') };
+        }""")
+        check("global colours: the panel row (+ its '+' button) shows even with none created yet",
+              gcui["rowVisible"] and gcui["addVisible"], str(gcui))
+        gc_add = page.locator(".rail-section.color .cp-globals-row .cp-sw-add")
+        gc_add.click()
+        page.wait_for_selector(".hv-float-input input", timeout=3000)
+        page.locator(".hv-float-input input").fill("Brand Red")
+        page.locator(".hv-float-input input").press("Enter")
+        page.wait_for_timeout(150)
+        check("global colours (UI): '+' -> name prompt -> creates AND applies to the selection",
+              page.locator(".rail-section.color .cp-globals-row .cp-global").count() == 1
+              and page.evaluate("() => editor.nodeById('a').getAttribute('fill')").startswith("url(#hvgc"))
+        page.locator(".rail-section.color .cp-globals-row .cp-global").first.click(button="right")
+        page.wait_for_selector(".context-menu", timeout=3000)
+        page.get_by_text("Edit colour…", exact=True).click()
+        page.wait_for_timeout(120)
+        check("global colours (UI): right-click -> Edit colour… enters the same Done-bar solo mode as Recolor",
+              page.locator(".rail-section.color .cp-recolor-done").is_visible())
+        page.locator(".rail-section.color .cp-recolor-done").click()
+        page.wait_for_timeout(120)
+        page.locator(".rail-section.color .cp-globals-row .cp-global").first.click(button="right")
+        page.wait_for_selector(".context-menu", timeout=3000)
+        page.get_by_text("Delete", exact=True).click()
+        page.wait_for_timeout(120)
+        check("global colours (UI): right-click -> Delete removes the swatch and unlinks the shape",
+              page.locator(".rail-section.color .cp-globals-row .cp-global").count() == 0
+              and page.evaluate("() => editor.nodeById('a').getAttribute('fill')") == "#ff0000")
+        mount_ctl(page)
+
         # Inspector property groups are collapsible (caret in the title), fold on click, hide their
         # rows when collapsed, and remember open/closed across the full panel rebuild (localStorage).
         section("Inspector: collapsible property groups")

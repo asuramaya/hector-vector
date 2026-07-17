@@ -72,6 +72,7 @@ export function openColorPicker(opts) {
         <label class="cp-inp cp-alpha-num">A<input data-k="a" type="number" min="0" max="100" /></label>
       </div>
     </div>
+    <div class="cp-globals" hidden></div>
     <div class="cp-swatches"></div>
     <div class="cp-actions">
       ${opts.allowNone ? `<button type="button" class="ghost-button cp-none">None</button>` : ""}
@@ -413,7 +414,52 @@ export function openColorPicker(opts) {
       sw.appendChild(grp);
     });
   };
-  renderSwatches(); renderRecent();
+  // Global colours (Epic C.1): a shared, DOCUMENT-scoped palette — unlike the swatches above,
+  // which are a personal, cross-document localStorage palette. Only present when the caller
+  // wires opts.globals (the main fill/stroke duo panel does; artboard-bg/recolor pickers don't).
+  const globalsWrap = $(".cp-globals");
+  // Applying a global mutates the DOCUMENT (editor.applyGlobalColor sets fill/stroke to a
+  // url(#…) reference), which the picker's own hsv `st`/`targets` model can't represent — so
+  // this syncs the PREVIEW to the resolved hex without going through changed()/emit(), which
+  // would re-apply st as a literal colour and stomp the link right back off.
+  const syncAppliedGlobal = (hex) => {
+    const rgb = hv.hexToRgb(hex); if (!rgb) return;
+    setFromRgb(rgb.r, rgb.g, rgb.b); st.none = false;
+    if (duo) targets[active] = { a: st.a, none: false, h: st.h, s: st.s, v: st.v };
+    paint(); paintSide();
+  };
+  const renderGlobals = () => {
+    if (!opts.globals) { globalsWrap.hidden = true; return; }
+    const list = opts.globals.list();
+    globalsWrap.hidden = false;
+    globalsWrap.innerHTML = "";
+    const label = document.createElement("div"); label.className = "cp-globals-lab"; label.textContent = "Global colours";
+    globalsWrap.appendChild(label);
+    const row = document.createElement("div"); row.className = "cp-globals-row";
+    const activeId = opts.globals.activeId ? opts.globals.activeId() : null;
+    list.forEach((g) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "cp-sw cp-global";
+      b.style.background = g.hex; b.title = g.name ? `${g.name} (${g.hex})` : g.hex;
+      b.classList.toggle("on", g.id === activeId);
+      b.addEventListener("click", () => { opts.globals.apply(g.id); syncAppliedGlobal(g.hex); renderGlobals(); });
+      b.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        showContextMenu(e.clientX, e.clientY, [
+          { label: "Edit colour…", onClick: () => opts.globals.edit(g.id) },   // replaces the whole panel (edit mode) — no local refresh needed
+          { label: "Rename…", onClick: () => floatingInput({ title: "Global colour name", value: g.name || "", onCommit: (n) => { opts.globals.rename(g.id, n); renderGlobals(); } }) },
+          { label: "Delete", onClick: () => { opts.globals.remove(g.id); renderGlobals(); } },
+        ]);
+      });
+      row.appendChild(b);
+    });
+    const add = document.createElement("button"); add.type = "button"; add.className = "cp-sw cp-sw-add"; add.textContent = "+"; add.title = "Make the current colour a global";
+    add.addEventListener("click", () => {
+      floatingInput({ title: "New global colour", value: "", onCommit: (name) => { opts.globals.makeNew(curHex(), name); renderGlobals(); } });
+    });
+    row.appendChild(add);
+    globalsWrap.appendChild(row);
+  };
+  renderSwatches(); renderRecent(); renderGlobals();
   // Record a settled colour into recents (debounced so live dragging doesn't spam it).
   let recentT = null;
   const recordRecent = () => { clearTimeout(recentT); recentT = setTimeout(() => { if (!st.none) { pushRecent(curHex()); renderRecent(); } }, 700); };

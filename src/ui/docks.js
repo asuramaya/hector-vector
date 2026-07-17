@@ -165,7 +165,7 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
       const body = colorSection.querySelector(".section-body"); if (!body) return;
       const key = [...(editor.selection || [])].sort().join(",") + "|" + !!editor.artboardSelected;
       if (key === lastColorKey && body.querySelector(".cp-window")) return;
-      if (key !== lastColorKey) editor._recolorTarget = null;   // selection changed → leave Recolor mode
+      if (key !== lastColorKey) { editor._recolorTarget = null; editor._globalEditTarget = null; }   // selection changed → leave Recolor/global-edit mode
       lastColorKey = key; editor._renderColorPanel(body);
     }
     function renderPanels() { renderProps(); renderColor(); if (typeof renderLibrary === "function") renderLibrary(); if (typeof renderJobsPanel === "function") renderJobsPanel(); if (typeof renderProcessorPanel === "function") renderProcessorPanel(); }

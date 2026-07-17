@@ -606,6 +606,27 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
         onChange: (h) => editor.recolorApply(targets, h || hex) });
       return;
     }
+    // Edit-a-global mode (Epic C.1): same "‹ Done" solo-picker idiom, entered via a global
+    // swatch's right-click "Edit colour…" (editor._editGlobalViaPanel). Every shape referencing
+    // it re-renders live — they all share the ONE def, so there's nothing here to re-apply.
+    if (editor._globalEditTarget) {
+      const id = editor._globalEditTarget;
+      const g = editor.listGlobalColors().find((x) => x.id === id);
+      if (g) {
+        if (ftitle) ftitle.textContent = "Global colour";
+        hostEl.innerHTML = "";
+        const bar = document.createElement("div"); bar.className = "cp-recolor-bar";
+        const done = document.createElement("button"); done.type = "button"; done.className = "ghost-button cp-recolor-done"; done.textContent = "‹ Done";
+        done.addEventListener("click", () => { editor._globalEditTarget = null; editor._renderColorPanel(hostEl); });
+        const lab = document.createElement("span"); lab.className = "cp-recolor-lab"; lab.textContent = "Editing " + (g.name || "global colour");
+        bar.append(done, lab); hostEl.appendChild(bar);
+        const pickerHost = document.createElement("div"); pickerHost.className = "cp-recolor-host"; hostEl.appendChild(pickerHost);
+        colorCtl = openColorPicker({ title: "Edit global colour", host: pickerHost, color: g.hex, allowNone: false,
+          onChange: (h) => editor.setGlobalColorHex(id, h || g.hex) });
+        return;
+      }
+      editor._globalEditTarget = null;   // it was deleted from elsewhere (e.g. another right-click) — fall through
+    }
     // Nothing selected → an empty state, NOT the full (tall) duo picker. Rendering the
     // picker with no target made the panel overflow when expanded-but-empty.
     if (!editor.artboardSelected && (!editor.selection || editor.selection.size === 0)) {
@@ -633,6 +654,18 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
         stroke: { color: cur("stroke"), alpha: curAlpha("stroke"), paint: curPaint("stroke") },
         apply: colApply,
         applyGradient: colApplyGradient,   // enables the picker's gradient editor (objects only)
+      },
+      // Global colours (Epic C.1): a shared registry, separate from the hsv duo model above —
+      // applying/editing one mutates the document directly (url(#…) references), never a
+      // literal hex through `apply`, so it needs its own capability rather than overloading duo.
+      globals: {
+        list: () => editor.listGlobalColors(),
+        activeId: () => { const n = firstSel(); return n ? editor._globalRefOf(n, active) : null; },
+        apply: (id) => { if (!coalescing) { editor.beginCoalesce(); coalescing = true; } editor.applyGlobalColor(active, id); scheduleColorCommit(); },
+        makeNew: (hex, name) => { const id = editor.makeGlobalColor(hex, name); editor.applyGlobalColor(active, id); },
+        rename: (id, name) => editor.renameGlobalColor(id, name),
+        remove: (id) => editor.deleteGlobalColor(id),
+        edit: (id) => editor._editGlobalViaPanel(id),
       },
     });
   };
