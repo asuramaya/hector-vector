@@ -27,6 +27,7 @@ import { marqueeMixin } from "./editor/tools/marquee.js";
 import { nodeMixin } from "./editor/tools/node.js";
 import { transformMixin } from "./editor/tools/transform.js";
 import { textMixin } from "./editor/tools/text.js";
+import { textStylesMixin } from "./editor/tools/textstyles.js";
 import { masksMixin } from "./editor/tools/masks.js";
 import { expandMixin } from "./editor/tools/expand.js";
 import { widthMixin } from "./editor/tools/width.js";
@@ -2754,7 +2755,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, colorsMixin, isolationMixin, symbolsMixin, effectsMixin, repeatMixin, artboardsMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, textStylesMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, colorsMixin, isolationMixin, symbolsMixin, effectsMixin, repeatMixin, artboardsMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 

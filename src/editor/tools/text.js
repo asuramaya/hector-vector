@@ -15,6 +15,7 @@ import { SVG_NS, bakeMatrixInto } from "../../hv/index.js";
 import { setStatus } from "../../app.js";
 import { platform } from "../../ui/platform.js";
 import { numRow, selectRow, inspRow } from "../ui-rows.js";
+import { showContextMenu } from "../../ui/menus.js";
 
 // Curated font stacks for the MVP picker (T6). The real registry + Google-Fonts search
 // (T11/#58) replaces this list with a searchable, on-demand-loaded catalogue; the current
@@ -492,6 +493,7 @@ export const textMixin = {
       if (value == null || value === "" || value === false) n.removeAttribute(name);
       else n.setAttribute(name, String(value));
       if (reflow) this._reflowText(n);
+      this._syncTextStyleFrom(n);   // Epic P.1: cascade to every other object sharing n's style
     }
     if (styleKey) this._textStyle()[styleKey] = value;
     if (name === "font-weight" || name === "font-style") this._ensureTextFonts();
@@ -512,6 +514,7 @@ export const textMixin = {
     const lsC = common((n) => parseFloat(n.getAttribute("letter-spacing")) || 0);
     const lhC = common((n) => this._lineHeightOf(n));
     const rows = [];
+    rows.push(this._textStyleRow(reads));
     // Inject the current stack as an option if it's outside the curated list (e.g. a font
     // loaded by the registry later) so it still shows selected rather than blank.
     rows.push(this._fontRow(famC));
@@ -594,6 +597,44 @@ export const textMixin = {
       });
     });
     return inspRow("Font", btn);
+  },
+
+  // The Style row (Epic P.1): apply/save/rename/detach/delete a named text style, via a
+  // context menu off one button — mirrors the swatch-folder header's right-click menu.
+  // Editing Font/Size/Weight/… below this row on a styled object propagates back into the
+  // shared style automatically (_syncTextStyleFrom, wired into the setters above); there's
+  // no separate "update style from selection" action to remember.
+  _textStyleRow(reads) {
+    const ids = new Set(reads.map((n) => this._styleIdOf(n)).filter(Boolean));
+    const singleId = ids.size === 1 ? [...ids][0] : null;
+    const singleDef = singleId ? this._textStyleDef(singleId) : null;
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "insp-action";
+    btn.textContent = singleDef ? singleDef.name : (ids.size > 1 ? "Mixed styles" : "No style");
+    btn.title = "Apply, save, rename, detach or delete a named text style";
+    btn.addEventListener("click", (e) => {
+      const items = [];
+      const styles = this._textStyles();
+      for (const def of styles) {
+        items.push({ label: (def.id === singleId ? "✓ " : "") + def.name, onClick: () => this.applyTextStyle(def.id) });
+      }
+      if (styles.length) items.push({ type: "sep" });
+      items.push({
+        label: "Save selection as new style…",
+        onClick: () => this._promptTextStyleName("New text style", "", (nm) => this.makeTextStyle(nm)),
+      });
+      if (singleDef) {
+        items.push({ type: "sep" });
+        items.push({
+          label: "Rename style…",
+          onClick: () => this._promptTextStyleName("Rename text style", singleDef.name, (nm) => this.renameTextStyle(singleId, nm)),
+        });
+        items.push({ label: "Detach from style", onClick: () => this.detachTextStyle() });
+        items.push({ label: "Delete style", onClick: () => this.deleteTextStyle(singleId) });
+      }
+      showContextMenu(e.clientX, e.clientY, items);
+    });
+    return inspRow("Text style", btn);
   },
   // Make sure the real weight/style face of any web font in the selection is loaded (the
   // browser only fetches the regular 400 on pick). No-op for system fonts (we only chase a
@@ -757,6 +798,7 @@ export const textMixin = {
       if (v == null || v === "" || isNaN(v)) n.removeAttribute(name);
       else n.setAttribute(name, String(v));
       if (reflow) this._reflowText(n);
+      this._syncTextStyleFrom(n);   // Epic P.1: cascade to every other object sharing n's style
     }
     if (styleKey && v != null && !isNaN(v)) this._textStyle()[styleKey] = v;
     this._renderSelection();
@@ -766,7 +808,7 @@ export const textMixin = {
   _applyTextLineHeight(v) {
     if (v == null || isNaN(v) || v <= 0) return;
     const texts = this.selectedNodes().filter((n) => n.tagName.toLowerCase() === "text");
-    for (const n of texts) { n.setAttribute("data-hv-line-height", String(v)); this._reflowText(n); }
+    for (const n of texts) { n.setAttribute("data-hv-line-height", String(v)); this._reflowText(n); this._syncTextStyleFrom(n); }
     this._textStyle().lineHeight = v;
     this._renderSelection();
   },
