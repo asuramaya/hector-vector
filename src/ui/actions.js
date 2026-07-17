@@ -157,6 +157,7 @@ export const TOOL_WHY = {
   "tool:line":         ["Line", "Drag out a straight line"],
   "tool:text":         ["Text", "Place some type and start typing"],
   "tool:width":        ["Width", "Make a stroke thicker in some places than others"],
+  "tool:envelope":     ["Envelope", "Drag a grid to bend everything inside it"],
   "tool:shapebuilder": ["Shape Builder", "Merge overlapping shapes by painting across them"],
   "tool:scissors":     ["Scissors", "Snip a path open at a single point"],
   "tool:knife":        ["Knife", "Slice clean through a shape"],
@@ -219,6 +220,7 @@ const FIND = {
   "tool:line":       "stroke straight rule",
   "tool:text":       "type font write letters words label title",
   "tool:width":      "thick thin taper swell weight",
+  "tool:envelope":   "mesh grid bend distort warp cage",
   "tool:shapebuilder": "merge combine paint join",
   "tool:scissors":   "snip open split break path",
   "tool:knife":      "slice cut split divide",
@@ -253,6 +255,13 @@ const VERB_FIND = [
   ["Shear", "slant skew italic"],
   ["Transform again", "repeat last"],
   ["Repeat", "grid radial mirror array duplicate many"],
+  ["Warp: Arc", "bend curve banner distort"],
+  ["Warp: Bulge", "inflate push swell distort"],
+  ["Warp: Flag", "ripple wave wavy distort"],
+  ["Warp: Fisheye", "lens magnify bulge distort"],
+  ["Make envelope with top object", "mesh grid bend distort cage conform fit"],
+  ["Make envelope", "mesh grid bend distort cage"],
+  ["Make gradient mesh", "colour color blend patch multi"],
 ];
 const verbFind = (label) => (VERB_FIND.find(([p]) => label.startsWith(p)) || [null, ""])[1];
 export const findWords = (key, label) => FIND[key] || (label ? verbFind(label) : "") || "";
@@ -312,6 +321,13 @@ const VERB_WHY = [
   ["Shear", "Slant it"],
   ["Transform again", "Repeat the last transform"],
   ["Repeat", "Duplicate it in a pattern"],
+  ["Warp: Arc", "Bend it along a smooth curve, like a banner"],
+  ["Warp: Bulge", "Push the middle outward, like it's inflated"],
+  ["Warp: Flag", "Ripple it side to side, like cloth in the wind"],
+  ["Warp: Fisheye", "Magnify the centre, like a wide-angle lens"],
+  ["Make envelope with top object", "Fit everything else inside the topmost shape's bounds"],
+  ["Make envelope", "Add a draggable grid to bend it"],
+  ["Make gradient mesh", "Blend several colours across it, corner to corner"],
 ];
 const verbWhy = (label) => (VERB_WHY.find(([p]) => label.startsWith(p)) || [null, ""])[1];
 

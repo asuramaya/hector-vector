@@ -627,6 +627,27 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       }
       editor._globalEditTarget = null;   // it was deleted from elsewhere (e.g. another right-click) — fall through
     }
+    // Mesh-point edit mode (Epic D.4): a swatch in the Gradient Mesh inspector group routes
+    // here — same solo-picker idiom as Recolor above, editing one control point's colour.
+    if (editor._meshPointTarget) {
+      const { gid, row, col } = editor._meshPointTarget;
+      const g = editor.nodeById(gid);
+      const spec = g ? editor._meshSpec(g) : null;
+      if (g && spec && spec.colors[row] && spec.colors[row][col] != null) {
+        if (ftitle) ftitle.textContent = "Mesh point";
+        hostEl.innerHTML = "";
+        const bar = document.createElement("div"); bar.className = "cp-recolor-bar";
+        const done = document.createElement("button"); done.type = "button"; done.className = "ghost-button cp-recolor-done"; done.textContent = "‹ Done";
+        done.addEventListener("click", () => { editor._meshPointTarget = null; editor._renderColorPanel(hostEl); });
+        const lab = document.createElement("span"); lab.className = "cp-recolor-lab"; lab.textContent = `Point ${row + 1}, ${col + 1}`;
+        bar.append(done, lab); hostEl.appendChild(bar);
+        const pickerHost = document.createElement("div"); pickerHost.className = "cp-recolor-host"; hostEl.appendChild(pickerHost);
+        colorCtl = openColorPicker({ title: "Mesh point", host: pickerHost, color: spec.colors[row][col], allowNone: false,
+          onChange: (h) => editor.setMeshColor(g, row, col, h || spec.colors[row][col]) });
+        return;
+      }
+      editor._meshPointTarget = null;
+    }
     // Nothing selected → an empty state, NOT the full (tall) duo picker. Rendering the
     // picker with no target made the panel overflow when expanded-but-empty.
     if (!editor.artboardSelected && (!editor.selection || editor.selection.size === 0)) {
@@ -1291,6 +1312,7 @@ document.addEventListener("keydown", (e) => {
   if (e.shiftKey && e.key === "E") { editor.setTool("eraser"); return; }         // Shift+E
   if (e.shiftKey && e.key === "C") { editor.setTool("scissors"); return; }       // Shift+C
   if (e.shiftKey && e.key === "K") { editor.setTool("knife"); return; }          // Shift+K
+  if (e.shiftKey && e.key === "W") { editor.setTool("envelope"); return; }       // Shift+W
   if (editor.tool === "eraser" && (e.key === "[" || e.key === "]")) { e.preventDefault(); editor.adjustEraser(e.key === "]" ? 3 : -3); editor._showHint(); return; }
   if (e.key === "v" || e.key === "V") { editor.setTool("select"); editor.clearXform(); return; }
   if (e.key === "a" || e.key === "A") { editor.setTool("node"); return; }

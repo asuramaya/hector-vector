@@ -2462,6 +2462,178 @@ def main():
         check("blend: 2 shapes → parametric group (endpoints+steps), colour+shape interp, steps regen, reverse, expand+undo, round-trips",
               bn["group"] and bn["origGone"] and bn["childCount"] and bn["midPlaced"] and bn["midColour"]
               and bn["regen"] and bn["reverse"] and bn["serOk"] and bn["expanded"] and bn["undoOk"], str(bn))
+
+        # Warp (Epic D.1): parametric preset deformation (arc/bulge/flag/fisheye) over the
+        # selection's combined bbox, as one data-hv-warp group — same shape as Blend above.
+        # flattenSubpaths only returns a path's OWN vertices (a plain rect has just 4), and this
+        # module's formulas are all zero at x=0/x=1 or r=maxR — so the group must DENSELY
+        # resample before deforming, or a rectangle would render completely untouched. That was
+        # the actual bug caught while building this (see src/editor/tools/warp.js's resample()).
+        section("Warp: parametric preset deformation — arc, bulge, flag, fisheye (Epic D.1)")
+        wp = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100"><rect data-hv-id="r" x="10" y="10" width="80" height="80" fill="#3366cc"/></svg>','wp');
+            editor.setTool('select'); editor.selection = new Set(['r']); editor.artboardSelected = false;
+            const acts = editor._objectActions(editor.selectedNodes()).map((a) => a.label);
+            o.menuHasAll = ['Warp: Arc', 'Warp: Bulge', 'Warp: Flag', 'Warp: Fisheye'].every((l) => acts.includes(l));
+            editor.makeWarp('arc');
+            const g = editor.nodeById([...editor.selection][0]);
+            o.group = !!g && g.tagName.toLowerCase() === 'g' && g.hasAttribute('data-hv-warp');
+            o.origGone = !editor.stage.querySelector('rect[data-hv-id]');
+            o.oneChild = g.querySelectorAll('path[data-hv-id]').length === 1;
+            // The whole point of the fix above: a plain rectangle must actually DEFORM, not just
+            // reproduce its own 4 corners untouched (bbox height changes; width (the arc's own
+            // axis) does not, since Arc only bends vertically).
+            const bbArc = g.children[0].getBBox();
+            o.arcBent = Math.round(bbArc.width) === 80 && Math.abs(bbArc.height - 80) > 5;
+            editor.setWarpParam(g, 'type', 'bulge');
+            editor.setWarpParam(g, 'amount', 0.8);
+            const bbBulge = g.children[0].getBBox();
+            o.bulgeGrows = bbBulge.width > 90 && bbBulge.height > 90;   // pushed outward on both axes
+            const ser = editor.serialize();
+            o.serOk = ser.includes('<path') && !ser.includes('data-hv-') && !ser.includes('data-hv-warp');
+            editor.expandWarp(g);
+            o.expanded = !g.hasAttribute('data-hv-warp') && g.querySelectorAll('path').length === 1;
+            editor.undo(); o.undoOk = editor.stage.querySelector('[data-hv-warp]') !== null;
+            return o; }""")
+        check("warp: Actions menu offers all 4 presets for a fillable selection",
+              wp["menuHasAll"])
+        check("warp: preset → parametric group, original gone, ONE deformed child (a rect's own 4 corners are not enough to bend — must resample)",
+              wp["group"] and wp["origGone"] and wp["oneChild"] and wp["arcBent"], str(wp))
+        check("warp: setWarpParam regenerates (type + amount), Bulge pushes the bbox outward on both axes",
+              wp["bulgeGrows"], str(wp))
+        check("warp: round-trips clean (no data-hv-* survives save), Expand bakes the spec, undo restores it",
+              wp["serOk"] and wp["expanded"] and wp["undoOk"], str(wp))
+
+        # Envelope distort (Epic D.2/D.3): a draggable 3x3 control grid bilinearly warps
+        # whatever's wrapped in it, cell by cell (not one global bbox scale — the CENTER grid
+        # point genuinely bends a circle, which a corners-only implementation couldn't do).
+        # "...with top object" seeds the grid's rest bounds from the topmost selected shape and
+        # consumes it. Also exercises a real bug this session found in passing: _renderSelection()
+        # unconditionally wipes the overlay right after setTool() mounts width/envelope handles,
+        # silently erasing them until the tool's first click/drag self-healed it — fixed by
+        # re-mounting both there too (curvature.js).
+        section("Envelope distort: draggable grid + make-with-top-object (Epic D.2/D.3)")
+        ev = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="40" y="40" width="80" height="80" fill="#3366cc"/></svg>','ev1');
+            editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false;
+            const acts0 = editor._objectActions(editor.selectedNodes()).map(a=>a.label);
+            o.gateBefore = acts0.includes('Make envelope') && !acts0.includes('Make envelope with top object');
+            editor.makeEnvelope();
+            const gid=[...editor.selection][0], g=editor.nodeById(gid);
+            o.isGroup = !!g && g.tagName.toLowerCase()==='g' && editor.isEnvelopeGroup(g);
+            o.origGone = !editor.stage.querySelector('rect[data-hv-id="r1"]');
+            const spec0 = editor._envSpec(g);
+            o.grid3x3 = spec0.rows===3 && spec0.cols===3;
+            const acts1 = editor._objectActions(editor.selectedNodes()).map(a=>a.label);
+            o.gateAfter = !acts1.includes('Make envelope') && !acts1.includes('Make envelope with top object');
+            const bboxBefore = g.querySelector('path[data-hv-id]').getBBox();
+            editor.setEnvelopePoint(g, 2, 2, 160, 160);
+            const bboxAfter = g.querySelector('path[data-hv-id]').getBBox();
+            o.deforms = (bboxAfter.width > bboxBefore.width + 10) && (bboxAfter.height > bboxBefore.height + 10);
+            editor.resetEnvelope(g);
+            const bboxReset = g.querySelector('path[data-hv-id]').getBBox();
+            o.resetOk = Math.abs(bboxReset.width-80)<1 && Math.abs(bboxReset.height-80)<1;
+            const ser = editor.serialize(); o.serStripped = !ser.includes('data-hv-env');
+            editor.expandEnvelope(editor.nodeById(gid));
+            const gAfterExpand = editor.nodeById(gid);
+            o.expanded = !gAfterExpand.hasAttribute('data-hv-env');
+            editor.undo();
+            o.undoExpand = !!editor.nodeById(gid) && editor.nodeById(gid).hasAttribute('data-hv-env');
+            // a circle's boundary never sits exactly on a grid corner — proves the CENTER point
+            // (unreachable by a corners-only bbox scale) genuinely participates in the warp
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><circle data-hv-id="c1" cx="80" cy="80" r="40" fill="#9933cc"/></svg>','evc');
+            editor.setTool('select'); editor.selection=new Set(['c1']); editor.artboardSelected=false;
+            editor.makeEnvelope();
+            const gc = editor.nodeById([...editor.selection][0]);
+            const cBefore = gc.querySelector('path[data-hv-id]').getBBox();
+            editor.setEnvelopePoint(gc, 1, 1, 40, 190);
+            const cAfter = gc.querySelector('path[data-hv-id]').getBBox();
+            o.centerPointBendsCircle = cAfter.height > cBefore.height + 1.0;
+            // "with top object": topmost shape lends its bounds, then both inputs are consumed
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="big" x="10" y="10" width="150" height="150" fill="#3366cc"/><circle data-hv-id="top" cx="100" cy="80" r="30" fill="#cc3333"/></svg>','ev2');
+            editor.setTool('select'); editor.selection=new Set(['big','top']); editor.artboardSelected=false;
+            const acts2 = editor._objectActions(editor.selectedNodes()).map(a=>a.label);
+            o.gate2plus = acts2.includes('Make envelope with top object');
+            editor.makeEnvelopeWithTopObject();
+            o.bothGone = !editor.stage.querySelector('rect[data-hv-id="big"]') && !editor.stage.querySelector('circle[data-hv-id="top"]');
+            const gt = editor.nodeById([...editor.selection][0]);
+            const specT = editor._envSpec(gt);
+            o.seededFromTop = Math.abs(specT.bbox.x0-70)<2 && Math.abs(specT.bbox.y0-50)<2 && Math.abs(specT.bbox.x1-130)<2 && Math.abs(specT.bbox.y1-110)<2;
+            o.onlyBigWarped = specT.items.length===1;
+            // on-canvas tool: switching to it mounts 9 draggable grid handles (found+fixed a real
+            // bug in passing: _renderSelection() was wiping them the instant the tool was picked)
+            editor.setTool('envelope');
+            return o; }""")
+        check("envelope: Actions-menu gate (Make envelope / with-top-object), 3x3 grid, corner+circle-center deform, reset, expand+undo, round-trips",
+              ev["gateBefore"] and ev["isGroup"] and ev["origGone"] and ev["grid3x3"] and ev["gateAfter"] and ev["deforms"]
+              and ev["resetOk"] and ev["serStripped"] and ev["expanded"] and ev["undoExpand"] and ev["centerPointBendsCircle"], str(ev))
+        check("envelope with top object: 2+ gate, topmost shape's bounds seed the grid + both inputs consumed into one group",
+              ev["gate2plus"] and ev["bothGone"] and ev["seededFromTop"] and ev["onlyBigWarped"], str(ev))
+        page.wait_for_timeout(120)
+        handleCount = page.evaluate("() => document.querySelectorAll('.hv-envhandle').length")
+        check("envelope tool: switching to it actually mounts 9 grid handles in the live overlay (not wiped by _renderSelection)",
+              handleCount == 9, f"found {handleCount}")
+
+        # Gradient mesh (Epic D.4, SCOPED v1): a 4x4 colour-only grid, blended bilinearly per
+        # cell (same math as Envelope's position grid) and rasterized into an <image> clipped
+        # to the shape's own outline via a real <clipPath> in defs — SVG has no native mesh-
+        # gradient primitive, so this is the honest v1 (no draggable geometry, colour only).
+        section("Gradient mesh: colour-blended grid clipped to the shape (Epic D.4)")
+        gm = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="40" y="40" width="80" height="80" fill="#3366cc"/></svg>','gm1');
+            editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false;
+            const acts0 = editor._objectActions(editor.selectedNodes()).map(a=>a.label);
+            o.gateBefore = acts0.includes('Make gradient mesh');
+            editor.makeGradientMesh();
+            const gid=[...editor.selection][0], g=editor.nodeById(gid);
+            o.isGroup = !!g && g.tagName.toLowerCase()==='g' && editor.isMeshGroup(g);
+            o.origGone = !editor.stage.querySelector('rect[data-hv-id="r1"]');
+            const spec0 = editor._meshSpec(g);
+            o.grid4x4 = spec0.rows===4 && spec0.cols===4;
+            o.seededUniform = spec0.colors.flat().every(c => c === '#3366cc');
+            const acts1 = editor._objectActions(editor.selectedNodes()).map(a=>a.label);
+            o.gateAfter = !acts1.includes('Make gradient mesh');
+            const img = g.querySelector('image[data-hv-id]');
+            o.hasImage = !!img && (img.getAttribute('href')||'').startsWith('data:image/png');
+            o.clipped = /url\(#/.test(img.getAttribute('clip-path')||'');
+            o.clipDefExists = !!editor.stage.querySelector('clipPath#'+CSS.escape(spec0.clipId));
+            const hrefBefore = img.getAttribute('href');
+            editor.setMeshColor(g, 0, 0, '#ff0000');
+            o.colorEditRegen = g.querySelector('image[data-hv-id]').getAttribute('href') !== hrefBefore;
+            o.othersUnchanged = editor._meshSpec(g).colors[3][3] === '#3366cc';
+            const ser = editor.serialize();
+            o.serStripped = !ser.includes('data-hv-mesh'); o.serHasImage = ser.includes('<image') && ser.includes('clip-path');
+            editor.expandGradientMesh(editor.nodeById(gid));
+            o.expanded = !editor.nodeById(gid).hasAttribute('data-hv-mesh');
+            editor.undo();
+            o.undoExpand = !!editor.nodeById(gid) && editor.nodeById(gid).hasAttribute('data-hv-mesh');
+            return o; }""")
+        check("gradient mesh: Actions-menu gate, 4x4 uniform-seeded grid, real clip in defs, colour edit re-rasterizes (others untouched), expand+undo, round-trips",
+              gm["gateBefore"] and gm["isGroup"] and gm["origGone"] and gm["grid4x4"] and gm["seededUniform"] and gm["gateAfter"]
+              and gm["hasImage"] and gm["clipped"] and gm["clipDefExists"] and gm["colorEditRegen"] and gm["othersUnchanged"]
+              and gm["serStripped"] and gm["serHasImage"] and gm["expanded"] and gm["undoExpand"], str(gm))
+        # Real-UI path: the Mesh swatch grid only renders through docks.js's live Properties
+        # panel if the group-detection uses the raw selection (the same class of bug this
+        # session found for Blend/Repeat/Envelope) — open the ACTUAL panel and click a swatch.
+        open_ctx_panel(page)
+        page.wait_for_timeout(150)
+        meshSwatches = page.query_selector_all(".insp-mesh-swatch")
+        check("gradient mesh: 16 swatches render through the live Properties panel", len(meshSwatches) == 16, f"found {len(meshSwatches)}")
+        if meshSwatches:
+            meshSwatches[0].scroll_into_view_if_needed()
+            meshSwatches[0].click()
+            page.wait_for_timeout(150)
+            check("clicking a mesh swatch enters the solo mesh-point colour-panel mode",
+                  page.evaluate("() => editor._meshPointTarget") is not None)
+            done = page.query_selector(".cp-recolor-done")
+            if done:
+                done.scroll_into_view_if_needed(); done.click(); page.wait_for_timeout(150)
+            check("'‹ Done' clears mesh-point edit mode", page.evaluate("() => editor._meshPointTarget") is None)
+        mount_ctl(page)
+
         # Colour systems (Epic C): Pattern fills (top object → <pattern> in defs applied below;
         # tile scale/rotate via patternTransform; round-trips) + Recolor Artwork (harvest distinct
         # solid colours, remap one exactly, Hue/Sat/Light shift over all). (Global colours deferred.)
@@ -5101,7 +5273,7 @@ def main():
                 trim = mp.evaluate("""() => {
                     const t = document.querySelector('.toolstrip');
                     const before = t.scrollHeight - t.clientHeight;
-                    for (const k of ['tool:curvature','tool:line','tool:width','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser'])
+                    for (const k of ['tool:curvature','tool:line','tool:width','tool:envelope','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser'])
                         __layout.setHidden(k, true);
                     return { before, after: t.scrollHeight - t.clientHeight };
                 }""")
@@ -5308,14 +5480,14 @@ def main():
                     const t = document.querySelector('.toolstrip');
                     const before = t.scrollHeight - t.clientHeight;
                     let clicked = 0;
-                    for (const k of ['tool:curvature','tool:line','tool:width','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser']) {
+                    for (const k of ['tool:curvature','tool:line','tool:width','tool:envelope','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser']) {
                         const row = document.querySelector(`.picker-row[data-key="${k}"]`);
                         if (row) { row.querySelector('input[type=checkbox]').click(); clicked++; }
                     }
                     return { clicked, before, after: t.scrollHeight - t.clientHeight };
                 }""")
                 check("mobile: unticking tools in the picker trims the real rail, solved through the UI",
-                      trimmed["clicked"] == 7 and trimmed["before"] > 0 and trimmed["after"] == 0, str(trimmed))
+                      trimmed["clicked"] == 8 and trimmed["before"] > 0 and trimmed["after"] == 0, str(trimmed))
                 mp.evaluate("() => { const b = document.querySelector('[data-modal-close]'); if (b) b.click(); }")
                 mp.evaluate("() => __layout.reset()")
                 mp.wait_for_timeout(200)
