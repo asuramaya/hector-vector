@@ -3292,6 +3292,38 @@ def main():
         check("Download PNG emits an a[download$=.png] blob", bool(png) and str(png.get("name")).endswith(".png") and png.get("blob"), str(png))
         page.evaluate("closeModal()")
 
+        section("Export PDF: the one output format the browser can't produce itself (Epic O.1)")
+        # PDF is real vector output (cairosvg server-side, see hvserver/export_pdf.py) — the
+        # opposite path from PNG's browser-only canvas rasterise. Same modal, a Format select.
+        page.evaluate("window.app.exportFlow()")
+        page.wait_for_function("!document.querySelector('#modal-root').hidden", timeout=4000)
+        page.evaluate("""() => {
+            const sels = [...document.querySelectorAll('#modal-body select')];
+            const fmtSel = sels.find(s => [...s.options].some(o => o.value === 'pdf'));
+            fmtSel.value = 'pdf'; fmtSel.dispatchEvent(new Event('change', {bubbles:true}));
+        }""")
+        pdf_modal = page.evaluate("""() => ({
+            title: document.querySelector('#modal-title').textContent,
+            hasRender: [...document.querySelectorAll('#modal-body button')].some(b=>/Render PDF/.test(b.textContent)),
+            noSize: ![...document.querySelectorAll('#modal-body .form-section')].some(e=>e.textContent==='Size'),
+        })""")
+        check("switching Format to PDF retitles the modal, drops the Size section (vector, no target pixels)",
+              pdf_modal["title"] == "Export PDF" and pdf_modal["hasRender"] and pdf_modal["noSize"], str(pdf_modal))
+        page.evaluate("""() => { window.__pdf=null; const real=HTMLAnchorElement.prototype.click;
+            HTMLAnchorElement.prototype.click=function(){ if(this.download){ window.__pdf={name:this.download, blob:this.href.startsWith('blob:')}; return; } return real.call(this); }; }""")
+        page.evaluate("""() => { for (const b of document.querySelectorAll('#modal-body button')) if (/Render PDF/.test(b.textContent)) { b.click(); break; } }""")
+        page.wait_for_function("[...document.querySelectorAll('#modal-body button')].some(b=>/Download PDF/.test(b.textContent))", timeout=6000)
+        pdf_res = page.evaluate("""() => ({
+            buttons: [...document.querySelectorAll('#modal-body button')].map(b=>b.textContent.trim()),
+            noBrokenImg: !document.querySelector('#modal-body .export-preview img'),
+        })""")
+        check("server-side cairosvg render succeeds — Download PDF appears, no broken <img> preview attempted",
+              "Download PDF" in pdf_res["buttons"] and pdf_res["noBrokenImg"] and "Save to library" not in pdf_res["buttons"], str(pdf_res))
+        page.evaluate("""() => { for (const b of document.querySelectorAll('#modal-body button')) if (/Download PDF/.test(b.textContent)) { b.click(); break; } }""")
+        pdf = page.evaluate("window.__pdf")
+        check("Download PDF emits an a[download$=.pdf] blob", bool(pdf) and str(pdf.get("name")).endswith(".pdf") and pdf.get("blob"), str(pdf))
+        page.evaluate("closeModal()")
+
         section("known-problem fix: SVG export bakes placed-raster hrefs to data URIs (self-contained)")
         inl = page.evaluate("""async () => {
             const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><image href="/assets/hv_logo.svg" x="0" y="0" width="50" height="50"/></svg>';

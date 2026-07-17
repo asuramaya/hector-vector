@@ -104,6 +104,10 @@ from hvserver.documents import *  # noqa: F401,F403,E402
 # Re-exported so the HTTP handler + main() keep reaching them.
 from hvserver.system import *  # noqa: F401,F403,E402
 
+# PDF export (hvserver/export_pdf.py, Epic O.1): SVG -> real vector PDF via cairosvg
+# (an existing optional dependency). Re-exported so `server.export_pdf` resolves.
+from hvserver.export_pdf import export_pdf  # noqa: F401,E402
+
 # HTTP layer (hvserver/http.py, #29 split): the Handler request dispatcher + main() entry.
 # Highest fan-out (it calls every endpoint), so it imports last. Re-exported so `server.Handler`
 # / `server.main` resolve and `python server.py` (the `if __name__` guard below) still serves.

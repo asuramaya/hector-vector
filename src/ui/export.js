@@ -19,8 +19,8 @@ export function configureExport(deps) {
 // Test seam (window.app.setSaveByteCap): force/clear the cap without a giant raster.
 export function setSaveByteCap(n) { _saveByteCap = n; }
 
-let exportState = { mode: "scale", scale: 16, longest: 1024, width: 0, height: 0, background: "transparent" };
-let lastExport = null;   // { blob, url, name, w, h } — the most recent client render, reused by the result actions
+let exportState = { format: "png", mode: "scale", scale: 16, longest: 1024, width: 0, height: 0, background: "transparent" };
+let lastExport = null;   // { blob, url, name, w, h, format, target } — the most recent render, reused by the result actions
 
 // The SVG to export + its native size + an optional library save target. Prefer the
 // LIVE canvas (exports exactly what's shown, including unsaved edits) over the saved
@@ -129,6 +129,20 @@ function renderSvgToPngBlob(svgText, w, h, background) {
   });
 }
 
+// PDF export (Epic O.1): the one format the browser can't produce itself — there is no
+// client API that turns SVG into real PDF vector drawing commands, only a rasterised page.
+// So this is the one export path that leaves the browser: the server converts via cairosvg
+// (see hvserver/export_pdf.py). CLOUD build has no server — api() already fails fast with
+// "This needs the hector-vector desktop app.", surfaced the same way a missing-cairosvg
+// error is (both just land in the modal's existing catch block as a form-hint).
+async function renderSvgToPdfBlob(svgText, background) {
+  const data = await api("/api/export-pdf", "POST", { svg: svgText, background });
+  const bin = atob(data.pdf_base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: "application/pdf" });
+}
+
 function targetSizeFor(native) {
   const [nw, nh] = native || [0, 0];
   if (exportState.mode === "scale") {
@@ -171,7 +185,8 @@ export function openExportModal() {
   const src = currentExportSource();
   if (!src) { setStatus("Open or create a canvas first.", 2500); return; }
   const native = src.native;
-  openModal("Export PNG", true);
+  const isPdf = exportState.format === "pdf";
+  openModal(isPdf ? "Export PDF" : "Export PNG", true);
   modalSearchEl.hidden = true;
   const root = document.createElement("div");
   root.className = "form";
@@ -194,6 +209,13 @@ export function openExportModal() {
     catch { /* keep the plain preview */ }
   })();
 
+  root.appendChild(sectionTitle("Format"));
+  const fmtSel = makeSelectRaw(exportState.format, [
+    ["png", "PNG (raster image)"],
+    ["pdf", "PDF (vector, print-ready)"],
+  ], (v) => { exportState.format = v; openExportModal(); });
+  root.appendChild(fieldRow("Format", fmtSel));
+
   const sizeOut = document.createElement("div");
   sizeOut.className = "form-hint";
   const refreshSizeOut = () => {
@@ -201,27 +223,31 @@ export function openExportModal() {
     sizeOut.textContent = native ? `Native ${native[0]}×${native[1]} → output ${w}×${h} px` : `Output ${w}×${h} px`;
   };
 
-  root.appendChild(sectionTitle("Size"));
-  const modeSel = makeSelectRaw(exportState.mode, [
-    ["scale", "Multiply native (×N)"],
-    ["longest", "Longest side (px)"],
-    ["custom", "Custom width × height"],
-  ], (v) => { exportState.mode = v; openExportModal(); });
-  root.appendChild(fieldRow("Mode", modeSel));
+  // Size only means anything for a raster — a PDF exports its actual vector geometry at
+  // native scale, so there's nothing to pick.
+  if (!isPdf) {
+    root.appendChild(sectionTitle("Size"));
+    const modeSel = makeSelectRaw(exportState.mode, [
+      ["scale", "Multiply native (×N)"],
+      ["longest", "Longest side (px)"],
+      ["custom", "Custom width × height"],
+    ], (v) => { exportState.mode = v; openExportModal(); });
+    root.appendChild(fieldRow("Mode", modeSel));
 
-  if (exportState.mode === "scale") {
-    const presets = [2, 4, 8, 16, 32, 64];
-    const sel = makeSelectRaw(String(exportState.scale), presets.map((n) => [String(n), `×${n}`]), (v) => { exportState.scale = +v; refreshSizeOut(); });
-    root.appendChild(fieldRow("Scale", sel, "Each native unit becomes an N×N block."));
-  } else if (exportState.mode === "longest") {
-    const presets = [256, 512, 1024, 2048, 4096];
-    const sel = makeSelectRaw(String(exportState.longest), presets.map((n) => [String(n), `${n} px`]), (v) => { exportState.longest = +v; refreshSizeOut(); });
-    root.appendChild(fieldRow("Longest side", sel, "Aspect ratio is preserved."));
-  } else {
-    const wInp = makeNumberRaw(exportState.width || (native ? native[0] : 0), (v) => { exportState.width = v; refreshSizeOut(); });
-    const hInp = makeNumberRaw(exportState.height || (native ? native[1] : 0), (v) => { exportState.height = v; refreshSizeOut(); });
-    root.appendChild(fieldRow("Width", wInp));
-    root.appendChild(fieldRow("Height", hInp));
+    if (exportState.mode === "scale") {
+      const presets = [2, 4, 8, 16, 32, 64];
+      const sel = makeSelectRaw(String(exportState.scale), presets.map((n) => [String(n), `×${n}`]), (v) => { exportState.scale = +v; refreshSizeOut(); });
+      root.appendChild(fieldRow("Scale", sel, "Each native unit becomes an N×N block."));
+    } else if (exportState.mode === "longest") {
+      const presets = [256, 512, 1024, 2048, 4096];
+      const sel = makeSelectRaw(String(exportState.longest), presets.map((n) => [String(n), `${n} px`]), (v) => { exportState.longest = +v; refreshSizeOut(); });
+      root.appendChild(fieldRow("Longest side", sel, "Aspect ratio is preserved."));
+    } else {
+      const wInp = makeNumberRaw(exportState.width || (native ? native[0] : 0), (v) => { exportState.width = v; refreshSizeOut(); });
+      const hInp = makeNumberRaw(exportState.height || (native ? native[1] : 0), (v) => { exportState.height = v; refreshSizeOut(); });
+      root.appendChild(fieldRow("Width", wInp));
+      root.appendChild(fieldRow("Height", hInp));
+    }
   }
 
   root.appendChild(sectionTitle("Background"));
@@ -232,30 +258,34 @@ export function openExportModal() {
   ], (v) => { exportState.background = v; });
   root.appendChild(fieldRow("Fill", bgSel));
 
-  refreshSizeOut();
-  root.appendChild(sizeOut);
+  if (!isPdf) { refreshSizeOut(); root.appendChild(sizeOut); }
 
   const actions = document.createElement("div");
   actions.className = "form-actions";
   const go = document.createElement("button");
   go.type = "button"; go.className = "primary-button";
-  go.textContent = "Render PNG";
+  go.textContent = isPdf ? "Render PDF" : "Render PNG";
   go.addEventListener("click", async () => {
     go.disabled = true; go.textContent = "Rendering…";
-    const [w, h] = targetSizeFor(native);
     try {
-      // Browser-side rasterise (no cairosvg). Inline rasters + embed web fonts first so
-      // neither drops out of the isolated <img> render.
+      // Inline rasters + embed web fonts first so neither drops out of the isolated
+      // render — the same prep whichever format renders it.
       if (window.__fonts) await window.__fonts.fontsReady();
       let svgText = await inlineSvgImages(src.svg);
       svgText = await withEmbeddedFonts(svgText);
-      const blob = await renderSvgToPngBlob(svgText, w, h, exportState.background);
-      if (lastExport && lastExport.url) URL.revokeObjectURL(lastExport.url);
       const base = src.target ? src.target.name.replace(/\.svg$/i, "") : (defaultSaveName() || "export");
-      lastExport = { blob, url: URL.createObjectURL(blob), name: `${base}@${w}x${h}.png`, w, h, target: src.target };
+      if (lastExport && lastExport.url) URL.revokeObjectURL(lastExport.url);
+      if (isPdf) {
+        const blob = await renderSvgToPdfBlob(svgText, exportState.background);
+        lastExport = { blob, url: URL.createObjectURL(blob), name: `${base}.pdf`, format: "pdf", target: null };
+      } else {
+        const [w, h] = targetSizeFor(native);
+        const blob = await renderSvgToPngBlob(svgText, w, h, exportState.background);
+        lastExport = { blob, url: URL.createObjectURL(blob), name: `${base}@${w}x${h}.png`, w, h, format: "png", target: src.target };
+      }
       showExportResult();
     } catch (e) {
-      go.disabled = false; go.textContent = "Render PNG";
+      go.disabled = false; go.textContent = isPdf ? "Render PDF" : "Render PNG";
       const hint = document.createElement("div"); hint.className = "form-hint status-error"; hint.textContent = e.message; actions.appendChild(hint);
     }
   });
@@ -272,20 +302,25 @@ export function openExportModal() {
 function showExportResult() {
   const ex = lastExport;
   if (!ex) return;
+  const isPdf = ex.format === "pdf";
   modalTitleEl.textContent = "Exported";
   const root = document.createElement("div"); root.className = "form";
   root.appendChild(sectionTitle("Rendered"));
-  const preview = document.createElement("div"); preview.className = "export-preview";
-  const im = document.createElement("img"); im.src = ex.url; im.alt = ex.name; preview.appendChild(im); root.appendChild(preview);
+  if (!isPdf) {
+    // A PDF blob can't render into an <img> — there's no browser preview for it, only
+    // the PNG raster gets the on-canvas preview.
+    const preview = document.createElement("div"); preview.className = "export-preview";
+    const im = document.createElement("img"); im.src = ex.url; im.alt = ex.name; preview.appendChild(im); root.appendChild(preview);
+  }
   const info = document.createElement("div"); info.className = "form-hint";
-  info.textContent = `${ex.name} — ${ex.w}×${ex.h} px · ${fmtBytes(ex.blob.size)}`;
+  info.textContent = isPdf ? `${ex.name} · ${fmtBytes(ex.blob.size)}` : `${ex.name} — ${ex.w}×${ex.h} px · ${fmtBytes(ex.blob.size)}`;
   root.appendChild(info);
 
   const actions = document.createElement("div"); actions.className = "form-actions";
-  const dl = document.createElement("button"); dl.type = "button"; dl.className = "primary-button"; dl.textContent = "Download PNG";
-  dl.addEventListener("click", () => { downloadBlob(ex.name, ex.blob, "image/png"); setStatus(`Downloaded ${ex.name}.`, 2000); });
+  const dl = document.createElement("button"); dl.type = "button"; dl.className = "primary-button"; dl.textContent = isPdf ? "Download PDF" : "Download PNG";
+  dl.addEventListener("click", () => { downloadBlob(ex.name, ex.blob, isPdf ? "application/pdf" : "image/png"); setStatus(`Downloaded ${ex.name}.`, 2000); });
   actions.appendChild(dl);
-  if (ex.target) {
+  if (ex.target && !isPdf) {
     const saveBtn = ghostBtn("Save to library", async () => {
       saveBtn.disabled = true; saveBtn.textContent = "Saving…";
       try {
@@ -298,6 +333,8 @@ function showExportResult() {
     });
     actions.appendChild(saveBtn);
   }
+  // Opening a PDF blob URL in a new tab works fine — the browser's native PDF viewer
+  // renders it, same as any other PDF link.
   actions.appendChild(ghostBtn("Open", () => window.open(ex.url, "_blank", "noopener")));
   actions.appendChild(ghostBtn("Back", () => openExportModal()));
   actions.appendChild(ghostBtn("Done", () => closeModal()));
