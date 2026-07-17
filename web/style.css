@@ -2437,7 +2437,7 @@ text.hv-text-editing { visibility: hidden; }
   .mobilebar,
   .editor-grid > .toolstrip,
   .editor-grid > .actionbar,
-  .stage-wrap > .stage-toolbar,
+  .phone-ctxrow .stage-toolbar,
   .stage-wrap .panel-foot,
   .sheet-tabs { touch-action: pan-x; overscroll-behavior: contain; }
   /* ...and the vertical scrollers scroll themselves, never the page behind them. */
@@ -2501,27 +2501,30 @@ text.hv-text-editing { visibility: hidden; }
      and on a phone it was previously unreachable at any size. */
   .app.editor > .status-bar #rail-toggle { display: none; }
   .app.editor > .status-bar .bar-btn { width: 26px; height: 26px; font-size: 13px; }
-  /* The Arrange strip becomes the CONTEXTUAL bar: hidden while you draw, and slid in under the
-     canvas the moment something is selected (order:3 drops it below .stage-body). It carries the
-     ops you can only want with a selection — arrange, rename, duplicate and, crucially, DELETE,
-     which this stylesheet used to display:none outright, leaving no way at all to delete an
-     object on a phone. */
-  .stage-wrap > .stage-toolbar { display: none; }
-  .app.has-selection .stage-wrap > .stage-toolbar {
-    display: flex; order: 3;
+  /* The Arrange strip becomes the CONTEXTUAL bar: hidden while you draw, and shown above the
+     canvas the moment something is selected. formfactor.js relocates it into a fresh full-width
+     .phone-ctxrow wrapper (a sibling of mobilebar/toolstrip/stage-wrap/actionbar) rather than
+     leaving it nested in .stage-wrap — nested there, it's confined to the middle rail column,
+     too narrow to keep even the capped 7 tiles reachable without scrolling. It carries the ops
+     you can only want with a selection — arrange, rename, duplicate and, crucially, DELETE, which
+     this stylesheet used to display:none outright, leaving no way at all to delete an object on
+     a phone. */
+  .phone-ctxrow > .stage-toolbar { display: none; }
+  .app.has-selection .phone-ctxrow > .stage-toolbar {
+    display: flex;
     /* nowrap or it stacks into two rows and eats ~200px of canvas — it must scroll, not wrap.
        flex-start is load-bearing too: the desktop rule centres this bar, and centred flex content
        that overflows spills off the LEFT edge, where scrolling cannot reach it — Duplicate was
        sitting at x=-50, permanently unreachable. */
     flex-direction: row; flex-wrap: nowrap; justify-content: flex-start; align-items: center; gap: 8px;
     padding: 7px 10px; margin: 0;
-    border-width: 1px 0 0 0; border-top: 1px solid var(--line);
+    border-width: 0 0 1px 0; border-bottom: 1px solid var(--line);   /* it's above the canvas now, not below */
     overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
   }
-  .app.has-selection .stage-wrap > .stage-toolbar::-webkit-scrollbar { display: none; }
-  .app.has-selection .stage-wrap > .stage-toolbar .tool-button { width: 44px; height: 44px; font-size: 19px; flex: 0 0 auto; }
-  .app.has-selection .stage-wrap > .stage-toolbar .tool-vsep { width: 1px; height: 26px; margin: 0 3px; align-self: center; flex: 0 0 auto; }
+  .app.has-selection .phone-ctxrow > .stage-toolbar::-webkit-scrollbar { display: none; }
+  .app.has-selection .phone-ctxrow > .stage-toolbar .tool-button { width: 44px; height: 44px; font-size: 19px; flex: 0 0 auto; }
+  .app.has-selection .phone-ctxrow > .stage-toolbar .tool-vsep { width: 1px; height: 26px; margin: 0 3px; align-self: center; flex: 0 0 auto; }
 
   /* --- the always-on quick bar: undo/redo + canvas control, directly under the topbar --- */
   .mobilebar {
@@ -2539,56 +2542,65 @@ text.hv-text-editing { visibility: hidden; }
   .mobilebar .tool-button { width: 42px; height: 42px; font-size: 18px; flex: 0 0 auto; }
   .mobilebar .tool-sep { width: 1px; height: 24px; margin: 0 3px; align-self: center; flex: 0 0 auto; background: var(--line); }
 
-  /* --- shell: single column, canvas on top, the two bars beneath --- */
-  /* minmax(0,1fr) NOT 1fr: a bare 1fr track still resolves to its widest item's min-content,
-     and grid items default to min-width:auto, so the wide horizontal tool bars would blow the
-     column past the viewport (canvas pushed off-screen). minmax(0,…) + min-width:0 lets the
-     column stay at viewport width and the bars scroll INSIDE it. */
+  /* --- rails either side of the canvas, mirroring desktop's own spatial language ---
+     Portrait has the OPPOSITE resource profile from short landscape: plenty of HEIGHT, little
+     WIDTH. A horizontal strip (full viewport width, ~44-60px tall) spends the abundant axis and
+     taxes the scarce one; a vertical rail (viewport height, ~40-54px wide) does the reverse — so
+     tools and object-actions become rails here too, the same 3-column shape the landscape shell
+     below already proved out, just narrower-and-taller instead of shorter-and-wider. This also
+     means .actionbar no longer needs the Panels-sheet detour: after formfactor.js's `ctx` merge
+     moves every selection-dependent tile (scale/rotate/duplicate/booleans/flip) into
+     .stage-toolbar, what's left in .actionbar is just cut/copy/paste — small enough to live as
+     its own persistent rail, same as it already does in landscape below.
+     minmax(0,1fr) NOT 1fr on the middle column/last row: a bare 1fr track still resolves to its
+     widest item's min-content, and grid items default to min-width/height:auto, so a wide rail
+     or tall canvas content would blow its track past the viewport. */
   .app.editor .editor-grid {
-    grid-template-columns: minmax(0, 1fr) !important;   /* beat docks.js's inline column track */
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto !important;   /* beat docks.js's inline column track */
+    grid-template-rows: auto auto minmax(0, 1fr);
   }
   .editor-grid > .leftdock { display: none !important; }
-  .editor-grid > .mobilebar  { grid-row: 1; grid-column: 1; min-width: 0; }
-  .editor-grid > .stage-wrap { grid-row: 2; grid-column: 1; min-width: 0; }
+  .editor-grid > .mobilebar  { grid-row: 1; grid-column: 1 / -1; min-width: 0; }
+  /* the relocated contextual bar's own full-width row — see formfactor.js's phone-ctxrow wrapper
+     and the design note where .app.has-selection .phone-ctxrow > .stage-toolbar is styled below */
+  .editor-grid > .phone-ctxrow { grid-row: 2; grid-column: 1 / -1; min-width: 0; }
   .editor-grid > .toolstrip  { grid-row: 3; grid-column: 1; min-width: 0; }
-  /* .actionbar is reparented into the Panels sheet on a phone (app.js), so it claims no row here. */
+  .editor-grid > .stage-wrap { grid-row: 3; grid-column: 2; min-width: 0; }
+  .editor-grid > .actionbar  { grid-row: 3; grid-column: 3; min-width: 0; }
 
-  /* --- tools + object actions become horizontal, thumb-reachable scroll bars --- */
+  /* --- tools + object actions: vertical rails, scrolling on the Y axis (as on desktop) --- */
   .editor-grid > .toolstrip,
   .editor-grid > .actionbar {
-    flex-direction: row;
+    flex-direction: column;
     justify-content: flex-start;
     align-items: center;
-    gap: 8px;
-    padding: 7px 10px;
-    border-width: 1px 0 0 0;
-    overflow-x: auto;
-    overflow-y: hidden;
+    gap: 6px;
+    padding: 6px 5px;
+    overflow-x: hidden;
+    overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
   }
+  .editor-grid > .toolstrip { border-width: 0 1px 0 0; }
+  .editor-grid > .actionbar { border-width: 0 0 0 1px; }
   .editor-grid > .toolstrip::-webkit-scrollbar,
   .editor-grid > .actionbar::-webkit-scrollbar { display: none; }
+  /* 44px, not landscape's 40px below — a touch target minimum this stylesheet already asserts
+     elsewhere, and portrait can afford it (little width is spent per rail; height is the scarce
+     axis here, not width). */
   .editor-grid > .toolstrip .tool-button,
   .editor-grid > .actionbar .tool-button { width: 44px; height: 44px; font-size: 19px; flex: 0 0 auto; }
-  /* The strip scrolls horizontally here (it's a vertical rail on desktop), so the desktop
-     .tile-scroll-y mask is on the wrong axis and never fires. Fade the trailing edge while there
-     are still tools out of view — otherwise 6 of the 13 are simply invisible, with nothing to
-     suggest they exist. */
-  .editor-grid > .toolstrip.tile-scroll-y { -webkit-mask-image: none; mask-image: none; }
-  .editor-grid > .toolstrip.is-overflowing-x {
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent 100%);
-    mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent 100%);
-  }
+  /* The rail scrolls vertically again now (same axis app.js registered it with — see
+     observeOverflow's [".toolstrip","y"] entry), so the desktop .tile-scroll-y fade mask just
+     works unmodified; no horizontal override needed here any more. */
   /* The toolstrip is no longer the last band — the teaching strip sits under it now and carries the
      home-indicator inset instead. Padding past the indicator HERE as well would double it. */
   .editor-grid > .toolstrip { padding-bottom: 7px; }
   .editor-grid > .toolstrip .tool-button.tool-primary { width: 48px; height: 48px; font-size: 21px; }
-  /* separators were horizontal hairlines in the vertical bars → make them vertical */
+  /* separators: horizontal hairlines again, now that the bars are vertical */
   .editor-grid > .toolstrip .tool-sep,
   .editor-grid > .actionbar .tool-sep {
-    width: 1px; height: 26px; margin: 0 3px; align-self: center; flex: 0 0 auto;
+    width: 24px; height: 1px; margin: 3px 0; align-self: center; flex: 0 0 auto;
   }
 
   /* --- right dock → slide-up bottom sheet --- */
@@ -2683,11 +2695,13 @@ text.hv-text-editing { visibility: hidden; }
   .editor-grid > .rightdock.sheet-tabbed .section-head .caret { display: none; }
 
   /* --- floating Panels toggle + dismiss scrim --- */
-  /* Floats clear ABOVE the two bottom bars over the lower-right canvas (the standard bottom-right
-     FAB spot). The fill/stroke swatches move LEFT below so they don't sit under it. */
+  /* Tools and actions are rails now, not bottom bars, so the FAB only needs to clear the teaching
+     strip (bottom) and the actionbar rail (right) — the same offsets short-landscape already
+     uses below, for the same reason. The fill/stroke swatches move LEFT below so they don't sit
+     under it. */
   .mobile-fab {
     display: grid; place-items: center;
-    position: fixed; right: 14px; bottom: calc(76px + var(--strip-h) + env(safe-area-inset-bottom));
+    position: fixed; right: calc(66px + env(safe-area-inset-right)); bottom: calc(16px + var(--strip-h) + env(safe-area-inset-bottom));
     width: 50px; height: 50px; border-radius: 50%;
     background: var(--ink); color: var(--on-ink); border: 0;
     font-size: 21px; line-height: 1; cursor: pointer;
@@ -2695,9 +2709,6 @@ text.hv-text-editing { visibility: hidden; }
   }
   /* the brand mark is black ink; the FAB is a black disc — invert it or it disappears into its own button */
   .mobile-fab .brand-logo { display: block; width: 26px; height: 26px; filter: invert(1); }
-  /* the contextual bar slides in beneath the canvas, so lift the FAB clear of it or it lands on
-     top of Delete — the one control it must never cover. */
-  .app.has-selection .mobile-fab { bottom: calc(140px + var(--strip-h) + env(safe-area-inset-bottom)); }
   .app.sheet-open .mobile-fab { display: none; }   /* tap the scrim to dismiss */
   .app.sheet-open .mobile-scrim { display: block; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); z-index: 58; }
   .stage-body .tool-swatches { left: 12px; right: auto; }

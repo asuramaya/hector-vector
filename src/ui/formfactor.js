@@ -86,18 +86,18 @@ export function setCustomizeHandler(fn) { onCustomize = fn; }
 // The panes ARE the sheet's own children — nothing is rebuilt, cloned or re-implemented, so every
 // id-wired handler still fires and every layout.js tileKey still resolves. A tab is only a view onto
 // a child that was already there.
-const TAB_ORDER = ["properties", "color", "layers", "history", "actions", "view", "library", "processor", "jobs", "info"];
-const TAB_NAMES = { view: "View", actions: "Actions" };
+const TAB_ORDER = ["properties", "color", "layers", "history", "view", "library", "processor", "jobs", "info"];
+const TAB_NAMES = { view: "View" };
 
 let sheeted = false;
 let barEl = null, tabsEl = null, tabSig = "", userTab = null, activeTab = null, watcher = null;
 
-// The two reparented bars have no data-section — they're bars, not panels. Everything else in the
-// sheet is a rail-section and names itself.
+// The reparented bar has no data-section — it's a bar, not a panel. Everything else in the sheet is
+// a rail-section and names itself. .actionbar used to be reparented here too (an "actions" tab) —
+// now that tools/actions are rails in both touch shells, it never enters the sheet at all.
 const paneKey = (el) => (
   el.classList.contains("panel-foot") ? "view"
-    : el.classList.contains("actionbar") ? "actions"
-      : el.dataset.section || null
+    : el.dataset.section || null
 );
 const paneLabel = (el, key) => TAB_NAMES[key] || el.querySelector(".sec-label")?.textContent.trim() || key;
 // The tab bar, the resizers and the section separators aren't panes — none of them name themselves.
@@ -243,24 +243,26 @@ sheetMql.addEventListener("change", (e) => composeSheet(e.matches));
 // Phone portrait (≤620px). MOVES existing elements rather than rebuilding them, so every id-wired
 // handler and every layout.js tileKey survives.
 //
-// Three bands, by how often you reach for them:
-//   TOP    — undo/redo + zoom/fit. Always visible: undo is the most-used control in a touch editor
-//            and it used to be TWO taps deep in the Panels sheet.
-//   BOTTOM — the tools. Always visible.
-//   CONTEXT— arrange + delete + duplicate, shown ONLY when something is selected (the
-//            .has-selection class), so it costs zero canvas while you draw. Delete lived in
-//            .stage-toolbar, which the phone stylesheet display:none'd outright — it was genuinely
-//            UNREACHABLE on a phone.
-// The rest (booleans, rotate/flip, rulers/guides) stays one tap away in the Panels sheet.
-// LANDSCAPE is the same shell with the furniture on different walls. A phone held sideways has width
-// to spare and no height, so stacking bars UNDER the canvas — which is what it did — spends the one
-// axis it hasn't got. Instead the buttons SURROUND the canvas, exactly as they do on a desktop: tools
-// down the left, actions down the right, and the contextual bar across the TOP with the chrome. Same
-// tiles, same handlers, same oracle; only the walls change.
+// Buttons SURROUND the canvas here too, same as landscape below and same as desktop: tools down
+// the LEFT and actions down the RIGHT (both real vertical rails now, see style.css), the
+// contextual bar across the TOP — undo/redo/zoom lead in their own always-visible strip above
+// that. Delete lived in .stage-toolbar, which the phone stylesheet used to display:none outright;
+// it's reachable now the same way the rest of the contextual bar is. The rest (rulers/guides,
+// library, etc. — set-once or occasional, not per-stroke) stays one tap away in the Panels sheet.
+//
+// Portrait and landscape reach that SAME shape by DIFFERENT means, because their resource budgets
+// are opposite. Landscape has width to spare and almost no height, so it can't afford a whole extra
+// row for the contextual bar — it borrows the top bar's own row instead (`on-topbar`, below).
+// Portrait has height to spare, so the contextual bar doesn't need relocating at all: .stage-toolbar
+// is already .stage-wrap's first child in index.html (arrange sits above the canvas, same as
+// desktop) — style.css just has to stop overriding that with `order: 3`, which used to shove it
+// BELOW .stage-body and stack it over the tool rail's own row. Same tiles, same handlers, same
+// oracle; only which wall — and which trick gets it there — differs.
 export function composeShell(m) {
   const sheet = q("#rightdock"), topbar = q("#mobile-top");
   if (!sheet || !topbar || m === composed) return;
-  const actionbar = q(".editor-grid > .actionbar") || q("#rightdock > .actionbar");
+  // .actionbar itself is never reparented any more (see intoSheet below) — it stays a persistent
+  // rail in both touch shells, so this function has no need to look it up.
   const panelFoot = q(".stage-wrap > .panel-foot") || q("#rightdock > .panel-foot") || q("#mobile-top > .panel-foot");
   const arrange = q(".stage-toolbar");
   const on = m !== "desktop";
@@ -316,19 +318,32 @@ export function composeShell(m) {
     // reverse: each insert goes to the head, so the last one inserted ends up first
     if (arrange) for (const el of [...ctx].reverse()) { remember(el); arrange.insertBefore(el, arrange.firstChild); }
 
-    // PORTRAIT: the action bar and the zoom strip go into the Panels sheet (as tabs), leaving exactly
-    // one bar at the bottom — the tools. The contextual bar stays under the canvas, where your thumb
-    // already is, and costs nothing while nothing is selected.
-    // LANDSCAPE: the action bar is a RAIL down the right-hand side (it has the height for it), and the
-    // contextual bar rides up onto the top bar instead of stacking under the canvas. The zoom strip
-    // goes into the sheet either way — it's a set-once surface, not a per-stroke one.
-    const intoSheet = m === "phone" ? [panelFoot, actionbar] : [panelFoot];
+    // Only the zoom-strip leftovers (rulers/guides — set-once toggles, not per-stroke controls) go
+    // into the Panels sheet as a tab, in EITHER shell. .actionbar stays OUT of the sheet in both:
+    // once the ctx merge below runs, all that's left in it is cut/copy/paste — small enough to live
+    // as its own persistent rail (right-hand column), the same way landscape already treats it.
+    const intoSheet = [panelFoot];
     for (const el of intoSheet.filter(Boolean)) {
       remember(el);
       el.classList.add("in-sheet");
       sheet.insertBefore(el, sheet.querySelector(".rail-section"));
     }
     if (m === "landscape" && arrange) { remember(arrange); arrange.classList.add("on-topbar"); topbar.appendChild(arrange); }
+    // Portrait: the merged contextual bar needs a genuine FULL-WIDTH row of its own — nested inside
+    // .stage-wrap (its natural DOM position), it's confined to the middle rail column, which starves
+    // it of enough width to keep even 7 capped tiles reachable without scrolling. It can't just join
+    // mobilebar's own row the way landscape's does either: mobilebar's quick items already scroll
+    // sideways in ONE nowrap row, and forcing THAT row to wrap would break them. So it gets a fresh
+    // wrapper row instead — a sibling of mobilebar/toolstrip/stage-wrap/actionbar, spanning the same
+    // full width mobilebar does (see style.css's grid-row assignments).
+    if (m === "phone" && arrange) {
+      const ctxRow = document.createElement("div");
+      ctxRow.className = "phone-ctxrow mobile-made";
+      topbar.parentNode.insertBefore(ctxRow, topbar.nextSibling);
+      remember(arrange);
+      arrange.classList.add("on-topbar");
+      ctxRow.appendChild(arrange);
+    }
     // (The sheet's tab strip is composeSheet's job, not this one — it spans both orientations.)
   }
   composed = m;
@@ -340,10 +355,13 @@ export function composeShell(m) {
 // back out on the canvas would be display:none'd by that pane's own rule.
 function undoCompose(topbar, sheet) {
   q('.menu[data-menu="file"] .menu-trigger')?.classList.remove("has-logo");   // the ≣ comes back
-  // Order matters: the homes loop re-parents children OUT of .mobile-chrome, so empty the wrappers
-  // first and let goHome() put each child back itself.
-  topbar.querySelectorAll(".mobile-made").forEach((s) => s.remove());
-  sheet.querySelectorAll(".mobile-made").forEach((s) => s.remove());
+  // Order matters: the homes loop re-parents children OUT of .mobile-chrome/.phone-ctxrow, so empty
+  // the wrappers first and let goHome() put each child back itself. One query from a common
+  // ancestor, not two separate ones off topbar/sheet — a wrapper can live anywhere in the grid now
+  // (phone's .phone-ctxrow is a sibling of topbar, not a child of it, so `topbar.querySelectorAll`
+  // alone would miss it and leak a stranded wrapper on every phone->desktop crossing).
+  const grid = topbar.closest(".editor-grid") || topbar.parentNode;
+  grid.querySelectorAll(".mobile-made").forEach((s) => s.remove());
   for (const el of homes.keys()) { el.classList.remove("in-sheet", "sheet-active", "on-topbar"); goHome(el); }
 }
 

@@ -76,11 +76,17 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
   }
   // The bars' overflow-fade hint is driven by a MutationObserver watching childList only (app.js),
   // so a class-only change would never retrigger it and the "there's more, scroll" fade would lie.
+  // `is-overflowing-x` is always horizontal (a few surfaces — .stage-toolbar, viewport controls —
+  // are horizontal strips regardless of shell), but `is-overflowing` itself has to ask axisY(), the
+  // same live computed-flexDirection check the hit-test already uses: toolstrip/actionbar are
+  // vertical rails on desktop AND on a narrow viewport now (not just desktop), so a hardcoded
+  // scrollWidth check here would silently never clear the fade after hiding tiles trims a rail.
   function refreshOverflow() {
     requestAnimationFrame(() => {
       for (const b of BARS) {
         const c = barOf(b); if (!c) continue;
         c.classList.toggle("is-overflowing-x", c.scrollWidth > c.clientWidth + 1);
+        c.classList.toggle("is-overflowing", axisY(c) ? c.scrollHeight > c.clientHeight + 1 : c.scrollWidth > c.clientWidth + 1);
       }
     });
   }

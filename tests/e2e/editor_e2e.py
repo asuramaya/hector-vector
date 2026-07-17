@@ -4609,8 +4609,8 @@ def main():
                 mp.wait_for_function("typeof editor!=='undefined' && typeof mountStageFromText==='function'", timeout=20000)
                 mp.evaluate("([s]) => window.mountStageFromText(s, 'mobile.svg')", [MR])
                 mp.wait_for_timeout(200)
-                check("mobile: tool strip reflows to a horizontal bar",
-                      mp.evaluate("getComputedStyle(document.querySelector('.toolstrip')).flexDirection === 'row'"))
+                check("mobile: tool strip folds to a vertical rail (same spatial language as desktop)",
+                      mp.evaluate("getComputedStyle(document.querySelector('.toolstrip')).flexDirection === 'column'"))
                 check("mobile: canvas frame has touch-action:none (touch draws, not scrolls)",
                       mp.evaluate("getComputedStyle(document.querySelector('#output-preview')).touchAction === 'none'"))
                 check("mobile: tool buttons are >=44px touch targets",
@@ -4709,12 +4709,23 @@ def main():
                 check("mobile: a touch maps to the point it actually paints at, at every zoom (calibration live, no singular CTM)",
                       all(abs(t["det"]) > 1e-9 and t["err"] < 1.0 and t["measured"] for t in trip),
                       str(trip))
-                # Phone portrait collapses to ONE bottom bar: the object-action bar + zoom/fit strip
-                # are reparented INTO the Panels sheet (as View/Actions rows), leaving only the tools.
-                check("mobile: action bar + zoom strip move into the Panels sheet (single bottom bar = tools)",
-                      mp.evaluate("""() => !!document.querySelector('#rightdock > .actionbar.in-sheet')
-                                        && !!document.querySelector('#rightdock > .panel-foot.in-sheet')
-                                        && !document.querySelector('.editor-grid > .actionbar')"""))
+                # Phone portrait folds to rails now, same as landscape: tools left, actions right,
+                # the canvas between them. Only the zoom/fit strip's leftovers (rulers/guides — set-
+                # once toggles) go into the Panels sheet; .actionbar stays OUT of it and persists as
+                # its own rail.
+                railGeo = mp.evaluate("""() => {
+                    const r = (s) => { const e = document.querySelector(s); return e ? e.getBoundingClientRect() : null; };
+                    const tools = r('.editor-grid > .toolstrip'), acts = r('.editor-grid > .actionbar'), stage = r('.stage-wrap');
+                    return {
+                        actionbarInSheet: !!document.querySelector('#rightdock > .actionbar'),
+                        panelFootInSheet: !!document.querySelector('#rightdock > .panel-foot.in-sheet'),
+                        toolsLeft: !!tools && !!stage && Math.round(tools.right) <= Math.round(stage.left),
+                        actsRight: !!acts && !!stage && Math.round(acts.left) >= Math.round(stage.right),
+                    };
+                }""")
+                check("mobile: tools + actions are persistent rails around the canvas (not swept into the sheet)",
+                      not railGeo["actionbarInSheet"] and railGeo["panelFootInSheet"]
+                      and railGeo["toolsLeft"] and railGeo["actsRight"], str(railGeo))
                 # Reachability, not just presence. The phone layout had regressed to the point where
                 # DELETE was display:none'd outright (no way to delete an object at all) and undo —
                 # the most-used control in a touch editor — was two taps deep in the Panels sheet.
@@ -4729,7 +4740,10 @@ def main():
                 }""")
                 check("mobile: undo/redo + zoom/fit sit in the always-on quick bar (were 2 taps deep in the sheet)",
                       all(quick.values()), str(quick))
-                ctxbar = ".stage-wrap > .stage-toolbar"
+                # .stage-toolbar now lives in the relocated .phone-ctxrow wrapper, not nested in
+                # .stage-wrap any more (see formfactor.js's composeShell / the design note above
+                # .phone-ctxrow's has-selection rule in style.css).
+                ctxbar = ".phone-ctxrow > .stage-toolbar"
                 # the one-finger-draw check above leaves its rect selected — clear it, or we'd be
                 # asserting the idle state while there is very much a selection.
                 mp.evaluate("() => { editor.selection.clear(); editor.onInspect && editor.onInspect(); }")
@@ -4746,32 +4760,46 @@ def main():
                     const shown = !!bar && bar.offsetParent !== null;
                     const reach = s => {{ const e = document.querySelector(s); if (!e || e.offsetParent === null) return false;
                         const r = e.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.width > 0; }};
+                    const body = document.querySelector('.stage-body');
                     return {{ shown, rows: bar ? Math.round(bar.getBoundingClientRect().height) : 0,
                               del: reach('#layer-delete'), dup: reach('#act-duplicate'),
+                              // its natural DOM position — .stage-toolbar is .stage-wrap's first child
+                              // (same as desktop) — puts it ABOVE the canvas, not stacked below it.
+                              aboveCanvas: !!bar && !!body && bar.getBoundingClientRect().bottom <= body.getBoundingClientRect().top + 1,
                               selSize: editor.selection.size, nodes: editor.stage.querySelectorAll('[data-hv-id]').length,
                               hasSel: document.querySelector('main.app').classList.contains('has-selection') }};
                 }}""")
                 # rows: one row (~60px). It used to WRAP to two and eat ~200px of canvas.
-                check("mobile: selecting reveals the contextual bar with Delete + Duplicate on-screen, in ONE row",
-                      sel["shown"] and sel["del"] and sel["dup"] and sel["rows"] < 90, str(sel))
+                check("mobile: selecting reveals the contextual bar with Delete + Duplicate on-screen, in ONE row, above the canvas",
+                      sel["shown"] and sel["del"] and sel["dup"] and sel["rows"] < 90 and sel["aboveCanvas"], str(sel))
                 mp.evaluate("() => { editor.selection.clear(); editor.onInspect && editor.onInspect(); }")
 
                 section("Mobile / customization — show-hide, per-form-factor layouts")
-                # THE user-facing problem: 13 tools need 711px in a 390px strip. Hiding tools must
-                # actually make the strip stop overflowing — and the fade hint must notice, which the
-                # existing MutationObserver cannot (it watches childList, and hiding is a CLASS).
+                # THE user-facing problem: 13 tools need more rail height than a short portrait
+                # screen affords — .toolstrip is a vertical rail here (tools+actions are rails, not
+                # bottom bars, on a narrow viewport — see formfactor.js/style.css), so at the
+                # section's standard 800px height they simply fit with room to spare (confirmed:
+                # zero overflow there). Shrink to a shorter phone for this one check, the same way H2
+                # below temporarily widens to a desktop viewport — the trim behaviour under test
+                # doesn't depend on which height reproduces it, only that hiding tools actually make
+                # the rail stop overflowing, and that the fade hint notices (it watches childList,
+                # and hiding is a CLASS, so a naive MutationObserver wouldn't).
+                mp.set_viewport_size({"width": 390, "height": 500})
+                mp.wait_for_timeout(200)
                 desktop_key_before = mp.evaluate("() => localStorage.getItem('hector-vector:layout')")
                 trim = mp.evaluate("""() => {
                     const t = document.querySelector('.toolstrip');
-                    const before = t.scrollWidth - t.clientWidth;
+                    const before = t.scrollHeight - t.clientHeight;
                     for (const k of ['tool:curvature','tool:line','tool:width','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser'])
                         __layout.setHidden(k, true);
-                    return { before, after: t.scrollWidth - t.clientWidth };
+                    return { before, after: t.scrollHeight - t.clientHeight };
                 }""")
                 mp.wait_for_timeout(250)
-                faded = mp.evaluate("() => document.querySelector('.toolstrip').classList.contains('is-overflowing-x')")
-                check("mobile: hiding tools actually trims the strip — 711px-in-390px overflow goes to zero, fade hint clears",
-                      trim["before"] > 300 and trim["after"] == 0 and not faded, str(trim))
+                faded = mp.evaluate("() => document.querySelector('.toolstrip').classList.contains('is-overflowing')")
+                check("mobile: hiding tools actually trims the rail — vertical overflow goes to zero, fade hint clears",
+                      trim["before"] > 0 and trim["after"] == 0 and not faded, str(trim))
+                mp.set_viewport_size({"width": 390, "height": 800})
+                mp.wait_for_timeout(200)
                 check("mobile: Select is pinned — you cannot hide every tool and strand yourself",
                       mp.evaluate("""() => __layout.setHidden('tool:select', true) === false
                                         && document.querySelector('[data-tool=select]').offsetParent !== null"""))
@@ -4816,33 +4844,32 @@ def main():
                     // transition and not a leftover from whatever the previous check left selected.
                     editor.selection = new Set([]); editor._renderInspector(); await wait();
                     editor.selection = new Set(['p', 'q']); editor._renderInspector(); await wait();
-                    const bar = document.querySelector('.stage-wrap > .stage-toolbar');
+                    const bar = document.querySelector('.phone-ctxrow > .stage-toolbar');
                     const vis = (el) => !!el && el.offsetParent !== null;
                     const shown = [...bar.children].filter((e) => vis(e) && e.id)
                         .sort((x, y) => (+getComputedStyle(x).order) - (+getComputedStyle(y).order)).map((e) => '#' + e.id);
                     // The cap is PER BAR: capping the global ranked list would have made cut/copy
-                    // (which rank low) vanish from the sheet too — i.e. unreachable anywhere. They
-                    // live on the Actions bar, which the tabbed sheet shows one tap away, so "still
-                    // offered" is the class the adaptive engine gives it — not what's on screen right
-                    // now. That it's genuinely VISIBLE once you tap Actions is asserted below.
-                    const abar = document.querySelector('#rightdock > .actionbar');
+                    // (which rank low) vanish everywhere. They live on their own persistent .actionbar
+                    // rail instead (no cap there, same as desktop/landscape — see adaptive.js), so
+                    // "still offered" means genuinely visible on that rail right now, not tucked away.
+                    const abar = document.querySelector('.editor-grid > .actionbar');
                     const off = (s) => { const e = abar && abar.querySelector(s); return !e || e.classList.contains('act-off'); };
                     // The teaching strip and the pulse work exactly the same on a phone — no second
                     // "Suggested" surface needed: the booleans are already right there, on the bar.
                     return { shown, overflow: bar.scrollWidth - bar.clientWidth,
                              rows: Math.round(bar.getBoundingClientRect().height),
-                             cutOffered: !!abar && !off('#act-cut'),
+                             cutVisible: !!abar && !off('#act-cut') && vis(document.querySelector('#act-cut')),
                              pasteHidden: off('#act-paste') && !vis(document.querySelector('#act-paste')),
                              unionPulsed: document.querySelector('#act-union').classList.contains('hl-pulse'),
                              says: document.querySelector('#status-text')?.textContent };
                 }""")
-                check("mobile: two overlapping shapes put the booleans on the bar under the canvas, no sheet needed",
+                check("mobile: two overlapping shapes put the booleans on the bar above the canvas, no sheet needed",
                       ctx["shown"][:3] == ["#act-union", "#act-subtract", "#act-intersect"], str(ctx["shown"][:4]))
                 check("mobile: the contextual bar still fits — one row, no overflow (the cap earns its keep)",
                       ctx["overflow"] == 0 and ctx["rows"] < 90 and len(ctx["shown"]) <= 7,
                       f"overflow={ctx['overflow']} rows={ctx['rows']} n={len(ctx['shown'])}")
-                check("mobile: capping the bar doesn't make anything unreachable (cut/copy still offered in the sheet)",
-                      ctx["cutOffered"] and ctx["pasteHidden"], str(ctx))
+                check("mobile: capping the contextual bar doesn't make anything unreachable (cut is right there on its own rail, unused paste is genuinely hidden)",
+                      ctx["cutVisible"] and ctx["pasteHidden"], str(ctx))
                 check("mobile: the pulse lights the SAME bar (no second Suggested surface) and the strip narrates it",
                       ctx["unionPulsed"] and ctx["says"] and "possible" in ctx["says"], str(ctx))
                 # The sheet was a STACK: ten panels in a 480px window, so you scrolled the sheet to find
@@ -4881,13 +4908,9 @@ def main():
                 # stack heights into a surface that has no stack.
                 check("mobile: the open pane fills the sheet (not clipped to the dock splitter's stack height)",
                       sheet["paneH"] > sheet["sheetH"] * 0.7, str(sheet))
-                # "One tap away" is a claim about the UI, so tap it. Cut ranks too low for the canvas
-                # bar's 7-tile cap; the sheet's Actions tab is where it has to actually appear.
-                mp.click('.sheet-tab[data-tab-key="actions"]')
-                mp.wait_for_timeout(250)
-                check("mobile: ...and one tap on Actions genuinely puts Cut on screen (not just in the DOM)",
-                      mp.evaluate("""() => { const c = document.querySelector('#act-cut');
-                          return !!c && c.offsetParent !== null && c.getBoundingClientRect().width >= 40; }"""))
+                # (There's no "Actions" tab any more — .actionbar is a persistent rail in every touch
+                # shell now, not sheet content; Cut's on-screen reachability was already asserted
+                # directly against that rail above, in the `ctx` check.)
                 # Drive the REAL tab buttons — the pane must actually swap, and the tapped tab is the
                 # only one marked current (a11y: aria-selected, not just a class).
                 mp.click('.sheet-tab[data-tab-key="layers"]')
@@ -4922,6 +4945,10 @@ def main():
 
                 # The picker is the ONLY way to customize on a phone (HTML5 drag never fires on touch),
                 # so its reachability is the feature. Drive it through the real UI, not the API.
+                # Shrunk height again — same reasoning as the trim check above, the strip genuinely
+                # doesn't overflow at this section's standard 800px height any more.
+                mp.set_viewport_size({"width": 390, "height": 500})
+                mp.wait_for_timeout(200)
                 mp.evaluate("() => __layout.reset()")
                 mp.wait_for_timeout(200)
                 mp.click("#mobile-panels")            # the Panels FAB
@@ -4965,21 +4992,23 @@ def main():
                       and opened["moveIsSelect"], str(opened))
                 check("mobile: a modal DIMS what's behind it (a white dialog on a white canvas is invisible)",
                       opened["backdropDims"], str(opened.get("backdropDims")))
-                # ...and the actual payoff: untick tools IN THE PICKER, watch the strip stop overflowing.
+                # ...and the actual payoff: untick tools IN THE PICKER, watch the rail stop overflowing.
                 trimmed = mp.evaluate("""() => {
                     const t = document.querySelector('.toolstrip');
-                    const before = t.scrollWidth - t.clientWidth;
+                    const before = t.scrollHeight - t.clientHeight;
                     let clicked = 0;
                     for (const k of ['tool:curvature','tool:line','tool:width','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser']) {
                         const row = document.querySelector(`.picker-row[data-key="${k}"]`);
                         if (row) { row.querySelector('input[type=checkbox]').click(); clicked++; }
                     }
-                    return { clicked, before, after: t.scrollWidth - t.clientWidth };
+                    return { clicked, before, after: t.scrollHeight - t.clientHeight };
                 }""")
-                check("mobile: unticking tools in the picker trims the real strip — 711px-in-390px, solved through the UI",
-                      trimmed["clicked"] == 7 and trimmed["before"] > 300 and trimmed["after"] == 0, str(trimmed))
+                check("mobile: unticking tools in the picker trims the real rail, solved through the UI",
+                      trimmed["clicked"] == 7 and trimmed["before"] > 0 and trimmed["after"] == 0, str(trimmed))
                 mp.evaluate("() => { const b = document.querySelector('[data-modal-close]'); if (b) b.click(); }")
                 mp.evaluate("() => __layout.reset()")
+                mp.wait_for_timeout(200)
+                mp.set_viewport_size({"width": 390, "height": 800})
                 mp.wait_for_timeout(200)
 
                 # A REAL touch drag. This was flatly impossible before — HTML5 drag events never fire
@@ -4987,6 +5016,9 @@ def main():
                 # PointerEvents carry pointerId 0, which is why the helper must not depend on
                 # setPointerCapture (it throws on id 0) — that constraint is what makes this testable.
                 mp.evaluate("() => __layout.toggleEdit()")
+                # The strip is a vertical rail now (drag along Y to reorder, not X) — axisY() in
+                # layout.js already asks the live computed flexDirection rather than assuming, so the
+                # hit-test itself needs no change, only this test's own drag geometry.
                 touch_drag = mp.evaluate("""() => {
                     const strip = document.querySelector('.toolstrip');
                     const rect = strip.querySelector('[data-tool=rect]'), pen = strip.querySelector('[data-tool=pen]');
@@ -4994,21 +5026,21 @@ def main():
                     const pe = (t, ty, x, y) => t.dispatchEvent(new PointerEvent(ty, {
                         pointerId: 0, pointerType: 'touch', button: 0, isPrimary: true,
                         clientX: x, clientY: y, bubbles: true, cancelable: true }));
-                    const y = rb.top + rb.height / 2, x0 = rb.left + rb.width / 2, x1 = pb.left + 2;
-                    pe(rect, 'pointerdown', x0, y);
-                    for (let i = 1; i <= 10; i++) pe(window, 'pointermove', x0 + (x1 - x0) * i / 10, y);
-                    pe(window, 'pointerup', x1, y);
+                    const x = rb.left + rb.width / 2, y0 = rb.top + rb.height / 2, y1 = pb.top + 2;
+                    pe(rect, 'pointerdown', x, y0);
+                    for (let i = 1; i <= 10; i++) pe(window, 'pointermove', x, y0 + (y1 - y0) * i / 10);
+                    pe(window, 'pointerup', x, y1);
                     const dom = [...strip.querySelectorAll('.tool-button')].map((b) => 'tool:' + b.dataset.tool);
                     const saved = JSON.parse(localStorage.getItem('hector-vector:layout:phone') || 'null');
                     const savedTools = ((saved && saved.tools) || []).filter((k) => k !== '|');
                     return { movedBefore: dom.indexOf('tool:rect') < dom.indexOf('tool:pen'),
                              persisted: JSON.stringify(dom) === JSON.stringify(savedTools) };
                 }""")
-                check("mobile: a real TOUCH drag reorders the tool strip and auto-saves (HTML5 drag never fires on touch)",
+                check("mobile: a real TOUCH drag reorders the tool rail and auto-saves (HTML5 drag never fires on touch)",
                       touch_drag["movedBefore"] and touch_drag["persisted"], str(touch_drag))
-                # Cross-bar drag is refused on a phone BY POLICY (the bars are at opposite ends of the
-                # screen and the action bar is inside the sheet). Assert the policy, so a future
-                # "helpful" relaxation trips a test rather than shipping a hostile gesture.
+                # Cross-bar drag is refused on a phone BY POLICY (the bars are visually separate
+                # rails/strips around the canvas now, not adjacent rows). Assert the policy, so a
+                # future "helpful" relaxation trips a test rather than shipping a hostile gesture.
                 cross = mp.evaluate("""() => {
                     const strip = document.querySelector('.toolstrip'), quick = document.querySelector('#mobile-top');
                     const t = strip.querySelector('[data-tool=text]');
