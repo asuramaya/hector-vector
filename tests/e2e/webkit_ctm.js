@@ -12,11 +12,15 @@
 // (ubuntu 26.04 among them) — the image already carries a WebKit that does run:
 //
 //   PORT=2099 .venv/bin/python server.py &
-//   docker run --rm --network host -v "$PWD/tests/e2e:/w" -w /w \
+//   docker run --rm --network host --memory=8g --memory-swap=8g \
+//     -v "$PWD/tests/e2e:/w" -w /w \
 //     -e PLAYWRIGHT_BROWSERS_PATH=/ms-playwright -e PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
 //     -e NODE_PATH=/usr/lib/node_modules mcr.microsoft.com/playwright:v1.60.0-noble \
 //     bash -lc 'npm i -g --silent playwright@1.60.0 >/dev/null 2>&1; node webkit_ctm.js'
 //
+// --memory/--memory-swap: a WebKit-driving container gets the same hard cap as the local
+// Chromium runs (see scripts/capped-run.sh) — this test's own browser tree is just as capable
+// of growing a runaway renderer, and docker's default is UNBOUNDED host memory, not a safe one.
 // (The image ships the browsers but not the client library, hence the npm install.)
 // Pass a base URL as argv[2] to point it elsewhere (defaults to http://127.0.0.1:2099).
 const { webkit, chromium } = require("playwright");
