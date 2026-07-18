@@ -44,7 +44,7 @@ import {
 } from "./ui/menus.js";
 import {
   configureExport, inlineSvgImages, serializeForSave, openExportModal, setSaveByteCap,
-  renderCurrentPngDataUrl,
+  renderCurrentPngDataUrl, renderSvgToPngBlob, withEmbeddedFonts,
 } from "./ui/export.js";
 import {
   configureModal, floatingInput, openModal, closeModal, confirmDialog,
@@ -648,6 +648,27 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
       }
       editor._meshPointTarget = null;
     }
+    // Fill-layer edit mode (Epic K.1): a layer swatch in the Fills inspector group routes
+    // here — same solo-picker idiom as Recolor above, editing one layer of a fill stack.
+    if (editor._fillLayerTarget) {
+      const { gid, index } = editor._fillLayerTarget;
+      const g = editor.nodeById(gid);
+      const layers = g ? editor._fillLayers(g) : null;
+      if (g && layers && layers[index]) {
+        if (ftitle) ftitle.textContent = "Fill layer";
+        hostEl.innerHTML = "";
+        const bar = document.createElement("div"); bar.className = "cp-recolor-bar";
+        const done = document.createElement("button"); done.type = "button"; done.className = "ghost-button cp-recolor-done"; done.textContent = "‹ Done";
+        done.addEventListener("click", () => { editor._fillLayerTarget = null; editor._renderColorPanel(hostEl); });
+        const lab = document.createElement("span"); lab.className = "cp-recolor-lab"; lab.textContent = `Layer ${index + 1}`;
+        bar.append(done, lab); hostEl.appendChild(bar);
+        const pickerHost = document.createElement("div"); pickerHost.className = "cp-recolor-host"; hostEl.appendChild(pickerHost);
+        colorCtl = openColorPicker({ title: "Fill layer", host: pickerHost, color: layers[index].fill, alpha: layers[index].opacity, allowNone: false,
+          onChange: (h, a) => editor.setFillLayer(g, index, { fill: h || layers[index].fill, opacity: a }) });
+        return;
+      }
+      editor._fillLayerTarget = null;
+    }
     // Nothing selected → an empty state, NOT the full (tall) duo picker. Rendering the
     // picker with no target made the panel overflow when expanded-but-empty.
     if (!editor.artboardSelected && (!editor.selection || editor.selection.size === 0)) {
@@ -691,6 +712,67 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
     });
   };
   editor._summonColor = () => { if (window.__docks) window.__docks.showColor(); };
+  // PNG-per-artboard (Epic K.4): same crop editor._croppedArtboardSVG already does for the SVG
+  // download, rasterised through the SAME client-side canvas pipeline the Export PNG modal
+  // uses (font embed + inline placed rasters first, so neither drops out of the isolated render).
+  editor._exportArtboardPNG = async (rect, name) => {
+    if (window.__fonts) await window.__fonts.fontsReady();
+    let svgText = await inlineSvgImages(editor._croppedArtboardSVG(rect));
+    svgText = await withEmbeddedFonts(svgText);
+    const blob = await renderSvgToPngBlob(svgText, Math.max(1, Math.round(rect.w)), Math.max(1, Math.round(rect.h)), "transparent");
+    downloadBlob(`${(name || "artboard").replace(/\s+/g, "-")}.png`, blob, "image/png");
+    setStatus(`Exported ${name || "artboard"} as PNG.`, 2000);
+  };
+  // Expand Appearance (Epic K.2): bake ONE node's filter (blur/shadow/glow) into a raster
+  // <image> — the one bake X's own expand can't do (feGaussianBlur has no vector/path form).
+  // Isolate the node from the rest of the document rather than crop-the-whole-doc (unlike
+  // per-artboard export, other overlapping artwork must NOT bleed into this one object's
+  // snapshot): pull its absolute geometry via shapeToAbsPath (already transform-independent,
+  // the same technique Pathfinder/Blend/Warp use) into a fresh, minimal standalone SVG sized
+  // to the node's own rendered bbox — which, read via getBoundingClientRect(), already
+  // includes the filter's blur/shadow spread for free (the browser already computed it).
+  editor._expandAppearanceHook = async (node) => {
+    const d = shapeToAbsPath(node, node.getCTM());
+    if (!d) return null;
+    const bb = node.getBoundingClientRect();
+    const m = editor.stageCTM().inverse();
+    const p0 = new DOMPoint(bb.left, bb.top).matrixTransform(m);
+    const p1 = new DOMPoint(bb.right, bb.bottom).matrixTransform(m);
+    const pad = Math.max(p1.x - p0.x, p1.y - p0.y, 1) * 0.03;   // small safety margin against edge clipping
+    const x = p0.x - pad, y = p0.y - pad, w = (p1.x - p0.x) + pad * 2, h = (p1.y - p0.y) + pad * 2;
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    const fid = editor._urlRefId(node, "filter");
+    const filt = fid ? editor.stage.querySelector("#" + CSS.escape(fid)) : null;
+    const doc = document.createElementNS(SVG_NS, "svg");
+    doc.setAttribute("xmlns", SVG_NS);
+    doc.setAttribute("viewBox", `${x} ${y} ${w} ${h}`);
+    doc.setAttribute("width", String(Math.max(1, Math.round(w))));
+    doc.setAttribute("height", String(Math.max(1, Math.round(h))));
+    if (filt) { const defs = document.createElementNS(SVG_NS, "defs"); defs.appendChild(filt.cloneNode(true)); doc.appendChild(defs); }
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", d);
+    path.setAttribute("fill", node.getAttribute("fill") || "#000000");
+    if (node.getAttribute("fill-rule")) path.setAttribute("fill-rule", node.getAttribute("fill-rule"));
+    const stroke = node.getAttribute("stroke");
+    if (stroke && stroke !== "none") {
+      path.setAttribute("stroke", stroke);
+      const ctm = node.getCTM(); const k = ctm ? Math.hypot(ctm.a, ctm.b) : 1;   // stroke width scales with the node's CTM (shapeToAbsPath bakes geometry, not stroke width)
+      path.setAttribute("stroke-width", hv.nfmt((parseFloat(node.getAttribute("stroke-width")) || 1) * k));
+    }
+    for (const a of ["fill-opacity", "stroke-opacity", "opacity"]) { const v = node.getAttribute(a); if (v) path.setAttribute(a, v); }
+    if (filt) path.setAttribute("filter", "url(#" + fid + ")");
+    doc.appendChild(path);
+    const svgText = new XMLSerializer().serializeToString(doc);
+    const blob = await renderSvgToPngBlob(svgText, Math.max(1, Math.round(w * 2)), Math.max(1, Math.round(h * 2)), "transparent");
+    const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(blob); });
+    const img = document.createElementNS(SVG_NS, "image");
+    img.setAttribute("data-hv-id", "n" + (++editor.idSeq));
+    img.setAttribute("x", hv.nfmt(x)); img.setAttribute("y", hv.nfmt(y));
+    img.setAttribute("width", hv.nfmt(w)); img.setAttribute("height", hv.nfmt(h));
+    img.setAttribute("href", dataUrl);
+    node.replaceWith(img);
+    return img.getAttribute("data-hv-id");
+  };
   const pickFor = (which) => { active = which; refreshSwatches(); if (window.__docks) window.__docks.showColor(); };
   const doSwap = () => {
     const f = cur("fill"), s = cur("stroke");
@@ -1313,6 +1395,7 @@ document.addEventListener("keydown", (e) => {
   if (e.shiftKey && e.key === "C") { editor.setTool("scissors"); return; }       // Shift+C
   if (e.shiftKey && e.key === "K") { editor.setTool("knife"); return; }          // Shift+K
   if (e.shiftKey && e.key === "W") { editor.setTool("envelope"); return; }       // Shift+W
+  if (e.shiftKey && e.key === "O") { editor.setTool("artboard"); return; }       // Shift+O (Illustrator parity)
   if (editor.tool === "eraser" && (e.key === "[" || e.key === "]")) { e.preventDefault(); editor.adjustEraser(e.key === "]" ? 3 : -3); editor._showHint(); return; }
   if (e.key === "v" || e.key === "V") { editor.setTool("select"); editor.clearXform(); return; }
   if (e.key === "a" || e.key === "A") { editor.setTool("node"); return; }

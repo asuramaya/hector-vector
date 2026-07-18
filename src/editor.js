@@ -42,6 +42,7 @@ import { symbolsMixin } from "./editor/tools/symbols.js";
 import { effectsMixin } from "./editor/tools/effects.js";
 import { repeatMixin } from "./editor/tools/repeat.js";
 import { artboardsMixin } from "./editor/tools/artboards.js";
+import { multiFillMixin } from "./editor/tools/multifill.js";
 import { snap45 } from "./editor/snap.js";
 import {
   CAP_GLYPH, JOIN_GLYPH, DASH_GLYPH, ALIGN_ICON, AB_FIT_ICON, BLEND_MODES,
@@ -319,6 +320,7 @@ const editor = {
     if (this.tool === "scissors") { this._scissorsDown(e); return; }
     if (this.tool === "knife") { this._knifeDown(e); return; }
     if (this.tool === "eraser") { this._eraserDown(e); return; }
+    if (this.tool === "artboard") { this._artboardDown(e); return; }
     if (SHAPE_TOOLS.has(this.tool)) {
       if (e.button !== 0) return;
       e.stopPropagation(); e.preventDefault();   // draw, don't pan
@@ -476,7 +478,7 @@ const editor = {
   // creation sub-tools. Marquee + transform are folded into select (empty-drag
   // rubber-bands; Ctrl+T/Ctrl+R toggle the scale/rotate sub-mode).
   setTool(t) {
-    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "text" && t !== "width" && t !== "envelope" && !BUILDER_TOOLS.has(t) && !SHAPE_TOOLS.has(t)) return;
+    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "text" && t !== "width" && t !== "envelope" && t !== "artboard" && !BUILDER_TOOLS.has(t) && !SHAPE_TOOLS.has(t)) return;
     if (this._pen && t !== "pen") this._finishPen(true);   // keep any in-progress path
     if (this._curv && t !== "curvature") this._curvFinish(true);
     if (this._textEdit && t !== "text") this._commitText();   // leaving the text tool finishes the edit in progress
@@ -530,6 +532,7 @@ const editor = {
     if (t === "rect") return "Rectangle: drag on the canvas.";
     if (t === "ellipse") return "Ellipse: drag on the canvas.";
     if (t === "line") return "Line: drag on the canvas.";
+    if (t === "artboard") return "Artboard: drag on the canvas to add one, sized and placed exactly there.";
     return "";
   },
   _hint() {
@@ -559,6 +562,7 @@ const editor = {
     if (t === "rect") return "Rectangle (R) — drag on the canvas · Shift = square";
     if (t === "ellipse") return "Ellipse (E) — drag on the canvas · Shift = circle";
     if (t === "line") return "Line (L) — drag on the canvas · Shift = 45°";
+    if (t === "artboard") return "Artboard (Shift+O) — drag on the canvas to add one, sized and placed exactly there";
     return "";
   },
   _showHint() { const h = this._hint(); if (h) setStatus(h, 0); },
@@ -2075,13 +2079,16 @@ const editor = {
     const isEnvelope = single && this.isEnvelopeGroup(single);
     const isMesh = single && this.isMeshGroup(single);
     const anyInstance = nodes.some((n) => this.isSymbolInstance(n));
+    const hasEffects = reads.some((n) => this.effectsOf(n).length);
+    const isMultiFill = single && this.isMultiFillGroup(single);
     const items = [];
     if (expandable) items.push({ label: "Expand object", onClick: () => this.expandSelection() });
+    if (hasEffects) items.push({ label: "Expand appearance", onClick: () => this.expandAppearance() });
     if (hasStroke) items.push({ label: "Outline stroke", onClick: () => this.outlineStroke() });
     if (hasPath) items.push({ label: "Offset path…", onClick: () => this._promptOffsetPath() });
     if (fillable >= 2) {
       items.push({ type: "sep" });
-      for (const [op, lab] of [["divide", "Divide"], ["trim", "Trim"], ["merge", "Merge"], ["crop", "Crop"], ["minus-back", "Minus Back"]])
+      for (const [op, lab] of [["divide", "Divide"], ["trim", "Trim"], ["merge", "Merge"], ["crop", "Crop"], ["minus-back", "Minus Back"], ["outline", "Outline"]])
         items.push({ label: "Pathfinder: " + lab, onClick: () => this.pathfinder(op) });
     }
     const areaTexts = nodes.length === 2 && nodes.every((n) => this._isAreaText && this._isAreaText(n));
@@ -2098,6 +2105,8 @@ const editor = {
     if (fillable >= 1 && !isEnvelope) makes.push({ label: "Make envelope", onClick: () => { this.makeEnvelope(); this.setTool("envelope"); } });
     if (fillable >= 2 && !isEnvelope) makes.push({ label: "Make envelope with top object", onClick: () => { this.makeEnvelopeWithTopObject(); this.setTool("envelope"); } });
     if (single && !isMesh && shapeToAbsPath(single)) makes.push({ label: "Make gradient mesh", onClick: () => this.makeGradientMesh() });
+    if (single && !isMultiFill && shapeToAbsPath(single)) makes.push({ label: "Add fill", onClick: () => this.makeMultiFill() });
+    if (isMultiFill) { makes.push({ label: "Add fill layer", onClick: () => this.addFillLayer(single) }); makes.push({ label: "Expand fill stack", onClick: () => this.expandMultiFill(single) }); }
     if (makes.length) { items.push({ type: "sep" }, ...makes); }
     if (!isRepeat) {
       items.push({ type: "sep" },
@@ -2130,14 +2139,15 @@ const editor = {
     // {mixed:true, value:<first>} — so a multi-selection with different fills/widths
     // shows an indeterminate "Mixed" state instead of silently showing just the first.
     const reads = (() => { const l = this._effectiveLeaves(nodes); return l.length ? l : nodes; })();
-    const first = reads[0];
     // The caller (docks.js renderProps) passes _effectiveLeaves()-unwrapped nodes, not the
     // raw selection — fine for style reads above, but a parametric <g> (blend/warp/repeat/
-    // envelope) unwraps into its N generated children, so `nodes.length===1 && isXGroup(nodes[0])`
-    // never matches through the real UI (found while wiring up Envelope below: its own panel
-    // silently never appeared). Blend/Warp/Repeat's own-group panels below had the same latent
-    // bug — fixed here alongside, using the RAW selection for group identity instead.
+    // envelope/fill stack) unwraps into its N generated children, so
+    // `nodes.length===1 && isXGroup(nodes[0])` would never match through the real UI (found
+    // independently while wiring up both Envelope and Fills: each own-group panel silently
+    // never appeared). Blend/Warp/Repeat's own-group panels had the same latent bug — fixed
+    // here alongside, using the RAW selection for group identity instead.
     const rawSel = this.selectedNodes();
+    const first = reads[0];
     const common = (read) => { let v, set = false; for (const n of reads) { const c = read(n); if (!set) { v = c; set = true; } else if (c !== v) return { mixed: true, value: read(first) }; } return { value: v }; };
     const wrap = document.createElement("div");
     const tags = new Set(reads.map((n) => n.tagName.toLowerCase()));
@@ -2432,6 +2442,32 @@ const editor = {
       mx.title = "Bake the mesh into a plain clipped image"; mx.addEventListener("click", () => this.expandGradientMesh(g));
       mrows.push(inspRow("", mx));
       wrap.appendChild(inspGroup("Gradient mesh", mrows));
+    }
+    // FILLS (Epic K.1, scoped): a selected fill-stack group gets one row per layer — a
+    // swatch (opens the dock Colour panel in a solo edit mode, _fillLayerTarget below),
+    // an inline opacity %, and reorder/remove. ("Add fill" / "Add fill layer" / "Expand
+    // fill stack" live in the Actions menu, matching Blend/Warp/Symbol's own convention.)
+    if (rawSel.length === 1 && this.isMultiFillGroup(rawSel[0])) {
+      const g = rawSel[0], spec = this._fillsSpec(g) || { layers: [] }, frows = [];
+      spec.layers.forEach((layer, i) => {
+        const row = document.createElement("div"); row.className = "insp-row insp-fill-row";
+        const sw = document.createElement("button"); sw.type = "button"; sw.className = "insp-swatch"; sw.style.background = layer.fill;
+        sw.title = `Layer ${i + 1} — click to edit its colour`;
+        sw.addEventListener("click", () => { this._fillLayerTarget = { gid: g.getAttribute("data-hv-id"), index: i }; if (this._summonColor) this._summonColor(); });
+        const opInp = document.createElement("input"); opInp.type = "number"; opInp.min = "0"; opInp.max = "100"; opInp.className = "insp-fill-opacity";
+        opInp.value = String(Math.round((layer.opacity == null ? 1 : layer.opacity) * 100));
+        opInp.title = "Layer opacity %";
+        opInp.addEventListener("input", () => { this.beginCoalesce(); this.setFillLayer(g, i, { opacity: Math.max(0, Math.min(100, parseFloat(opInp.value) || 0)) / 100 }); });
+        opInp.addEventListener("change", () => this.commitCoalesce("Fill layer opacity"));
+        const btns = document.createElement("div"); btns.className = "insp-btns";
+        const mk = (glyph, title, fn, disabled) => { const b = document.createElement("button"); b.type = "button"; b.className = "insp-iconbtn"; b.textContent = glyph; b.title = title; b.disabled = !!disabled; b.addEventListener("click", fn); btns.appendChild(b); };
+        mk("↑", "Move layer up", () => this.moveFillLayer(g, i, -1), i === 0);
+        mk("↓", "Move layer down", () => this.moveFillLayer(g, i, 1), i === spec.layers.length - 1);
+        mk("✕", "Remove this layer", () => this.removeFillLayer(g, i), spec.layers.length <= 1);
+        row.append(sw, opInp, btns);
+        frows.push(row);
+      });
+      wrap.appendChild(inspGroup("Fills", frows));
     }
     // COLOUR SYSTEMS (Epic C). Pattern fill: a selected pattern-filled object gets tile
     //  scale/rotate; 2+ objects get "Pattern fill" (top = tile). Recolor: a selection with 2+
@@ -2811,6 +2847,7 @@ const editor = {
       const mk = (glyph, title, fn) => { const b = document.createElement("button"); b.type = "button"; b.className = "insp-iconbtn"; b.textContent = glyph; b.title = title; b.addEventListener("click", fn); btns.appendChild(b); };
       mk("⊕", "Fit this artboard in view", () => this.fitToArtboard(a));
       mk("⤓", "Export this artboard as SVG", () => this.exportArtboardSVG(a, a.name));
+      mk("🖼", "Export this artboard as PNG", () => { if (this._exportArtboardPNG) this._exportArtboardPNG(a, a.name); });
       if (!a.primary) mk("✕", "Delete artboard", () => this.deleteArtboard(a.index));
       row.appendChild(btns); abRows.push(row);
     }
@@ -2838,7 +2875,7 @@ const editor = {
 
 // Mix the undo/redo + History-panel methods into the editor (extracted to keep this
 // file focused). They run with `this === editor`, so behaviour is identical to inline.
-Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, textStylesMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, warpMixin, envelopeMixin, meshMixin, colorsMixin, isolationMixin, symbolsMixin, effectsMixin, repeatMixin, artboardsMixin);
+Object.assign(editor, historyMixin, layersMixin, penMixin, curvatureMixin, marqueeMixin, nodeMixin, transformMixin, textMixin, textStylesMixin, masksMixin, expandMixin, widthMixin, builderMixin, blendMixin, warpMixin, envelopeMixin, meshMixin, colorsMixin, isolationMixin, symbolsMixin, effectsMixin, repeatMixin, artboardsMixin, multiFillMixin);
 // (pointInPoly moved into editor/tools/marquee.js — its only consumer)
 // (snap45/snapDelta/snapPoint extracted -> editor/snap.js)
 

@@ -2293,6 +2293,25 @@ def main():
               and pf["crop"]["isG"] and pf["crop"]["colours"]==1 and pf["crop"]["gone"]
               and (not pf["minusB"]["isG"]) and pf["minusB"]["paths"]==1 and pf["minusB"]["colours"]==1 and pf["minusB"]["gone"]
               and pf["merge"]["isG"] and pf["merge"]["colours"]==2 and pf["merge"]["gone"], str(pf))
+        # Pathfinder Outline (Epic K.5): the same Divide face decomposition, but every face
+        # traces as an unfilled STROKE (fill=none) instead of a filled region — colours moved
+        # from fill to stroke, so overlapping shapes read as a wireframe of their boundaries.
+        pfo = page.evaluate(r"""() => {
+            const D2 = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="a" x="30" y="60" width="90" height="80" fill="#ee5555"/><rect data-hv-id="b" x="90" y="60" width="90" height="80" fill="#55ee55"/></svg>';
+            window.mountStageFromText(D2,'pfo'); editor.setTool('select'); editor.selection=new Set(['a','b']); editor.artboardSelected=false;
+            const actionLabels = editor._objectActions(editor.selectedNodes()).map(x=>x.label);
+            editor.pathfinder('outline');
+            const ids=[...editor.selection]; const g=editor.nodeById(ids[0]); const isG=!!g&&g.tagName.toLowerCase()==='g';
+            const paths = isG ? [...g.querySelectorAll('path')] : [];
+            const allUnfilled = paths.length>0 && paths.every(p=>p.getAttribute('fill')==='none');
+            const allStroked = paths.every(p=>{ const s=p.getAttribute('stroke'); return s && s!=='none'; });
+            const strokeColours = new Set(paths.map(p=>p.getAttribute('stroke')));
+            const gone = !editor.stage.querySelector('[data-hv-id="a"]') && !editor.stage.querySelector('[data-hv-id="b"]');
+            return { actionLabels, isG, faces: paths.length, allUnfilled, allStroked, strokeColours: [...strokeColours], gone }; }""")
+        check("Actions menu offers 'Pathfinder: Outline' + it traces every face as an unfilled, coloured-stroke wireframe",
+              pfo["actionLabels"].count("Pathfinder: Outline") == 1 and pfo["isG"] and pfo["faces"] == 3
+              and pfo["allUnfilled"] and pfo["allStroked"]
+              and "#ee5555" in pfo["strokeColours"] and "#55ee55" in pfo["strokeColours"] and pfo["gone"], str(pfo))
         # Expand (X.2): a live-shape <path> + a primitive <circle>, one stroked — expand bakes
         # all to plain <path> (no data-hv-shape, no primitives), outlining the stroke; round-trips.
         ex = page.evaluate(r"""() => {
@@ -2634,6 +2653,65 @@ def main():
             check("'‹ Done' clears mesh-point edit mode", page.evaluate("() => editor._meshPointTarget") is None)
         mount_ctl(page)
 
+        # Appearance stack v1 (Epic K.1, SCOPED to fills-only — no strokes/blend-modes/per-layer
+        # effects, same "ship a v1" pattern as the rest of this backlog). A <g data-hv-fills>
+        # holds ordered {fill,opacity} layers over one shared shape; _regenFills rebuilds one
+        # <path> per layer (paint order = list order). Also exercises a real bug this session
+        # found in passing: docks.js's live Properties panel renders _effectiveLeaves()-unwrapped
+        # nodes, so a parametric <g>'s OWN inspector section (Blend/Repeat/Fills) never matched
+        # nodes.length===1 through the real UI — fixed via a raw-selection check in _objectPanel.
+        section("Appearance stack: ordered fill layers (Epic K.1)")
+        mf = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="40" y="40" width="80" height="80" fill="#3366cc"/></svg>','k1');
+            editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false;
+            const acts0 = editor._objectActions(editor.selectedNodes()).map(a=>a.label);
+            o.gateBefore = acts0.includes('Add fill') && !acts0.includes('Add fill layer') && !acts0.includes('Expand fill stack');
+            editor.makeMultiFill();
+            const gid=[...editor.selection][0], g=editor.nodeById(gid);
+            o.isGroup = !!g && g.tagName.toLowerCase()==='g' && editor.isMultiFillGroup(g);
+            o.origGone = !editor.stage.querySelector('rect[data-hv-id="r1"]');
+            o.twoLayers = g.querySelectorAll('path[data-hv-id]').length===2;
+            const acts1 = editor._objectActions(editor.selectedNodes()).map(a=>a.label);
+            o.gateAfter = acts1.includes('Add fill layer') && acts1.includes('Expand fill stack') && !acts1.includes('Add fill');
+            editor.addFillLayer(g); o.threeLayers = g.querySelectorAll('path[data-hv-id]').length===3;
+            editor.setFillLayer(g,1,{fill:'#ff0000',opacity:0.5});
+            const kids=[...g.querySelectorAll('path[data-hv-id]')];
+            o.setLayer = kids[1].getAttribute('fill')==='#ff0000' && kids[1].getAttribute('fill-opacity')==='0.5';
+            editor.moveFillLayer(g,1,1); o.moved = editor._fillsSpec(g).layers[2].fill==='#ff0000';
+            editor.removeFillLayer(g,2); o.removed = g.querySelectorAll('path[data-hv-id]').length===2;
+            editor.removeFillLayer(g,0); editor.removeFillLayer(g,0);
+            o.floorAtOne = g.querySelectorAll('path[data-hv-id]').length===1;   // never below 1 layer
+            const ser = editor.serialize(); o.serStripped = !ser.includes('data-hv-fills');
+            editor.expandMultiFill(editor.nodeById(gid));
+            const gAfterExpand = editor.nodeById(gid);
+            o.expanded = !gAfterExpand.hasAttribute('data-hv-fills') && gAfterExpand.querySelectorAll('path[data-hv-id]').length>=1;
+            editor.undo();
+            const gAfterUndo = editor.nodeById(gid);
+            o.undoExpand = !!gAfterUndo && gAfterUndo.hasAttribute('data-hv-fills');
+            return o; }""")
+        check("multi-fill: Actions-menu gate (Add fill / Add fill layer+Expand), stack of layers, set/move/remove (floors at 1), expand+undo, round-trips",
+              mf["gateBefore"] and mf["isGroup"] and mf["origGone"] and mf["twoLayers"] and mf["gateAfter"]
+              and mf["threeLayers"] and mf["setLayer"] and mf["moved"] and mf["removed"] and mf["floorAtOne"]
+              and mf["serStripped"] and mf["expanded"] and mf["undoExpand"], str(mf))
+        # Real-UI path: the Fills inspector group only renders through docks.js's live Properties
+        # panel if _objectPanel's group-detection survives the _effectiveLeaves() unwrap (the bug
+        # above) — open the ACTUAL panel (not a direct _objectPanel() call) and click a real swatch.
+        open_ctx_panel(page)
+        page.wait_for_timeout(150)
+        rows = page.query_selector_all(".insp-fill-row .insp-swatch")
+        # State at this point is post floor-at-1 + expand/undo, so exactly 1 layer survives.
+        check("multi-fill: Fills group renders through the live Properties panel (1 layer row)", len(rows) == 1, f"found {len(rows)}")
+        if rows:
+            rows[0].scroll_into_view_if_needed()
+            rows[0].click()
+            page.wait_for_timeout(150)
+            target = page.evaluate("() => editor._fillLayerTarget")
+            check("clicking a layer swatch enters the solo fill-layer colour-panel mode", target is not None, str(target))
+            done = page.query_selector(".cp-recolor-done")
+            if done:
+                done.scroll_into_view_if_needed(); done.click(); page.wait_for_timeout(150)
+            check("'‹ Done' clears fill-layer edit mode", page.evaluate("() => editor._fillLayerTarget") is None)
         # Colour systems (Epic C): Pattern fills (top object → <pattern> in defs applied below;
         # tile scale/rotate via patternTransform; round-trips) + Recolor Artwork (harvest distinct
         # solid colours, remap one exactly, Hue/Sat/Light shift over all). (Global colours deferred.)
@@ -3003,6 +3081,33 @@ def main():
             return { groupOk, undoOk, sameType, boolGc, appendOk }; }""")
         check("effects hardening: group filter, undo drops it, same-type stack chains, boolean leaves no orphan, reopen+append",
               eh["groupOk"] and eh["undoOk"] and eh["sameType"] and eh["boolGc"] and eh["appendOk"], str(eh))
+        # Expand Appearance (Epic K.2): bake a live filter (blur/shadow/glow) into a flat raster
+        # <image> — the one bake X's own expand can't do (no vector form for feGaussianBlur).
+        ea = page.evaluate(r"""async () => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="60" y="60" width="80" height="80" fill="#3399cc"/></svg>','k2');
+            editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false;
+            editor.addEffect('shadow');
+            const actionLabels = editor._objectActions(editor.selectedNodes()).map(x=>x.label);
+            const before = editor.stage.querySelectorAll('[data-hv-id]').length;
+            const historyBefore = editor.history.length;
+            await editor.expandAppearance();
+            const r1Gone = !editor.nodeById('r1');
+            const ids = [...editor.selection]; const img = ids.length===1 ? editor.nodeById(ids[0]) : null;
+            const isImage = !!img && img.tagName.toLowerCase()==='image';
+            const hasHref = !!img && (img.getAttribute('href')||'').startsWith('data:image/png');
+            const biggerThanRaw = !!img && parseFloat(img.getAttribute('width'))>80 && parseFloat(img.getAttribute('height'))>80;
+            const nodeCountSame = editor.stage.querySelectorAll('[data-hv-id]').length===before;
+            const oneUndoStep = editor.history.length===historyBefore+1;
+            editor.undo();
+            const restored = editor.nodeById('r1'); const undoOk = !!restored && !!restored.getAttribute('filter') && restored.getAttribute('fill')==='#3399cc';
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100"><rect data-hv-id="p1" x="10" y="10" width="50" height="50" fill="#c33"/></svg>','k2b');
+            editor.selection=new Set(['p1']); editor.artboardSelected=false;
+            const noFxLabels = editor._objectActions(editor.selectedNodes()).map(x=>x.label);
+            return { hasExpandAppearance: actionLabels.includes('Expand appearance'), r1Gone, isImage, hasHref, biggerThanRaw,
+                     nodeCountSame, oneUndoStep, undoOk, noFxOffersNothing: !noFxLabels.includes('Expand appearance') }; }""")
+        check("Expand Appearance: menu gated on having an effect, bakes to a correctly-sized <image>, one undo step, undo restores the filter, ungated for a plain object",
+              ea["hasExpandAppearance"] and ea["r1Gone"] and ea["isImage"] and ea["hasHref"] and ea["biggerThanRaw"]
+              and ea["nodeCountSame"] and ea["oneUndoStep"] and ea["undoOk"] and ea["noFxOffersNothing"], str(ea))
         # Transforms & Repeat (Epic T): reflect (+copy), shear, transform-each (own centre),
         # transform-again, and parametric repeat (grid/radial/mirror) with live count + expand.
         section("Transforms & Repeat: reflect / shear / each / again / repeat (Epic T)")
@@ -3111,6 +3216,57 @@ def main():
             return { multi, resize, fit, noClip, exportCrop, undoOk, backcompat }; }""")
         check("artboard hardening: 3 extras grow union, resize reflows, fit moves viewport, no-clip, export-crop, undo-add, back-compat single",
               ah["multi"] and ah["resize"] and ah["fit"] and ah["noClip"] and ah["exportCrop"] and ah["undoOk"] and ah["backcompat"], str(ah))
+        # PNG-per-artboard (Epic K.4): the same crop as exportArtboardSVG, rasterised through the
+        # SAME client-side canvas pipeline the Export PNG modal uses (editor._exportArtboardPNG,
+        # a UI-layer hook app.js wires — mirrors _summonColor's dependency-injection pattern).
+        ap = page.evaluate(r"""async () => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="20" y="20" width="120" height="120" fill="#3399cc"/></svg>','k4');
+            editor.setTool('select'); editor.artboardSelected=true; editor.selection=new Set();
+            editor.addArtboard({ name: 'Board 2' });
+            window.__png=null; const real=HTMLAnchorElement.prototype.click;
+            HTMLAnchorElement.prototype.click=function(){ if(this.download){ window.__png={name:this.download, blob:this.href.startsWith('blob:')}; return; } return real.call(this); };
+            const rect = editor.allArtboards().find(a => a.name === 'Board 2');
+            await editor._exportArtboardPNG(rect, rect.name);
+            HTMLAnchorElement.prototype.click = real;
+            const p = editor._artboardPanel();
+            const hasBtn = [...p.querySelectorAll('.insp-iconbtn')].some(b => /Export this artboard as PNG/.test(b.title));
+            return { png: window.__png, hasBtn }; }""")
+        check("PNG-per-artboard downloads a correctly-named a[download$=.png] blob, panel offers the button",
+              bool(ap["png"]) and ap["png"]["name"] == "Board-2.png" and ap["png"]["blob"] and ap["hasBtn"], str(ap))
+        # On-canvas artboard tool (Epic K.3): drag to create a new artboard at exactly that
+        # position/size — previously only reachable via the panel's auto-placed "Add artboard".
+        # Same click-vs-drag contract as the shape tools (a bare click makes nothing).
+        k3 = page.evaluate(r"""() => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="400" height="300"><rect data-hv-id="r1" x="40" y="40" width="100" height="100" fill="#3399cc"/></svg>','k3');
+            editor.setTool('select');
+            editor.setTool('artboard');
+            const stageRect = editor.stage.getBoundingClientRect();
+            const pe = (t, ty, x, y) => t.dispatchEvent(new PointerEvent(ty, { pointerId: 0, pointerType: 'mouse', button: 0, isPrimary: true, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+            const cx = stageRect.left + stageRect.width * 0.7, cy = stageRect.top + stageRect.height * 0.7;
+            pe(editor.stage, 'pointerdown', cx, cy); pe(window, 'pointerup', cx, cy);
+            const noneFromClick = (editor.artboards || []).length === 0;
+            const x0 = stageRect.left + stageRect.width * 0.55, y0 = stageRect.top + stageRect.height * 0.15;
+            const x1 = stageRect.left + stageRect.width * 0.95, y1 = stageRect.top + stageRect.height * 0.55;
+            // Capture the CTM BEFORE the drag — adding the artboard grows the viewBox to the new
+            // union, changing scale, so converting AFTER would compare against the wrong mapping.
+            const m = editor.stageCTM().inverse();
+            const p0 = new DOMPoint(x0, y0).matrixTransform(m), p1 = new DOMPoint(x1, y1).matrixTransform(m);
+            pe(editor.stage, 'pointerdown', x0, y0);
+            pe(window, 'pointermove', (x0 + x1) / 2, (y0 + y1) / 2);
+            const previewDuring = !!document.querySelector('.hv-artboard-preview');
+            pe(window, 'pointermove', x1, y1);
+            pe(window, 'pointerup', x1, y1);
+            const previewGone = !document.querySelector('.hv-artboard-preview');
+            const abs = editor.allArtboards(); const extra = abs.find(a => !a.primary);
+            const wOk = !!extra && Math.abs(extra.w - Math.abs(p1.x - p0.x)) < 5;
+            const hOk = !!extra && Math.abs(extra.h - Math.abs(p1.y - p0.y)) < 5;
+            const historyLabel = editor._curLabel, artboardSelected = editor.artboardSelected;
+            editor.undo();
+            const undoOk = editor.allArtboards().length === 1;
+            return { noneFromClick, previewDuring, previewGone, count: abs.length, wOk, hOk, artboardSelected, historyLabel, undoOk }; }""")
+        check("on-canvas artboard tool: bare click makes nothing; a real drag creates+places+sizes one artboard exactly there, in one undo step",
+              k3["noneFromClick"] and k3["previewDuring"] and k3["previewGone"] and k3["count"] == 2
+              and k3["wOk"] and k3["hOk"] and k3["artboardSelected"] and k3["historyLabel"] == "Add artboard" and k3["undoOk"], str(k3))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)
@@ -5273,7 +5429,7 @@ def main():
                 trim = mp.evaluate("""() => {
                     const t = document.querySelector('.toolstrip');
                     const before = t.scrollHeight - t.clientHeight;
-                    for (const k of ['tool:curvature','tool:line','tool:width','tool:envelope','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser'])
+                    for (const k of ['tool:curvature','tool:line','tool:width','tool:envelope','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser','tool:artboard'])
                         __layout.setHidden(k, true);
                     return { before, after: t.scrollHeight - t.clientHeight };
                 }""")
@@ -5480,14 +5636,14 @@ def main():
                     const t = document.querySelector('.toolstrip');
                     const before = t.scrollHeight - t.clientHeight;
                     let clicked = 0;
-                    for (const k of ['tool:curvature','tool:line','tool:width','tool:envelope','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser']) {
+                    for (const k of ['tool:curvature','tool:line','tool:width','tool:envelope','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser','tool:artboard']) {
                         const row = document.querySelector(`.picker-row[data-key="${k}"]`);
                         if (row) { row.querySelector('input[type=checkbox]').click(); clicked++; }
                     }
                     return { clicked, before, after: t.scrollHeight - t.clientHeight };
                 }""")
                 check("mobile: unticking tools in the picker trims the real rail, solved through the UI",
-                      trimmed["clicked"] == 8 and trimmed["before"] > 0 and trimmed["after"] == 0, str(trimmed))
+                      trimmed["clicked"] == 9 and trimmed["before"] > 0 and trimmed["after"] == 0, str(trimmed))
                 mp.evaluate("() => { const b = document.querySelector('[data-modal-close]'); if (b) b.click(); }")
                 mp.evaluate("() => __layout.reset()")
                 mp.wait_for_timeout(200)

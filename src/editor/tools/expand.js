@@ -182,7 +182,7 @@ export const expandMixin = {
   // Each builds a region predicate per output and traces it to crisp cubics.
   pathfinder(op) {
     if (!this.stage) return;
-    const ops = { divide: "Divide", trim: "Trim", merge: "Merge", crop: "Crop", "minus-back": "Minus Back" };
+    const ops = { divide: "Divide", trim: "Trim", merge: "Merge", crop: "Crop", "minus-back": "Minus Back", outline: "Outline" };
     if (!ops[op]) { setStatus("Unknown pathfinder op.", 2000); return; }
     let nodes = this._fillableSelection();
     if (nodes.length < 2) { setStatus("Select 2 or more overlapping shapes.", 3000); return; }
@@ -195,17 +195,30 @@ export const expandMixin = {
     const res = Math.max(170, Math.min(380, Math.round(big / 3.5)));
     const inAbove = (i, x, y) => { for (let j = i + 1; j < N; j++) if (masks[j].inside(x, y)) return true; return false; };
     const fillOf = (n) => n.getAttribute("fill") || "#000000";
+    // Outline (K.5): the same face decomposition as Divide, but each face traces as an
+    // unfilled STROKE instead of a filled region — Illustrator's Pathfinder Outline. Faces
+    // are traced independently (no shared-edge dedup in this engine), so two adjacent faces
+    // each draw their common boundary once — harmless (the same line drawn twice looks
+    // identical to once) but not a true single-stroke edge graph; noted, not solved here.
+    const outlineMode = op === "outline";
     const mkPath = (d, src) => {
       const path = document.createElementNS(SVG_NS, "path");
       path.setAttribute("data-hv-id", "n" + (++this.idSeq));
-      path.setAttribute("d", d); path.setAttribute("fill-rule", "nonzero");
-      path.setAttribute("fill", fillOf(src));
-      for (const a of ["fill-opacity", "opacity"]) { const v = src.getAttribute(a); if (v) path.setAttribute(a, v); }
+      path.setAttribute("d", d);
+      if (outlineMode) {
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke", fillOf(src));
+        path.setAttribute("stroke-width", "1");
+      } else {
+        path.setAttribute("fill-rule", "nonzero");
+        path.setAttribute("fill", fillOf(src));
+        for (const a of ["fill-opacity", "opacity"]) { const v = src.getAttribute(a); if (v) path.setAttribute(a, v); }
+      }
       return path;
     };
     // Build the list of output regions: { pred, src }.
     const outs = [];
-    if (op === "divide") {
+    if (op === "divide" || op === "outline") {
       for (let sig = 1; sig < (1 << N); sig++) {
         let top = -1; for (let i = N - 1; i >= 0; i--) if (sig & (1 << i)) { top = i; break; }
         outs.push({ pred: (x, y) => { for (let i = 0; i < N; i++) if (masks[i].inside(x, y) !== !!(sig & (1 << i))) return false; return true; }, src: nodes[top] });
@@ -248,5 +261,25 @@ export const expandMixin = {
     this.selection = new Set(ids); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector(); this._renderLayers();
     setStatus(`${ops[op]} → ${made.length} path${made.length > 1 ? "s" : ""}.`, 2500);
+  },
+  // Expand Appearance (Epic K.2): bake a live filter/effect stack (drop shadow/blur/glow —
+  // Epic E) into flat, plain-<image> geometry — mirrors X's own expand (live shape/stroke →
+  // plain path), but for effects there's no vector equivalent to bake TO (feGaussianBlur has
+  // no path form), so this is lossy-by-necessity: a raster snapshot, sized to the filter's own
+  // rendered extent (shadows/blur spread beyond the raw geometry). The actual rasterisation is
+  // a UI-layer hook (app.js wires it, same pattern as _summonColor/_exportArtboardPNG) since it
+  // needs ui/export.js's canvas pipeline, a layer above editor.js.
+  async expandAppearance() {
+    const nodes = this.selectedNodes().filter((n) => this.effectsOf(n).length);
+    if (!nodes.length) { setStatus("Select an object with an effect (blur, shadow, or glow) to expand.", 3000); return; }
+    if (!this._expandAppearanceHook) { setStatus("Expand Appearance isn't available.", 2500); return; }
+    this.push("Expand appearance");
+    const ids = [];
+    for (const n of nodes) { const id = await this._expandAppearanceHook(n); if (id) ids.push(id); }
+    if (!ids.length) { this.undo(); setStatus("Nothing to expand.", 2000); return; }
+    this._gcDefs();
+    this.selection = new Set(ids); this.artboardSelected = false;
+    this._renderSelection(); this._renderInspector(); this._renderLayers();
+    setStatus(`Expanded appearance on ${ids.length} object${ids.length > 1 ? "s" : ""}.`, 2500);
   },
 };
