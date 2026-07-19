@@ -2515,6 +2515,67 @@ def main():
         check("blend: 2 shapes → parametric group (endpoints+steps), colour+shape interp, steps regen, reverse, expand+undo, round-trips",
               bn["group"] and bn["origGone"] and bn["childCount"] and bn["midPlaced"] and bn["midColour"]
               and bn["regen"] and bn["reverse"] and bn["serOk"] and bn["expanded"] and bn["undoOk"], str(bn))
+        # Two-click Blend tool (B): click one shape, then another, to blend between them — reuses
+        # makeBlend() unchanged, just staging the two picks into the normal selection first (the
+        # Actions-menu "Make blend" needed both pre-selected already).
+        mount_ctl(page)
+        page.evaluate("editor.setTool('blend')")
+        page.wait_for_timeout(80)
+        click_node(page, "r1")
+        page.wait_for_timeout(80)
+        pick1 = page.evaluate("() => ({ blendPick: editor._blendPick, selSize: editor.selection.size })")
+        check("blend tool: first click picks a shape (no blend yet)", pick1["blendPick"] is not None and pick1["selSize"] == 1, str(pick1))
+        click_node(page, "r2")
+        page.wait_for_timeout(80)
+        made = page.evaluate("""() => {
+            const gid = [...editor.selection][0]; const g = editor.nodeById(gid);
+            return { blendPick: editor._blendPick, isGroup: !!g && editor.isBlendGroup(g),
+                     r1Gone: !editor.nodeById('r1'), r2Gone: !editor.nodeById('r2') }; }""")
+        check("blend tool: second click on a different shape creates the blend",
+              made["blendPick"] is None and made["isGroup"] and made["r1Gone"] and made["r2Gone"], str(made))
+        page.evaluate("editor.undo(); editor.setTool('select')")
+        # Replace Spine (L, "smooth spacing"): a blend + one more fillable shape → that shape's
+        # outline becomes the blend's motion path (consumed), each step (endpoints included)
+        # TRANSLATED so its centroid lands evenly-by-ARC-LENGTH along it, instead of sitting
+        # wherever straight-line position-lerp between the endpoints put it.
+        sp = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="400" height="300">'
+              + '<rect data-hv-id="a" x="20" y="20" width="30" height="30" fill="#3366cc"/>'
+              + '<rect data-hv-id="b" x="300" y="20" width="30" height="30" fill="#cc3366"/>'
+              + '<path data-hv-id="spine" d="M35 35 C 100 250, 300 250, 315 35" fill="none" stroke="#000" stroke-width="2"/></svg>','sp1');
+            editor.setTool('select'); editor.selection = new Set(['a','b']); editor.artboardSelected = false;
+            editor.makeBlend();
+            const gid = [...editor.selection][0];
+            editor.selection = new Set([gid, 'spine']);
+            const actsBefore = editor._objectActions(editor.selectedNodes()).map(x=>x.label);
+            o.replaceOffered = actsBefore.includes('Replace Spine');
+            editor.makeReplaceSpine();
+            const g = editor.nodeById(gid);
+            const spec = editor._blendSpec(g);
+            o.hasSpine = !!spec.spine;
+            o.spineGone = !editor.nodeById('spine');
+            const actsAfter = editor._objectActions([g]).map(x=>x.label);
+            o.removeOffered = actsAfter.includes('Remove spine');
+            const kids = [...g.querySelectorAll('path[data-hv-id]')];
+            const t = kids[Math.floor(kids.length/2)].getAttribute('transform') || '';
+            const m = /translate\(\s*(-?[\d.]+)\s+(-?[\d.]+)\s*\)/.exec(t);
+            o.midDy = m ? parseFloat(m[2]) : 0;   // the spine dips ~200 units below the endpoints
+            const ser = editor.serialize();
+            o.serStripped = !ser.includes('data-hv-blend');
+            editor.removeSpine(g);
+            o.removedOk = !editor._blendSpec(editor.nodeById(gid)).spine;
+            editor.undo();   // undo remove-spine — undo() reinstalls the WHOLE stage, so `g` is now
+            o.undoRemoveOk = !!editor._blendSpec(editor.nodeById(gid)).spine;   // stale; re-query by id
+            editor.undo();   // undo replace-spine
+            o.undoReplaceOk = !editor._blendSpec(editor.nodeById(gid)).spine;
+            return o; }""")
+        check("Replace Spine: offered only for a blend+1-more selection, sets spec.spine, consumes the spine shape, offers Remove-spine",
+              sp["replaceOffered"] and sp["hasSpine"] and sp["spineGone"] and sp["removeOffered"], str(sp))
+        check("Replace Spine: an interior step is actually pulled toward the spine's curve (translate dy), and it serializes stripped",
+              sp["midDy"] > 50 and sp["serStripped"], str(sp))
+        check("Remove spine clears spec.spine; undo restores it; a second undo removes Replace Spine entirely",
+              sp["removedOk"] and sp["undoRemoveOk"] and sp["undoReplaceOk"], str(sp))
 
         # Warp (Epic D.1): parametric preset deformation (arc/bulge/flag/fisheye) over the
         # selection's combined bbox, as one data-hv-warp group — same shape as Blend above.

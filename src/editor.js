@@ -322,6 +322,7 @@ const editor = {
     if (this.tool === "knife") { this._knifeDown(e); return; }
     if (this.tool === "eraser") { this._eraserDown(e); return; }
     if (this.tool === "artboard") { this._artboardDown(e); return; }
+    if (this.tool === "blend") { this._blendToolDown(e); return; }
     if (SHAPE_TOOLS.has(this.tool)) {
       if (e.button !== 0) return;
       e.stopPropagation(); e.preventDefault();   // draw, don't pan
@@ -479,10 +480,11 @@ const editor = {
   // creation sub-tools. Marquee + transform are folded into select (empty-drag
   // rubber-bands; Ctrl+T/Ctrl+R toggle the scale/rotate sub-mode).
   setTool(t) {
-    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "text" && t !== "width" && t !== "envelope" && t !== "artboard" && !BUILDER_TOOLS.has(t) && !SHAPE_TOOLS.has(t)) return;
+    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "text" && t !== "width" && t !== "envelope" && t !== "artboard" && t !== "blend" && !BUILDER_TOOLS.has(t) && !SHAPE_TOOLS.has(t)) return;
     if (this._pen && t !== "pen") this._finishPen(true);   // keep any in-progress path
     if (this._curv && t !== "curvature") this._curvFinish(true);
     if (this._textEdit && t !== "text") this._commitText();   // leaving the text tool finishes the edit in progress
+    if (this._blendPick && t !== "blend") this._blendPick = null;   // drop a half-made blend pick on tool switch
     if (t !== this.tool) { this._xformMode = null; this._gradMode = false; }   // leaving select drops the transform / gradient sub-mode
     if (t !== "node") this._nodeSel = new Set();           // anchor selection is node-tool-only
     this.tool = t;
@@ -534,6 +536,7 @@ const editor = {
     if (t === "ellipse") return "Ellipse: drag on the canvas.";
     if (t === "line") return "Line: drag on the canvas.";
     if (t === "artboard") return "Artboard: drag on the canvas to add one, sized and placed exactly there.";
+    if (t === "blend") return this._blendPick ? "Blend: now tap the second shape to blend into." : "Blend: tap a shape, then tap another to blend between them.";
     return "";
   },
   _hint() {
@@ -564,6 +567,7 @@ const editor = {
     if (t === "ellipse") return "Ellipse (E) — drag on the canvas · Shift = circle";
     if (t === "line") return "Line (L) — drag on the canvas · Shift = 45°";
     if (t === "artboard") return "Artboard (Shift+O) — drag on the canvas to add one, sized and placed exactly there";
+    if (t === "blend") return this._blendPick ? "Blend (B) — click a second shape to blend into · Esc cancels" : "Blend (B) — click two shapes, one after another, to blend between them";
     return "";
   },
   _showHint() { const h = this._hint(); if (h) setStatus(h, 0); },
@@ -2098,6 +2102,12 @@ const editor = {
     const makes = [];
     if (reads.some((n) => this._isStroked(n)) && !anyWs) makes.push({ label: "Vary width", onClick: () => { this.makeWidthStroke(); this.setTool("width"); } });
     if (fillable === 2 && !isBlend) makes.push({ label: "Make blend", onClick: () => this.makeBlend() });
+    // Replace Spine (L): a blend + one more fillable shape → that shape's outline becomes the
+    // blend's motion path (consumed, like the top-object idiom elsewhere). Remove-spine only
+    // offers once one is actually set.
+    if (nodes.length === 2 && nodes.some((n) => this.isBlendGroup(n)) && nodes.some((n) => !this.isBlendGroup(n) && shapeToAbsPath(n)))
+      makes.push({ label: "Replace Spine", onClick: () => this.makeReplaceSpine() });
+    if (isBlend && (this._blendSpec(single) || {}).spine) makes.push({ label: "Remove spine", onClick: () => this.removeSpine(single) });
     if (nodes.length >= 2) makes.push({ label: "Pattern fill", onClick: () => this.fillWithPattern() });
     if (!anyInstance) makes.push({ label: "Make symbol", onClick: () => this.makeSymbol() });
     if (areaTexts) makes.push({ label: "Thread text", onClick: () => this.linkTextFrames() });
@@ -2396,6 +2406,13 @@ const editor = {
         (v) => { this.beginCoalesce(); this.setBlendParam(g, "steps", Math.max(1, Math.min(60, Math.round(v)))); }, null,
         () => { this.commitCoalesce("Blend steps"); this._renderInspector(); }));
       brows.push(checkRow("Reverse", !!spec.reverse, (v) => this.setBlendParam(g, "reverse", v)));
+      if (spec.spine) {
+        const note = document.createElement("span"); note.className = "insp-note"; note.textContent = "Following a spine — steps are evenly spaced along it";
+        brows.push(inspRow("", note));
+        const rs = document.createElement("button"); rs.type = "button"; rs.className = "insp-action"; rs.textContent = "Remove spine";
+        rs.title = "Release back to a straight-line motion between the two endpoints"; rs.addEventListener("click", () => this.removeSpine(g));
+        brows.push(inspRow("", rs));
+      }
       const bx = document.createElement("button"); bx.type = "button"; bx.className = "insp-action"; bx.textContent = "Expand";
       bx.title = "Bake the blend into a plain group"; bx.addEventListener("click", () => this.expandBlend(g));
       brows.push(inspRow("", bx));

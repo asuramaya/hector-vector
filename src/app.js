@@ -1406,10 +1406,12 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "l" || e.key === "L") { editor.setTool("line"); return; }
   if (e.key === "t" || e.key === "T") { editor.setTool("text"); return; }
   if (e.key === "w" || e.key === "W") { editor.setTool("width"); return; }
+  if (e.key === "b" || e.key === "B") { editor.setTool("blend"); return; }
   if (e.key === "Escape" && editor.stage) {
     if (editor._gradMode) { editor.clearGradMode(); return; }   // first Esc exits the gradient editor
     if (editor._xformMode) { editor.clearXform(); return; }     // …or scale/rotate
     if (editor.isIsolated && editor.isIsolated()) { editor.exitIsolation(); return; }   // …or isolation mode (Epic I)
+    if (editor.tool === "blend" && editor._blendPick) { editor._blendPick = null; editor.selection = new Set(); editor._renderSelection(); editor._renderInspector(); editor._showHint(); return; }   // cancel a half-made blend pick
     editor.selection = new Set(); editor.artboardSelected = false; editor._renderSelection(); editor._renderInspector(); editor._showHint();
   }
 });

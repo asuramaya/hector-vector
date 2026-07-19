@@ -163,6 +163,7 @@ export const TOOL_WHY = {
   "tool:knife":        ["Knife", "Slice clean through a shape"],
   "tool:eraser":       ["Eraser", "Rub parts of a shape away"],
   "tool:artboard":     ["Artboard", "Drag out a new artboard exactly where and how big you want it"],
+  "tool:blend":        ["Blend", "Click two shapes to morph a series of steps between them"],
 };
 export const VIEW_WHY = {
   "vp:zoom-out":   ["Zoom out", "See more of the canvas at once"],
@@ -227,6 +228,7 @@ const FIND = {
   "tool:knife":      "slice cut split divide",
   "tool:eraser":     "rub remove delete",
   "tool:artboard":   "canvas page board frame new size document",
+  "tool:blend":      "morph interpolate steps gradient shape mix transition spine",
   "vp:zoom-in":      "magnify closer bigger in",
   "vp:zoom-out":     "smaller further away out",
   "vp:fit":          "zoom fit whole all see everything",
