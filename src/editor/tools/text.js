@@ -938,6 +938,68 @@ export const textMixin = {
     return newIds;
   },
 
+  // PDF export (Epic O.1) needs pure vector paths, not <text> + an embedded @font-face: verified
+  // that cairosvg (the server-side PDF renderer, hvserver/export_pdf.py) SILENTLY IGNORES a
+  // base64 woff2 data: URI @font-face entirely — a document with cairosvg's fallback font
+  // installed system-wide would render byte-identically whether the face is embedded or not, no
+  // error or warning either way. Rather than risk visually-wrong text in the one export format
+  // meant to be print-accurate, outline PLAIN text (point/area — the common case) on a DETACHED
+  // clone of the export markup before it ever reaches cairosvg, reusing the same /api/text-outline
+  // endpoint the manual "Convert to outlines" button already calls. Best-effort: on ANY outline
+  // failure (offline, an unrecognised family, …) this returns the ORIGINAL text unchanged rather
+  // than fail the whole export — the export still succeeds, just with cairosvg's own font
+  // fallback, i.e. today's (imperfect but working) behaviour.
+  // DEFERRED (documented gap, not silently missed): text-ON-A-PATH is left as <text> here.
+  // _boundPathEl resolves its <path> via `this.stage.querySelector(...)`, hardcoded to the LIVE
+  // document — outlining on-path text against a detached clone needs that generalized to look up
+  // the id within the node's OWN document first, a bigger change for a narrower case (on-path
+  // text is far less common than plain text). It still round-trips through cairosvg's fallback
+  // font for now.
+  async outlineTextForExport(svgText) {
+    if (!window.__fonts) return svgText;
+    // Best-effort end to end, not just around the network call: ANY failure here (a bad family
+    // lookup, a parse error, …) returns the ORIGINAL markup unchanged rather than throwing —
+    // the export still succeeds, just with cairosvg's own (imperfect but working) font fallback.
+    try {
+      const doc = new DOMParser().parseFromString(svgText, "image/svg+xml");
+      const root = doc.documentElement;
+      if (root.tagName.toLowerCase() !== "svg") return svgText;
+      const texts = [...root.querySelectorAll("text")].filter((n) => !this._hasTextPath(n));
+      if (!texts.length) return svgText;
+      const jobs = texts.map((node) => {
+        const text = this._literalLines(node);
+        const fam = window.__fonts.primaryFamily(node.getAttribute("font-family") || "");
+        return { node, payload: {
+          text, family: fam, source: window.__fonts.webFontSource(fam),
+          weight: parseInt(node.getAttribute("font-weight") || "400", 10) || 400,
+          italic: (node.getAttribute("font-style") || "") === "italic",
+          fontSize: parseFloat(node.getAttribute("font-size")) || 16,
+          letterSpacing: parseFloat(node.getAttribute("letter-spacing")) || 0,
+          lineHeight: this._lineHeightOf(node),
+          anchor: node.getAttribute("text-anchor") || "start",
+          x: parseFloat(node.getAttribute("x")) || 0,
+          y: parseFloat(node.getAttribute("y")) || 0,
+        } };
+      }).filter((j) => j.payload.text.trim());
+      if (!jobs.length) return svgText;
+      const results = await Promise.all(jobs.map((j) => platform.textOutline(j.payload)));
+      const drop = new Set(["x", "y", "dx", "dy", "font-family", "font-size", "font-weight",
+        "font-style", "font-stretch", "text-anchor", "letter-spacing", "word-spacing", "xml:space",
+        "data-hv-id", "data-hv-name", "data-hv-line-height", "data-hv-text-width", "data-hv-br"]);
+      jobs.forEach((j, i) => {
+        const d = results[i] && results[i].d;
+        if (!d) return;   // this one text run failed to outline — leave it as <text>, don't fail the export
+        const path = doc.createElementNS(SVG_NS, "path");
+        path.setAttribute("d", d);
+        for (const at of [...j.node.attributes]) if (!drop.has(at.name)) path.setAttribute(at.name, at.value);
+        if (!path.getAttribute("fill")) path.setAttribute("fill", j.node.getAttribute("fill") || "#000000");
+        path.setAttribute("fill-rule", "nonzero");
+        j.node.replaceWith(path);
+      });
+      return new XMLSerializer().serializeToString(root);
+    } catch { return svgText; }
+  },
+
   // Coalesced numeric apply (no push) — for scrubbable inspector fields (size, spacing).
   // History is taken once on beginCoalesce and committed once on drag end, so a scrub is
   // a single undo step. `reflow` re-spaces multi-line tspans after a size change.

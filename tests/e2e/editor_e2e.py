@@ -3876,6 +3876,36 @@ def main():
         pdf = page.evaluate("window.__pdf")
         check("Download PDF emits an a[download$=.pdf] blob", bool(pdf) and str(pdf.get("name")).endswith(".pdf") and pdf.get("blob"), str(pdf))
         page.evaluate("closeModal()")
+        # Font-embedding FIDELITY (O.1 backlog gap, now closed): confirmed by direct testing that
+        # cairosvg (hvserver/export_pdf.py's server-side renderer) SILENTLY IGNORES an embedded
+        # base64 woff2 @font-face entirely — the exact same PDF bytes come out whether the face is
+        # embedded or not, no error either way, always falling back to whatever system font
+        # fontconfig resolves. So PDF export now outlines plain <text> into real vector <path>
+        # elements first (editor.outlineTextForExport) instead of embedding fonts for cairosvg to
+        # ignore — verify the export path actually does that, not just that a PDF comes out.
+        outline = page.evaluate(r"""async () => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 100" width="300" height="100"><text data-hv-id="t1" x="10" y="60" font-family="Arial" font-size="32" fill="#112233">Fidelity</text></svg>','o1fid');
+            const before = editor.serialize();
+            const out = await editor.outlineTextForExport(before);
+            const pdfRes = await fetch('/api/export-pdf', { method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ svg: out, background: 'white' }) }).then(r => r.json());
+            return { stillHasText: /<text/.test(out), hasPath: /<path/.test(out),
+                     fillCarried: /#112233/.test(out), pdfOk: !!pdfRes.pdf_base64 && pdfRes.pdf_base64.length > 100 }; }""")
+        check("PDF export: outlineTextForExport converts <text> to real vector <path> (fill/attrs carried over), and the server still renders it",
+              not outline["stillHasText"] and outline["hasPath"] and outline["fillCarried"] and outline["pdfOk"], str(outline))
+        # Best-effort: a text-outline failure (e.g. offline) must not fail the WHOLE export — the
+        # original <text> markup should come back unchanged so cairosvg's existing (imperfect but
+        # working) font fallback still produces SOMETHING, rather than a hard export error. Force
+        # a REAL failure by aborting the /api/text-outline request (not monkey-patching
+        # window.__fonts — it's an ES module namespace object, its exports are non-writable, so an
+        # attempted reassignment silently no-ops in sloppy mode rather than actually stubbing it).
+        page.route("**/api/text-outline", lambda route: route.abort())
+        fallback = page.evaluate(r"""async () => {
+            const out = await editor.outlineTextForExport('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><text x="5" y="30" font-family="Arial" font-size="20">Hi</text></svg>');
+            return { unchanged: /<text/.test(out) && !/<path/.test(out) }; }""")
+        page.unroute("**/api/text-outline")
+        check("PDF export: a text-outline failure falls back to the original <text> rather than failing the export",
+              fallback["unchanged"], str(fallback))
 
         section("known-problem fix: SVG export bakes placed-raster hrefs to data URIs (self-contained)")
         inl = page.evaluate("""async () => {

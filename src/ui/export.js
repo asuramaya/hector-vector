@@ -268,11 +268,16 @@ export function openExportModal() {
   go.addEventListener("click", async () => {
     go.disabled = true; go.textContent = "Rendering…";
     try {
-      // Inline rasters + embed web fonts first so neither drops out of the isolated
-      // render — the same prep whichever format renders it.
+      // Inline rasters first so they don't drop out of the isolated render — the same prep
+      // whichever format renders it. Fonts diverge by format below: PNG's <img> render
+      // understands @font-face + a data: URI just fine (real browser CSS), but cairosvg
+      // (PDF's server-side renderer) silently IGNORES it — verified: it renders byte-identically
+      // whether the face is embedded or not, falling back to a system font with no error. So PDF
+      // outlines text into real paths instead (editor.outlineTextForExport, [[export-pdf-font-fidelity]]);
+      // PNG keeps embedding, which is correct for its own render path.
       if (window.__fonts) await window.__fonts.fontsReady();
       let svgText = await inlineSvgImages(src.svg);
-      svgText = await withEmbeddedFonts(svgText);
+      svgText = isPdf ? await editor.outlineTextForExport(svgText) : await withEmbeddedFonts(svgText);
       const base = src.target ? src.target.name.replace(/\.svg$/i, "") : (defaultSaveName() || "export");
       if (lastExport && lastExport.url) URL.revokeObjectURL(lastExport.url);
       if (isPdf) {
