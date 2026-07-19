@@ -1158,6 +1158,7 @@ function buildRasterTools(node) {
   wire("#layer-delete", () => editor.deleteSelection());
   wire("#layer-cleanup", () => editor.cleanupLayers());
   wire("#layer-merge", () => editor.consolidateByColor());
+  wire("#symbols-add", () => editor.makeSymbol());
 
   const set = (id, on) => { const b = document.querySelector(id); if (b) b.disabled = !on; };
   let lastFacts = null;   // most recent selection facts — the adaptive engine + the pulse read this

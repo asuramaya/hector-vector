@@ -3151,11 +3151,11 @@ def main():
             o.dupShares = uses.length===2 && uses[0].getAttribute('href')===uses[1].getAttribute('href');
             // edit master: surface+isolate, recolor a child, exit → propagates to instances
             editor.selection=new Set([use.getAttribute('data-hv-id')]); editor.editSymbol(use);
-            o.editing = editor.isIsolated() && !!editor._symEdit && editor.stage.querySelector('#'+CSS.escape(symId)).closest('defs')===null;
+            o.editing = editor.isIsolated() && !!(editor._symEditStack && editor._symEditStack.length) && editor.stage.querySelector('#'+CSS.escape(symId)).closest('defs')===null;
             editor.push('edit'); editor.stage.querySelector('#'+CSS.escape(symId)).querySelector('rect').setAttribute('fill','#0000ff');
             editor.exitIsolation();
             const after = editor.stage.querySelector('#'+CSS.escape(symId));
-            o.returned = !!after && after.closest('defs')!==null && !editor.isIsolated() && !editor._symEdit;
+            o.returned = !!after && after.closest('defs')!==null && !editor.isIsolated() && !(editor._symEditStack && editor._symEditStack.length);
             o.propagated = after.querySelector('rect').getAttribute('fill')==='#0000ff';
             o.serOk = editor.serialize().includes('hv-symbol') && editor.serialize().includes('<use') && !editor.serialize().includes('data-hv-');
             const firstUse = editor.stage.querySelector('use[data-hv-id]'); editor.breakSymbolLink(firstUse);
@@ -3165,6 +3165,111 @@ def main():
         check("symbols: make (master in defs + <use>), originals gone, duplicate shares master, edit-master propagates, break-link copies, round-trips",
               sym["made"] and sym["master"] and sym["origGone"] and sym["dupShares"] and sym["editing"]
               and sym["returned"] and sym["propagated"] and sym["serOk"] and sym["broke"], str(sym))
+        # Symbols PANEL (Epic Y): a browsable library — one tile per master, a live <use>-based
+        # thumbnail (no rasterization/cache — it's real geometry in the same document, so it
+        # updates automatically as the master is edited), click OR drag to place a NEW instance
+        # (distinct from duplicate(), which copies an EXISTING one). Piggybacks on _renderLayers()
+        # for refresh (any mutation that could change the symbol set already routes through there).
+        section("Symbols panel: browsable library, click/drag to place a new instance (Epic Y)")
+        panel = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 200" width="300" height="200"><rect data-hv-id="a" x="20" y="20" width="30" height="30" fill="#e55"/></svg>','panel1');
+            editor.setTool('select'); editor.selection=new Set(['a']); editor.artboardSelected=false;
+            editor.makeSymbol();
+            const rows = [...document.querySelectorAll('.symbol-row')];
+            o.rowCount = rows.length;
+            o.hasThumb = rows.length && !!rows[0].querySelector('.symbol-thumb use');
+            o.count = document.querySelector('#symbols-count')?.textContent;
+            return o; }""")
+        check("symbols panel: one tile per master with a live <use> thumbnail, count updates",
+              panel["rowCount"] == 1 and panel["hasThumb"] and panel["count"] == "1", str(panel))
+        click_place = page.evaluate(r"""() => {
+            const before = editor.stage.querySelectorAll('use[data-hv-id]').length;
+            const row = document.querySelector('.symbol-row');
+            row.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, button: 0, clientX: 0, clientY: 0, bubbles: true }));
+            window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, button: 0, clientX: 0, clientY: 0, bubbles: true }));
+            const after = editor.stage.querySelectorAll('use[data-hv-id]').length;
+            const sel = editor.nodeById([...editor.selection][0]);
+            // getBBox() excludes the element's OWN transform (classic SVG gotcha) — read the LIVE
+            // rendered position via getBoundingClientRect() + the CTM inverse instead.
+            const r = sel.getBoundingClientRect();
+            const p = new DOMPoint(r.left + r.width/2, r.top + r.height/2).matrixTransform(editor.stageCTM().inverse());
+            const vb = editor.stage.viewBox.baseVal;
+            const nearCenter = Math.abs(p.x - (vb.x+vb.width/2)) < 3 && Math.abs(p.y - (vb.y+vb.height/2)) < 3;
+            return { before, after, nearCenter, label: editor._curLabel }; }""")
+        check("symbols panel: clicking a tile places a NEW instance centred on the document, selects it, one undo step",
+              click_place["after"] == click_place["before"] + 1 and click_place["nearCenter"] and click_place["label"] == "Place symbol", str(click_place))
+        page.evaluate("editor.undo()")
+        drop_pt = page.evaluate("""() => { const r = editor.stage.getBoundingClientRect(); return { x: r.left + r.width*0.8, y: r.top + r.height*0.2 }; }""")
+        row_pt = page.evaluate("""() => { const r = document.querySelector('.symbol-row').getBoundingClientRect(); return { x: r.left+r.width/2, y: r.top+r.height/2 }; }""")
+        page.mouse.move(row_pt["x"], row_pt["y"]); page.mouse.down()
+        page.mouse.move(drop_pt["x"], drop_pt["y"], steps=8); page.mouse.up()
+        page.wait_for_timeout(100)
+        drag_place = page.evaluate("""(drop) => {
+            const sel = editor.nodeById([...editor.selection][0]);
+            const r = sel.getBoundingClientRect();
+            const m = editor.stageCTM().inverse();
+            const p = new DOMPoint(r.left + r.width/2, r.top + r.height/2).matrixTransform(m);
+            const target = new DOMPoint(drop.x, drop.y).matrixTransform(m);
+            return { nearDrop: Math.abs(p.x - target.x) < 5 && Math.abs(p.y - target.y) < 5, label: editor._curLabel,
+                     ghostGone: !document.querySelector('.symbol-drag-ghost') }; }""", drop_pt)
+        check("symbols panel: a real mouse drag from the tile onto the canvas places the instance AT the drop point, ghost cleaned up",
+              drag_place["nearDrop"] and drag_place["label"] == "Place symbol" and drag_place["ghostGone"], str(drag_place))
+        page.evaluate("editor.undo()")
+        # Nested symbols: makeSymbol() now allows bundling an EXISTING instance + other content
+        # into a NEW symbol (symbol B's content contains a <use> of symbol A) — the old guard
+        # blocked ANY selection containing an instance, not just the pointless single-instance
+        # rewrap case. Editing symbol B, then double-clicking A's nested instance to edit IT too,
+        # pushes a SECOND edit session (_symEditStack) instead of silently refusing — and exiting
+        # unwinds them ONE Esc at a time (inner first), or all at once via a depth-jump/exit-to-
+        # containing without stranding a master live on the stage.
+        nest = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 200" width="300" height="200"><rect data-hv-id="a" x="20" y="20" width="30" height="30" fill="#e55"/></svg>','nest1');
+            editor.setTool('select'); editor.selection=new Set(['a']); editor.artboardSelected=false;
+            editor.makeSymbol();
+            const useA = editor.nodeById([...editor.selection][0]);
+            const circle = document.createElementNS('http://www.w3.org/2000/svg','circle');
+            circle.setAttribute('data-hv-id','extra1'); circle.setAttribute('cx','200'); circle.setAttribute('cy','100'); circle.setAttribute('r','15'); circle.setAttribute('fill','#33e');
+            editor.stage.insertBefore(circle, editor.stage.querySelector('g.hv-overlay'));
+            editor.selection = new Set([useA.getAttribute('data-hv-id'), 'extra1']);
+            editor.makeSymbol();   // symbol B — bundles an instance of A + a shape
+            const useB = editor.nodeById([...editor.selection][0]);
+            const symBId = useB ? (/#(.+)$/.exec(useB.getAttribute('href'))||[])[1] : null;
+            const symB = symBId ? editor.stage.querySelector('#'+CSS.escape(symBId)) : null;
+            o.madeNested = !!useB && useB.tagName.toLowerCase()==='use' && !!(symB && symB.querySelector('use'));
+            editor.selection = new Set([useB.getAttribute('data-hv-id')]);
+            editor.editSymbol(useB);
+            const depth1 = editor._isoStack.length, symDepth1 = editor._symEditStack.length;
+            const innerUse = editor.stage.querySelector('#'+CSS.escape(symBId)+' use');
+            editor.selection = new Set([innerUse.getAttribute('data-hv-id')]);
+            editor.editSymbol(innerUse);   // edit A's master WHILE B's is still surfaced — nested edit
+            o.nestedEditOk = depth1 === 1 && symDepth1 === 1 && editor._isoStack.length === 2 && editor._symEditStack.length === 2;
+            const beforeDefs = editor.stage.querySelectorAll('defs .hv-symbol').length;
+            editor.exitIsolation();   // pop A (inner) — only A returns to defs
+            o.innerUnwound = editor.stage.querySelectorAll('defs .hv-symbol').length === beforeDefs + 1
+              && editor._isoStack.length === 1 && editor._symEditStack.length === 1;
+            editor.exitIsolation();   // pop B (outer) — B returns too
+            o.outerUnwound = editor.stage.querySelectorAll('defs .hv-symbol').length === beforeDefs + 2
+              && editor._isoStack.length === 0 && editor._symEditStack.length === 0;
+            // re-enter both, then jump straight out — must finish BOTH stranded edits, not just the top one
+            editor.selection = new Set([useB.getAttribute('data-hv-id')]); editor.editSymbol(useB);
+            const innerUse2 = editor.stage.querySelector('#'+CSS.escape(symBId)+' use');
+            editor.selection = new Set([innerUse2.getAttribute('data-hv-id')]); editor.editSymbol(innerUse2);
+            const before2 = editor.stage.querySelectorAll('defs .hv-symbol').length;
+            editor.exitIsolationToDepth(0);
+            o.jumpFinishedBoth = editor.stage.querySelectorAll('defs .hv-symbol').length === before2 + 2
+              && editor._isoStack.length === 0 && editor._symEditStack.length === 0;
+            return o; }""")
+        check("nested symbols: makeSymbol() bundles an existing instance + other content into a new symbol",
+              nest["madeNested"], str(nest))
+        check("nested symbols: editing a symbol found INSIDE an already-surfaced master pushes a second edit session (not refused)",
+              nest["nestedEditOk"], str(nest))
+        check("nested symbols: exitIsolation unwinds ONE edit at a time (inner first), each master correctly returned to <defs>",
+              nest["innerUnwound"] and nest["outerUnwound"], str(nest))
+        check("nested symbols: jumping straight out past BOTH edits finishes both — no master left stranded live on the stage",
+              nest["jumpFinishedBoth"], str(nest))
+
         # Appearance / live effects (Epic E): a per-object effect stack (drop shadow / blur / glow)
         # rendered to a chained <filter> in defs; live param edits; serialize strips the working
         # JSON but keeps the filter; reopen RECONSTRUCTS the editable spec; clone-independent; GC.

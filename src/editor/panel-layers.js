@@ -36,6 +36,11 @@ export const layersMixin = {
   },
 
   _renderLayers() {
+    // Symbols panel (Epic Y) piggybacks on this call site rather than getting ~80 call sites of
+    // its own: any document mutation that could change the symbol set (make/break/edit a symbol,
+    // undo/redo, reopen) already routes through _renderLayers, and _renderSymbols is a no-op
+    // when its own panel isn't in the DOM (cloud/mobile/shelved), same guard as here.
+    if (this._renderSymbols) this._renderSymbols();
     const list = document.querySelector("#layers-list");
     if (!list) return;
     list.innerHTML = "";

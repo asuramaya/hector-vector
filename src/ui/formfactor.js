@@ -86,7 +86,7 @@ export function setCustomizeHandler(fn) { onCustomize = fn; }
 // The panes ARE the sheet's own children — nothing is rebuilt, cloned or re-implemented, so every
 // id-wired handler still fires and every layout.js tileKey still resolves. A tab is only a view onto
 // a child that was already there.
-const TAB_ORDER = ["properties", "color", "layers", "history", "view", "library", "processor", "jobs", "info"];
+const TAB_ORDER = ["properties", "color", "layers", "symbols", "history", "view", "library", "processor", "jobs", "info"];
 const TAB_NAMES = { view: "View" };
 
 let sheeted = false;

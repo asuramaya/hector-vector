@@ -32,10 +32,13 @@ export const isolationMixin = {
 
   // Enter one level deeper. `g` must nest inside the CURRENT deepest level (or be any group at
   // all, if nothing is isolated yet) — entering an unrelated group would silently orphan the
-  // stack levels already above it.
-  enterIsolation(g) {
+  // stack levels already above it. `force` skips that DOM-containment check: a NESTED symbol's
+  // own master (Epic Y) lives in <defs>, never as a descendant of the outer symbol's surfaced
+  // content — only its <use> REFERENCE is. That's a LOGICAL nesting relationship, tracked
+  // correctly by _symEditStack's own isoDepth bookkeeping, not a geometric one this check can see.
+  enterIsolation(g, force) {
     if (!g || !g.hasAttribute || !g.hasAttribute("data-hv-id") || g.tagName.toLowerCase() !== "g" || g.getAttribute("data-hv-locked") === "1") return;
-    const deepest = this.isIsolated() ? this.nodeById(this._isoStack[this._isoStack.length - 1]) : null;
+    const deepest = (!force && this.isIsolated()) ? this.nodeById(this._isoStack[this._isoStack.length - 1]) : null;
     if (deepest && !deepest.contains(g)) return;
     this._isoStack = (this._isoStack || []).concat([g.getAttribute("data-hv-id")]);
     this.selection = new Set(); this.artboardSelected = false;
@@ -48,9 +51,15 @@ export const isolationMixin = {
   // Back out ONE level (Esc, or the breadcrumb's own "◀ Exit" button — always the LAST crumb).
   exitIsolation() {
     if (!this._isoStack || !this._isoStack.length) return;
+    const poppedDepth = this._isoStack.length;   // depth BEFORE the pop below
     const wasId = this._isoStack.pop();
     this._applyIsoClasses(); this._renderBreadcrumb();
-    if (this._symEdit) { this._symFinishEdit(); return; }   // a symbol edit returns the master to <defs> + selects the instance (Epic Y)
+    // A symbol edit (Epic Y) only finishes when the level being popped is the one it was
+    // entered at — a PLAIN nested isolation inside a symbol's surfaced content (or a NESTED
+    // symbol edit inside it) must be able to exit on its own without prematurely ending the
+    // edit session underneath it.
+    const sst = this._symEditStack;
+    if (sst && sst.length && sst[sst.length - 1].isoDepth === poppedDepth) { this._symFinishEdit(); return; }
     if (wasId && this.nodeById(wasId)) { this.selection = new Set([wasId]); this.artboardSelected = false; }
     this._renderSelection(); this._renderInspector(); this._renderLayers();
   },
@@ -58,6 +67,7 @@ export const isolationMixin = {
   exitIsolationToDepth(depth) {
     if (!this._isoStack || depth >= this._isoStack.length || depth < 0) return;
     this._isoStack = this._isoStack.slice(0, depth);
+    this._finishSymbolEditsAbove(depth);
     this.selection = new Set(); this.artboardSelected = false;
     this._applyIsoClasses(); this._renderBreadcrumb();
     this._renderSelection(); this._renderInspector(); this._renderLayers();
@@ -73,9 +83,18 @@ export const isolationMixin = {
       stack = stack.slice(0, -1);
     }
     this._isoStack = stack;
+    this._finishSymbolEditsAbove(stack.length);
     this.selection = new Set(); this.artboardSelected = false;
     this._applyIsoClasses(); this._renderBreadcrumb();
     this._renderSelection(); this._renderInspector(); this._renderLayers();
+  },
+  // A jump (exitIsolationToDepth / exit-to-containing) can skip past several levels — and
+  // several NESTED symbol edits — at once. Any edit session whose own isolation depth no longer
+  // exists after the jump must still be finished (master returned to <defs>), or it's left
+  // stranded live on the stage instead — a real data-integrity bug, not just a UX rough edge.
+  _finishSymbolEditsAbove(depth) {
+    const sst = this._symEditStack;
+    while (sst && sst.length && sst[sst.length - 1].isoDepth > depth) this._symFinishEdit();
   },
   _applyIsoClasses() {
     if (!this.stage) return;

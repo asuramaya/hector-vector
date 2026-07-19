@@ -60,7 +60,7 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
     // tries to manage/dock them. (Their render fns already no-op on missing DOM.)
     const SERVER_PANELS = new Set(["library", "processor", "jobs", "info"]);
     if (CLOUD) for (const n of SERVER_PANELS) document.querySelector(`.rail-section[data-section="${n}"]`)?.remove();
-    const ORDER = ["history", "layers", "library", "processor", "properties", "color", "info", "jobs"]   // home identity order
+    const ORDER = ["history", "layers", "symbols", "library", "processor", "properties", "color", "info", "jobs"]   // home identity order
       .filter((n) => !(CLOUD && SERVER_PANELS.has(n)));
     const dockElFor = (side) => (side === "left" ? leftDock : rightDock);
     let folded = localStorage.getItem(FOLD_KEY) === "1";
@@ -100,10 +100,13 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
     const isFloat = (name) => { const s = sectionEl(name); return !!(s && s.closest(".dock-window")); };
     const curLoc = (name) => { if (state[name] && state[name].loc === "shelf") return "shelf"; if (groupOf(name)) return "float"; const s = sectionEl(name); if (!s || !s.parentElement) return null; if (s.closest(".dock-window")) return "float"; return s.parentElement === leftDock ? "left" : "right"; };
 
-    const DEFAULT_LOC = { history: "right", layers: "right", library: "right", processor: "right", properties: "right", color: "right", info: "shelf", jobs: "right" };
+    // symbols defaults VISIBLE (not shelved like info): the panel only earns its keep once a
+    // symbol exists, and hiding it by default would mean a user's first makeSymbol()/F8 has no
+    // visible payoff — they'd have no idea a browsable library now exists at all.
+    const DEFAULT_LOC = { history: "right", layers: "right", symbols: "right", library: "right", processor: "right", properties: "right", color: "right", info: "shelf", jobs: "right" };
     // Shelf squares: a glyph + label per panel (parked/unused panels show as these).
-    const SHELF_GLYPH = { history: "⟲", layers: "▤", library: "⊞", processor: "▸", properties: "☰", color: "◧", info: "ⓘ", jobs: "☷" };
-    const PANEL_LABEL = { history: "History", layers: "Layers", library: "Library", processor: "Processor", properties: "Properties", color: "Colour", info: "Info", jobs: "Jobs" };
+    const SHELF_GLYPH = { history: "⟲", layers: "▤", symbols: "◈", library: "⊞", processor: "▸", properties: "☰", color: "◧", info: "ⓘ", jobs: "☷" };
+    const PANEL_LABEL = { history: "History", layers: "Layers", symbols: "Symbols", library: "Library", processor: "Processor", properties: "Properties", color: "Colour", info: "Info", jobs: "Jobs" };
     let state = {};
     ORDER.forEach((n, i) => state[n] = { loc: DEFAULT_LOC[n], order: i, rect: null, visible: false });
     try { const s = JSON.parse(localStorage.getItem(DOCKS_KEY) || "null"); if (s) for (const n of ORDER) if (s[n]) state[n] = { ...state[n], ...s[n] }; } catch {}
