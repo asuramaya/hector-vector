@@ -61,7 +61,7 @@ export const historyMixin = {
     this._updateButtons(); this._renderHistory();
   },
   cancelCoalesce() { this._coalescing = false; this._coalesceState = null; },
-  _state() { return { svg: this._historyMarkup(), sel: [...this.selection], ab: this.artboardSelected, label: this._curLabel || "Edit" }; },
+  _state() { return { svg: this._historyMarkup(), sel: [...this.selection], ab: this.artboardSelected, abi: this._abSel, label: this._curLabel || "Edit" }; },
   undo() {
     if (this._pen) this._finishPen(true); if (this._curv) this._curvFinish(true); this.commitCoalesce();
     if (!this.history.length) return;
@@ -108,9 +108,13 @@ export const historyMixin = {
     const fresh = document.importNode(doc.documentElement, true);
     fresh.classList.add("inline-svg");
     host.replaceChild(fresh, this.stage);
-    this._install(fresh);
+    this._install(fresh);   // _install -> _loadArtboards resets _abSel to null as a safe default
     this.selection = new Set(state.sel.filter((id) => this.nodeById(id)));
     this.artboardSelected = !!state.ab;
+    // Restore WHICH extra artboard (if any) was selected, so undoing a K.3 move/resize doesn't
+    // silently drop its on-canvas handles back to the primary's — but only if that index still
+    // exists post-restore (an artboard the redo direction hasn't recreated yet, etc).
+    this._abSel = (state.abi != null && this.artboards && this.artboards[state.abi]) ? state.abi : null;
     this._renderSelection();
     this._renderInspector();
     this._updateButtons();

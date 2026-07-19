@@ -158,11 +158,18 @@ export const curvatureMixin = {
   _renderSelection() {
     const ov = this._overlayEl(); if (!ov) return;
     this._raiseGuides();   // keep ruler guides above any newly-added artwork (still below the overlay)
-    ov.innerHTML = ""; this._xform = null;
+    ov.innerHTML = ""; this._xform = null; this._abHandles = null;
+    // Keep the extra-artboard chrome's .selected styling in sync with artboardSelected/_abSel —
+    // centralized here (not scattered across every call site that changes them) since this is
+    // the one function EVERY selection change already routes through. _renderArtboards() is a
+    // cheap full rebuild and already no-ops safely when there are no extra artboards.
+    if (this._renderArtboards) this._renderArtboards();
     // Node tool shows anchors, not the object's bounding box — drawing the select bbox
     // on top of the handles (esp. degenerate on a thin line) just clutters the edit.
     if (this.tool === "node") { this.mountNodeHandles(); return; }
-    const targets = this.artboardSelected
+    // An EXTRA artboard (K.3) gets its own dedicated move/resize handles below, not the
+    // generic dashed sel-box (which only ever tracked the primary artboard's own rect).
+    const targets = (this.artboardSelected && this._abSel == null)
       ? [this.artboardEl()].filter(Boolean)
       : this.selectedNodes();
     const ctm = this.stageCTM();
@@ -184,6 +191,8 @@ export const curvatureMixin = {
     if (this.tool === "select" && this._xformMode && this.selection.size && !this.artboardSelected) this._mountTransformHandles();
     // On-canvas gradient editor (G.4): handles for the selected gradient object (self-heals if N/A).
     if (this.tool === "select" && this._gradMode && this.selection.size === 1 && !this.artboardSelected) this._mountGradientHandles();
+    // On-canvas artboard move/resize (K.3): handles for a selected EXTRA artboard.
+    if (this.tool === "select" && this.artboardSelected && this._abSel != null) this._mountArtboardHandles();
     // Pen tool: show the selected object's anchors so add/remove is obvious (read-only —
     // the actual add/delete is the pen's hover+click affordance).
     if (this.tool === "pen") this._renderPenPoints();

@@ -120,7 +120,14 @@ export const marqueeMixin = {
           if (additive) { this.selection.has(id) ? this.selection.delete(id) : this.selection.add(id); }
           else this.selection = new Set([id]);
           this.artboardSelected = false;
-        } else if (!additive) { this.selection = new Set(); this.artboardSelected = true; }
+        } else if (!additive) {
+          this.selection = new Set(); this.artboardSelected = true;
+          // Blank click inside an EXTRA artboard's own bounds selects THAT artboard (K.3) —
+          // same dispatch point that already picks "the artboard" for a click anywhere else;
+          // outside every extra's bounds this stays the existing primary-artboard behaviour.
+          const abIdx = this._artboardAt ? this._artboardAt(start.x, start.y) : -1;
+          this._abSel = abIdx >= 0 ? abIdx : null;
+        }
         this._renderSelection(); this._renderInspector();
         return;
       }

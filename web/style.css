@@ -1297,6 +1297,17 @@ svg.hv-iso > .hv-ablayer, svg.hv-iso > rect.hv-artboard { opacity: 0.4; }
    own colour so the preview reads as a direct look-ahead of the frame it will become. */
 .hv-artboard-preview { fill: none; stroke: #4a90d9; stroke-width: 1.5; stroke-dasharray: 5 3; vector-effect: non-scaling-stroke; pointer-events: none; }
 .hv-ablabel { fill: #4a90d9; font: 12px var(--ui-font, system-ui, sans-serif); pointer-events: none; }
+.hv-abframe.selected { stroke-width: 2.5; }
+/* On-canvas move/resize handles for an EXISTING extra artboard (Epic K.3). The move target is
+   stroke-only hit-testing (like .hv-guidehit above) so the artboard's own INTERIOR stays fully
+   click-through to real artwork — only the border itself drags the frame. */
+.hv-ab-movehit { fill: none; stroke: transparent; pointer-events: stroke; cursor: move; vector-effect: non-scaling-stroke; }
+.hv-ab-handle { fill: #fff; stroke: #4a90d9; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: all; }
+.hv-ab-handle:hover { fill: var(--hl-hover); }
+.hv-ab-nw, .hv-ab-se { cursor: nwse-resize; }
+.hv-ab-ne, .hv-ab-sw { cursor: nesw-resize; }
+.hv-ab-n,  .hv-ab-s  { cursor: ns-resize; }
+.hv-ab-e,  .hv-ab-w  { cursor: ew-resize; }
 .insp-ab-row .insp-ab-name { flex: 1; min-width: 0; }
 input.insp-ab-name { background: var(--field-bg); color: inherit; border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; }
 .xform-readout { position: fixed; z-index: 1100; background: rgba(0, 0, 0, 0.82); color: #fff; font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 3px 7px; pointer-events: none; white-space: nowrap; }

@@ -108,6 +108,7 @@ const editor = {
   stage: null,
   selection: new Set(),
   artboardSelected: false,
+  _abSel: null,          // which EXTRA artboard (index into this.artboards) is selected — null = primary/none (Epic K.3)
   tool: "select",
   history: [],
   redo: [],

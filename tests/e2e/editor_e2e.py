@@ -3301,6 +3301,72 @@ def main():
         check("on-canvas artboard tool: bare click makes nothing; a real drag creates+places+sizes one artboard exactly there, in one undo step",
               k3["noneFromClick"] and k3["previewDuring"] and k3["previewGone"] and k3["count"] == 2
               and k3["wOk"] and k3["hOk"] and k3["artboardSelected"] and k3["historyLabel"] == "Add artboard" and k3["undoOk"], str(k3))
+        # On-canvas MOVE/RESIZE handles for an EXISTING extra artboard (Epic K.3, the other half
+        # of the create-by-drag tool above) — deliberately scoped to extras only: the primary
+        # artboard keeps its existing panel-only Width/Height fields, since moving/resizing IT
+        # would shift the whole document's coordinate origin. resizeArtboard/moveArtboard already
+        # existed programmatically; this is the on-canvas UI for them. Driven with REAL page.mouse
+        # events, not synthetic dispatchEvent — the handles rely on setPointerCapture (same as the
+        # transform tool's own scale handles), which only real input hit-testing honours; a raw
+        # dispatchEvent on window bypasses capture retargeting entirely and the drag silently no-ops.
+        a0 = page.evaluate(r"""() => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400"></svg>','k3h');
+            editor.setTool('select'); editor.artboards = [];
+            editor.addArtboard({ w: 100, h: 80 });
+            return { ...editor.artboards[0] }; }""")
+        toScreen = lambda ux, uy: page.evaluate("([ux,uy]) => { const p = new DOMPoint(ux,uy).matrixTransform(editor.stageCTM()); return {x:p.x,y:p.y}; }", [ux, uy])
+        # Blank click INSIDE the extra artboard's bounds selects THAT artboard, not primary.
+        pt = toScreen(a0["x"] + a0["w"] / 2, a0["y"] + a0["h"] / 2)
+        page.mouse.click(pt["x"], pt["y"])
+        page.wait_for_timeout(80)
+        sel1 = page.evaluate("""() => ({ artboardSelected: editor.artboardSelected, abSel: editor._abSel,
+                                          handleCount: document.querySelectorAll('.hv-ab-handle').length,
+                                          frameSelected: document.querySelector('.hv-abframe.selected') !== null })""")
+        check("K.3 handles: a blank click inside an extra artboard selects IT (not primary), 8 handles + selected-frame styling appear",
+              sel1["artboardSelected"] is True and sel1["abSel"] == 0 and sel1["handleCount"] == 8 and sel1["frameSelected"], str(sel1))
+        # Drag the SE corner handle: grows the artboard, one undo step.
+        se = page.evaluate("""() => { const r = document.querySelector('.hv-ab-se').getBoundingClientRect();
+                                       return { x: r.left + r.width/2, y: r.top + r.height/2 }; }""")
+        page.mouse.move(se["x"], se["y"]); page.mouse.down()
+        page.mouse.move(se["x"] + 40, se["y"] + 30, steps=8); page.mouse.up()
+        page.wait_for_timeout(80)
+        rsz = page.evaluate("""(a0) => ({ a1: { ...editor.artboards[0] }, label: editor._curLabel })""", a0)
+        grewOk = rsz["a1"]["w"] > a0["w"] + 20 and rsz["a1"]["h"] > a0["h"] + 15
+        check("K.3 handles: dragging a corner resizes the artboard",
+              grewOk and rsz["label"] == "Resize artboard", str(rsz))
+        a2 = page.evaluate("(a0) => { editor.undo(); return { ...editor.artboards[0] }; }", a0)
+        undoResizeOk = abs(a2["w"] - a0["w"]) < 0.5 and abs(a2["h"] - a0["h"]) < 0.5
+        check("K.3 handles: undo restores the pre-resize size (one step)", undoResizeOk, str(a2))
+        # Drag the frame's own border (west edge, clear of the nw/w handles) — MOVES it, undoes in
+        # one step; the interior stays click-through (fill:none, pointer-events:stroke).
+        border = toScreen(a2["x"], a2["y"] + a2["h"] * 0.3)
+        page.mouse.move(border["x"], border["y"]); page.mouse.down()
+        page.mouse.move(border["x"] + 35, border["y"] + 25, steps=8); page.mouse.up()
+        page.wait_for_timeout(80)
+        mv = page.evaluate("""(a2) => ({ a3: { ...editor.artboards[0] }, label: editor._curLabel })""", a2)
+        movedOk = abs(mv["a3"]["x"] - a2["x"]) > 15 and abs(mv["a3"]["y"] - a2["y"]) > 15
+        check("K.3 handles: dragging the frame's own border moves the artboard",
+              movedOk and mv["label"] == "Move artboard", str(mv))
+        a4 = page.evaluate("(a2) => { editor.undo(); return { ...editor.artboards[0] }; }", a2)
+        undoMoveOk = abs(a4["x"] - a2["x"]) < 0.5 and abs(a4["y"] - a2["y"]) < 0.5
+        check("K.3 handles: undo restores the pre-move position (one step)", undoMoveOk, str(a4))
+        # The PRIMARY artboard gets no on-canvas handles — still the existing panel-only path. A
+        # real object placed inside the extra artboard stays independently click-selectable.
+        rest = page.evaluate("""(a4) => {
+            editor.selection = new Set(); editor.artboardSelected = true; editor._abSel = null; editor._renderSelection();
+            const primaryHandles = document.querySelectorAll('.hv-ab-handle').length;
+            const g = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            g.setAttribute('data-hv-id', 'inner1'); g.setAttribute('fill', '#c33');
+            g.setAttribute('x', a4.x + 10); g.setAttribute('y', a4.y + 10); g.setAttribute('width', 20); g.setAttribute('height', 20);
+            editor.stage.insertBefore(g, editor.stage.querySelector('g.hv-overlay'));
+            return { primaryHandles }; }""", a4)
+        objPt = page.evaluate("""() => { const n = editor.nodeById('inner1'); const r = n.getBoundingClientRect();
+                                          return { x: r.left + r.width/2, y: r.top + r.height/2 }; }""")
+        page.mouse.click(objPt["x"], objPt["y"])
+        page.wait_for_timeout(80)
+        objSel = page.evaluate("() => ({ sel: [...editor.selection], artboardSelected: editor.artboardSelected })")
+        check("K.3 handles: the PRIMARY artboard stays panel-only (no on-canvas handles); a real object inside an extra artboard is still independently clickable",
+              rest["primaryHandles"] == 0 and objSel["sel"] == ["inner1"] and objSel["artboardSelected"] is False, str({**rest, **objSel}))
 
         section("nested layers tree: group → indented children with ids; collapse hides them")
         mount_ctl(page)

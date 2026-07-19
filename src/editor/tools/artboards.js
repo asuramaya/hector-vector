@@ -20,8 +20,21 @@ export const artboardsMixin = {
     (this.artboards || []).forEach((a, i) => list.push({ ...a, index: i }));
     return list;
   },
+  // The frontmost (highest-index — last added, drawn last) EXTRA artboard whose rect contains
+  // (x,y) in user space, or -1. Used by the select tool's blank-click dispatch (K.3) — the
+  // primary artboard has no index of its own here, so a click outside every extra's bounds
+  // falls through to the existing "select the artboard" (primary) behaviour, unchanged.
+  _artboardAt(x, y) {
+    if (!this.artboards) return -1;
+    for (let i = this.artboards.length - 1; i >= 0; i--) {
+      const a = this.artboards[i];
+      if (x >= a.x && x <= a.x + a.w && y >= a.y && y <= a.y + a.h) return i;
+    }
+    return -1;
+  },
   _loadArtboards(svg) {
     this.artboards = [];
+    this._abSel = null;   // indices are about to be rebuilt from scratch — any old selection is stale
     const meta = svg.querySelector("metadata#hv-artboards");
     if (!meta) return;   // back-compat: single artboard
     try {
@@ -50,14 +63,15 @@ export const artboardsMixin = {
     if (!this.artboards || !this.artboards.length) { if (existing) existing.remove(); return; }
     const g = this._abLayer(); g.innerHTML = "";
     this.stage.insertBefore(g, this._overlayEl() || null);   // keep above artwork, below the overlay
-    for (const a of this.artboards) {
-      const r = document.createElementNS(SVG_NS, "rect"); r.setAttribute("class", "hv-abframe");
+    this.artboards.forEach((a, i) => {
+      const sel = this.artboardSelected && this._abSel === i;
+      const r = document.createElementNS(SVG_NS, "rect"); r.setAttribute("class", "hv-abframe" + (sel ? " selected" : ""));
       r.setAttribute("x", nfmt(a.x)); r.setAttribute("y", nfmt(a.y)); r.setAttribute("width", nfmt(a.w)); r.setAttribute("height", nfmt(a.h));
       g.appendChild(r);
       const t = document.createElementNS(SVG_NS, "text"); t.setAttribute("class", "hv-ablabel");
       t.setAttribute("x", nfmt(a.x)); t.setAttribute("y", nfmt(a.y - 4)); t.textContent = a.name || "Artboard";
       g.appendChild(t);
-    }
+    });
   },
   // Grow the canvas viewBox to the union of every artboard, redraw frames, persist, refit.
   _reflowCanvas() {
@@ -91,9 +105,8 @@ export const artboardsMixin = {
   // (_beginDraw in editor.js, text.js's _textDown): a bare click makes nothing, same as
   // dragging out a rectangle; only a real drag commits. A live dashed preview rect lives
   // in the overlay layer while dragging, same idea as the text tool's box-preview.
-  // DEFERRED (not in this pass): moving/resizing an EXISTING artboard by dragging its
-  // frame/handles on-canvas — today that's still panel-only (resizeArtboard/moveArtboard
-  // already support it programmatically; only the on-canvas handles are missing).
+  // Moving/resizing an EXISTING artboard on-canvas is _mountArtboardHandles/_bindArtboardMove/
+  // _bindArtboardResize below — this handler only covers the CREATE-by-drag gesture.
   _artboardDown(e) {
     if (e.button !== 0 || !this.stage) return;
     e.stopPropagation(); e.preventDefault();
@@ -118,7 +131,7 @@ export const artboardsMixin = {
       const idx = this.addArtboard({ w, h });   // pushes its own undo step
       this.artboards[idx].x = x; this.artboards[idx].y = y;   // place it exactly as drawn
       this._reflowCanvas();
-      this.selection = new Set(); this.artboardSelected = true;
+      this.selection = new Set(); this.artboardSelected = true; this._abSel = idx;
       this._renderSelection(); this._renderInspector();
     };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
@@ -129,8 +142,126 @@ export const artboardsMixin = {
   deleteArtboard(i) {
     if (!this.artboards || !this.artboards[i]) return;
     this.push("Delete artboard"); this.artboards.splice(i, 1);
+    if (this._abSel === i) { this._abSel = null; this.artboardSelected = false; }
+    else if (this._abSel != null && this._abSel > i) this._abSel--;   // later indices shift down
     this._reflowCanvas(); this._renderInspector();
     setStatus("Artboard removed.", 1500);
+  },
+  // On-canvas move/resize handles for an EXISTING extra artboard (Epic K.3 — deliberately
+  // scoped to extras only; the primary artboard keeps its existing panel-only Width/Height
+  // fields, since moving/resizing IT would shift the whole document's coordinate origin, a
+  // much bigger change nothing here asks for). Mirrors transform.js's _mountTransformHandles
+  // (8 corner/edge handles) but drives resizeArtboard/moveArtboard directly instead of baking
+  // a matrix — an artboard is just {x,y,w,h} metadata, not a graphical node.
+  _mountArtboardHandles() {
+    this.unmountArtboardHandles();
+    const ov = this._overlayEl(); if (!ov || !this.stage || this._abSel == null) return;
+    const i = this._abSel, a = this.artboards && this.artboards[i]; if (!a) return;
+    const m = this.stageCTM(); const k = m ? Math.hypot(m.a, m.b) || 1 : 1;
+    const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+    const r = (coarse ? 8 : 4.5) / k;
+    const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "hv-ab-xform");
+    // A wide invisible stroke along the frame's own perimeter — drag it to MOVE. The interior
+    // stays click-through to real artwork (fill:none); only the border itself is a move target,
+    // so marquee-selecting objects inside an artboard is completely unaffected by this.
+    const moveHit = document.createElementNS(SVG_NS, "rect"); moveHit.setAttribute("class", "hv-ab-movehit");
+    moveHit.style.strokeWidth = nfmt((coarse ? 22 : 14) / k);
+    this._bindArtboardMove(moveHit, i);
+    g.appendChild(moveHit);
+    const HS = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+    const SX = { nw: -1, n: 0, ne: 1, e: 1, se: 1, s: 0, sw: -1, w: -1 };
+    const SY = { nw: -1, n: -1, ne: -1, e: 0, se: 1, s: 1, sw: 1, w: 0 };
+    const handles = {};
+    for (const h of HS) {
+      const c = document.createElementNS(SVG_NS, "rect"); c.setAttribute("class", "hv-ab-handle hv-ab-" + h);
+      this._bindArtboardResize(c, i, { sx: SX[h], sy: SY[h] });
+      g.appendChild(c);
+      handles[h] = c;
+    }
+    ov.appendChild(g);
+    this._abHandles = { g, moveHit, handles, r };
+    this._layoutArtboardHandles(a);
+  },
+  // Reposition the LIVE handle elements to match an artboard rect, without touching their
+  // event bindings/pointer capture — a full remount mid-drag would orphan the very element
+  // the drag is happening on (the same trap transform.js's _updateXformVisual avoids).
+  _layoutArtboardHandles(a) {
+    const xf = this._abHandles; if (!xf) return;
+    xf.moveHit.setAttribute("x", nfmt(a.x)); xf.moveHit.setAttribute("y", nfmt(a.y));
+    xf.moveHit.setAttribute("width", nfmt(a.w)); xf.moveHit.setAttribute("height", nfmt(a.h));
+    const midX = a.x + a.w / 2, midY = a.y + a.h / 2, r = xf.r;
+    const pos = {
+      nw: [a.x, a.y], n: [midX, a.y], ne: [a.x + a.w, a.y], e: [a.x + a.w, midY],
+      se: [a.x + a.w, a.y + a.h], s: [midX, a.y + a.h], sw: [a.x, a.y + a.h], w: [a.x, midY],
+    };
+    for (const h in pos) {
+      const [x, y] = pos[h], c = xf.handles[h];
+      c.setAttribute("x", nfmt(x - r)); c.setAttribute("y", nfmt(y - r));
+      c.setAttribute("width", nfmt(2 * r)); c.setAttribute("height", nfmt(2 * r));
+    }
+  },
+  unmountArtboardHandles() {
+    const ov = this._overlayEl(); if (ov) ov.querySelectorAll(".hv-ab-xform").forEach((g) => g.remove());
+    this._abHandles = null;
+  },
+  _bindArtboardMove(hit, i) {
+    hit.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || !this.artboards || !this.artboards[i]) return;
+      e.stopPropagation(); e.preventDefault();
+      try { hit.setPointerCapture(e.pointerId); } catch {}
+      const a0 = this.artboards[i];
+      const inv = () => this.stageCTM().inverse();
+      const start = new DOMPoint(e.clientX, e.clientY).matrixTransform(inv());
+      const ox = a0.x, oy = a0.y;
+      this._handleDragging = true;
+      let pushed = false;
+      const move = (ev) => {
+        const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
+        if (!pushed) { this.beginCoalesce(); pushed = true; }
+        this.moveArtboard(i, ox + (p.x - start.x), oy + (p.y - start.y));
+        this._layoutArtboardHandles(this.artboards[i]);
+      };
+      const up = () => {
+        try { hit.releasePointerCapture(e.pointerId); } catch {}
+        this._handleDragging = false;
+        hit.removeEventListener("pointermove", move); hit.removeEventListener("pointerup", up);
+        if (pushed) { this.commitCoalesce("Move artboard"); this._renderInspector(); setStatus("Moved artboard.", 1200); }
+      };
+      hit.addEventListener("pointermove", move);
+      hit.addEventListener("pointerup", up);
+    });
+  },
+  _bindArtboardResize(c, i, spec) {
+    c.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || !this.artboards || !this.artboards[i]) return;
+      e.stopPropagation(); e.preventDefault();
+      try { c.setPointerCapture(e.pointerId); } catch {}
+      const a0 = { ...this.artboards[i] };
+      const inv = () => this.stageCTM().inverse();
+      const MIN = 8;
+      this._handleDragging = true;
+      let pushed = false;
+      const move = (ev) => {
+        const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
+        if (!pushed) { this.beginCoalesce(); pushed = true; }
+        let x = a0.x, y = a0.y, w = a0.w, h = a0.h;
+        if (spec.sx < 0) { const right = a0.x + a0.w; x = Math.min(p.x, right - MIN); w = right - x; }
+        else if (spec.sx > 0) { w = Math.max(MIN, p.x - a0.x); }
+        if (spec.sy < 0) { const bot = a0.y + a0.h; y = Math.min(p.y, bot - MIN); h = bot - y; }
+        else if (spec.sy > 0) { h = Math.max(MIN, p.y - a0.y); }
+        this.moveArtboard(i, x, y);
+        this.resizeArtboard(i, w, h);
+        this._layoutArtboardHandles(this.artboards[i]);
+      };
+      const up = () => {
+        try { c.releasePointerCapture(e.pointerId); } catch {}
+        this._handleDragging = false;
+        c.removeEventListener("pointermove", move); c.removeEventListener("pointerup", up);
+        if (pushed) { this.commitCoalesce("Resize artboard"); this._renderInspector(); setStatus("Resized artboard.", 1200); }
+      };
+      c.addEventListener("pointermove", move);
+      c.addEventListener("pointerup", up);
+    });
   },
   fitToArtboard(rect) { if (rect) try { frameRect(viewports.output, rect.x, rect.y, rect.w, rect.h); } catch {} },
   // Crop the current document to one artboard's region (its own viewBox, not the union canvas
