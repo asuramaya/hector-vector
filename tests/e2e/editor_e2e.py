@@ -4094,6 +4094,52 @@ def main():
         pdf = page.evaluate("window.__pdf")
         check("Download PDF emits an a[download$=.pdf] blob", bool(pdf) and str(pdf.get("name")).endswith(".pdf") and pdf.get("blob"), str(pdf))
         page.evaluate("closeModal()")
+
+        section("Export EPS: PDF + one more hop through Ghostscript's eps2write (Epic O.2)")
+        # No direct svg2eps in cairosvg — EPS is built FROM the already-verified PDF path (same
+        # cairosvg render + the same outlineTextForExport font-fidelity fix, since EPS shares
+        # PDF's renderer) plus a server-side Ghostscript conversion (hvserver/export_eps.py).
+        page.evaluate("window.app.exportFlow()")
+        page.wait_for_function("!document.querySelector('#modal-root').hidden", timeout=4000)
+        page.evaluate("""() => {
+            const sels = [...document.querySelectorAll('#modal-body select')];
+            const fmtSel = sels.find(s => [...s.options].some(o => o.value === 'eps'));
+            fmtSel.value = 'eps'; fmtSel.dispatchEvent(new Event('change', {bubbles:true}));
+        }""")
+        eps_modal = page.evaluate("""() => ({
+            title: document.querySelector('#modal-title').textContent,
+            hasRender: [...document.querySelectorAll('#modal-body button')].some(b=>/Render EPS/.test(b.textContent)),
+            noSize: ![...document.querySelectorAll('#modal-body .form-section')].some(e=>e.textContent==='Size'),
+        })""")
+        check("switching Format to EPS retitles the modal, drops the Size section (vector, no target pixels)",
+              eps_modal["title"] == "Export EPS" and eps_modal["hasRender"] and eps_modal["noSize"], str(eps_modal))
+        page.evaluate("""() => { window.__eps=null; const real=HTMLAnchorElement.prototype.click;
+            HTMLAnchorElement.prototype.click=function(){ if(this.download){ window.__eps={name:this.download, blob:this.href.startsWith('blob:')}; return; } return real.call(this); }; }""")
+        page.evaluate("""() => { for (const b of document.querySelectorAll('#modal-body button')) if (/Render EPS/.test(b.textContent)) { b.click(); break; } }""")
+        page.wait_for_function("[...document.querySelectorAll('#modal-body button')].some(b=>/Download EPS/.test(b.textContent))", timeout=8000)
+        eps_res = page.evaluate("""() => ({
+            buttons: [...document.querySelectorAll('#modal-body button')].map(b=>b.textContent.trim()),
+            noBrokenImg: !document.querySelector('#modal-body .export-preview img'),
+        })""")
+        check("server-side Ghostscript render succeeds — Download EPS appears, no broken <img> preview attempted",
+              "Download EPS" in eps_res["buttons"] and eps_res["noBrokenImg"] and "Save to library" not in eps_res["buttons"], str(eps_res))
+        # No browser can render EPS inline (unlike PDF, which every browser opens natively) —
+        # offering "Open" would be a dead click, so it's deliberately not in the button list.
+        check("no 'Open' button for EPS (no browser can render it inline)", "Open" not in eps_res["buttons"], str(eps_res["buttons"]))
+        page.evaluate("""() => { for (const b of document.querySelectorAll('#modal-body button')) if (/Download EPS/.test(b.textContent)) { b.click(); break; } }""")
+        eps = page.evaluate("window.__eps")
+        check("Download EPS emits an a[download$=.eps] blob", bool(eps) and str(eps.get("name")).endswith(".eps") and eps.get("blob"), str(eps))
+        page.evaluate("closeModal()")
+        eps_bytes = page.evaluate("""async () => {
+            const svg = editor.serialize();
+            const res = await fetch('/api/export-eps', { method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ svg, background: 'white' }) });
+            const data = await res.json();
+            return data.eps_base64 ? atob(data.eps_base64).slice(0, 40) : null;
+        }""")
+        check("the server round-trip produces a real EPS (starts %!PS-Adobe, a valid EPSF header)",
+              bool(eps_bytes) and eps_bytes.startswith("%!PS-Adobe"), str(eps_bytes))
+
         # Font-embedding FIDELITY (O.1 backlog gap, now closed): confirmed by direct testing that
         # cairosvg (hvserver/export_pdf.py's server-side renderer) SILENTLY IGNORES an embedded
         # base64 woff2 @font-face entirely — the exact same PDF bytes come out whether the face is

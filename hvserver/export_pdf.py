@@ -14,6 +14,10 @@ Missing it here is a plain, actionable ValueError, the same class svg_render.py'
 _render_cairosvg already raises for the identical library — this is a small, ordinary
 pip package, not a multi-hundred-MB AI model, so it doesn't need the AI-tools install
 registry's progress-bar UX (see hvserver/capabilities.py CAPABILITIES).
+
+`svg_to_pdf_bytes`/`validated_svg_and_bg` are split out (not just `export_pdf`'s own body)
+because export_eps.py needs the exact same validation + cairosvg render as its own first hop
+— EPS is "PDF plus one more conversion", not a second, independent renderer.
 """
 from __future__ import annotations
 
@@ -22,11 +26,8 @@ import base64
 from hvserver.paths import MAX_SVG_SAVE_BYTES
 
 
-def export_pdf(payload: dict) -> dict:
-    """{svg, background?} -> {pdf_base64}. background is transparent/white/black, same
-    vocabulary as the Export modal's PNG path; cairosvg leaves the page transparent when
-    it's omitted (PDF supports alpha, unlike a printed page, so this is a legitimate output,
-    not just a preview convenience)."""
+def validated_svg_and_bg(payload: dict) -> tuple[str, str | None]:
+    """Shared payload validation for every SVG-in export (PDF, EPS, …)."""
     svg_text = payload.get("svg")
     if not isinstance(svg_text, str) or "<svg" not in svg_text.lower():
         raise ValueError("Missing or invalid 'svg' markup.")
@@ -35,6 +36,13 @@ def export_pdf(payload: dict) -> dict:
     bg = payload.get("background") or None
     if bg not in (None, "white", "black"):
         bg = None
+    return svg_text, bg
+
+
+def svg_to_pdf_bytes(svg_text: str, bg: str | None) -> bytes:
+    """background is transparent/white/black, same vocabulary as the Export modal's PNG path;
+    cairosvg leaves the page transparent when it's omitted (PDF supports alpha, unlike a
+    printed page, so this is a legitimate output, not just a preview convenience)."""
     try:
         import cairosvg  # type: ignore
     except ImportError:
@@ -48,4 +56,11 @@ def export_pdf(payload: dict) -> dict:
         raise ValueError(f"Couldn't render this SVG to PDF: {exc}")
     if not pdf_bytes:
         raise ValueError("PDF render produced no output.")
+    return pdf_bytes
+
+
+def export_pdf(payload: dict) -> dict:
+    """{svg, background?} -> {pdf_base64}."""
+    svg_text, bg = validated_svg_and_bg(payload)
+    pdf_bytes = svg_to_pdf_bytes(svg_text, bg)
     return {"pdf_base64": base64.b64encode(pdf_bytes).decode("ascii")}

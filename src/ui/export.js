@@ -137,11 +137,32 @@ export function renderSvgToPngBlob(svgText, w, h, background) {
 // error is (both just land in the modal's existing catch block as a form-hint).
 async function renderSvgToPdfBlob(svgText, background) {
   const data = await api("/api/export-pdf", "POST", { svg: svgText, background });
-  const bin = atob(data.pdf_base64);
+  return base64ToBlob(data.pdf_base64, "application/pdf");
+}
+
+// EPS (Epic O.2): same server round-trip as PDF (also CLOUD-gated for free via api()'s
+// existing check — no new gating code, same as PDF), one hop further through Ghostscript
+// server-side (hvserver/export_eps.py). Text goes through the SAME outlineTextForExport step
+// as PDF before this is called — EPS is built FROM the PDF path, so it inherits that fidelity
+// fix for free rather than needing its own.
+async function renderSvgToEpsBlob(svgText, background) {
+  const data = await api("/api/export-eps", "POST", { svg: svgText, background });
+  return base64ToBlob(data.eps_base64, "application/postscript");
+}
+
+function base64ToBlob(b64, mime) {
+  const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new Blob([bytes], { type: "application/pdf" });
+  return new Blob([bytes], { type: mime });
 }
+
+// PDF + EPS are both vector, server-rendered, and Download-only (no <img> preview, no
+// pixel size picker, no Save-to-library) — everything PNG offers that a vector export can't.
+const VECTOR_FORMATS = {
+  pdf: { label: "PDF", mime: "application/pdf", render: renderSvgToPdfBlob, canOpen: true },
+  eps: { label: "EPS", mime: "application/postscript", render: renderSvgToEpsBlob, canOpen: false },   // no browser can render EPS inline
+};
 
 function targetSizeFor(native) {
   const [nw, nh] = native || [0, 0];
@@ -185,8 +206,8 @@ export function openExportModal() {
   const src = currentExportSource();
   if (!src) { setStatus("Open or create a canvas first.", 2500); return; }
   const native = src.native;
-  const isPdf = exportState.format === "pdf";
-  openModal(isPdf ? "Export PDF" : "Export PNG", true);
+  const vec = VECTOR_FORMATS[exportState.format] || null;
+  openModal(vec ? `Export ${vec.label}` : "Export PNG", true);
   modalSearchEl.hidden = true;
   const root = document.createElement("div");
   root.className = "form";
@@ -213,6 +234,7 @@ export function openExportModal() {
   const fmtSel = makeSelectRaw(exportState.format, [
     ["png", "PNG (raster image)"],
     ["pdf", "PDF (vector, print-ready)"],
+    ["eps", "EPS (vector, legacy print)"],
   ], (v) => { exportState.format = v; openExportModal(); });
   root.appendChild(fieldRow("Format", fmtSel));
 
@@ -223,9 +245,9 @@ export function openExportModal() {
     sizeOut.textContent = native ? `Native ${native[0]}×${native[1]} → output ${w}×${h} px` : `Output ${w}×${h} px`;
   };
 
-  // Size only means anything for a raster — a PDF exports its actual vector geometry at
+  // Size only means anything for a raster — PDF/EPS export their actual vector geometry at
   // native scale, so there's nothing to pick.
-  if (!isPdf) {
+  if (!vec) {
     root.appendChild(sectionTitle("Size"));
     const modeSel = makeSelectRaw(exportState.mode, [
       ["scale", "Multiply native (×N)"],
@@ -258,31 +280,32 @@ export function openExportModal() {
   ], (v) => { exportState.background = v; });
   root.appendChild(fieldRow("Fill", bgSel));
 
-  if (!isPdf) { refreshSizeOut(); root.appendChild(sizeOut); }
+  if (!vec) { refreshSizeOut(); root.appendChild(sizeOut); }
 
   const actions = document.createElement("div");
   actions.className = "form-actions";
   const go = document.createElement("button");
   go.type = "button"; go.className = "primary-button";
-  go.textContent = isPdf ? "Render PDF" : "Render PNG";
+  go.textContent = vec ? `Render ${vec.label}` : "Render PNG";
   go.addEventListener("click", async () => {
     go.disabled = true; go.textContent = "Rendering…";
     try {
       // Inline rasters first so they don't drop out of the isolated render — the same prep
       // whichever format renders it. Fonts diverge by format below: PNG's <img> render
       // understands @font-face + a data: URI just fine (real browser CSS), but cairosvg
-      // (PDF's server-side renderer) silently IGNORES it — verified: it renders byte-identically
-      // whether the face is embedded or not, falling back to a system font with no error. So PDF
-      // outlines text into real paths instead (editor.outlineTextForExport, [[export-pdf-font-fidelity]]);
-      // PNG keeps embedding, which is correct for its own render path.
+      // (PDF's AND EPS's server-side renderer — EPS is built from the PDF path) silently
+      // IGNORES it — verified: it renders byte-identically whether the face is embedded or
+      // not, falling back to a system font with no error. So vector formats outline text into
+      // real paths instead (editor.outlineTextForExport, [[export-pdf-font-fidelity]]); PNG
+      // keeps embedding, which is correct for its own render path.
       if (window.__fonts) await window.__fonts.fontsReady();
       let svgText = await inlineSvgImages(src.svg);
-      svgText = isPdf ? await editor.outlineTextForExport(svgText) : await withEmbeddedFonts(svgText);
+      svgText = vec ? await editor.outlineTextForExport(svgText) : await withEmbeddedFonts(svgText);
       const base = src.target ? src.target.name.replace(/\.svg$/i, "") : (defaultSaveName() || "export");
       if (lastExport && lastExport.url) URL.revokeObjectURL(lastExport.url);
-      if (isPdf) {
-        const blob = await renderSvgToPdfBlob(svgText, exportState.background);
-        lastExport = { blob, url: URL.createObjectURL(blob), name: `${base}.pdf`, format: "pdf", target: null };
+      if (vec) {
+        const blob = await vec.render(svgText, exportState.background);
+        lastExport = { blob, url: URL.createObjectURL(blob), name: `${base}.${exportState.format}`, format: exportState.format, target: null };
       } else {
         const [w, h] = targetSizeFor(native);
         const blob = await renderSvgToPngBlob(svgText, w, h, exportState.background);
@@ -290,7 +313,7 @@ export function openExportModal() {
       }
       showExportResult();
     } catch (e) {
-      go.disabled = false; go.textContent = isPdf ? "Render PDF" : "Render PNG";
+      go.disabled = false; go.textContent = vec ? `Render ${vec.label}` : "Render PNG";
       const hint = document.createElement("div"); hint.className = "form-hint status-error"; hint.textContent = e.message; actions.appendChild(hint);
     }
   });
@@ -307,25 +330,25 @@ export function openExportModal() {
 function showExportResult() {
   const ex = lastExport;
   if (!ex) return;
-  const isPdf = ex.format === "pdf";
+  const vec = VECTOR_FORMATS[ex.format] || null;
   modalTitleEl.textContent = "Exported";
   const root = document.createElement("div"); root.className = "form";
   root.appendChild(sectionTitle("Rendered"));
-  if (!isPdf) {
-    // A PDF blob can't render into an <img> — there's no browser preview for it, only
-    // the PNG raster gets the on-canvas preview.
+  if (!vec) {
+    // A PDF/EPS blob can't render into an <img> — there's no browser preview for either,
+    // only the PNG raster gets the on-canvas preview.
     const preview = document.createElement("div"); preview.className = "export-preview";
     const im = document.createElement("img"); im.src = ex.url; im.alt = ex.name; preview.appendChild(im); root.appendChild(preview);
   }
   const info = document.createElement("div"); info.className = "form-hint";
-  info.textContent = isPdf ? `${ex.name} · ${fmtBytes(ex.blob.size)}` : `${ex.name} — ${ex.w}×${ex.h} px · ${fmtBytes(ex.blob.size)}`;
+  info.textContent = vec ? `${ex.name} · ${fmtBytes(ex.blob.size)}` : `${ex.name} — ${ex.w}×${ex.h} px · ${fmtBytes(ex.blob.size)}`;
   root.appendChild(info);
 
   const actions = document.createElement("div"); actions.className = "form-actions";
-  const dl = document.createElement("button"); dl.type = "button"; dl.className = "primary-button"; dl.textContent = isPdf ? "Download PDF" : "Download PNG";
-  dl.addEventListener("click", () => { downloadBlob(ex.name, ex.blob, isPdf ? "application/pdf" : "image/png"); setStatus(`Downloaded ${ex.name}.`, 2000); });
+  const dl = document.createElement("button"); dl.type = "button"; dl.className = "primary-button"; dl.textContent = vec ? `Download ${vec.label}` : "Download PNG";
+  dl.addEventListener("click", () => { downloadBlob(ex.name, ex.blob, vec ? vec.mime : "image/png"); setStatus(`Downloaded ${ex.name}.`, 2000); });
   actions.appendChild(dl);
-  if (ex.target && !isPdf) {
+  if (ex.target && !vec) {
     const saveBtn = ghostBtn("Save to library", async () => {
       saveBtn.disabled = true; saveBtn.textContent = "Saving…";
       try {
@@ -338,9 +361,10 @@ function showExportResult() {
     });
     actions.appendChild(saveBtn);
   }
-  // Opening a PDF blob URL in a new tab works fine — the browser's native PDF viewer
-  // renders it, same as any other PDF link.
-  actions.appendChild(ghostBtn("Open", () => window.open(ex.url, "_blank", "noopener")));
+  // Opening a PDF blob URL in a new tab works fine — the browser's native PDF viewer renders
+  // it, same as any other PDF link. EPS has no browser-native viewer at all (canOpen:false),
+  // so offering "Open" there would just be a confusing dead click — Download is the only act.
+  if (!vec || vec.canOpen) actions.appendChild(ghostBtn("Open", () => window.open(ex.url, "_blank", "noopener")));
   actions.appendChild(ghostBtn("Back", () => openExportModal()));
   actions.appendChild(ghostBtn("Done", () => closeModal()));
   root.appendChild(actions);

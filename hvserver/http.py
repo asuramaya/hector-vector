@@ -36,6 +36,7 @@ from hvserver.documents import *    # noqa: F401,F403
 from hvserver.system import *       # noqa: F401,F403
 from hvserver.fonts import font_catalog, load_font, text_to_outline, installed_fonts  # noqa: E402
 from hvserver.export_pdf import export_pdf  # noqa: E402
+from hvserver.export_eps import export_eps  # noqa: E402
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -303,6 +304,8 @@ class Handler(SimpleHTTPRequestHandler):
                 result = text_to_outline(payload)
             elif parsed.path == "/api/export-pdf":
                 result = export_pdf(payload)
+            elif parsed.path == "/api/export-eps":
+                result = export_eps(payload)
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "Unknown endpoint")
                 return
