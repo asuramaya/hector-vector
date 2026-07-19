@@ -7,16 +7,24 @@
     1. Start the companion (the normal server, companion mode on, origin = where you'll serve THIS page):
          HV_COMPANION=1 HV_COMPANION_ORIGIN=https://<where-this-page-is-served> PORT=2002 ./run.sh
        (HV_COMPANION_ORIGIN must EXACTLY match this page's origin — scheme + host, no path.)
-    2. Serve this file from a PUBLIC https origin — NOT localhost (localhost→localhost never triggers LNA):
-         • quickest: `cloudflared tunnel --url http://localhost:8000` over a `python -m http.server 8000`, or
-         • drop it in your Cloudflare Pages deploy and open the .pages.dev URL.
-    3. Open that public URL in Chrome/Edge (142+), set the port below, click Connect.
+    2. This file is already bundled+deployed by deploy-cloud.sh — open https://hector-vector.com/companion-spike
+       directly (no tunnel needed; localhost→localhost never triggers LNA, but this is already a real public origin).
+    3. Set the port below (2002), click Connect.
        Chrome should show: "…wants to look for and connect to any device on your local network."
     4. Click Allow. You should see the companion's JSON.
-    5. THE TWO THINGS WE NEED TO KNOW:
-       (a) PERSISTENCE — reload the page and click Connect again. Prompt again, or silent? (silent = remembered per-origin = one-time)
-       (b) HEADERS — it already works with just CORS + the preflight this build sends; note if Chrome demanded anything more.
-    Report (a) and (b) back.
+    5. THE ONE THING LEFT TO CONFIRM BY HAND (needs a real profile + a real click — not automatable):
+       PERSISTENCE — reload the page and click Connect again. Prompt again, or silent? (silent = remembered
+       per-origin = one-time). Report back.
+
+  ALREADY ANSWERED, 2026-07-19, via Playwright driving the real chain (browser → this exact live page →
+  a locally-run companion, CDP-granted local-network-access, real fetch, real 200) — see decision log:
+    - HEADERS: confirmed sufficient as-is. The existing CORS + PNA preflight (Access-Control-Allow-
+      Private-Network: true on the OPTIONS response) is everything Chrome asks for; nothing more needed.
+    - REAL BUG FOUND + FIXED: this file used targetAddressSpace:"local" below, but 127.0.0.1 is its own
+      "loopback" address-space category in the PNA spec, distinct from "local" (private-LAN ranges).
+      Declaring the wrong one doesn't fall through to a permission prompt — Chrome hard-fails the fetch
+      with an address-space MISMATCH error first. As originally written, this spike could never have
+      reached a real permission prompt on ANY device. Fixed to "loopback"; verified end-to-end afterward.
 -->
 <html lang="en">
 <head>
@@ -55,9 +63,14 @@
       status("Requesting local network access…", "muted");
       const t0 = performance.now();
       try {
-        // targetAddressSpace:"local" is what makes Chrome treat this as a local-network request
-        // (→ the LNA permission prompt) rather than silently blocking it as mixed content.
-        const res = await fetch(url, { targetAddressSpace: "local" });
+        // targetAddressSpace:"loopback", NOT "local" — 127.0.0.1 is its own PNA address-space
+        // category, distinct from "local" (private-LAN ranges like 192.168.x.x or .local mDNS
+        // hosts). Declaring "local" against a loopback target doesn't fall through to a
+        // permission prompt at all; Chrome hard-fails the fetch with an address-space MISMATCH
+        // error before permission is ever considered ("Request had a target IP address space of
+        // `local` yet the resource is in address space `loopback`") — confirmed empirically by
+        // driving this exact fetch through Playwright and reading the real console error.
+        const res = await fetch(url, { targetAddressSpace: "loopback" });
         const dt = Math.round(performance.now() - t0);
         if (!res.ok) { status(`Reached it but got HTTP ${res.status}.`, "err"); return; }
         const data = await res.json();
