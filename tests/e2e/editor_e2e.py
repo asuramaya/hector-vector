@@ -5460,17 +5460,28 @@ def main():
                 mp.set_viewport_size({"width": 390, "height": 500})
                 mp.wait_for_timeout(200)
                 desktop_key_before = mp.evaluate("() => localStorage.getItem('hector-vector:layout')")
+                # Hide tools back-to-front (last in the rail first, Select always skipped — it's
+                # pinned) until the rail actually stops overflowing, instead of a hardcoded tool-key
+                # list + expected count: any FUTURE always-visible toolbar button changes WHICH/HOW
+                # MANY tools need hiding, not whether this check still passes (thread d5836a55 — this
+                # exact hardcoded list had already gone stale twice from unrelated feature work).
                 trim = mp.evaluate("""() => {
                     const t = document.querySelector('.toolstrip');
                     const before = t.scrollHeight - t.clientHeight;
-                    for (const k of ['tool:curvature','tool:line','tool:width','tool:envelope','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser','tool:artboard'])
-                        __layout.setHidden(k, true);
-                    return { before, after: t.scrollHeight - t.clientHeight };
+                    const keys = [...t.querySelectorAll('.tool-button')].map((b) => 'tool:' + b.dataset.tool)
+                        .reverse().filter((k) => k !== 'tool:select');
+                    const hidden = [];
+                    for (const k of keys) {
+                        if (t.scrollHeight <= t.clientHeight) break;
+                        if (__layout.setHidden(k, true)) hidden.push(k);
+                    }
+                    return { before, after: t.scrollHeight - t.clientHeight, hidden };
                 }""")
                 mp.wait_for_timeout(250)
                 faded = mp.evaluate("() => document.querySelector('.toolstrip').classList.contains('is-overflowing')")
                 check("mobile: hiding tools actually trims the rail — vertical overflow goes to zero, fade hint clears",
-                      trim["before"] > 0 and trim["after"] == 0 and not faded, str(trim))
+                      trim["before"] > 0 and len(trim["hidden"]) > 0 and trim["after"] == 0 and not faded, str(trim))
+                someHidden = trim["hidden"][0]   # whichever tool the dynamic trim actually hid — not a fixed key
                 mp.set_viewport_size({"width": 390, "height": 800})
                 mp.wait_for_timeout(200)
                 check("mobile: Select is pinned — you cannot hide every tool and strand yourself",
@@ -5481,8 +5492,8 @@ def main():
                 # the time it fires, so it wrote the phone arrangement into the desktop key.)
                 check("mobile: a phone session cannot touch the desktop layout key (they are separate stores)",
                       mp.evaluate("() => localStorage.getItem('hector-vector:layout')") == desktop_key_before
-                      and mp.evaluate("""() => { const k = JSON.parse(localStorage.getItem('hector-vector:layout:phone') || 'null');
-                                                 return !!k && k['#hidden'].includes('tool:knife'); }"""))
+                      and mp.evaluate("""(k) => { const l = JSON.parse(localStorage.getItem('hector-vector:layout:phone') || 'null');
+                                                 return !!l && l['#hidden'].includes(k); }""", someHidden))
                 # H2: the stranding bug. Move a tool INTO the quick bar (#mobile-top is display:none
                 # above 620px), cross to desktop, and it must NOT vanish. Only renormalize() saves it —
                 # composePhone's homes map never moved that tile, so it cannot put it back.
@@ -5503,8 +5514,8 @@ def main():
                 mp.set_viewport_size({"width": 390, "height": 800})
                 mp.wait_for_timeout(700)
                 check("mobile: coming back to the phone restores the phone layout (hides + moves), not the desktop one",
-                      mp.evaluate("""() => __layout.isHidden('tool:knife')
-                                        && !!document.querySelector('#mobile-top [data-tool=pen]')"""))
+                      mp.evaluate("""(k) => __layout.isHidden(k)
+                                        && !!document.querySelector('#mobile-top [data-tool=pen]')""", someHidden))
 
                 # THE contextual ask: with two overlapping shapes, the booleans must be RIGHT THERE —
                 # not buried in the sheet. And the strip must still be one row that fits.
@@ -5666,18 +5677,24 @@ def main():
                 check("mobile: a modal DIMS what's behind it (a white dialog on a white canvas is invisible)",
                       opened["backdropDims"], str(opened.get("backdropDims")))
                 # ...and the actual payoff: untick tools IN THE PICKER, watch the rail stop overflowing.
+                # Dynamic, not a hardcoded tool-key list — see the same rationale a few checks up
+                # (thread d5836a55): untick back-to-front (Select excluded — it's pinned, no checkbox
+                # click can touch it) until the rail's own overflow actually clears.
                 trimmed = mp.evaluate("""() => {
                     const t = document.querySelector('.toolstrip');
                     const before = t.scrollHeight - t.clientHeight;
+                    const keys = [...t.querySelectorAll('.tool-button')].map((b) => 'tool:' + b.dataset.tool)
+                        .reverse().filter((k) => k !== 'tool:select');
                     let clicked = 0;
-                    for (const k of ['tool:curvature','tool:line','tool:width','tool:envelope','tool:shapebuilder','tool:scissors','tool:knife','tool:eraser','tool:artboard']) {
+                    for (const k of keys) {
+                        if (t.scrollHeight <= t.clientHeight) break;
                         const row = document.querySelector(`.picker-row[data-key="${k}"]`);
                         if (row) { row.querySelector('input[type=checkbox]').click(); clicked++; }
                     }
                     return { clicked, before, after: t.scrollHeight - t.clientHeight };
                 }""")
                 check("mobile: unticking tools in the picker trims the real rail, solved through the UI",
-                      trimmed["clicked"] == 9 and trimmed["before"] > 0 and trimmed["after"] == 0, str(trimmed))
+                      trimmed["clicked"] > 0 and trimmed["before"] > 0 and trimmed["after"] == 0, str(trimmed))
                 mp.evaluate("() => { const b = document.querySelector('[data-modal-close]'); if (b) b.click(); }")
                 mp.evaluate("() => __layout.reset()")
                 mp.wait_for_timeout(200)
