@@ -666,8 +666,21 @@ button:disabled {
 .stage-head { gap: 10px; }
 /* arrange/structure toolbar across the top of the canvas (reorder/group/cleanup …) */
 /* top arrange bar — the top run of the picture frame: same fill as the side bars,
-   bordered top (outer edge) and bottom (inner edge against the canvas). */
-.stage-toolbar { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap; padding: 5px 8px; background: var(--bg); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+   bordered top (outer edge) and bottom (inner edge against the canvas). Desktop windows can
+   narrow this bar below its content width same as a phone can — it must scroll sideways, not
+   wrap to a second row (which used to eat canvas height AND look like broken layout, not an
+   intentional bar). `safe center`: centres when it fits, same as before, but degrades to
+   start-alignment instead of clipping once it overflows — plain `center` on an overflowing
+   flex row makes the far side unreachable by scrolling (same trap the mobile rail already
+   worked around; see the phone-ctxrow comment further down). */
+.stage-toolbar {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: safe center; gap: 6px;
+  flex-wrap: nowrap; padding: 5px 8px; background: var(--bg);
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+}
+.stage-toolbar::-webkit-scrollbar { display: none; }
+.stage-toolbar > * { flex: 0 0 auto; }
 .tool-vsep { width: 1px; align-self: stretch; margin: 3px 4px; background: var(--line); }
 /* body holds the rulers overlay + the preview frame (so rulers don't cover the toolbar) */
 .stage-body { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
@@ -1114,6 +1127,18 @@ button:disabled {
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
 }
+
+/* Its one child (zoom/select-all/rulers/free-transform/flip) is where an overflow risk
+   actually lives — panel-foot's own `flex: 0 0 auto` on it would just push content past the
+   bar's edges uncontrolled at a narrow desktop width. `flex: 1 1 auto; min-width: 0` bounds it
+   to the available width so `overflow-x: auto` below has something to scroll, same fix as the
+   top arrange bar just above. */
+.viewport-controls {
+  flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; justify-content: safe center;
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+}
+.viewport-controls::-webkit-scrollbar { display: none; }
+.viewport-controls > * { flex: 0 0 auto; }
 
 .preview-frame {
   min-height: 0;
