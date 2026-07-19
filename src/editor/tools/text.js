@@ -294,12 +294,15 @@ export const textMixin = {
     return node.textContent || "";
   },
   _hasTextPath(node) { return !!(node && node.querySelector && node.querySelector(":scope > textPath")); },
-  // The <path> element a text node is bound to via its <textPath href>, or null.
-  _boundPathEl(node) {
+  // The <path> element a text node is bound to via its <textPath href>, or null. Searches
+  // `root` (an Element with querySelector) if given, else the live stage — so this also works
+  // against a DETACHED DOMParser clone (export's own copy of the markup, not the live document),
+  // as long as the referenced <path> is present in that same clone.
+  _boundPathEl(node, root) {
     const tp = node && node.querySelector && node.querySelector(":scope > textPath");
     if (!tp) return null;
     const href = tp.getAttribute("href") || tp.getAttribute("xlink:href") || "";
-    return href ? this.stage.querySelector("#" + CSS.escape(href.slice(1))) : null;
+    return href ? (root || this.stage).querySelector("#" + CSS.escape(href.slice(1))) : null;
   },
   // Dispatch: on-path → single run; AREA (has a wrap width) → word-wrap; POINT → hard breaks only.
   _writeContent(node, str) {
@@ -810,10 +813,10 @@ export const textMixin = {
   // mid-advance distance and rotated to the tangent there. startOffset (px or %), text-anchor
   // and side=right are honoured; glyphs whose centre falls off the path are dropped (as SVG
   // does). Every glyph's place+rotate is baked into ONE editable all-cubic path.
-  _layoutGlyphsOnPath(node, glyphs) {
+  _layoutGlyphsOnPath(node, glyphs, root) {
     const tp = node.querySelector(":scope > textPath");
     if (!tp || !glyphs || !glyphs.length) return null;
-    const pathEl = this._boundPathEl(node);
+    const pathEl = this._boundPathEl(node, root);
     if (!pathEl || !pathEl.getTotalLength) return null;
     const L = pathEl.getTotalLength();
     if (!(L > 0)) return null;
@@ -949,12 +952,12 @@ export const textMixin = {
   // failure (offline, an unrecognised family, …) this returns the ORIGINAL text unchanged rather
   // than fail the whole export — the export still succeeds, just with cairosvg's own font
   // fallback, i.e. today's (imperfect but working) behaviour.
-  // DEFERRED (documented gap, not silently missed): text-ON-A-PATH is left as <text> here.
-  // _boundPathEl resolves its <path> via `this.stage.querySelector(...)`, hardcoded to the LIVE
-  // document — outlining on-path text against a detached clone needs that generalized to look up
-  // the id within the node's OWN document first, a bigger change for a narrower case (on-path
-  // text is far less common than plain text). It still round-trips through cairosvg's fallback
-  // font for now.
+  // Text-ON-A-PATH is outlined here too (perGlyph, same as convertSelectedTextToOutlines's
+  // on-path branch): _boundPathEl/_layoutGlyphsOnPath both take `root` now, so they resolve the
+  // bound <path> within THIS detached clone instead of the live stage — the only piece that
+  // was missing before. If the referenced <path> id isn't in `svgText` at all (shouldn't happen;
+  // export serializes the whole document), _layoutGlyphsOnPath returns null and that one run is
+  // left as <text>, same best-effort fallback as any other single-job failure below.
   async outlineTextForExport(svgText) {
     if (!window.__fonts) return svgText;
     // Best-effort end to end, not just around the network call: ANY failure here (a bad family
@@ -964,13 +967,16 @@ export const textMixin = {
       const doc = new DOMParser().parseFromString(svgText, "image/svg+xml");
       const root = doc.documentElement;
       if (root.tagName.toLowerCase() !== "svg") return svgText;
-      const texts = [...root.querySelectorAll("text")].filter((n) => !this._hasTextPath(n));
+      const texts = [...root.querySelectorAll("text")];
       if (!texts.length) return svgText;
       const jobs = texts.map((node) => {
-        const text = this._literalLines(node);
+        const onPath = this._hasTextPath(node);
+        const text = onPath ? (node.querySelector(":scope > textPath").textContent || "")
+                            : this._literalLines(node);
         const fam = window.__fonts.primaryFamily(node.getAttribute("font-family") || "");
-        return { node, payload: {
-          text, family: fam, source: window.__fonts.webFontSource(fam),
+        return { node, onPath, payload: {
+          text: onPath ? text.replace(/\n/g, " ") : text,
+          family: fam, source: window.__fonts.webFontSource(fam),
           weight: parseInt(node.getAttribute("font-weight") || "400", 10) || 400,
           italic: (node.getAttribute("font-style") || "") === "italic",
           fontSize: parseFloat(node.getAttribute("font-size")) || 16,
@@ -979,6 +985,7 @@ export const textMixin = {
           anchor: node.getAttribute("text-anchor") || "start",
           x: parseFloat(node.getAttribute("x")) || 0,
           y: parseFloat(node.getAttribute("y")) || 0,
+          perGlyph: onPath,
         } };
       }).filter((j) => j.payload.text.trim());
       if (!jobs.length) return svgText;
@@ -987,11 +994,13 @@ export const textMixin = {
         "font-style", "font-stretch", "text-anchor", "letter-spacing", "word-spacing", "xml:space",
         "data-hv-id", "data-hv-name", "data-hv-line-height", "data-hv-text-width", "data-hv-br"]);
       jobs.forEach((j, i) => {
-        const d = results[i] && results[i].d;
+        const res = results[i] || {};
+        const d = j.onPath ? this._layoutGlyphsOnPath(j.node, res.glyphs || [], root) : res.d;
         if (!d) return;   // this one text run failed to outline — leave it as <text>, don't fail the export
         const path = doc.createElementNS(SVG_NS, "path");
         path.setAttribute("d", d);
-        for (const at of [...j.node.attributes]) if (!drop.has(at.name)) path.setAttribute(at.name, at.value);
+        const nodeDrop = j.onPath ? new Set([...drop, "transform"]) : drop;
+        for (const at of [...j.node.attributes]) if (!nodeDrop.has(at.name)) path.setAttribute(at.name, at.value);
         if (!path.getAttribute("fill")) path.setAttribute("fill", j.node.getAttribute("fill") || "#000000");
         path.setAttribute("fill-rule", "nonzero");
         j.node.replaceWith(path);
