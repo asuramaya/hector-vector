@@ -2224,6 +2224,22 @@ def main():
             return { undoOk, delGc, nested, gradKept, reopenRel }; }""")
         check("mask hardening: undo restores, delete GC's, masks nest, clip-shape gradient kept, reopen-release",
               mh["undoOk"] and mh["delGc"] and mh["nested"] and mh["gradKept"] and mh["reopenRel"], str(mh))
+        # Real-UI path (thread 25818cfd): the Release panel above (line ~2196) asserted on a direct
+        # _objectPanel([g]) call — exactly the blind spot that hid the Fills bug (K.1). makeClipMask
+        # strips the clip shape from the DOM, so the group ALWAYS unwraps to its content leaf/leaves
+        # through docks.js's live Properties panel; a check gated on the _effectiveLeaves()-unwrapped
+        # `nodes[0]` (instead of the raw selection) could never equal the group itself. Open the
+        # ACTUAL panel to prove Release survives that path.
+        page.evaluate(r"""() => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="20" y="20" width="40" height="40" fill="#36c"/><rect data-hv-id="r3" x="10" y="10" width="60" height="60" fill="#c33"/></svg>','m-real');
+            editor.setTool('select'); editor.selection=new Set(['r1','r3']); editor.artboardSelected=false;
+            editor.makeClipMask();
+        }""")
+        open_ctx_panel(page)
+        page.wait_for_timeout(150)
+        relGroup = page.query_selector('.insp-group[data-group="Clipping mask"]')
+        check("masks: Release panel renders through the live Properties panel (real _effectiveLeaves unwrap path)",
+              relGroup is not None and "Release" in relGroup.inner_text())
         # Expand & Pathfinder (Epic X): outline stroke (filled-path replaces the stroke, honouring
         # width/cap via the raster→bézier engine), offset path (grow/shrink copies), and Pathfinder
         # Divide (overlap → grouped face regions, each coloured by the topmost shape). Round-trips.
@@ -2414,6 +2430,24 @@ def main():
             return out; }""")
         check("width tool: make→variable ribbon, swell renders, base-scale, uniform reset, release, expand+undo, round-trips",
               wv["made"] and wv["ribbon"] and wv["swell"] and wv["scaled"] and wv["uniform"] and wv["serOk"] and wv["released"] and wv["expanded"] and wv["undoOk"], str(wv))
+        # Real-UI path (thread 25818cfd): the source shape above had stroke only (fill="none"), so
+        # _regenWidthStroke never generated its optional extra fill child and this never exercised
+        # the bug. A shape with BOTH a fill and a stroke gets a 2-child group (fill path + ribbon)
+        # — _effectiveLeaves() then unwraps to 2 leaves, and a `nodes.length===1` gate through
+        # docks.js's live Properties panel silently hid the whole Width group. Open the ACTUAL panel.
+        page.evaluate(r"""() => {
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><circle data-hv-id="c1" cx="100" cy="100" r="40" fill="#3366cc" stroke="#cc3333" stroke-width="10"/></svg>','w-real');
+            editor.setTool('width'); editor.selection=new Set(['c1']); editor.artboardSelected=false;
+            const ids = editor.makeWidthStroke(['c1']);
+            window.__wsLeaves = editor._effectiveLeaves().length;
+            editor.selection = new Set([ids[0]]); editor.artboardSelected=false;
+        }""")
+        open_ctx_panel(page)
+        page.wait_for_timeout(150)
+        widthGroup = page.query_selector('.insp-group[data-group="Width"]')
+        wsLeaves = page.evaluate("() => window.__wsLeaves")
+        check("width: panel renders through the live Properties panel for a fill+stroke source (2-leaf group, real _effectiveLeaves unwrap path)",
+              wsLeaves == 2 and widthGroup is not None, f"leaves={wsLeaves} group={widthGroup is not None}")
         # Path-construction tools (Epic B): Shape Builder / Scissors / Knife / Eraser — driven via
         # their pure cores (shapeBuilderPaint / scissorsCut / knifeCut / eraseSweep). Each ends in
         # plain editable paths on the same raster+marching engine the booleans use; undo restores.

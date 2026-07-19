@@ -2145,7 +2145,13 @@ const editor = {
     // `nodes.length===1 && isXGroup(nodes[0])` would never match through the real UI (found
     // independently while wiring up both Envelope and Fills: each own-group panel silently
     // never appeared). Blend/Warp/Repeat's own-group panels had the same latent bug — fixed
-    // here alongside, using the RAW selection for group identity instead.
+    // here alongside, using the RAW selection for group identity instead. Audit (thread
+    // 25818cfd) found two more of the same class: Masks' clip/mask-group Release panel (the
+    // clip/mask shape is stripped from the DOM on creation, so the group ALWAYS unwraps to
+    // its content leaves — this one was broken in every case, not an edge case) and Width's
+    // uniform/release/expand panel (only when the source shape carried both a fill and a
+    // stroke, since `_regenWidthStroke` then generates 2 children — fill path + ribbon —
+    // instead of 1). Both fixed below with `rawSel`, same as the others.
     const rawSel = this.selectedNodes();
     const first = reads[0];
     const common = (read) => { let v, set = false; for (const n of reads) { const c = read(n); if (!set) { v = c; set = true; } else if (c !== v) return { mixed: true, value: read(first) }; } return { value: v }; };
@@ -2228,8 +2234,8 @@ const editor = {
     }
     // Masks (M.4): a single clipped/masked group → Release; ≥2 objects with a vector on top
     //  → offer Make clipping mask / Make opacity mask (the top object becomes the mask).
-    if (nodes.length === 1 && (this._clipGroupOf(nodes[0]) === nodes[0] || this._maskGroupOf(nodes[0]) === nodes[0])) {
-      const clipped = this._clipGroupOf(nodes[0]) === nodes[0];
+    if (rawSel.length === 1 && (this._clipGroupOf(rawSel[0]) === rawSel[0] || this._maskGroupOf(rawSel[0]) === rawSel[0])) {
+      const clipped = this._clipGroupOf(rawSel[0]) === rawSel[0];
       const rel = document.createElement("button");
       rel.type = "button"; rel.className = "insp-action"; rel.textContent = "Release";
       rel.title = "Release the mask — the masking shape returns as a normal object";
@@ -2261,7 +2267,7 @@ const editor = {
       // Expand / Outline / Offset / Pathfinder moved to the Actions menu (_objectActions).
       // Width (Epic W): a selected width-stroke group gets its uniform-width scrub + Uniform
       //  reset + Release + Expand. ("Vary width" — making one — is in the Actions menu.)
-      const wsGroup = nodes.length === 1 ? this._wsGroupOf(nodes[0]) : null;
+      const wsGroup = rawSel.length === 1 ? this._wsGroupOf(rawSel[0]) : null;
       if (wsGroup) {
         const spec = this._wsSpec(wsGroup); const wrows = [];
         wrows.push(numRow("Width", Math.round((spec.w || 0) * 100) / 100, 0.25, 1,
