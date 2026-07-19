@@ -32,6 +32,13 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
       // action clicks or a just-finished drag don't collapse — but a plain click does,
       // whether the panel is docked OR floating (a drag sets head._docking to opt out).
       if (e.target.closest(".panel-actions") || head._docking) return;
+      // Manage-screen citizens are laid out as a persistent grid, not a dock — collapsing one
+      // leaves a bare header sitting in a fixed grid cell with no reflow and no caret ever shown
+      // to explain why (the caret is CSS-hidden there, see .manage-grid .rail-section .caret).
+      // bindHeaderDrag already exempts these panels from the drag-to-float gesture via its own
+      // `away` Set (out of scope here — a different nested closure); closest() reaches the same
+      // answer without needing it in scope, straight off where the section actually lives.
+      if (section.closest(".manage-grid")) return;
       // Phone: the sheet is a tab surface, so the tab IS the panel — folding it would blank the sheet
       // you just opened, and there is no second panel below for the space to go to. Header taps do
       // nothing there. (This also retires the old auto-fold triage: with one pane at a time, there is
@@ -60,7 +67,13 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
     // tries to manage/dock them. (Their render fns already no-op on missing DOM.)
     const SERVER_PANELS = new Set(["library", "processor", "jobs", "info"]);
     if (CLOUD) for (const n of SERVER_PANELS) document.querySelector(`.rail-section[data-section="${n}"]`)?.remove();
-    const ORDER = ["history", "layers", "symbols", "library", "processor", "properties", "color", "info", "jobs"]   // home identity order
+    // Home identity order — also the default top-to-bottom stacking WITHIN whichever dock a panel
+    // lands in (state[n].order below is just this array's index; sorting happens per-dock, after
+    // filtering by loc, so the two halves below don't need to interleave). Right half: the four
+    // panels you want up while your hand is mid-edit. Left half: browse/source/pipeline, opened for
+    // a stretch and closed — matches SERVER_PANELS below almost exactly (Symbols is the one panel
+    // in that family the free browser build still gets).
+    const ORDER = ["properties", "color", "layers", "history", "library", "info", "symbols", "processor", "jobs"]
       .filter((n) => !(CLOUD && SERVER_PANELS.has(n)));
     const dockElFor = (side) => (side === "left" ? leftDock : rightDock);
     let folded = localStorage.getItem(FOLD_KEY) === "1";
@@ -100,10 +113,14 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
     const isFloat = (name) => { const s = sectionEl(name); return !!(s && s.closest(".dock-window")); };
     const curLoc = (name) => { if (state[name] && state[name].loc === "shelf") return "shelf"; if (groupOf(name)) return "float"; const s = sectionEl(name); if (!s || !s.parentElement) return null; if (s.closest(".dock-window")) return "float"; return s.parentElement === leftDock ? "left" : "right"; };
 
-    // symbols defaults VISIBLE (not shelved like info): the panel only earns its keep once a
-    // symbol exists, and hiding it by default would mean a user's first makeSymbol()/F8 has no
-    // visible payoff — they'd have no idea a browsable library now exists at all.
-    const DEFAULT_LOC = { history: "right", layers: "right", symbols: "right", library: "right", processor: "right", properties: "right", color: "right", info: "shelf", jobs: "right" };
+    // Two docks, two jobs. Right: Properties/Colour/Layers/History — up constantly while a shape is
+    // selected, every build has all four. Left: Library/Info/Symbols/Processor/Jobs — sourcing and
+    // pipeline work, opened for a stretch and closed; three of the five only exist in the desktop
+    // build (SERVER_PANELS above). Info used to default to the shelf specifically because the old
+    // single right-hand column had no room left for a fifth-plus panel — with its own dock now, that
+    // reason is gone, and shelving the one panel that answers "what am I looking at" only meant its
+    // first use was invisible.
+    const DEFAULT_LOC = { history: "right", layers: "right", symbols: "left", library: "left", processor: "left", properties: "right", color: "right", info: "left", jobs: "left" };
     // Shelf squares: a glyph + label per panel (parked/unused panels show as these).
     const SHELF_GLYPH = { history: "⟲", layers: "▤", symbols: "◈", library: "⊞", processor: "▸", properties: "☰", color: "◧", info: "ⓘ", jobs: "☷" };
     const PANEL_LABEL = { history: "History", layers: "Layers", symbols: "Symbols", library: "Library", processor: "Processor", properties: "Properties", color: "Colour", info: "Info", jobs: "Jobs" };

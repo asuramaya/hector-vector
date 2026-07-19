@@ -210,13 +210,19 @@ export const artboardsMixin = {
       e.stopPropagation(); e.preventDefault();
       try { hit.setPointerCapture(e.pointerId); } catch {}
       const a0 = this.artboards[i];
-      const inv = () => this.stageCTM().inverse();
-      const start = new DOMPoint(e.clientX, e.clientY).matrixTransform(inv());
+      // Frozen ONCE, not recomputed per move: moveArtboard() below calls _reflowCanvas(), which
+      // grows the viewBox to the union of every artboard and re-fits the zoom to it — so a LIVE
+      // stageCTM() drifts mid-drag, one reflow per pointermove, while a0/ox/oy stay fixed at the
+      // drag's start. Comparing a moving coordinate system against a fixed reference rect is
+      // exactly the bug: each step's delta lands somewhere the previous step's math didn't expect,
+      // and it compounds across the drag instead of cancelling out.
+      const inv = this.stageCTM().inverse();
+      const start = new DOMPoint(e.clientX, e.clientY).matrixTransform(inv);
       const ox = a0.x, oy = a0.y;
       this._handleDragging = true;
       let pushed = false;
       const move = (ev) => {
-        const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
+        const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv);
         if (!pushed) { this.beginCoalesce(); pushed = true; }
         this.moveArtboard(i, ox + (p.x - start.x), oy + (p.y - start.y));
         this._layoutArtboardHandles(this.artboards[i]);
@@ -237,12 +243,15 @@ export const artboardsMixin = {
       e.stopPropagation(); e.preventDefault();
       try { c.setPointerCapture(e.pointerId); } catch {}
       const a0 = { ...this.artboards[i] };
-      const inv = () => this.stageCTM().inverse();
+      // Frozen ONCE — see the identical note in _bindArtboardMove just above. resizeArtboard()
+      // below grows the union viewBox and re-fits the zoom on every step, so a live stageCTM()
+      // would drift out from under a0 across the drag instead of staying comparable to it.
+      const inv = this.stageCTM().inverse();
       const MIN = 8;
       this._handleDragging = true;
       let pushed = false;
       const move = (ev) => {
-        const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv());
+        const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(inv);
         if (!pushed) { this.beginCoalesce(); pushed = true; }
         let x = a0.x, y = a0.y, w = a0.w, h = a0.h;
         if (spec.sx < 0) { const right = a0.x + a0.w; x = Math.min(p.x, right - MIN); w = right - x; }

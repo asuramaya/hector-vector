@@ -137,18 +137,14 @@
           <span class="tool-sep" aria-hidden="true"></span>
           <button class="tool-button" data-tool="pen" data-key="P" type="button" title="Pen — click to add points (P)">✒</button>
           <button class="tool-button" data-tool="curvature" data-key="C" type="button" title="Curvature — click to drop auto-smooth points (C)">⌒</button>
+          <span class="tool-sep" aria-hidden="true"></span>
           <button class="tool-button" data-tool="rect" data-key="R" type="button" title="Rectangle (R)">▭</button>
           <button class="tool-button" data-tool="ellipse" data-key="E" type="button" title="Ellipse (E)">◯</button>
           <button class="tool-button" data-tool="line" data-key="L" type="button" title="Line (L)">╱</button>
+          <span class="tool-sep" aria-hidden="true"></span>
           <button class="tool-button" data-tool="text" data-key="T" type="button" title="Text (T) — click to place, type, Esc to finish">T</button>
-          <button class="tool-button" data-tool="width" data-key="W" type="button" title="Width (W) — drag a stroke perpendicular to swell/pinch it (Alt = one side)">⊳</button>
-          <button class="tool-button" data-tool="envelope" data-key="⇧W" type="button" title="Envelope (Shift+W) — drag any grid point to bend everything inside it">▦</button>
-          <button class="tool-button" data-tool="shapebuilder" data-key="⇧M" type="button" title="Shape Builder (Shift+M) — paint across overlapping selected shapes to merge regions (Alt removes)">◳</button>
-          <button class="tool-button" data-tool="scissors" data-key="⇧C" type="button" title="Scissors (Shift+C) — click a path to cut it">✂</button>
-          <button class="tool-button" data-tool="knife" data-key="⇧K" type="button" title="Knife (Shift+K) — drag across shapes to cut (Alt = straight)">⚔</button>
-          <button class="tool-button" data-tool="eraser" data-key="⇧E" type="button" title="Eraser (Shift+E) — drag over filled shapes to erase ( [ / ] resize )">⌫</button>
+          <span class="tool-sep" aria-hidden="true"></span>
           <button class="tool-button" data-tool="artboard" data-key="⇧O" type="button" title="Artboard (Shift+O) — drag on the canvas to add one, sized and placed exactly there">▤</button>
-          <button class="tool-button" data-tool="blend" data-key="B" type="button" title="Blend (B) — click two shapes, one after another, to blend between them">◐</button>
         </nav>
 
         <article class="stage-wrap preview-panel" data-tool="select">
@@ -161,6 +157,8 @@
             <span class="tool-vsep" aria-hidden="true"></span>
             <button id="layer-group" class="tool-button" data-key="⌘G" type="button" title="Group (Ctrl/Cmd+G)" disabled>⊞</button>
             <button id="layer-ungroup" class="tool-button" type="button" title="Ungroup (Ctrl/Cmd+Shift+G)" disabled>⊟</button>
+            <button class="tool-button" id="act-clip" type="button" title="Make clipping mask (Ctrl/Cmd+7) — top object clips the rest" disabled>⛶</button>
+            <button class="tool-button" id="act-duplicate" data-key="⌘D" type="button" title="Duplicate (Ctrl/Cmd+D)" disabled>⧉⁺</button>
             <span class="tool-vsep" aria-hidden="true"></span>
             <button id="layer-rename" class="tool-button" type="button" title="Rename selected object" disabled>✎</button>
             <button id="layer-delete" class="tool-button" data-key="⌫" type="button" title="Delete (Del / Backspace)" disabled>✕</button>
@@ -193,32 +191,45 @@
               <button id="vp-selectall" class="tool-button" data-key="⌘A" type="button" title="Select all objects (Ctrl/Cmd+A)">▦</button>
               <button id="vp-rulers" class="tool-button" type="button" title="Rulers — show measurement rulers" aria-pressed="false">⊢</button>
               <button id="vp-guides" class="tool-button" type="button" title="Smart guides — snap to other objects' edges &amp; centres" aria-pressed="false">⊹</button>
+              <span class="vp-sep" aria-hidden="true"></span>
+              <!-- Free transform. These were keyboard-only doors: scale was Ctrl+T and rotate had no
+                   binding AT ALL (Ctrl+R went to the rulers) — so on a phone neither existed, and on a
+                   desktop rotate never had. The handles always worked with a finger; there was simply no
+                   way in. They TOGGLE, because a phone has no Esc to get back out with. -->
+              <button class="tool-button" id="act-scale" data-key="⌘T" type="button" title="Scale — drag the box handles (Ctrl/Cmd+T)" disabled>⇲</button>
+              <button class="tool-button" id="act-rotate" type="button" title="Rotate — drag the corner handles" disabled>⟳</button>
+              <span class="vp-sep" aria-hidden="true"></span>
+              <button class="tool-button" id="act-rotate-cw" type="button" title="Rotate 90° clockwise">↻</button>
+              <button class="tool-button" id="act-rotate-ccw" type="button" title="Rotate 90° counter-clockwise">↺</button>
+              <button class="tool-button" id="act-flip-h" type="button" title="Flip horizontal">⇄</button>
+              <button class="tool-button" id="act-flip-v" type="button" title="Flip vertical">⇅</button>
             </div>
           </div>
         </article>
 
         <nav class="actionbar" role="toolbar" aria-label="Object actions">
-          <button class="tool-button" id="act-cut" data-key="⌘X" type="button" title="Cut (Ctrl/Cmd+X)" disabled>✂</button>
-          <button class="tool-button" id="act-copy" data-key="⌘C" type="button" title="Copy (Ctrl/Cmd+C)" disabled>⧉</button>
-          <button class="tool-button" id="act-paste" data-key="⌘V" type="button" title="Paste (Ctrl/Cmd+V)" disabled>❏</button>
-          <button class="tool-button" id="act-duplicate" data-key="⌘D" type="button" title="Duplicate (Ctrl/Cmd+D)" disabled>⧉⁺</button>
+          <button class="tool-button" data-tool="width" data-key="W" type="button" title="Width (W) — drag a stroke perpendicular to swell/pinch it (Alt = one side)">⊳</button>
+          <button class="tool-button" data-tool="envelope" data-key="⇧W" type="button" title="Envelope (Shift+W) — drag any grid point to bend everything inside it">▦</button>
+          <span class="tool-sep" aria-hidden="true"></span>
+          <button class="tool-button" data-tool="shapebuilder" data-key="⇧M" type="button" title="Shape Builder (Shift+M) — paint across overlapping selected shapes to merge regions (Alt removes)">◳</button>
+          <button class="tool-button" data-tool="scissors" data-key="⇧C" type="button" title="Scissors (Shift+C) — click a path to cut it">✄</button>
+          <button class="tool-button" data-tool="knife" data-key="⇧K" type="button" title="Knife (Shift+K) — drag across shapes to cut (Alt = straight)">⚔</button>
+          <button class="tool-button" data-tool="eraser" data-key="⇧E" type="button" title="Eraser (Shift+E) — drag over filled shapes to erase ( [ / ] resize )">⌫</button>
           <span class="tool-sep" aria-hidden="true"></span>
           <button class="tool-button" id="act-union" type="button" title="Unite — combine shapes" disabled>∪</button>
           <button class="tool-button" id="act-subtract" type="button" title="Subtract front from back" disabled>−</button>
           <button class="tool-button" id="act-intersect" type="button" title="Intersect — keep the overlap" disabled>∩</button>
-          <button class="tool-button" id="act-clip" type="button" title="Make clipping mask (Ctrl/Cmd+7) — top object clips the rest" disabled>⛶</button>
           <span class="tool-sep" aria-hidden="true"></span>
-          <!-- Free transform. These were keyboard-only doors: scale was Ctrl+T and rotate had no
-               binding AT ALL (Ctrl+R went to the rulers) — so on a phone neither existed, and on a
-               desktop rotate never had. The handles always worked with a finger; there was simply no
-               way in. They TOGGLE, because a phone has no Esc to get back out with. -->
-          <button class="tool-button" id="act-scale" data-key="⌘T" type="button" title="Scale — drag the box handles (Ctrl/Cmd+T)" disabled>⤢</button>
-          <button class="tool-button" id="act-rotate" type="button" title="Rotate — drag the corner handles" disabled>⟳</button>
+          <button class="tool-button" data-tool="blend" data-key="B" type="button" title="Blend (B) — click two shapes, one after another, to blend between them">◐</button>
           <span class="tool-sep" aria-hidden="true"></span>
-          <button class="tool-button" id="act-rotate-cw" type="button" title="Rotate 90° clockwise">↻</button>
-          <button class="tool-button" id="act-rotate-ccw" type="button" title="Rotate 90° counter-clockwise">↺</button>
-          <button class="tool-button" id="act-flip-h" type="button" title="Flip horizontal">⇄</button>
-          <button class="tool-button" id="act-flip-v" type="button" title="Flip vertical">⇅</button>
+          <!-- Cut/Copy/Paste stay HERE, not on the arrange bar with the rest of Structure — the arrange
+               bar is selection-gated on mobile (composeShell in formfactor.js merges Scale/Rotate/
+               booleans/Duplicate into it, but deliberately leaves Cut/Copy/Paste out: Paste has to work
+               with NOTHING selected). This is the one rail that's never selection-gated on any shell, so
+               it's the only safe home for them once they're no longer allowed to be a keyboard-only menu. -->
+          <button class="tool-button" id="act-cut" data-key="⌘X" type="button" title="Cut (Ctrl/Cmd+X)" disabled>✂</button>
+          <button class="tool-button" id="act-copy" data-key="⌘C" type="button" title="Copy (Ctrl/Cmd+C)" disabled>⧉</button>
+          <button class="tool-button" id="act-paste" data-key="⌘V" type="button" title="Paste (Ctrl/Cmd+V)" disabled>❏</button>
         </nav>
 
         <aside class="rightdock" id="rightdock">

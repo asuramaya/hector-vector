@@ -30,6 +30,7 @@ export function createPointerDrag({
   autoScroll = true,
 } = {}) {
   let el = null, pid = null, sx = 0, sy = 0, dragging = false, home = null, cont = null, scrollRAF = 0;
+  let ghostEl = null, ghostHome = null;
 
   const dist = (x, y) => Math.hypot(x - sx, y - sy);
   const limit = (e) => (e.pointerType === "touch" ? touchThreshold : threshold);
@@ -52,20 +53,43 @@ export function createPointerDrag({
     scrollRAF = requestAnimationFrame(step);
   }
 
-  // Keep the tile under the pointer. Recomputed from the element's CURRENT rect every move rather
-  // than accumulated from the start point — the live reflow physically relocates the tile mid-drag,
-  // so an accumulated offset would drift away from the finger.
-  function ghost(x, y) {
+  // The real `el` never moves visually any more — it stays put (dimmed via the .dragging class)
+  // and keeps being reflowed in place by the caller's onMove/insertBefore, exactly as before. What
+  // the pointer actually carries is a CLONE, fixed-positioned straight off the viewport and appended
+  // to <body>, so no ancestor's `overflow: hidden`/`auto` (a scrollable toolstrip rail, a panel's
+  // scrolling body, the layer list) can clip it once the drag crosses that ancestor's own edge — the
+  // old approach transformed `el` itself, which is still a DOM child of whatever bar/list it started
+  // in, so dragging a toolbar tile out of its (clipped) rail made it silently invisible past the rail's
+  // border: not stuck, just unpainted. Same fixed-overlay pattern this app already uses for
+  // `.xform-readout`.
+  function makeGhost() {
     if (ghostAxis === "none") return;
-    el.style.transform = "";
     const r = el.getBoundingClientRect();
-    const dx = ghostAxis === "y" ? 0 : x - (r.left + r.width / 2);
-    const dy = ghostAxis === "x" ? 0 : y - (r.top + r.height / 2);
-    el.style.transform = `translate(${dx}px, ${dy}px)`;
+    ghostHome = { x: r.left, y: r.top, w: r.width, h: r.height };
+    const g = el.cloneNode(true);
+    g.removeAttribute("id");
+    g.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
+    g.classList.remove("dragging");
+    g.classList.add("hv-drag-ghost");
+    g.style.cssText = `position:fixed; left:0; top:0; width:${r.width}px; height:${r.height}px; margin:0; pointer-events:none; z-index:1100;`;
+    document.body.appendChild(g);
+    ghostEl = g;
+  }
+  // Keep the ghost under the pointer. ghostAxis locks the OTHER axis to where the drag started
+  // (ghostHome, captured once) rather than the element's live natural position — el's natural rect
+  // can shift as the live reflow reorders it, and a full-width list row locked to its own column
+  // shouldn't visually drift sideways just because a sibling above it changed.
+  function ghost(x, y) {
+    if (ghostAxis === "none" || !ghostEl) return;
+    const left = ghostAxis === "y" ? ghostHome.x : x - ghostHome.w / 2;
+    const top = ghostAxis === "x" ? ghostHome.y : y - ghostHome.h / 2;
+    ghostEl.style.transform = `translate(${left}px, ${top}px)`;
   }
 
   function cleanup() {
-    if (el) { el.style.transform = ""; el.classList.remove("dragging"); }
+    if (el) el.classList.remove("dragging");
+    if (ghostEl) { ghostEl.remove(); ghostEl = null; }
+    ghostHome = null;
     cancelAnimationFrame(scrollRAF); scrollRAF = 0;
     window.removeEventListener("pointermove", move, true);
     window.removeEventListener("pointerup", up, true);
@@ -81,6 +105,7 @@ export function createPointerDrag({
       dragging = true;
       home = { parent: el.parentNode, next: el.nextSibling };   // for Escape
       el.classList.add("dragging");
+      makeGhost();
       onStart(el);
     }
     e.preventDefault();
@@ -93,13 +118,16 @@ export function createPointerDrag({
   function up(e) {
     if (e.pointerId !== pid || !el) return;
     const node = el, dropped = dragging, where = cont;
-    if (dragging) { el.style.transform = ""; el.classList.remove("dragging"); }
     cleanup();
     if (dropped) onDrop(node, where); else onTap(node);
   }
 
   function cancel(e) { if (e.pointerId !== pid) return; restore(); }
-  function key(e) { if (e.key === "Escape") { e.preventDefault(); restore(); } }
+  // stopPropagation, not just preventDefault: an active drag OWNS this Escape entirely. Without it,
+  // the same keypress falls through (this handler doesn't unwind the drag until AFTER it returns) to
+  // any other Escape listener the host app has registered elsewhere (closing customize-layout mode,
+  // say) — one keypress silently doing two unrelated things in the same tick.
+  function key(e) { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); restore(); } }
   function restore() {
     if (!el) return;
     const node = el, h = home, was = dragging;

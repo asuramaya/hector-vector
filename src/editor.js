@@ -517,10 +517,10 @@ const editor = {
   _touchHint() {
     const t = this.tool;
     if (t === "select") {
-      if (this._xformMode === "scale") return "Scale: drag the corner handles. Tap ⤢ again when you're done.";
+      if (this._xformMode === "scale") return "Scale: drag the corner handles. Tap ⇲ again when you're done.";
       if (this._xformMode === "rotate") return "Rotate: drag the round corner handles. Tap ⟳ again when you're done.";
       if (this.artboardSelected) return "Artboard selected. Set its size in the panel, or tap a shape to select that instead.";
-      if (this.selection.size) return `${this.selection.size} selected. Drag to move · hold for more actions · ⤢ resize · ⟳ turn`;
+      if (this.selection.size) return `${this.selection.size} selected. Drag to move · hold for more actions · ⇲ resize · ⟳ turn`;
       return "Select: tap a shape to pick it up. Drag empty space to sweep up several. Hold anything for its actions.";
     }
     if (t === "node") return "Points: drag the dots to reshape. Drag the line between two dots to bend it.";
@@ -551,7 +551,7 @@ const editor = {
       if (this.artboardSelected) return "Artboard — set size/background in the panel · click a shape to select it";
       // Ctrl+R has meant "rulers" for a long time — this line advertised a shortcut that did the
       // wrong thing, for a mode nothing could enter. Both now have buttons (#act-scale / #act-rotate).
-      if (this.selection.size) return `${this.selection.size} selected — drag to move · Alt-drag duplicates · Ctrl+T or ⤢ scale · ⟳ rotate · ⌫ delete`;
+      if (this.selection.size) return `${this.selection.size} selected — drag to move · Alt-drag duplicates · Ctrl+T or ⇲ scale · ⟳ rotate · ⌫ delete`;
       return "Select (V) — click a shape · drag to marquee (Alt = lasso) · Space-drag pans · A edits points";
     }
     if (t === "node") return "Points (A) — drag anchors/handles · Shift multi-selects · Alt converts · drag a segment to reshape · ⌫ deletes";

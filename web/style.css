@@ -327,16 +327,29 @@ button:disabled {
 .app.manage .editor-grid { display: none; }
 .app.manage .manage-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
-  grid-template-rows: minmax(0, 1fr) minmax(120px, 0.7fr) minmax(96px, 0.45fr);
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px) minmax(280px, 340px);
+  grid-template-rows: minmax(0, 1fr) minmax(140px, 0.6fr);
   gap: 10px;
 }
-/* Library = the big browse pane (full-height left); right column stacks Processor (the active
-   image's pipeline) · Info (inspect the selection) · Jobs (the queue). */
-.manage-grid .rail-section.library { grid-column: 1; grid-row: 1 / span 3; }
-.manage-grid .rail-section.processor { grid-column: 2; grid-row: 1; }
-.manage-grid .rail-section.info { grid-column: 2; grid-row: 2; }
-.manage-grid .rail-section.jobs { grid-column: 2; grid-row: 3; }
+/* Library = the big browse pane (full-height, leftmost). Info and Processor/Jobs used to
+   share ONE column, stacked three deep — Info squeezed into the middle row meant it read as
+   a minor status strip between two "real" panels, when it's actually the other primary
+   surface here (whatever you last clicked lands in it). Two persistent columns instead:
+   Info stays full-height on its own (a click brings a fresh image into full view, not a
+   190px-tall crop), Processor + Jobs pair up on the right — they're the natural pair (Jobs
+   is the queue Processor's Run feeds), not Info's neighbor. */
+.manage-grid .rail-section.library { grid-column: 1; grid-row: 1 / span 2; }
+.manage-grid .rail-section.info { grid-column: 2; grid-row: 1 / span 2; }
+.manage-grid .rail-section.processor { grid-column: 3; grid-row: 1; }
+.manage-grid .rail-section.jobs { grid-column: 3; grid-row: 2; }
+/* The click-a-Library-tile "bring attention" pulse (library.js's bringAttention) — Info and
+   Processor are what a click updates, but neither is what you physically clicked, so without
+   this the update is real but silent. Restart-safe via bringAttention's remove+reflow+re-add. */
+@keyframes hv-attn-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--hl-drop) 60%, transparent); }
+  100% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--hl-drop) 0%, transparent); }
+}
+.manage-grid .rail-section.hv-attn { animation: hv-attn-pulse 0.7s ease-out; }
 .manage-grid .rail-section.info .fp-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .manage-grid .rail-section .panel-x { display: none; }   /* a Manage citizen has no close button */
 .info-empty { padding: 14px 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
@@ -536,7 +549,20 @@ button:disabled {
 .section-head .panel-actions .tool-button { width: 26px; height: 26px; font-size: 12px; border: 1px solid var(--hair); border-radius: var(--r); background: var(--bg); color: var(--ink); }
 .section-head .panel-actions .tool-button:hover:not(:disabled):not(.active):not(.on) { background: var(--surface); color: var(--ink); border-color: var(--hair-2); }
 .section-head .panel-actions .tool-button.active, .section-head .panel-actions .tool-button.on { background: var(--ink); color: var(--on-ink); border-color: var(--ink); }
-.app.editor.customizing .section-head .panel-actions { min-width: 26px; min-height: 26px; outline: 1px dashed var(--ink); outline-offset: -1px; background: var(--surface); border-radius: var(--r); }
+/* Same drop-zone language as every other customize-layout bar (toolstrip/actionbar/etc, below)
+   — it used to be a neutral outline: var(--ink) on var(--surface), which barely reads against a
+   white header and left panel headers looking exempt from customizing when they're not (their
+   action icons — undo/redo, the panel-x — are registered bars too, see BARS in layout.js).
+   Scoped to .panel-actions specifically, not the whole .section-head row: the rest of the header
+   has its own always-on drag (reordering the PANEL itself within the dock, unrelated to and
+   unaffected by Customize layout), so painting the whole row here would imply a connection to
+   customize mode that isn't there.
+   padding+negative-margin, not just outline: the buttons inside pack edge to edge with zero gap,
+   so a background tint / -1px outline-offset on .panel-actions itself renders fully behind their
+   own opaque backgrounds — present in the DOM, invisible on screen. The padding buys the tint an
+   actual ring to show in; the matching negative margin keeps the header's height/layout exactly
+   as it was outside customize mode. */
+.app.editor.customizing .section-head .panel-actions { min-width: 26px; min-height: 26px; padding: 3px; margin: -3px; outline: 1px dashed var(--hl-drop); outline-offset: -1px; background: color-mix(in srgb, var(--hl-drop) 10%, var(--bg)); border-radius: calc(var(--r) + 2px); }
 /* Shelf: closed/unused panels parked as squares in the top-right header. Click to reopen,
    right-click for a tiny menu. Empty → hidden so it takes no space. */
 .panel-shelf { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
@@ -2400,12 +2426,18 @@ text.hv-text-editing { visibility: hidden; }
    - touch-action:none, or a drag along the phone's horizontally-scrolling tool strip would just be
      read as a scroll and the tile would never move. Only the TILES claim the gesture; the bar's own
      background still scrolls normally.
-   - the tile follows the pointer via a transform, so it must not swallow its own hit-tests. */
+   - a floating CLONE follows the pointer (.hv-drag-ghost below); the tile itself stays put as a
+     dimmed placeholder marking the live drop position, so it must not swallow its own hit-tests. */
 .app.editor.customizing .tool-button,
 .app.editor.customizing .tool-sep,
 .app.editor.customizing .tool-vsep,
 .app.editor.customizing .vp-sep { touch-action: none; }
 .app.editor.customizing .tool-button.dragging { pointer-events: none; position: relative; z-index: 3; }
+/* pointer-drag.js's floating ghost (see makeGhost()): fixed off the viewport and appended to
+   <body>, so it reads as genuinely lifted off the surface — and, load-bearing, so no ancestor's
+   scrollable/clipped rail (toolstrip, a panel body, the layer list) can clip it once the drag
+   crosses that ancestor's own edge, which is what made a dragged tile appear "stuck" before. */
+.hv-drag-ghost { box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35); opacity: 0.96; }
 /* a bar refusing the drop (a panel header already at its tile cap) — replaces DnD's dropEffect */
 .app.editor.customizing .no-drop { outline: 1px dashed var(--danger) !important; cursor: no-drop; }
 /* disabled tiles stay draggable in customize mode (you're arranging, not using them) */

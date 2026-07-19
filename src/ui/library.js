@@ -78,6 +78,18 @@ export function renderLibrary() {
   else renderLibraryRasters(host, q);
   host.scrollTop = keepScroll;
 }
+// A brief highlight pulse on a Manage-grid panel — the visible half of "clicking a Library
+// tile updates Info + Processor". Without it the update is real (new content lands in both
+// panels) but silent: nothing on screen draws the eye there, so a click can easily read as
+// having done nothing. Restart-safe (classList.remove + reflow + re-add) so clicking a
+// second tile before the first pulse finishes still flashes again instead of no-op'ing.
+function bringAttention(sectionName) {
+  const s = document.querySelector(`.manage-grid .rail-section.${sectionName}`);
+  if (!s) return;
+  s.classList.remove("hv-attn");
+  void s.offsetWidth;
+  s.classList.add("hv-attn");
+}
 function libSetCount(n) { const c = document.querySelector("#library-count"); if (c) c.textContent = n ? String(n) : ""; }
 function libEmpty(host, msg) { const e = document.createElement("div"); e.className = "gallery-empty"; e.textContent = msg; host.appendChild(e); }
 function libGrid(host) { const g = document.createElement("div"); g.className = "gallery-grid"; host.appendChild(g); return g; }
@@ -150,7 +162,7 @@ function renderLibraryRasters(host, q) {
     libCell(grid, {
       url: `${item.url}?w=256`, name: item.name,
       active: item.name === selectedName, processed: itemIsProcessed(item.name),
-      badge: itemIsProcessed(item.name) ? " ✓" : "", title: `${item.name} — click to select, drag to the canvas, right-click for info`,
+      badge: itemIsProcessed(item.name) ? " ✓" : "", title: `${item.name} — click to select + inspect, drag to the canvas`,
       // Selecting a library raster makes it the Processor's target when the canvas is empty,
       // so re-render the Processor (target row + auto-routing banner) + run the contextual
       // reveal — otherwise picking an image in the Library / Manage browse never surfaces its
@@ -159,6 +171,8 @@ function renderLibraryRasters(host, q) {
         setSelectedName(item.name); setManualOutputName(null); refreshLibrary();
         if (typeof renderProcessorPanel === "function") renderProcessorPanel();
         if (typeof syncDockContext === "function") syncDockContext();
+        openInfoModal(item.name);
+        bringAttention("info"); bringAttention("processor");
       },
       onContext: () => openInfoModal(item.name),
       drag: { mode: "raster", url: item.url, name: item.name },

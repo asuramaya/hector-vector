@@ -374,6 +374,18 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
     el.classList.add("layout-bar");   // CSS hook for the customize drop outline
   }
   BARS.forEach(wireBarContext);   // arm the Layout right-click on the static frame bars at boot
+  // Customize mode had exactly one way in AND out — right-click any bar, "Customize layout" — and
+  // no visible reminder once the entry toast faded, so it read as a state with no exit at all.
+  // Escape is what every other modal-ish mode in this app already answers to (the modal, the rich
+  // context menu, Pen/Curvature mid-path); this just makes customize mode consistent with that.
+  // Guarded on drag.isDragging(): pointer-drag.js binds its OWN Escape handler the instant a drag
+  // starts (to revert that one drag) — without this guard, the same keypress would revert the drag
+  // AND fall through to exit the whole mode in one go, which is one Escape doing two things.
+  function onEscExit(e) {
+    if (e.key !== "Escape" || drag.isDragging()) return;
+    e.preventDefault();
+    setEditing(false);
+  }
   function setEditing(on) {
     editing = on;
     // Suspend the adaptive engine while customizing. insertionRef() walks DOM order and compares
@@ -383,8 +395,10 @@ export function createLayoutCustomize({ appEl, editor, setStatus, floatingInput,
     appEl.classList.toggle("customizing", on);
     if (layoutTrigger) layoutTrigger.classList.toggle("active", on);
     BARS.forEach((b) => wireBar(b, on));
+    if (on) document.addEventListener("keydown", onEscExit);
+    else document.removeEventListener("keydown", onEscExit);
     if (!on && editor.onInspect) editor.onInspect();   // restore the correct disabled states (onInspect runs refreshActionButtons)
-    setStatus(on ? "Customize layout: drag buttons between bars (incl. panel headers) — changes save automatically." : "Ready.", on ? 6000 : 1500);
+    setStatus(on ? "Customize layout: drag buttons between bars (incl. panel headers) — Esc when done. Changes save automatically." : "Ready.", on ? 6000 : 1500);
   }
   // ---- active-profile state (the source of truth for "which profile is selected") ----
   // null = the unnamed working layout ("Default"). The live arrangement can DIVERGE from

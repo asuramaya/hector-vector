@@ -33,7 +33,7 @@ const TOUCH_ROWS = [
   ["Drag empty canvas", "Sweep up everything you drag across"],
   ["Hold a shape", "Its actions menu — everything you can do to it"],
   ["Drag a selected shape", "Move it"],
-  ["⤢ then drag", "Resize it (the handles appear on the box)"],
+  ["⇲ then drag", "Resize it (the handles appear on the box)"],
   ["⟳ then drag", "Turn it (drag the round corner handles)"],
   ["✕", "Delete it (on the bar under the canvas)"],
   ["§", "Drawing"],

@@ -33,7 +33,7 @@ export function createManage(deps) {
   if (gridEl && docks) for (const [name, el] of docks.borrow(BORROW)) {
     gridEl.appendChild(el);
     // Info is the selection inspector — give it a hint until an image is opened into it.
-    if (name === "info") { const body = el.querySelector(".fp-body"); if (body && !body.textContent.trim()) body.innerHTML = '<div class="info-empty">Open an image (right-click a Library tile, or its ⓘ) to inspect it here.</div>'; }
+    if (name === "info") { const body = el.querySelector(".fp-body"); if (body && !body.textContent.trim()) body.innerHTML = '<div class="info-empty">Click a Library tile to inspect it here.</div>'; }
   }
   syncButtons();
   return { enter, leave, toggle, isManage: () => manageOn };

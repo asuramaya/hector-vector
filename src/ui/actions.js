@@ -109,7 +109,7 @@ export const ACTIONS = [
   // Free transform ranks ABOVE the 90° nudges: "make it bigger" and "turn it a bit" are what people
   // actually reach for, and on a phone these two buttons ARE the only way in (no Ctrl+T) and the only
   // way back out (no Esc).
-  { key: "#act-scale",     glyph: "⤢",  label: "Scale",        why: "Drag the handles to resize it",    valid: (f) => f.canXform, noisy: true },
+  { key: "#act-scale",     glyph: "⇲",  label: "Scale",        why: "Drag the handles to resize it",    valid: (f) => f.canXform, noisy: true },
   { key: "#act-rotate",    glyph: "⟳",  label: "Rotate",       why: "Drag the corners to turn it",      valid: (f) => f.canXform, noisy: true },
   { key: "#act-rotate-cw", glyph: "↻",  label: "Rotate right", why: "Turn it 90° clockwise",            valid: (f) => f.canXform, noisy: true },
   { key: "#act-rotate-ccw", glyph: "↺", label: "Rotate left",  why: "Turn it 90° anticlockwise",        valid: (f) => f.canXform, noisy: true },

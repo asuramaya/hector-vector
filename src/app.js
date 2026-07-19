@@ -2823,7 +2823,15 @@ function fillProcessorChin(chin, t) {
     const wi = workItems.find((i) => i.name === t.name);
     const load = document.createElement("button"); load.type = "button"; load.className = "proc-foot-load";
     load.textContent = "↓ Load to preview"; load.title = `Load “${t.name}” onto the canvas to tune a live preview first (Run loads it automatically)`;
-    load.addEventListener("click", () => { if (wi) loadRasterToCanvas({ name: wi.name, url: wi.url }); });
+    // Same Manage → workbench seam runProcess() uses for "Run → canvas" (see its comment): this
+    // button places content on the canvas exactly like Run does, but was missing the handoff back
+    // to Edit — so clicking it from the Manage screen silently edited the (hidden, off-screen)
+    // canvas with no visible result at all, just a status-line message easy to miss entirely.
+    load.addEventListener("click", () => {
+      if (!wi) return;
+      if (window.__manage && window.__manage.isManage()) window.__manage.leave();
+      loadRasterToCanvas({ name: wi.name, url: wi.url });
+    });
     chin.appendChild(load);
   } else if (!t.batch && !t.name) {
     const hint = document.createElement("span"); hint.className = "proc-foot-hint";

@@ -4665,14 +4665,22 @@ def main():
             out.domUntouched = JSON.stringify(domOrder()) === JSON.stringify(domBefore);
             out.layoutUntouched = localStorage.getItem('hector-vector:layout') === layoutBefore;
             out.greyedNotHidden = !!document.querySelector('.actionbar #act-union.act-off');
+            // The Change rail mixes tool MODES (Width, Envelope, Shape Builder…) with real actions
+            // (Unite, Cut) — modes must survive adaptive ranking untouched, whatever's selected.
+            out.modeNeverOff = !document.querySelector('.actionbar [data-tool].act-off');
             return out;
         }""")
         check("adaptive: two overlapping shapes put the booleans first, on the bar",
               adapt["overlap"][:3] == ["#act-union", "#act-subtract", "#act-intersect"], str(adapt["overlap"][:4]))
-        check("adaptive: one shape leads with Scale/Rotate, keeps Duplicate, and offers NO booleans at all",
-              adapt["shape"][:2] == ["#act-scale", "#act-rotate"]
-              and "#act-duplicate" in adapt["shape"] and "#act-union" not in adapt["shape"],
-              str(adapt["shape"][:4]))
+        # Scale/Rotate/Duplicate no longer live on the actionbar (moved to the Bottom/Top bars in the
+        # gestalt-layout pass) — what's left to adapt here for a single shape is just clipboard vs.
+        # booleans: Cut/Copy are always valid with a selection, booleans need a fillable PAIR.
+        check("adaptive: one shape offers Cut/Copy, no booleans (nothing fillable-paired yet)",
+              "#act-cut" in adapt["shape"] and "#act-copy" in adapt["shape"]
+              and "#act-union" not in adapt["shape"],
+              str(adapt["shape"]))
+        check("adaptive: tool-mode buttons sharing the Change rail are never reranked/hidden",
+              adapt["modeNeverOff"], str(adapt["modeNeverOff"]))
         check("adaptive: an impossible action is HIDDEN, not greyed out (that's the whole point)",
               adapt["greyedNotHidden"] and "#act-union" not in adapt["shape"])
         check("adaptive: nothing selected -> the object bar empties out (costs no space)",
@@ -6470,7 +6478,7 @@ def main():
             # thing a phone could never do — no hover means no way to ask "what is this?" of a rune.
             tp.evaluate("() => editor.setTool('select')"); tp.wait_for_timeout(80)
             tp.evaluate("""() => {
-                const el = document.querySelector('.toolstrip [data-tool="eraser"]');
+                const el = document.querySelector('.actionbar [data-tool="eraser"]');
                 const b = el.getBoundingClientRect();
                 window.__hvHoldPt = {x: b.x + b.width / 2, y: b.y + b.height / 2};
                 el.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true,
@@ -6485,7 +6493,7 @@ def main():
                   f"strip={held!r} tool={tool_after!r}")
             # Lift the finger, and let the release-click be eaten as the real gesture would.
             tp.evaluate("""() => {
-                const el = document.querySelector('.toolstrip [data-tool="eraser"]');
+                const el = document.querySelector('.actionbar [data-tool="eraser"]');
                 const p = window.__hvHoldPt;
                 el.dispatchEvent(new PointerEvent('pointerup', {bubbles: true, cancelable: true,
                     pointerId: 11, pointerType: 'touch', clientX: p.x, clientY: p.y}));

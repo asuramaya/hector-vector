@@ -26,6 +26,15 @@ import { isTouchShell } from "./formfactor.js";
 // one gated tile isn't worth the jitter next to a caret and a close button.
 const ADAPTIVE_BARS = new Set(["arrange", "actions"]);
 
+// That "modes are always valid" rule doesn't stop being true just because a tool-mode button now
+// shares a bar with real actions (the Change rail mixes both: Width/Envelope/etc are modes, Unite/
+// Cut are actions). ACTIONS in actions.js only ever registered `#act-*`/`#layer-*` keys — it has no
+// entry for a `tool:*` key at all — so without this, rank.has() is false for every tool button here
+// and the ranking loop below would silently mark all of them .act-off the moment adaptive mode goes
+// "full" (which touch/phone always is). Treated exactly like a pinned tile: reserved slot, always
+// shown, never reranked.
+const isMode = (k) => !!k && k.startsWith("tool:");
+
 // How many actions a bar will show at once on a PHONE. With two overlapping shapes selected, fifteen
 // different actions are genuinely valid — ranking puts the right ones first, but fifteen 44px tiles
 // still need 700px in a 390px strip, and the tail is a scroll nobody performs. So the bar carries the
@@ -98,12 +107,12 @@ export function sync(facts) {
       // Pinned tiles are ANCHORS: they hold their DOM slot and are always shown. Everything else gets
       // dealt into the slots the anchors didn't claim, best-first.
       const taken = new Set();
-      kids.forEach((el, i) => { const k = keyOf(el); if (k && L.isPinned(k)) taken.add(i); });
+      kids.forEach((el, i) => { const k = keyOf(el); if (k && (L.isPinned(k) || isMode(k))) taken.add(i); });
       const free = kids.map((_, i) => i).filter((i) => !taken.has(i));
       let f = 0;
 
       const ranked = kids
-        .filter((el) => { const k = keyOf(el); return k && !L.isPinned(k) && rank.has(k); })
+        .filter((el) => { const k = keyOf(el); return k && !L.isPinned(k) && !isMode(k) && rank.has(k); })
         .sort((a, b) => rank.get(keyOf(a)) - rank.get(keyOf(b)));
 
       // The cap is PER BAR, and only where space is actually scarce: the phone's contextual strip,
@@ -117,7 +126,7 @@ export function sync(facts) {
 
       for (const [i, el] of kids.entries()) {
         const k = keyOf(el);
-        if (k && L.isPinned(k)) { el.classList.remove("act-off"); el.style.order = String(i); continue; }
+        if (k && (L.isPinned(k) || isMode(k))) { el.classList.remove("act-off"); el.style.order = String(i); continue; }
         if (!k) {
           // A divider's grouping meaning is destroyed by reranking, and a stray rule floating between
           // reflowed icons is just noise. They come back verbatim when adaptivity is off.
