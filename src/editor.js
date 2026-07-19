@@ -272,7 +272,7 @@ const editor = {
     const c = this.stage.cloneNode(true);
     c.querySelectorAll("g.hv-overlay, g.hv-guideslayer, g.hv-ablayer, g.hv-preview").forEach((g) => g.remove());
     c.querySelectorAll(".hv-raster-hidden").forEach((n) => { n.classList.remove("hv-raster-hidden"); if (!n.getAttribute("class")) n.removeAttribute("class"); });
-    c.querySelectorAll(".hv-iso-keep").forEach((n) => { n.classList.remove("hv-iso-keep"); if (!n.getAttribute("class")) n.removeAttribute("class"); });   // isolation dim is editor-only (Epic I)
+    c.querySelectorAll(".hv-iso-keep").forEach((n) => { n.classList.remove("hv-iso-keep", "hv-iso-active"); if (!n.getAttribute("class")) n.removeAttribute("class"); });   // isolation dim is editor-only (Epic I)
     // inline-svg is a query-selector hook (editor.js's own outputPreviewEl.querySelector("svg.inline-svg"))
     // and transparent-board is a CSS hook for the editor's checkerboard-behind-transparency chin — neither
     // means anything outside this app's own stylesheet/DOM queries, so both leaked into every saved/exported

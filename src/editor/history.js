@@ -11,7 +11,7 @@ export const historyMixin = {
     const c = this.stage.cloneNode(true);
     c.querySelectorAll("g.hv-overlay, g.hv-guideslayer, g.hv-preview").forEach((g) => g.remove());
     c.querySelectorAll(".hv-raster-hidden").forEach((n) => { n.classList.remove("hv-raster-hidden"); if (!n.getAttribute("class")) n.removeAttribute("class"); });
-    c.querySelectorAll(".hv-iso-keep").forEach((n) => { n.classList.remove("hv-iso-keep"); if (!n.getAttribute("class")) n.removeAttribute("class"); });   // isolation is view-state, not history (Epic I)
+    c.querySelectorAll(".hv-iso-keep").forEach((n) => { n.classList.remove("hv-iso-keep", "hv-iso-active"); if (!n.getAttribute("class")) n.removeAttribute("class"); });   // isolation is view-state, not history (Epic I)
     c.classList.remove("hv-pickable", "hv-iso");
     return c.outerHTML;
   },

@@ -1235,14 +1235,26 @@ button:disabled {
 .hv-btrail-build { stroke: var(--hl-edit); stroke-width: 2.5; opacity: 0.6; }
 .stage-wrap[data-tool="shapebuilder"] svg, .stage-wrap[data-tool="knife"] svg, .stage-wrap[data-tool="eraser"] svg { cursor: crosshair; }
 .stage-wrap[data-tool="scissors"] svg { cursor: crosshair; }
-/* Epic I — Isolation mode: dim + disable everything outside the isolated group */
+/* Epic I — Isolation mode: dim + disable everything outside the isolated group. NESTED: every
+   level of the stack carries .hv-iso-keep (not just the deepest), so this second rule — dim the
+   unmarked direct children of an INTERMEDIATE kept group, not just the stage's own — recurses to
+   arbitrary depth automatically: only the direct path from the stage down to the deepest level
+   stays lit, siblings at every INTERMEDIATE level get dimmed same as top-level siblings always
+   did. The DEEPEST level also carries .hv-iso-active and is explicitly EXCLUDED from this rule —
+   its own children are the active editing scope and must stay fully lit + interactive, not dimmed
+   the same as an intermediate level's off-path siblings would be. */
 svg.hv-iso > [data-hv-id]:not(.hv-iso-keep) { opacity: 0.25; pointer-events: none; }
+svg.hv-iso .hv-iso-keep:not(.hv-iso-active) > [data-hv-id]:not(.hv-iso-keep) { opacity: 0.25; pointer-events: none; }
 svg.hv-iso > .hv-ablayer, svg.hv-iso > rect.hv-artboard { opacity: 0.4; }
-.hv-iso-crumb { position: absolute; top: 8px; left: 8px; z-index: 7; display: flex; align-items: center; gap: 8px;
-  background: var(--panel); border: 1px solid var(--hair); border-radius: var(--r); padding: 3px 8px 3px 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); }
-.hv-iso-back { font: inherit; font-size: 12px; line-height: 1; cursor: pointer; border: 1px solid var(--hair); border-radius: 3px; background: var(--bg); color: var(--ink); padding: 3px 7px; }
+.hv-iso-crumb { position: absolute; top: 8px; left: 8px; z-index: 7; display: flex; align-items: center; gap: 6px;
+  background: var(--panel); border: 1px solid var(--hair); border-radius: var(--r); padding: 3px 8px 3px 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+  max-width: calc(100% - 16px); overflow-x: auto; }
+.hv-iso-back { font: inherit; font-size: 12px; line-height: 1; cursor: pointer; border: 1px solid var(--hair); border-radius: 3px; background: var(--bg); color: var(--ink); padding: 3px 7px; flex: none; }
 .hv-iso-back:hover { border-color: var(--hl-hover); color: var(--hl-hover); }
-.hv-iso-name { font-size: 12px; color: var(--muted); }
+.hv-iso-sep { font-size: 12px; color: var(--muted); flex: none; }
+.hv-iso-name { font-size: 12px; color: var(--muted); white-space: nowrap; }
+button.hv-iso-name.hv-iso-link { font: inherit; cursor: pointer; border: none; background: none; padding: 0; color: var(--muted); text-decoration: underline dotted; }
+button.hv-iso-name.hv-iso-link:hover { color: var(--hl-hover); }
 /* Epic C — Recolor swatch grid. `flex: 0 0 20px` + min/max + align-self pin each swatch to a
    fixed 20×20 box so no flex stretch/shrink (from any ancestor) can collapse them into thin tall bars. */
 .insp-recolor-grid { display: flex; flex-wrap: wrap; align-items: flex-start; align-content: flex-start; gap: 4px; }

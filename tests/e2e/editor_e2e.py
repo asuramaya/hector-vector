@@ -3079,6 +3079,58 @@ def main():
         check("isolation: enter (dim+keep+crumb), scoped scope/select-all, new objects parent inside, serialize+undo clean, exit selects group, reconcile on delete",
               iso["entered"] and iso["scope"] and iso["selAll"] and iso["newInside"] and iso["serClean"]
               and iso["afterUndo"] and iso["exited"] and iso["reconcileGone"], str(iso))
+        # Nested isolation (Epic I): double-clicking a group INSIDE an isolation enters a level
+        # deeper, building a breadcrumb STACK. Esc/exitIsolation pops ONE level at a time (not
+        # all at once); an earlier breadcrumb jumps straight to that depth; double-clicking
+        # outside the deepest level lands at whichever ANCESTOR level actually contains the
+        # click, not always all the way out. The deepest level's own children stay fully
+        # lit/interactive (that's the active editing scope) — only INTERMEDIATE levels' off-path
+        # siblings get dimmed, same as top-level siblings always were.
+        nest = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">'
+              + '<g data-hv-id="outer"><rect data-hv-id="oSib" x="120" y="120" width="20" height="20" fill="#999"/>'
+              + '<g data-hv-id="mid"><rect data-hv-id="mSib" x="80" y="80" width="20" height="20" fill="#aaa"/>'
+              + '<g data-hv-id="inner"><rect data-hv-id="leaf" x="10" y="10" width="20" height="20" fill="#e55"/></g>'
+              + '</g></g></svg>','nest');
+            editor.setTool('select');
+            editor.enterIsolation(editor.nodeById('outer'));
+            editor.enterIsolation(editor.nodeById('mid'));
+            editor.enterIsolation(editor.nodeById('inner'));
+            o.depth3 = editor._isoStack.length === 3 && editor._isoStack[2] === 'inner';
+            o.allKept = ['outer','mid','inner'].every(id => editor.nodeById(id).classList.contains('hv-iso-keep'));
+            o.onlyDeepestActive = editor.nodeById('inner').classList.contains('hv-iso-active')
+              && !editor.nodeById('outer').classList.contains('hv-iso-active') && !editor.nodeById('mid').classList.contains('hv-iso-active');
+            o.scope = JSON.stringify(editor._artScope().map(n=>n.getAttribute('data-hv-id')))==='["leaf"]';
+            // the deepest level's own child stays fully interactive; an intermediate level's
+            // off-path sibling (mSib, a child of 'mid' which is NOT the deepest) gets dimmed
+            o.leafLit = getComputedStyle(editor.nodeById('leaf')).opacity === '1';
+            o.mSibDimmed = getComputedStyle(editor.nodeById('mSib')).opacity !== '1';
+            const crumbs = [...document.querySelectorAll('.hv-iso-crumb .hv-iso-name')];
+            o.crumbCount = crumbs.length;
+            o.linkCount = document.querySelectorAll('.hv-iso-crumb .hv-iso-link').length;
+            o.serClean = !editor.serialize().includes('hv-iso');
+            editor.exitIsolation();   // pop 'inner' — ONE level, not all
+            o.afterOnePop = editor._isoStack.length === 2 && [...editor.selection].join()==='inner';
+            editor.enterIsolation(editor.nodeById('inner'));   // back to 3 deep
+            editor.exitIsolationToDepth(1);   // jump straight to 'outer', skipping 'mid'
+            o.jumpOk = editor._isoStack.length === 1 && editor._isoStack[0] === 'outer';
+            editor.enterIsolation(editor.nodeById('mid')); editor.enterIsolation(editor.nodeById('inner'));
+            editor._exitIsolationToContaining(editor.nodeById('mSib'));   // mSib lives in 'mid', not 'inner'
+            o.containingOk = JSON.stringify(editor._isoStack)==='["outer","mid"]';
+            editor._reconcileIsolation();   // nothing changed — must be a no-op
+            o.reconcileNoopOk = JSON.stringify(editor._isoStack)==='["outer","mid"]';
+            return o; }""")
+        check("nested isolation: 3-deep stack, every level kept, ONLY the deepest marked active, scope is the deepest, serializes clean",
+              nest["depth3"] and nest["allKept"] and nest["onlyDeepestActive"] and nest["scope"] and nest["serClean"], str(nest))
+        check("nested isolation: the deepest level's own child stays fully lit; an intermediate level's off-path sibling is dimmed",
+              nest["leafLit"] and nest["mSibDimmed"], str(nest))
+        check("nested isolation: breadcrumb has one entry per level, only earlier levels are clickable links",
+              nest["crumbCount"] == 3 and nest["linkCount"] == 2, str(nest))
+        check("nested isolation: exitIsolation pops ONE level (re-selects it); exitIsolationToDepth jumps straight to a level; exit-to-containing lands at the right ancestor; reconcile no-ops when nothing changed",
+              nest["afterOnePop"] and nest["jumpOk"] and nest["containingOk"] and nest["reconcileNoopOk"], str(nest))
+        page.evaluate("editor.exitIsolationToDepth(0)")   # back to a clean slate for the next section
+
         # Symbols & instances (Epic Y): selection → a <g class=hv-symbol> master in defs + a <use>
         # instance; duplicate shares the master; edit-master (surface+isolate, Epic I) propagates to
         # all instances; break-link makes an independent copy; <symbol>/<use> round-trip in serialize.
