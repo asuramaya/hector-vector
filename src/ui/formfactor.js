@@ -245,19 +245,20 @@ sheetMql.addEventListener("change", (e) => composeSheet(e.matches));
 //
 // Buttons SURROUND the canvas here too, same as landscape below and same as desktop: tools down
 // the LEFT and actions down the RIGHT (both real vertical rails now, see style.css), the
-// contextual bar across the TOP — undo/redo/zoom lead in their own always-visible strip above
-// that. Delete lived in .stage-toolbar, which the phone stylesheet used to display:none outright;
-// it's reachable now the same way the rest of the contextual bar is. The rest (rulers/guides,
-// library, etc. — set-once or occasional, not per-stroke) stays one tap away in the Panels sheet.
+// contextual bar across the BOTTOM, right above the status bar — undo/redo/zoom lead in their
+// own always-visible strip at the TOP instead. Delete lived in .stage-toolbar, which the phone
+// stylesheet used to display:none outright; it's reachable now the same way the rest of the
+// contextual bar is. The rest (rulers/guides, library, etc. — set-once or occasional, not
+// per-stroke) stays one tap away in the Panels sheet.
 //
-// Portrait and landscape reach that SAME shape by DIFFERENT means, because their resource budgets
-// are opposite. Landscape has width to spare and almost no height, so it can't afford a whole extra
-// row for the contextual bar — it borrows the top bar's own row instead (`on-topbar`, below).
-// Portrait has height to spare, so the contextual bar doesn't need relocating at all: .stage-toolbar
-// is already .stage-wrap's first child in index.html (arrange sits above the canvas, same as
-// desktop) — style.css just has to stop overriding that with `order: 3`, which used to shove it
-// BELOW .stage-body and stack it over the tool rail's own row. Same tiles, same handlers, same
-// oracle; only which wall — and which trick gets it there — differs.
+// Portrait and landscape reach that SAME "surround the canvas" shape by DIFFERENT means, because
+// their resource budgets are opposite. Landscape has width to spare and almost no height, so it
+// can't afford a whole extra row for the contextual bar — it borrows the top bar's own row instead
+// (`on-topbar`, below). Portrait has height to spare, so the contextual bar gets a genuine row of
+// its own — but NOT stacked directly under the quick bar at the top (that read as two competing
+// toolbars fighting over the same strip the instant something's selected); it anchors at the
+// bottom instead, thumb-reachable, right above .status-bar, which otherwise sits there empty.
+// Same tiles, same handlers, same oracle; only which wall — and which trick gets it there — differs.
 export function composeShell(m) {
   const sheet = q("#rightdock"), topbar = q("#mobile-top");
   if (!sheet || !topbar || m === composed) return;
@@ -334,12 +335,16 @@ export function composeShell(m) {
     // it of enough width to keep even 7 capped tiles reachable without scrolling. It can't just join
     // mobilebar's own row the way landscape's does either: mobilebar's quick items already scroll
     // sideways in ONE nowrap row, and forcing THAT row to wrap would break them. So it gets a fresh
-    // wrapper row instead — a sibling of mobilebar/toolstrip/stage-wrap/actionbar, spanning the same
-    // full width mobilebar does (see style.css's grid-row assignments).
+    // wrapper row instead — anchored at the BOTTOM of the screen, directly above .status-bar (a
+    // sibling of .editor-grid, not inside it), not stacked under the quick bar at the top: a lone
+    // top row plus this one read as two competing toolbars fighting for the same 44px strip the
+    // instant something's selected, when the thumb-reachable bottom edge — right where the status
+    // bar already sits — was sitting empty the whole time (see style.css's grid-row assignments).
     if (m === "phone" && arrange) {
       const ctxRow = document.createElement("div");
       ctxRow.className = "phone-ctxrow mobile-made";
-      topbar.parentNode.insertBefore(ctxRow, topbar.nextSibling);
+      const statusBar = q(".status-bar");
+      (statusBar ? statusBar.parentNode : topbar.parentNode).insertBefore(ctxRow, statusBar || null);
       remember(arrange);
       arrange.classList.add("on-topbar");
       ctxRow.appendChild(arrange);
@@ -358,9 +363,10 @@ function undoCompose(topbar, sheet) {
   // Order matters: the homes loop re-parents children OUT of .mobile-chrome/.phone-ctxrow, so empty
   // the wrappers first and let goHome() put each child back itself. One query from a common
   // ancestor, not two separate ones off topbar/sheet — a wrapper can live anywhere in the grid now
-  // (phone's .phone-ctxrow is a sibling of topbar, not a child of it, so `topbar.querySelectorAll`
-  // alone would miss it and leak a stranded wrapper on every phone->desktop crossing).
-  const grid = topbar.closest(".editor-grid") || topbar.parentNode;
+  // (phone's .phone-ctxrow sits by .status-bar now — a sibling of .editor-grid ITSELF, one level
+  // above topbar, not just a sibling of topbar within it — so the search has to start from .app.editor
+  // or it would miss the wrapper and leak it on every phone->desktop crossing).
+  const grid = topbar.closest(".app.editor") || topbar.closest(".editor-grid") || topbar.parentNode;
   grid.querySelectorAll(".mobile-made").forEach((s) => s.remove());
   for (const el of homes.keys()) { el.classList.remove("in-sheet", "sheet-active", "on-topbar"); goHome(el); }
 }

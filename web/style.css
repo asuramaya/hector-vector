@@ -2610,7 +2610,7 @@ text.hv-text-editing { visibility: hidden; }
      words most. It also took the ? (help) button down with it, to a 0x0 rect.
      So the band is spent, deliberately, and kept cheap: one line, 30px, at the foot where the
      desktop puts it too. The FAB offsets below account for it via --strip-h. */
-  :root { --strip-h: 44px; }
+  :root { --strip-h: 44px; --ctxrow-h: 58px; }   /* --ctxrow-h: the contextual bar's own height (44px tool-button + 7px top/bottom padding) — quoted to the FAB below so it clears it too, same idea as --strip-h */
   .app.editor > .status-bar {
     min-height: var(--strip-h);
     gap: 8px;
@@ -2640,14 +2640,17 @@ text.hv-text-editing { visibility: hidden; }
      and on a phone it was previously unreachable at any size. */
   .app.editor > .status-bar #rail-toggle { display: none; }
   .app.editor > .status-bar .bar-btn { width: 26px; height: 26px; font-size: 13px; }
-  /* The Arrange strip becomes the CONTEXTUAL bar: hidden while you draw, and shown above the
-     canvas the moment something is selected. formfactor.js relocates it into a fresh full-width
-     .phone-ctxrow wrapper (a sibling of mobilebar/toolstrip/stage-wrap/actionbar) rather than
-     leaving it nested in .stage-wrap — nested there, it's confined to the middle rail column,
-     too narrow to keep even the capped 7 tiles reachable without scrolling. It carries the ops
-     you can only want with a selection — arrange, rename, duplicate and, crucially, DELETE, which
-     this stylesheet used to display:none outright, leaving no way at all to delete an object on
-     a phone. */
+  /* The Arrange strip becomes the CONTEXTUAL bar: hidden while you draw, and shown at the BOTTOM
+     of the screen — right above .status-bar, thumb-reachable — the moment something is selected.
+     formfactor.js relocates it into a fresh full-width .phone-ctxrow wrapper (a sibling of
+     .editor-grid itself, next to .status-bar) rather than leaving it nested in .stage-wrap —
+     nested there, it's confined to the middle rail column, too narrow to keep even the capped 7
+     tiles reachable without scrolling. It deliberately does NOT stack under the always-visible
+     quick bar at the top: a lone strip there plus this one read as two competing toolbars fighting
+     over the same 44px band the instant something's selected, and the bottom edge — where a thumb
+     already rests — sat empty the whole time. It carries the ops you can only want with a
+     selection — arrange, rename, duplicate and, crucially, DELETE, which this stylesheet used to
+     display:none outright, leaving no way at all to delete an object on a phone. */
   .phone-ctxrow > .stage-toolbar { display: none; }
   .app.has-selection .phone-ctxrow > .stage-toolbar {
     display: flex;
@@ -2657,7 +2660,7 @@ text.hv-text-editing { visibility: hidden; }
        sitting at x=-50, permanently unreachable. */
     flex-direction: row; flex-wrap: nowrap; justify-content: flex-start; align-items: center; gap: 8px;
     padding: 7px 10px; margin: 0;
-    border-width: 0 0 1px 0; border-bottom: 1px solid var(--line);   /* it's above the canvas now, not below */
+    border-width: 1px 0 0 0; border-top: 1px solid var(--line);   /* it's below the canvas now, above the status bar (which borders its own top edge too, but that seam is its, not ours) */
     overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
   }
@@ -2696,16 +2699,22 @@ text.hv-text-editing { visibility: hidden; }
      or tall canvas content would blow its track past the viewport. */
   .app.editor .editor-grid {
     grid-template-columns: auto minmax(0, 1fr) auto !important;   /* beat docks.js's inline column track */
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
   .editor-grid > .leftdock { display: none !important; }
   .editor-grid > .mobilebar  { grid-row: 1; grid-column: 1 / -1; min-width: 0; }
-  /* the relocated contextual bar's own full-width row — see formfactor.js's phone-ctxrow wrapper
-     and the design note where .app.has-selection .phone-ctxrow > .stage-toolbar is styled below */
-  .editor-grid > .phone-ctxrow { grid-row: 2; grid-column: 1 / -1; min-width: 0; }
-  .editor-grid > .toolstrip  { grid-row: 3; grid-column: 1; min-width: 0; }
-  .editor-grid > .stage-wrap { grid-row: 3; grid-column: 2; min-width: 0; }
-  .editor-grid > .actionbar  { grid-row: 3; grid-column: 3; min-width: 0; }
+  .editor-grid > .toolstrip  { grid-row: 2; grid-column: 1; min-width: 0; }
+  .editor-grid > .stage-wrap { grid-row: 2; grid-column: 2; min-width: 0; }
+  .editor-grid > .actionbar  { grid-row: 2; grid-column: 3; min-width: 0; }
+  /* .phone-ctxrow lives OUTSIDE .editor-grid now — formfactor.js parks it next to .status-bar (a
+     sibling of .editor-grid within .app.editor, not a descendant of it), so .app.editor itself
+     needs a 4th row for it: topbar / editor-grid (flexible) / ctxrow / status-bar. An empty row
+     costs nothing (an `auto` track with no content collapses to 0), so this is safe even where
+     .phone-ctxrow never gets created (landscape shares this media query but composes its
+     contextual bar onto the topbar's own row instead — see formfactor.js). See the design note
+     where .app.has-selection .phone-ctxrow > .stage-toolbar is styled above for the rest of it. */
+  .app.editor { grid-template-rows: auto minmax(0, 1fr) auto auto; }
+  .app.editor > .phone-ctxrow { min-width: 0; }
 
   /* --- tools + object actions: vertical rails, scrolling on the Y axis (as on desktop) --- */
   .editor-grid > .toolstrip,
@@ -2837,7 +2846,9 @@ text.hv-text-editing { visibility: hidden; }
   /* Tools and actions are rails now, not bottom bars, so the FAB only needs to clear the teaching
      strip (bottom) and the actionbar rail (right) — the same offsets short-landscape already
      uses below, for the same reason. The fill/stroke swatches move LEFT below so they don't sit
-     under it. */
+     under it. position:fixed is viewport-relative, so it has no idea the contextual bar's own row
+     just grew the bottom stack when something's selected — .app.has-selection below lifts it the
+     extra --ctxrow-h so it never sits on top of (or under) the contextual bar's own tiles. */
   .mobile-fab {
     display: grid; place-items: center;
     position: fixed; right: calc(66px + env(safe-area-inset-right)); bottom: calc(16px + var(--strip-h) + env(safe-area-inset-bottom));
@@ -2848,6 +2859,9 @@ text.hv-text-editing { visibility: hidden; }
   }
   /* the brand mark is black ink; the FAB is a black disc — invert it or it disappears into its own button */
   .mobile-fab .brand-logo { display: block; width: 26px; height: 26px; filter: invert(1); }
+  /* the contextual bar's own row is now above the status bar too — lift the FAB the extra
+     --ctxrow-h so it floats above BOTH bottom bands instead of overlapping the first one. */
+  .app.has-selection .mobile-fab { bottom: calc(16px + var(--strip-h) + var(--ctxrow-h) + env(safe-area-inset-bottom)); }
   .app.sheet-open .mobile-fab { display: none; }   /* tap the scrim to dismiss */
   .app.sheet-open .mobile-scrim { display: block; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); z-index: 58; }
   .stage-body .tool-swatches { left: 12px; right: auto; }

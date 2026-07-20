@@ -5840,17 +5840,20 @@ def main():
                     const reach = s => {{ const e = document.querySelector(s); if (!e || e.offsetParent === null) return false;
                         const r = e.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.width > 0; }};
                     const body = document.querySelector('.stage-body');
+                    const statusBar = document.querySelector('.status-bar');
                     return {{ shown, rows: bar ? Math.round(bar.getBoundingClientRect().height) : 0,
                               del: reach('#layer-delete'), dup: reach('#act-duplicate'),
-                              // its natural DOM position — .stage-toolbar is .stage-wrap's first child
-                              // (same as desktop) — puts it ABOVE the canvas, not stacked below it.
-                              aboveCanvas: !!bar && !!body && bar.getBoundingClientRect().bottom <= body.getBoundingClientRect().top + 1,
+                              // formfactor.js parks .phone-ctxrow next to .status-bar (a sibling of
+                              // .editor-grid, not inside it) — thumb-reachable at the bottom, not
+                              // stacked under the always-on quick bar at the top.
+                              belowCanvas: !!bar && !!body && bar.getBoundingClientRect().top >= body.getBoundingClientRect().bottom - 1,
+                              directlyAboveStatusBar: !!bar && !!statusBar && Math.abs(bar.getBoundingClientRect().bottom - statusBar.getBoundingClientRect().top) < 2,
                               selSize: editor.selection.size, nodes: editor.stage.querySelectorAll('[data-hv-id]').length,
                               hasSel: document.querySelector('main.app').classList.contains('has-selection') }};
                 }}""")
                 # rows: one row (~60px). It used to WRAP to two and eat ~200px of canvas.
-                check("mobile: selecting reveals the contextual bar with Delete + Duplicate on-screen, in ONE row, above the canvas",
-                      sel["shown"] and sel["del"] and sel["dup"] and sel["rows"] < 90 and sel["aboveCanvas"], str(sel))
+                check("mobile: selecting reveals the contextual bar with Delete + Duplicate on-screen, in ONE row, at the bottom right above the status bar",
+                      sel["shown"] and sel["del"] and sel["dup"] and sel["rows"] < 90 and sel["belowCanvas"] and sel["directlyAboveStatusBar"], str(sel))
                 mp.evaluate("() => { editor.selection.clear(); editor.onInspect && editor.onInspect(); }")
 
                 section("Mobile / customization — show-hide, per-form-factor layouts")
@@ -5953,7 +5956,7 @@ def main():
                              unionPulsed: document.querySelector('#act-union').classList.contains('hl-pulse'),
                              says: document.querySelector('#status-text')?.textContent };
                 }""")
-                check("mobile: two overlapping shapes put the booleans on the bar above the canvas, no sheet needed",
+                check("mobile: two overlapping shapes put the booleans on the bar at the bottom, no sheet needed",
                       ctx["shown"][:3] == ["#act-union", "#act-subtract", "#act-intersect"], str(ctx["shown"][:4]))
                 check("mobile: the contextual bar still fits — one row, no overflow (the cap earns its keep)",
                       ctx["overflow"] == 0 and ctx["rows"] < 90 and len(ctx["shown"]) <= 7,
