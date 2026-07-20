@@ -2712,6 +2712,58 @@ def main():
         check("envelope tool: switching to it actually mounts 9 grid handles in the live overlay (not wiped by _renderSelection)",
               handleCount == 9, f"found {handleCount}")
 
+        # D.3 closure: "with top object" now seeds the grid from the top object's actual
+        # SILHOUETTE (ray-cast from its centroid + a discrete Coons blend for the interior
+        # point), not just its bounding box — a circle's own bbox corners sit sqrt(2)*r from
+        # its centre, well off the circle, so this is a real, checkable behaviour change.
+        # The deformation engine itself (envXY/envPathD) is untouched: it already blends
+        # whatever `pts` it's given cell-by-cell, so conforming to a silhouette is purely a
+        # matter of where the REST grid starts. resetEnvelope must restore that silhouette
+        # too (not collapse back to the plain bbox), so restPts is stored alongside pts.
+        d3 = page.evaluate(r"""() => {
+            const o = {};
+            const cx = 100, cy = 80, r = 30;
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="big" x="10" y="10" width="150" height="150" fill="#3366cc"/><circle data-hv-id="top" cx="100" cy="80" r="30" fill="#cc3333"/></svg>','d3circ');
+            editor.setTool('select'); editor.selection=new Set(['big','top']); editor.artboardSelected=false;
+            editor.makeEnvelopeWithTopObject();
+            const g = editor.nodeById([...editor.selection][0]);
+            const spec = editor._envSpec(g);
+            let onCircle = true, cornerWasFarOff = true;
+            for (let r0 = 0; r0 < 3; r0++) for (let c0 = 0; c0 < 3; c0++) {
+              if (r0 === 1 && c0 === 1) continue;   // interior point, not boundary
+              const p = spec.pts[r0][c0], d = Math.hypot(p.x - cx, p.y - cy);
+              if (Math.abs(d - r) > 1.5) onCircle = false;
+            }
+            o.boundaryOnCircle = onCircle;
+            o.interiorNearCentre = Math.hypot(spec.pts[1][1].x - cx, spec.pts[1][1].y - cy) < 5;
+            o.restPtsStored = Array.isArray(spec.restPts);
+            editor.setEnvelopePoint(g, 0, 0, 5, 5);
+            editor.resetEnvelope(g);
+            const afterReset = editor._envSpec(g).pts[0][0];
+            o.resetRestoresSilhouette = Math.abs(Math.hypot(afterReset.x - cx, afterReset.y - cy) - r) < 1.5;
+            // a plain (non-top-object) envelope must still reset to its flat bbox rectangle
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="40" y="40" width="80" height="80" fill="#3366cc"/></svg>','d3plain');
+            editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false;
+            editor.makeEnvelope();
+            const g2 = editor.nodeById([...editor.selection][0]);
+            editor.setEnvelopePoint(g2, 0, 0, 5, 5);
+            editor.resetEnvelope(g2);
+            const p2 = editor._envSpec(g2).pts[0][0];
+            o.plainStillResetsToBbox = Math.abs(p2.x - 40) < 0.5 && Math.abs(p2.y - 40) < 0.5;
+            // round-trip: restPts travels inside the existing hv-live persistence blob for free
+            const ser = editor.serialize();
+            window.mountStageFromText(ser, 'd3reopen');
+            const g3 = editor.stage.querySelector('[data-hv-env]');
+            o.restPtsSurvivesReopen = !!g3 && JSON.parse(g3.getAttribute('data-hv-env')).restPts != null;
+            return o;
+        }""")
+        check("D.3: with-top-object grid boundary conforms to the top object's SILHOUETTE (a circle's own outline), not its bounding box",
+              d3["boundaryOnCircle"] and d3["interiorNearCentre"] and d3["restPtsStored"], str(d3))
+        check("D.3: Reset envelope restores the silhouette (stays on the circle) for a with-top-object envelope, and still restores the plain bbox rectangle for an ordinary one",
+              d3["resetRestoresSilhouette"] and d3["plainStillResetsToBbox"], str(d3))
+        check("D.3: the new restPts field round-trips through save/reopen via the existing hv-live blob, zero new persistence code needed",
+              d3["restPtsSurvivesReopen"], str(d3))
+
         # Gradient mesh (Epic D.4, SCOPED v1): a 4x4 colour-only grid, blended bilinearly per
         # cell (same math as Envelope's position grid) and rasterized into an <image> clipped
         # to the shape's own outline via a real <clipPath> in defs — SVG has no native mesh-

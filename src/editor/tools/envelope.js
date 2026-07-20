@@ -13,13 +13,20 @@
 // shape in more than one place at once), then refits to cubics. Editing a point regenerates;
 // Expand just drops the spec — the children are already real geometry.
 //
-// D.3 "with top object": seeds the grid's rest rectangle to the TOPMOST selected shape's
-// bbox (not the union of everything) and consumes that shape — the rest of the selection
-// gets warped into ITS bounds. This is a scoped v1: it conforms content to the top object's
-// BOUNDING BOX, not its literal silhouette (a true silhouette-conforming envelope needs a
-// coons-patch fit to the object's outline — a much larger, separate effort). Content outside
-// those bounds clamps to the boundary rather than extrapolating, which is the wanted
-// behaviour here (the whole point is fitting everything inside the top object's bounds).
+// D.3 "with top object": seeds the grid's rest positions to the TOPMOST selected shape's
+// ACTUAL SILHOUETTE (not just its bbox) and consumes that shape — the rest of the selection
+// gets warped to fit inside it. The runtime deformation (envXY/envPathD below) is already a
+// generic bilinear cell-by-cell lattice that has no idea whether its rest grid is a plain
+// rectangle or something stranger — so conforming to the silhouette is purely a matter of
+// choosing where those 9 grid points START, not a change to how warping works. silhouetteGrid()
+// below does that: cast a ray from the shape's centroid through each boundary grid point's
+// plain-bbox position (its ANGLE is all that's kept — a stand-in for "which side of the shape
+// this grid point belongs to"), take the farthest crossing with the outline, then fill the one
+// interior point via a discrete Coons (transfinite) blend of the four now-conformed edges. This
+// is exact for star-shaped-from-centroid outlines (circles, blobs, most badge/star shapes) and
+// degrades gracefully — falling back to the plain bbox position for any ray that fails to find
+// a crossing — rather than failing outright on a stranger (e.g. crescent) shape. Content outside
+// the rest silhouette still clamps to the boundary rather than extrapolating, same as before.
 //
 // A on-canvas "Envelope" tool shows the grid as draggable handles (same idiom as the Width
 // tool's on-spine stops) while an envelope group is selected. Object.assign MIXIN.
@@ -88,6 +95,79 @@ function restGrid(bbox, rows, cols) {
   }
   return pts;
 }
+// Shoelace centroid — winding-direction-invariant (both the numerator and the area flip
+// sign together for a CW vs CCW loop, so the quotient doesn't).
+function polyCentroid(poly) {
+  let cx = 0, cy = 0, area = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const cross = a.x * b.y - b.x * a.y;
+    area += cross; cx += (a.x + b.x) * cross; cy += (a.y + b.y) * cross;
+  }
+  area *= 0.5;
+  if (Math.abs(area) < 1e-9) {
+    let sx = 0, sy = 0; for (const p of poly) { sx += p.x; sy += p.y; }
+    return { x: sx / poly.length, y: sy / poly.length };
+  }
+  return { x: cx / (6 * area), y: cy / (6 * area) };
+}
+// Cast a ray from `origin` at `angle` against closed polygon `poly`; return the FARTHEST
+// crossing (the outermost one, for the rare case a ray crosses more than once on a
+// concave outline) or null if the ray never meets the boundary at all.
+function rayHit(origin, angle, poly) {
+  const Dx = Math.cos(angle), Dy = Math.sin(angle);
+  let best = null, bestT = -Infinity;
+  const n = poly.length;
+  for (let i = 0; i < n; i++) {
+    const A = poly[i], B = poly[(i + 1) % n];
+    const Ex = B.x - A.x, Ey = B.y - A.y;
+    const denom = Dx * Ey - Dy * Ex;
+    if (Math.abs(denom) < 1e-9) continue;
+    const ax = A.x - origin.x, ay = A.y - origin.y;
+    const t = (ax * Ey - ay * Ex) / denom;
+    const s = (ax * Dy - ay * Dx) / denom;
+    if (t >= 0 && s >= -1e-6 && s <= 1 + 1e-6 && t > bestT) { bestT = t; best = { x: origin.x + Dx * t, y: origin.y + Dy * t }; }
+  }
+  return best;
+}
+// D.3: a grid whose OUTER ring conforms to `d`'s actual silhouette (see the file banner for
+// the approach) instead of sitting on `bbox`'s plain rectangle. Returns null (caller falls
+// back to restGrid) if `d` has no usable closed subpath — an open path, or a degenerate one.
+function silhouetteGrid(d, bbox, rows, cols) {
+  const subs = flattenSubpaths(d, 0.4).filter((s) => s.closed && s.pts.length >= 3);
+  if (!subs.length) return null;
+  // biggest loop by area — the outer boundary of a compound path (e.g. a letterform with
+  // counters); ignoring holes here is the same simplification the plain bbox already made.
+  let poly = subs[0].pts, bestArea = 0;
+  for (const s of subs) {
+    let a = 0; for (let i = 0; i < s.pts.length; i++) { const p = s.pts[i], q = s.pts[(i + 1) % s.pts.length]; a += p.x * q.y - q.x * p.y; }
+    a = Math.abs(a);
+    if (a > bestArea) { bestArea = a; poly = s.pts; }
+  }
+  const centroid = polyCentroid(poly);
+  const base = restGrid(bbox, rows, cols);
+  const pts = base.map((row) => row.map((p) => ({ ...p })));
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    if (r !== 0 && r !== rows - 1 && c !== 0 && c !== cols - 1) continue;   // interior: filled in below
+    const rp = base[r][c];
+    const ang = Math.atan2(rp.y - centroid.y, rp.x - centroid.x);
+    const hit = rayHit(centroid, ang, poly);
+    if (hit) pts[r][c] = hit;
+  }
+  // Interior points: discrete Coons (transfinite) blend of the four now-conformed edges —
+  // the same formula a real coons-patch fit reduces to once the boundary itself is fixed.
+  const c00 = pts[0][0], c10 = pts[0][cols - 1], c01 = pts[rows - 1][0], c11 = pts[rows - 1][cols - 1];
+  for (let r = 1; r < rows - 1; r++) for (let c = 1; c < cols - 1; c++) {
+    const u = cols > 1 ? c / (cols - 1) : 0, v = rows > 1 ? r / (rows - 1) : 0;
+    const top = pts[0][c], bot = pts[rows - 1][c], left = pts[r][0], right = pts[r][cols - 1];
+    const bx = (1 - v) * top.x + v * bot.x + (1 - u) * left.x + u * right.x
+      - ((1 - u) * (1 - v) * c00.x + u * (1 - v) * c10.x + (1 - u) * v * c01.x + u * v * c11.x);
+    const by = (1 - v) * top.y + v * bot.y + (1 - u) * left.y + u * right.y
+      - ((1 - u) * (1 - v) * c00.y + u * (1 - v) * c10.y + (1 - u) * v * c01.y + u * v * c11.y);
+    pts[r][c] = { x: bx, y: by };
+  }
+  return pts;
+}
 
 export const envelopeMixin = {
   isEnvelopeGroup(n) { return !!(n && n.getAttribute && n.hasAttribute("data-hv-env")); },
@@ -119,10 +199,14 @@ export const envelopeMixin = {
       g.appendChild(p);
     }
   },
-  _buildEnvelopeGroup(items, bbox, insertAnchor) {
+  _buildEnvelopeGroup(items, bbox, insertAnchor, restPts) {
     const g = document.createElementNS(SVG_NS, "g");
     g.setAttribute("data-hv-id", "n" + (++this.idSeq));
-    this._envSet(g, { rows: ENV_ROWS, cols: ENV_COLS, bbox, pts: restGrid(bbox, ENV_ROWS, ENV_COLS), items });
+    const pts = restPts || restGrid(bbox, ENV_ROWS, ENV_COLS);
+    // restPts is stored separately from pts (the CURRENT, draggable positions) so "Reset
+    // envelope" can put a with-top-object envelope back on its silhouette instead of
+    // collapsing it to the plain bbox rectangle — see resetEnvelope().
+    this._envSet(g, { rows: ENV_ROWS, cols: ENV_COLS, bbox, pts, restPts: pts, items });
     const parent = insertAnchor.parentNode, ov = this._overlayEl();
     const ref = insertAnchor.nextSibling;
     if (ref && ref.parentNode === parent && ref !== ov) parent.insertBefore(g, ref); else parent.appendChild(g);
@@ -161,8 +245,10 @@ export const envelopeMixin = {
     const items = rest.map((n) => this._envItemFromNode(n)).filter(Boolean);
     if (!items.length) { setStatus("Nothing left to warp once the top object becomes the envelope.", 3000); return; }
     const bbox = this._bboxUnion([top]);
+    const topD = shapeToAbsPath(top, top.getCTM());
+    const silPts = topD ? silhouetteGrid(topD, bbox, ENV_ROWS, ENV_COLS) : null;
     this.push("Envelope with top object");
-    const g = this._buildEnvelopeGroup(items, bbox, top);
+    const g = this._buildEnvelopeGroup(items, bbox, top, silPts);
     sel.forEach((n) => n.remove());   // the warped shapes AND the consumed top object
     this.selection = new Set([g.getAttribute("data-hv-id")]); this.artboardSelected = false;
     this._renderSelection(); this._renderInspector(); this._renderLayers();
@@ -176,7 +262,10 @@ export const envelopeMixin = {
   resetEnvelope(g) {
     const spec = this._envSpec(g); if (!spec) return;
     this.push("Reset envelope");
-    spec.pts = restGrid(spec.bbox, spec.rows, spec.cols);
+    // restPts (the silhouette, for a with-top-object envelope) if present — falling back to
+    // a plain bbox rectangle for a plain make-envelope, or for a document saved before this
+    // field existed.
+    spec.pts = spec.restPts || restGrid(spec.bbox, spec.rows, spec.cols);
     this._envSet(g, spec); this._regenEnvelope(g);
     this._renderSelection(); this._mountEnvelopeHandles();
   },
