@@ -53,6 +53,24 @@ import {
 // select/shape draw path. (Set lives here, the handlers in editor/tools/builder.js.)
 const BUILDER_TOOLS = new Set(["shapebuilder", "scissors", "knife", "eraser"]);
 
+// Parametric-live-link persistence (foundational backlog item): every one of these
+// data-hv-* attributes is a feature's whole "recipe" for regenerating/re-editing its
+// shape — blend/warp/repeat/width/envelope/mesh/fills/text-threading/text-styles all park
+// their spec here, and serialize() strips every data-hv-* on save/export (see below), which
+// is otherwise correct (keeps saved/exported SVG standard) but means reopening a file used to
+// freeze every one of these into plain baked geometry — no more live editing, permanently.
+// _captureLiveBlob/_rehydrateLiveBlob close that gap for ALL of them at once (one generic
+// mechanism) rather than one bespoke fix per feature. Warp/blend/repeat/width/envelope/mesh/
+// fills are all fully self-contained (their JSON bakes absolute geometry, no id
+// cross-references) — verified by reading every regen fn before relying on it, not assumed.
+// data-hv-text-next is the one genuine exception (its VALUE is another node's data-hv-id,
+// which is NOT stable across save/reopen — see _captureLiveBlob's special case for it).
+const PERSIST_ATTRS = [
+  "data-hv-warp", "data-hv-blend", "data-hv-repeat", "data-hv-repeat-unit",
+  "data-hv-wstroke", "data-hv-env", "data-hv-mesh", "data-hv-fills",
+  "data-hv-text-next", "data-hv-text-style-id",
+];
+
 function editorSvgEl() {
   return outputPreviewEl.querySelector("svg.inline-svg");
 }
@@ -155,6 +173,12 @@ const editor = {
     this.artboardSelected = false;
     this.history = [];
     this.redo = [];
+    // Text styles are a plain in-memory registry (no DOM presence at all — see
+    // _rehydrateLiveBlob), so unlike everything else in this app it doesn't automatically
+    // reset with a fresh stage. Reset it HERE, at the one real document-boundary chokepoint
+    // (matching history/redo just above); _install below repopulates it from this doc's own
+    // saved blob, if it has one, same as `this.history`/`this.stage` do for their own state.
+    this.textStylesList = [];
     this._curLabel = "Open";
     this._install(svgEl);
     this._syncBoardBg();
@@ -186,6 +210,7 @@ const editor = {
   _install(svgEl) {
     this.stage = svgEl;
     this._ensureStructure(svgEl);
+    this._rehydrateLiveBlob(svgEl);   // parse <metadata id="hv-live"> — a no-op unless serialize() wrote one (never on undo/redo's own re-parse, which round-trips data-hv-* directly and never needed this)
     this._loadArtboards(svgEl);   // parse <metadata> extras (restores primary geom) — back-compat: none → single artboard
     svgEl.classList.add("hv-pickable");
     if (!svgEl._hvBound) {
@@ -247,6 +272,25 @@ const editor = {
     if (art.length !== 1) return;
     const g = art[0];
     if (g.tagName.toLowerCase() !== "g" || g.hasAttribute("data-hv-id")) return;
+    // This runs BEFORE _rehydrateLiveBlob, so a parametric group that happens to be the
+    // document's ONLY top-level element (e.g. a repeat/blend/warp spanning the whole canvas)
+    // looks identical to the "one anonymous wrapper <g>" case this exists to unwrap — it has
+    // no data-hv-id yet (never survives serialize) and several children (its own generated
+    // clones/steps). Unwrapping it here would strand its spec: the metadata blob would go on
+    // to look for a node by this real id and never find it. Exempt it by checking the hv-live
+    // blob itself (present only on OUR OWN saved output, never on a foreign/traced import —
+    // an Illustrator "Layer_1" wrapper never carries one) rather than broadening the exemption
+    // to any real id, which WOULD wrongly catch that common foreign-import shape.
+    const gid = g.getAttribute("id");
+    if (gid) {
+      const meta = svg.querySelector("metadata#hv-live");
+      if (meta) {
+        try {
+          const blob = JSON.parse(meta.textContent || "{}");
+          if (Array.isArray(blob.nodes) && blob.nodes.some((n) => n.id === gid)) return;
+        } catch { /* malformed blob — fall through to the normal flatten decision */ }
+      }
+    }
     const kids = [...g.children].filter((k) => !SKIP_TAGS.has(k.tagName.toLowerCase()));
     if (kids.length < 2) return;
     const gt = currentTranslate(g);
@@ -280,6 +324,15 @@ const editor = {
     // transparent-board" on the root <svg>). Strip them the same way hv-pickable/hv-iso already are.
     c.classList.remove("hv-pickable", "hv-iso", "inline-svg", "transparent-board");
     if (!c.getAttribute("class")) c.removeAttribute("class");   // don't leave a dangling class=""
+    // Capture every parametric spec BEFORE stripping data-hv-* below, so reopening this file
+    // restores live editability instead of freezing it as baked geometry (see PERSIST_ATTRS).
+    const liveBlob = this._captureLiveBlob(c);
+    if (liveBlob) {
+      const meta = document.createElementNS(SVG_NS, "metadata");
+      meta.setAttribute("id", "hv-live");
+      meta.textContent = JSON.stringify(liveBlob);
+      c.insertBefore(meta, c.firstChild);
+    }
     // Strip ALL editor metadata, including parametric live-shape params (data-hv-shape,
     // data-hv-bx, …): the `d` is the rendering truth, so exported SVG stays standard.
     c.querySelectorAll("[data-hv-id], [data-hv-shape]").forEach((n) => {
@@ -292,6 +345,88 @@ const editor = {
       else ab.removeAttribute("class");
     }
     return c.outerHTML;
+  },
+
+  // Walk `c` (serialize()'s clone, BEFORE data-hv-* is stripped) and pull every PERSIST_ATTRS
+  // value into a JSON blob keyed by a REAL id (not data-hv-id — unstable across save/reopen,
+  // see the PERSIST_ATTRS comment). Real ids are minted fresh right here, on the clone only —
+  // the live stage is never touched — so they cost nothing to collide-check (this save's ids
+  // don't need to mean anything on the NEXT save; _rehydrateLiveBlob consumes and discards
+  // them the moment this file is reopened). data-hv-text-next is the one attribute whose VALUE
+  // is itself a cross-reference (another node's data-hv-id) — translated here to that node's
+  // OWN real id (minted too, even if it has no PERSIST_ATTRS of its own) so the reference
+  // survives; _rehydrateLiveBlob translates it back to a data-hv-id on the other end.
+  _captureLiveBlob(c) {
+    const sel = PERSIST_ATTRS.map((a) => `[${a}]`).join(",");
+    const nodes = [...c.querySelectorAll(sel)];
+    const hasStyles = Array.isArray(this.textStylesList) && this.textStylesList.length > 0;
+    if (!nodes.length && !hasStyles) return null;
+    const byDataHvId = new Map([...c.querySelectorAll("[data-hv-id]")].map((n) => [n.getAttribute("data-hv-id"), n]));
+    const realIdFor = (n) => {
+      let id = n.getAttribute("id");
+      if (!id) { id = this._mintDefId("hvlive"); n.setAttribute("id", id); }
+      return id;
+    };
+    const entries = nodes.map((n) => {
+      const specs = {};
+      for (const a of PERSIST_ATTRS) {
+        if (!n.hasAttribute(a)) continue;
+        let v = n.getAttribute(a);
+        if (a === "data-hv-text-next") {
+          const target = byDataHvId.get(v);
+          v = target ? realIdFor(target) : null;
+        }
+        if (v != null) specs[a] = v;
+      }
+      return Object.keys(specs).length ? { id: realIdFor(n), specs } : null;
+    }).filter(Boolean);
+    if (!entries.length && !hasStyles) return null;
+    return { v: 1, nodes: entries, textStyles: hasStyles ? this.textStylesList : undefined };
+  },
+  // Consume a `<metadata id="hv-live">` blob (if present — never on undo/redo's own re-parse,
+  // since _historyMarkup() never strips data-hv-* in the first place, so serialize()'s blob
+  // never gets involved there) and reattach every spec onto the node its bridge id resolves
+  // to. Removes the metadata AND every bridge id once used — they're a one-time ferry across
+  // the save/reopen boundary, not meant to linger in the live document.
+  _rehydrateLiveBlob(svg) {
+    const meta = svg.querySelector("metadata#hv-live");
+    if (!meta) return;
+    let blob = null;
+    try { blob = JSON.parse(meta.textContent || "{}"); } catch { /* malformed — treat as absent */ }
+    meta.remove();
+    if (!blob || blob.v !== 1 || !Array.isArray(blob.nodes)) return;
+    this._ensureIds();   // guarantee every nested node (not just top-level) has a data-hv-id before translating data-hv-text-next below
+    // Resolve by a FRESH lookup each time, not a map pre-built from blob.nodes alone — a pure
+    // link TARGET (e.g. a threaded text box that receives a link but sends none of its own)
+    // never gets its own entry, so restricting lookups to entry-owners silently failed to
+    // resolve it (caught by testing the real round-trip, not by reading this code back).
+    const find = (id) => svg.querySelector("#" + CSS.escape(id));
+    const usedIds = new Set();
+    for (const entry of blob.nodes) {
+      const n = find(entry.id);
+      if (!n) continue;
+      usedIds.add(entry.id);
+      for (const [attr, v] of Object.entries(entry.specs || {})) {
+        if (attr === "data-hv-text-next") {
+          const target = find(v);
+          if (target) usedIds.add(v);
+          if (target && target.hasAttribute("data-hv-id")) n.setAttribute(attr, target.getAttribute("data-hv-id"));
+          continue;
+        }
+        n.setAttribute(attr, v);
+      }
+    }
+    for (const id of usedIds) { const n = find(id); if (n) n.removeAttribute("id"); }
+    if (Array.isArray(blob.textStyles)) {
+      this.textStylesList = blob.textStyles;
+      // "ts{N}" style ids share the idSeq counter but live outside data-hv-id/<defs>, so
+      // _ensureStructure's tally above never saw them — bump idSeq past the highest one
+      // restored, or a future makeTextStyle() could mint a colliding id.
+      for (const s of blob.textStyles) {
+        const m = +(/\d+/.exec((s && s.id) || "") || [0])[0];
+        if (m > this.idSeq) this.idSeq = m;
+      }
+    }
   },
 
   // ---------- history (undo/redo + panel) → mixed in from src/editor/history.js ----------

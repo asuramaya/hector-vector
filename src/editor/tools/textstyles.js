@@ -9,11 +9,11 @@
 // within one. Paint (fill/stroke) is deliberately NOT part of the bundle — that's Global
 // Colours' job (Epic C.1), kept separate on purpose.
 //
-// Like blend/warp/repeat/width/threaded-text, the link is in-session-live only:
-// data-hv-text-style-id is a data-hv-* attribute, and editor.js's serialize() strips ALL
-// of those on save/export by design — reopening a saved file gets independent text
-// objects holding whatever attributes were last stamped, the same accepted trade-off as
-// every other parametric feature in this app. Object.assign MIXIN — `this === editor`.
+// Both the per-node data-hv-text-style-id tag AND the registry itself (this.textStylesList —
+// plain in-memory, no DOM presence at all, unlike every other parametric feature here) survive
+// save/reopen via editor.js's PERSIST_ATTRS/_captureLiveBlob mechanism, which special-cases
+// textStyles as a top-level blob field precisely because there's no per-node spec to walk for
+// the registry entries themselves. Object.assign MIXIN — `this === editor`.
 import { setStatus } from "../../app.js";
 import { DEFAULT_TEXT } from "./text.js";
 

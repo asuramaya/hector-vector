@@ -2416,8 +2416,13 @@ def main():
             // base-width scrub scales the whole profile; uniform reset flattens it
             editor.setWidthBase(g, 24); out.scaled = editor._wsSpec(g).profile[1].l > 55;
             editor.resetWidthUniform(g); out.uniform = editor._wsSpec(g).profile.every(s=>Math.abs(s.l-12)<0.01);
-            // serialize → plain path, no data-hv-* / wstroke
-            const ser = editor.serialize(); out.serOk = ser.includes('<path') && !ser.includes('data-hv-') && !ser.includes('wstroke');
+            // serialize: the NODE itself stays clean, standard SVG (no data-hv-* attribute on
+            // the tag) — but the spec now survives via the hv-live persistence blob (parametric
+            // live-links foundational fix) rather than being lost outright on save/reopen.
+            const ser = editor.serialize();
+            const nodeClean = !/<g[^>]*\sdata-hv-wstroke=/.test(ser);
+            const hasLiveBlob = /metadata id="hv-live"/.test(ser) && ser.includes('data-hv-wstroke');
+            out.serOk = ser.includes('<path') && nodeClean && hasLiveBlob;
             // release → stroked path again
             editor.releaseWidthStroke(g);
             const rp = editor.stage.querySelector('path[data-hv-id]');
@@ -2508,7 +2513,13 @@ def main():
             o.midColour = /^#/.test(mf) && mf!=='#ff3333' && mf!=='#3333ff';  // colour interpolated
             editor.setBlendParam(g, 'steps', 3); o.regen = g.querySelectorAll('path[data-hv-id]').length === 5;
             editor.setBlendParam(g, 'reverse', true); o.reverse = editor._blendSpec(g).reverse===true && g.querySelectorAll('path[data-hv-id]').length===5;
-            const ser = editor.serialize(); o.serOk = ser.includes('<g') && ser.includes('<path') && !ser.includes('data-hv-') && !ser.includes('blend');
+            // serialize: the NODE itself stays clean, standard SVG — but the spec now survives
+            // via the hv-live persistence blob (parametric live-links foundational fix) rather
+            // than being lost outright on save/reopen.
+            const ser = editor.serialize();
+            const nodeClean = !/<g[^>]*\sdata-hv-blend=/.test(ser);
+            const hasLiveBlob = /metadata id="hv-live"/.test(ser) && ser.includes('data-hv-blend');
+            o.serOk = ser.includes('<g') && ser.includes('<path') && nodeClean && hasLiveBlob;
             editor.expandBlend(g); o.expanded = !g.hasAttribute('data-hv-blend') && g.querySelectorAll('path').length===5;
             editor.undo(); o.undoOk = editor.stage.querySelector('[data-hv-blend]')!==null;
             return o; }""")
@@ -2562,7 +2573,8 @@ def main():
             const m = /translate\(\s*(-?[\d.]+)\s+(-?[\d.]+)\s*\)/.exec(t);
             o.midDy = m ? parseFloat(m[2]) : 0;   // the spine dips ~200 units below the endpoints
             const ser = editor.serialize();
-            o.serStripped = !ser.includes('data-hv-blend');
+            const nodeClean = !/<g[^>]*\sdata-hv-blend=/.test(ser);
+            o.serOk = nodeClean && /metadata id="hv-live"/.test(ser) && ser.includes('data-hv-blend');
             editor.removeSpine(g);
             o.removedOk = !editor._blendSpec(editor.nodeById(gid)).spine;
             editor.undo();   // undo remove-spine — undo() reinstalls the WHOLE stage, so `g` is now
@@ -2572,8 +2584,8 @@ def main():
             return o; }""")
         check("Replace Spine: offered only for a blend+1-more selection, sets spec.spine, consumes the spine shape, offers Remove-spine",
               sp["replaceOffered"] and sp["hasSpine"] and sp["spineGone"] and sp["removeOffered"], str(sp))
-        check("Replace Spine: an interior step is actually pulled toward the spine's curve (translate dy), and it serializes stripped",
-              sp["midDy"] > 50 and sp["serStripped"], str(sp))
+        check("Replace Spine: an interior step is actually pulled toward the spine's curve (translate dy), and it round-trips (spec restored on reopen, not lost)",
+              sp["midDy"] > 50 and sp["serOk"], str(sp))
         check("Remove spine clears spec.spine; undo restores it; a second undo removes Replace Spine entirely",
               sp["removedOk"] and sp["undoRemoveOk"] and sp["undoReplaceOk"], str(sp))
 
@@ -2604,8 +2616,13 @@ def main():
             editor.setWarpParam(g, 'amount', 0.8);
             const bbBulge = g.children[0].getBBox();
             o.bulgeGrows = bbBulge.width > 90 && bbBulge.height > 90;   // pushed outward on both axes
+            // serialize: the NODE itself stays clean, standard SVG — but the spec now survives
+            // via the hv-live persistence blob (parametric live-links foundational fix) rather
+            // than being lost outright on save/reopen.
             const ser = editor.serialize();
-            o.serOk = ser.includes('<path') && !ser.includes('data-hv-') && !ser.includes('data-hv-warp');
+            const nodeClean = !/<g[^>]*\sdata-hv-warp=/.test(ser);
+            const hasLiveBlob = /metadata id="hv-live"/.test(ser) && ser.includes('data-hv-warp');
+            o.serOk = ser.includes('<path') && nodeClean && hasLiveBlob;
             editor.expandWarp(g);
             o.expanded = !g.hasAttribute('data-hv-warp') && g.querySelectorAll('path').length === 1;
             editor.undo(); o.undoOk = editor.stage.querySelector('[data-hv-warp]') !== null;
@@ -2616,7 +2633,7 @@ def main():
               wp["group"] and wp["origGone"] and wp["oneChild"] and wp["arcBent"], str(wp))
         check("warp: setWarpParam regenerates (type + amount), Bulge pushes the bbox outward on both axes",
               wp["bulgeGrows"], str(wp))
-        check("warp: round-trips clean (no data-hv-* survives save), Expand bakes the spec, undo restores it",
+        check("warp: the node itself stays clean SVG, but round-trips (spec restored on reopen via hv-live), Expand bakes the spec, undo restores it",
               wp["serOk"] and wp["expanded"] and wp["undoOk"], str(wp))
 
         # Envelope distort (Epic D.2/D.3): a draggable 3x3 control grid bilinearly warps
@@ -2649,7 +2666,12 @@ def main():
             editor.resetEnvelope(g);
             const bboxReset = g.querySelector('path[data-hv-id]').getBBox();
             o.resetOk = Math.abs(bboxReset.width-80)<1 && Math.abs(bboxReset.height-80)<1;
-            const ser = editor.serialize(); o.serStripped = !ser.includes('data-hv-env');
+            // serialize: the NODE itself stays clean, standard SVG — but the spec now survives
+            // via the hv-live persistence blob (parametric live-links foundational fix) rather
+            // than being lost outright on save/reopen.
+            const ser = editor.serialize();
+            const nodeClean = !/<g[^>]*\sdata-hv-env=/.test(ser);
+            o.serOk = nodeClean && /metadata id="hv-live"/.test(ser) && ser.includes('data-hv-env');
             editor.expandEnvelope(editor.nodeById(gid));
             const gAfterExpand = editor.nodeById(gid);
             o.expanded = !gAfterExpand.hasAttribute('data-hv-env');
@@ -2682,7 +2704,7 @@ def main():
             return o; }""")
         check("envelope: Actions-menu gate (Make envelope / with-top-object), 3x3 grid, corner+circle-center deform, reset, expand+undo, round-trips",
               ev["gateBefore"] and ev["isGroup"] and ev["origGone"] and ev["grid3x3"] and ev["gateAfter"] and ev["deforms"]
-              and ev["resetOk"] and ev["serStripped"] and ev["expanded"] and ev["undoExpand"] and ev["centerPointBendsCircle"], str(ev))
+              and ev["resetOk"] and ev["serOk"] and ev["expanded"] and ev["undoExpand"] and ev["centerPointBendsCircle"], str(ev))
         check("envelope with top object: 2+ gate, topmost shape's bounds seed the grid + both inputs consumed into one group",
               ev["gate2plus"] and ev["bothGone"] and ev["seededFromTop"] and ev["onlyBigWarped"], str(ev))
         page.wait_for_timeout(120)
@@ -2718,8 +2740,13 @@ def main():
             editor.setMeshColor(g, 0, 0, '#ff0000');
             o.colorEditRegen = g.querySelector('image[data-hv-id]').getAttribute('href') !== hrefBefore;
             o.othersUnchanged = editor._meshSpec(g).colors[3][3] === '#3366cc';
+            // serialize: the NODE itself stays clean, standard SVG — but the spec now survives
+            // via the hv-live persistence blob (parametric live-links foundational fix) rather
+            // than being lost outright on save/reopen.
             const ser = editor.serialize();
-            o.serStripped = !ser.includes('data-hv-mesh'); o.serHasImage = ser.includes('<image') && ser.includes('clip-path');
+            const nodeClean = !/<g[^>]*\sdata-hv-mesh=/.test(ser);
+            o.serOk = nodeClean && /metadata id="hv-live"/.test(ser) && ser.includes('data-hv-mesh');
+            o.serHasImage = ser.includes('<image') && ser.includes('clip-path');
             editor.expandGradientMesh(editor.nodeById(gid));
             o.expanded = !editor.nodeById(gid).hasAttribute('data-hv-mesh');
             editor.undo();
@@ -2728,7 +2755,7 @@ def main():
         check("gradient mesh: Actions-menu gate, 4x4 uniform-seeded grid, real clip in defs, colour edit re-rasterizes (others untouched), expand+undo, round-trips",
               gm["gateBefore"] and gm["isGroup"] and gm["origGone"] and gm["grid4x4"] and gm["seededUniform"] and gm["gateAfter"]
               and gm["hasImage"] and gm["clipped"] and gm["clipDefExists"] and gm["colorEditRegen"] and gm["othersUnchanged"]
-              and gm["serStripped"] and gm["serHasImage"] and gm["expanded"] and gm["undoExpand"], str(gm))
+              and gm["serOk"] and gm["serHasImage"] and gm["expanded"] and gm["undoExpand"], str(gm))
         # Real-UI path: the Mesh swatch grid only renders through docks.js's live Properties
         # panel if the group-detection uses the raw selection (the same class of bug this
         # session found for Blend/Repeat/Envelope) — open the ACTUAL panel and click a swatch.
@@ -2777,7 +2804,12 @@ def main():
             editor.removeFillLayer(g,2); o.removed = g.querySelectorAll('path[data-hv-id]').length===2;
             editor.removeFillLayer(g,0); editor.removeFillLayer(g,0);
             o.floorAtOne = g.querySelectorAll('path[data-hv-id]').length===1;   // never below 1 layer
-            const ser = editor.serialize(); o.serStripped = !ser.includes('data-hv-fills');
+            // serialize: the NODE itself stays clean, standard SVG — but the spec now survives
+            // via the hv-live persistence blob (parametric live-links foundational fix) rather
+            // than being lost outright on save/reopen.
+            const ser = editor.serialize();
+            const nodeClean = !/<g[^>]*\sdata-hv-fills=/.test(ser);
+            o.serOk = nodeClean && /metadata id="hv-live"/.test(ser) && ser.includes('data-hv-fills');
             editor.expandMultiFill(editor.nodeById(gid));
             const gAfterExpand = editor.nodeById(gid);
             o.expanded = !gAfterExpand.hasAttribute('data-hv-fills') && gAfterExpand.querySelectorAll('path[data-hv-id]').length>=1;
@@ -2788,7 +2820,7 @@ def main():
         check("multi-fill: Actions-menu gate (Add fill / Add fill layer+Expand), stack of layers, set/move/remove (floors at 1), expand+undo, round-trips",
               mf["gateBefore"] and mf["isGroup"] and mf["origGone"] and mf["twoLayers"] and mf["gateAfter"]
               and mf["threeLayers"] and mf["setLayer"] and mf["moved"] and mf["removed"] and mf["floorAtOne"]
-              and mf["serStripped"] and mf["expanded"] and mf["undoExpand"], str(mf))
+              and mf["serOk"] and mf["expanded"] and mf["undoExpand"], str(mf))
         # Real-UI path: the Fills inspector group only renders through docks.js's live Properties
         # panel if _objectPanel's group-detection survives the _effectiveLeaves() unwrap (the bug
         # above) — open the ACTUAL panel (not a direct _objectPanel() call) and click a real swatch.
@@ -3390,14 +3422,20 @@ def main():
             return { reflectCopy, sheared, eachOk, againOk, gridOk, gridLive, radialOk, mirrorOk, expandOk }; }""")
         check("transforms: reflect-copy, shear, transform-each(own centre), transform-again, grid/radial/mirror repeat + live count + expand",
               tr["reflectCopy"] and tr["sheared"] and tr["eachOk"] and tr["againOk"] and tr["gridOk"] and tr["gridLive"] and tr["radialOk"] and tr["mirrorOk"] and tr["expandOk"], str(tr))
-        # Transforms/Repeat hardening (stress): repeat serialize→reopen bakes clones to real geometry;
-        # repeat undo restores the single original; repeat a GROUP (nested clones); count 1×1 → master
-        # only; reflect-copy of a gradient object stays independent.
+        # Transforms/Repeat hardening (stress): repeat serialize→reopen keeps the repeat LIVE
+        # (the node itself stays clean SVG, but the spec survives via the hv-live persistence
+        # blob — parametric live-links foundational fix, no more freeze-on-reopen); repeat undo
+        # restores the single original; repeat a GROUP (nested clones); count 1×1 → master only;
+        # reflect-copy of a gradient object stays independent.
         th = page.evaluate(r"""() => {
             const R='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300"><rect data-hv-id="r1" x="40" y="40" width="50" height="40" fill="#3399cc"/></svg>';
             window.mountStageFromText(R,'th1'); editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false; editor.repeat('grid');
-            const ser=editor.serialize(); const noParams=!ser.includes('data-hv-');
-            window.mountStageFromText(ser,'th1b'); const reopenBakes = noParams && editor.stage.querySelectorAll('rect').length>=9;
+            const ser=editor.serialize();
+            const nodeClean = !/<g[^>]*\sdata-hv-repeat=/.test(ser);
+            const hasLiveBlob = /metadata id="hv-live"/.test(ser) && ser.includes('data-hv-repeat');
+            window.mountStageFromText(ser,'th1b');
+            const gReopen = editor.stage.querySelector('[data-hv-repeat]');
+            const reopenStaysLive = nodeClean && hasLiveBlob && !!gReopen && editor.stage.querySelectorAll('rect').length>=9;
             window.mountStageFromText(R,'th2'); editor.selection=new Set(['r1']); editor.repeat('radial'); editor.undo();
             const undoOk = !!editor.nodeById('r1') && editor.stage.querySelectorAll('g[data-hv-id]').length===0;
             window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300"><g data-hv-id="g0"><rect data-hv-id="a" x="30" y="30" width="30" height="30" fill="#e55"/><circle data-hv-id="b" cx="75" cy="45" r="12" fill="#5e5"/></g></svg>','th3');
@@ -3411,9 +3449,9 @@ def main():
             editor.reflectSelection('vertical',{copy:true}); const cp=editor.nodeById([...editor.selection][0]);
             const cgid=(/url\(#([^)]+)\)/.exec(cp.getAttribute('fill'))||[])[1];
             const reflectIndep = !!cgid && cgid!==gid && !!editor.stage.querySelector('#'+CSS.escape(cgid));
-            return { reopenBakes, undoOk, nested, count1, reflectIndep }; }""")
-        check("transforms/repeat hardening: reopen bakes clones, repeat-undo, nested group repeat, 1x1→master, reflect-copy gradient independent",
-              th["reopenBakes"] and th["undoOk"] and th["nested"] and th["count1"] and th["reflectIndep"], str(th))
+            return { reopenStaysLive, undoOk, nested, count1, reflectIndep }; }""")
+        check("transforms/repeat hardening: reopen keeps the repeat LIVE (not baked), repeat-undo, nested group repeat, 1x1→master, reflect-copy gradient independent",
+              th["reopenStaysLive"] and th["undoOk"] and th["nested"] and th["count1"] and th["reflectIndep"], str(th))
         # Multiple artboards (Epic A): extra named artboards grow the canvas viewBox to the union,
         # persist in <metadata> (chrome frames stripped on export), round-trip (primary geom +
         # extras restored), stay OUT of the artwork/layers, and delete back to a single artboard.

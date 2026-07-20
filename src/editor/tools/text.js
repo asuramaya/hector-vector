@@ -348,12 +348,10 @@ export const textMixin = {
   // Each box has at most one outbound link and at most one inbound one (no branching, no
   // cycles — enforced in linkTextFrames). Only the un-linked HEAD of a chain is ever typed
   // into directly; every downstream box is fed by _writeAreaContent's cascade below and
-  // can't be edited on its own (see _selectThreadTarget). Like every other parametric spec
-  // in this app (blend/warp/repeat/width all work the same way), the link lives only in the
-  // live session — editor.js's serialize() strips every data-hv-* attribute on save/export
-  // by design, so a saved-and-reopened document's boxes come back independent, holding
-  // whatever text was last rendered into them. That's an accepted, existing trade-off here,
-  // not something new this feature has to solve.
+  // can't be edited on its own (see _selectThreadTarget). The link survives save/reopen via
+  // editor.js's PERSIST_ATTRS/_captureLiveBlob mechanism — data-hv-text-next is the one entry
+  // there whose VALUE is itself a cross-reference (another node's data-hv-id, unstable across
+  // reopen), translated through a real minted id at capture time and back on rehydrate.
   _isAreaText(n) { return !!(n && n.tagName && n.tagName.toLowerCase() === "text" && parseFloat(n.getAttribute("data-hv-text-width")) > 0); },
   _threadNextOf(node) { const id = node && node.getAttribute("data-hv-text-next"); return id ? this.nodeById(id) : null; },
   _threadPrevOf(node) {

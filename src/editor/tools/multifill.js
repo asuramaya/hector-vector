@@ -9,8 +9,8 @@
 // absolute geometry + the ordered layer list; _regenFills(g) rebuilds one <path> child per
 // layer (DOM order = paint order = list order — index 0 paints first/bottom, the last index
 // paints last/top); expandMultiFill just drops the attribute, since the children are already
-// real, independently-editable paths. In-session-live only, like every sibling of this
-// pattern — serialize() strips all data-hv-* on save, an accepted trade-off, not a new one.
+// real, independently-editable paths. data-hv-fills survives save/reopen via editor.js's
+// PERSIST_ATTRS/_captureLiveBlob mechanism, same as every sibling of this pattern.
 // Object.assign MIXIN — `this === editor`.
 import { SVG_NS, shapeToAbsPath } from "../../hv/index.js";
 import { setStatus } from "../../app.js";
