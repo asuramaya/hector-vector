@@ -1408,6 +1408,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "t" || e.key === "T") { editor.setTool("text"); return; }
   if (e.key === "w" || e.key === "W") { editor.setTool("width"); return; }
   if (e.key === "b" || e.key === "B") { editor.setTool("blend"); return; }
+  if (e.key === "u" || e.key === "U") { editor.setTool("mesh"); return; }   // U — Gradient mesh (Illustrator parity)
   if (e.key === "Escape" && editor.stage) {
     if (editor._gradMode) { editor.clearGradMode(); return; }   // first Esc exits the gradient editor
     if (editor._xformMode) { editor.clearXform(); return; }     // …or scale/rotate

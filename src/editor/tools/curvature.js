@@ -198,13 +198,15 @@ export const curvatureMixin = {
     if (this.tool === "pen") this._renderPenPoints();
     // Threaded text (Epic P): a dashed connector between linked boxes, while one's selected.
     if (this._renderThreadLinks) this._renderThreadLinks();
-    // Width / Envelope: re-mount their on-canvas handles here too — this method's own
+    // Width / Envelope / Mesh: re-mount their on-canvas handles here too — this method's own
     // `ov.innerHTML = ""` above wipes whatever setTool() mounted just before calling it
     // (a real, pre-existing gap: Width's diamonds silently vanished the instant you
     // switched to the tool, self-healing only on your first click/drag; found while
-    // wiring up Envelope's identical mount-then-getWiped ordering — fixed for both here).
+    // wiring up Envelope's identical mount-then-getWiped ordering — fixed for both here,
+    // and applied proactively to Mesh's identical grid-handle idiom too).
     if (this.tool === "width") this._mountWidthHandles();
     if (this.tool === "envelope") this._mountEnvelopeHandles();
+    if (this.tool === "mesh") this._mountMeshHandles();
   },
   // Read-only anchor dots for the selected path(s) while the pen tool is active, so it's
   // clear where points sit (and thus where the +/− hover affordance will add/remove them).

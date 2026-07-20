@@ -452,6 +452,7 @@ const editor = {
     if (this.tool === "text") { this._textDown(e); return; }
     if (this.tool === "width") { this._widthDown(e); return; }
     if (this.tool === "envelope") { this._envDown(e); return; }
+    if (this.tool === "mesh") { this._meshDown(e); return; }
     if (this.tool === "shapebuilder") { this._builderDown(e); return; }
     if (this.tool === "scissors") { this._scissorsDown(e); return; }
     if (this.tool === "knife") { this._knifeDown(e); return; }
@@ -615,7 +616,7 @@ const editor = {
   // creation sub-tools. Marquee + transform are folded into select (empty-drag
   // rubber-bands; Ctrl+T/Ctrl+R toggle the scale/rotate sub-mode).
   setTool(t) {
-    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "text" && t !== "width" && t !== "envelope" && t !== "artboard" && t !== "blend" && !BUILDER_TOOLS.has(t) && !SHAPE_TOOLS.has(t)) return;
+    if (t !== "select" && t !== "node" && t !== "pen" && t !== "curvature" && t !== "text" && t !== "width" && t !== "envelope" && t !== "mesh" && t !== "artboard" && t !== "blend" && !BUILDER_TOOLS.has(t) && !SHAPE_TOOLS.has(t)) return;
     if (this._pen && t !== "pen") this._finishPen(true);   // keep any in-progress path
     if (this._curv && t !== "curvature") this._curvFinish(true);
     if (this._textEdit && t !== "text") this._commitText();   // leaving the text tool finishes the edit in progress
@@ -636,6 +637,7 @@ const editor = {
     if (t === "node") this.mountNodeHandles(); else this.unmountNodeHandles();
     if (t === "width") this._mountWidthHandles(); else this._unmountWidthHandles();
     if (t === "envelope") this._mountEnvelopeHandles(); else this._unmountEnvelopeHandles();
+    if (t === "mesh") this._mountMeshHandles(); else this._unmountMeshHandles();
     if (!BUILDER_TOOLS.has(t)) this._bTrail(null);   // clear any leftover knife/eraser trail
     if (this.stage) this._renderSelection();   // show/hide the transform bbox handles
     this._showHint();
@@ -661,6 +663,7 @@ const editor = {
     if (t === "node") return "Points: drag the dots to reshape. Drag the line between two dots to bend it.";
     if (t === "width") return "Width: drag sideways across a stroke to make it swell or pinch.";
     if (t === "envelope") return "Envelope: drag any grid dot to bend everything inside it.";
+    if (t === "mesh") return "Mesh: drag any grid dot to warp the colour field. Colours live in the Mesh panel.";
     if (t === "shapebuilder") return "Shape Builder: select 2+ overlapping shapes, then paint across them to merge.";
     if (t === "scissors") return "Scissors: tap a path to snip it open.";
     if (t === "knife") return "Knife: drag right across a shape to slice it in two.";
@@ -692,6 +695,7 @@ const editor = {
     if (t === "node") return "Points (A) — drag anchors/handles · Shift multi-selects · Alt converts · drag a segment to reshape · ⌫ deletes";
     if (t === "width") return "Width (W) — drag a stroke ⊥ to swell/pinch it · Alt = one side · Uniform/Release/Expand in Properties";
     if (t === "envelope") return "Envelope (⇧W) — drag any grid point to bend everything inside it · Reset/Expand in Properties";
+    if (t === "mesh") return "Mesh (U) — drag any grid point to warp the colour field · colour + Reset/Expand in Properties";
     if (t === "shapebuilder") return "Shape Builder — paint across 2+ selected overlapping shapes to merge regions · Alt-paint removes them";
     if (t === "scissors") return "Scissors — click a path to cut it (closed → opens · open → splits in two)";
     if (t === "knife") return "Knife — drag across filled shapes to cut them · Alt = straight cut";
@@ -712,6 +716,7 @@ const editor = {
     if (this.tool === "node" && this.stage) this.mountNodeHandles();
     if (this.tool === "width" && this.stage) this._mountWidthHandles();   // width-stop diamonds stay constant-screen-size
     if (this.tool === "envelope" && this.stage) this._mountEnvelopeHandles();   // grid handles stay constant-screen-size
+    if (this.tool === "mesh" && this.stage) this._mountMeshHandles();   // grid handles stay constant-screen-size
     if (this.tool === "select" && this._xformMode && this.stage) this._renderSelection();   // handles are constant-screen-size
     if (this.tool === "pen" && !this._pen && this.stage) this._renderPenPoints();   // anchor dots stay constant-screen-size
     if (this._pen) { this._redrawPen(); this._renderPenMarks(); }
@@ -2582,9 +2587,10 @@ const editor = {
       erows.push(inspRow("", ex));
       wrap.appendChild(inspGroup("Envelope", erows));
     }
-    // GRADIENT MESH (Epic D.4, scoped v1). A selected mesh group gets a grid of colour
-    //  swatches (one per control point — click to edit, mirrors the Fills-layer solo-picker
-    //  pattern) + Expand. ("Make gradient mesh" is in the Actions menu.)
+    // GRADIENT MESH (Epic D.4). A selected mesh group gets a grid of colour swatches (one
+    //  per control point — click to edit, mirrors the Fills-layer solo-picker pattern), a
+    //  status line for the on-canvas position drag (the Mesh tool), Reset + Expand. ("Make
+    //  gradient mesh" is in the Actions menu.)
     if (rawSel.length === 1 && this.isMeshGroup(rawSel[0])) {
       const g = rawSel[0], spec = this._meshSpec(g), mrows = [];
       const grid = document.createElement("div"); grid.className = "insp-mesh-grid";
@@ -2597,6 +2603,11 @@ const editor = {
         grid.appendChild(sw);
       }
       mrows.push(inspRow("", grid));
+      const note = document.createElement("span"); note.className = "insp-note"; note.textContent = "Pick the Gradient mesh tool (U) to drag a point's position";
+      mrows.push(inspRow("", note));
+      const rb = document.createElement("button"); rb.type = "button"; rb.className = "insp-action"; rb.textContent = "Reset points";
+      rb.title = "Put every grid point back to its resting position"; rb.addEventListener("click", () => this.resetMeshPoints(g));
+      mrows.push(inspRow("", rb));
       const mx = document.createElement("button"); mx.type = "button"; mx.className = "insp-action"; mx.textContent = "Expand";
       mx.title = "Bake the mesh into a plain clipped image"; mx.addEventListener("click", () => this.expandGradientMesh(g));
       mrows.push(inspRow("", mx));

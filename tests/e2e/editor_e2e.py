@@ -2827,6 +2827,83 @@ def main():
             check("'‹ Done' clears mesh-point edit mode", page.evaluate("() => editor._meshPointTarget") is None)
         mount_ctl(page)
 
+        # D.4 closure: gradient mesh gains DRAGGABLE geometry, not just colour — closing the
+        # gap this epic's own file banner used to defer ("no draggable geometry... SVG has no
+        # native mesh-gradient primitive"). Each grid point now carries a POSITION alongside
+        # its colour; dragging one Gouraud-shades the warped triangle mesh into the raster, so
+        # colour genuinely follows where a point moves, not a fixed evenly-spaced cell. Verifies
+        # via real pixel sampling of the rasterized <image> (not just reading the spec back) —
+        # the same "drive the real gesture, don't trust a direct API call" discipline that
+        # caught the K.1/Isolation dimming bugs earlier in this project's history.
+        section("Gradient mesh: draggable position grid (Epic D.4 closure)")
+        SAMPLE_MESH_PX = r"""async ([gid, x, y]) => {
+            const img = editor.nodeById(gid).querySelector('image');
+            const ix = +img.getAttribute('x'), iy = +img.getAttribute('y');
+            const iw = +img.getAttribute('width'), ih = +img.getAttribute('height');
+            const el = new Image(); el.src = img.getAttribute('href'); await el.decode();
+            const c = document.createElement('canvas'); c.width = el.naturalWidth; c.height = el.naturalHeight;
+            const ctx = c.getContext('2d'); ctx.drawImage(el, 0, 0);
+            const px = Math.max(0, Math.min(el.naturalWidth - 1, Math.round(((x - ix) / iw) * (el.naturalWidth - 1))));
+            const py = Math.max(0, Math.min(el.naturalHeight - 1, Math.round(((y - iy) / ih) * (el.naturalHeight - 1))));
+            return [...ctx.getImageData(px, py, 1, 1).data];
+        }"""
+        d4 = page.evaluate(r"""() => {
+            const o = {};
+            window.mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect data-hv-id="r1" x="40" y="40" width="80" height="80" fill="#3366cc"/></svg>','d4mesh');
+            editor.setTool('select'); editor.selection=new Set(['r1']); editor.artboardSelected=false;
+            editor.makeGradientMesh();
+            const gid=[...editor.selection][0], g=editor.nodeById(gid);
+            const spec = editor._meshSpec(g);
+            o.gid = gid;
+            o.hasPts = Array.isArray(spec.pts) && spec.pts.length === 4 && spec.pts[0].length === 4;
+            o.hasRestPts = Array.isArray(spec.restPts);
+            o.toolIsMesh = editor.tool === 'mesh';   // makeGradientMesh auto-switches, like Envelope's Actions-menu entries
+            editor.setMeshColor(g, 0, 0, '#ff0000');   // top-left corner -> red, rest stay #3366cc
+            o.restPos = { ...spec.pts[0][0] };
+            return o;
+        }""")
+        check("gradient mesh spec now carries a pts[][] position grid + restPts (Epic D.4 closure)",
+              d4["hasPts"] and d4["hasRestPts"], str(d4))
+        check("makeGradientMesh() auto-switches to the mesh tool, matching Envelope's Actions-menu convention",
+              d4["toolIsMesh"], str(d4))
+        before = page.evaluate(SAMPLE_MESH_PX, [d4["gid"], d4["restPos"]["x"] + 1, d4["restPos"]["y"] + 1])
+        check("before dragging: the red corner samples red at its rest position", before[0] > 200 and before[1] < 60, str(before))
+        page.wait_for_timeout(120)
+        handleCount = page.evaluate("() => document.querySelectorAll('.hv-meshhandle').length")
+        check("mesh tool: switching to it mounts 16 grid handles (4x4) in the live overlay", handleCount == 16, f"found {handleCount}")
+        # a REAL mouse drag through the actual pointer pipeline — the setPointerCapture/
+        # dispatchEvent class of bug (K.3 handles, Width/Envelope's mount-then-wiped gap) has
+        # bitten this project before; a direct setMeshPoint() call would never catch it.
+        m = page.evaluate("() => { const mtx = editor.stageCTM(); return [mtx.a, mtx.b, mtx.c, mtx.d, mtx.e, mtx.f]; }")
+        a, b, c, dd, e, f = m
+        rp = d4["restPos"]
+        sx, sy = a * rp["x"] + c * rp["y"] + e, b * rp["x"] + dd * rp["y"] + f
+        page.mouse.move(sx, sy); page.mouse.down()
+        page.mouse.move(sx + 16, sy + 16, steps=5)   # a moderate inward nudge, well within this point's own cell
+        page.mouse.up()
+        page.wait_for_timeout(150)
+        dragResult = page.evaluate("(gid) => editor._meshSpec(editor.nodeById(gid)).pts[0][0]", d4["gid"])
+        moved = ((dragResult["x"] - rp["x"]) ** 2 + (dragResult["y"] - rp["y"]) ** 2) ** 0.5
+        check("a REAL mouse drag on the on-canvas handle moves the mesh point (not just the direct-API path)", moved > 5, f"moved {moved:.1f}px")
+        oldSpot = page.evaluate(SAMPLE_MESH_PX, [d4["gid"], rp["x"] + 1, rp["y"] + 1])
+        newSpot = page.evaluate(SAMPLE_MESH_PX, [d4["gid"], dragResult["x"], dragResult["y"]])
+        check("after dragging: colour follows the moved point — old rest position is no longer red, new position is",
+              not (oldSpot[0] > 200 and oldSpot[1] < 60) and newSpot[0] > 180 and newSpot[1] < 90, f"old={oldSpot} new={newSpot}")
+        resetPt = page.evaluate(r"""(gid) => { const g = editor.nodeById(gid); editor.resetMeshPoints(g); return editor._meshSpec(g).pts[0][0]; }""", d4["gid"])
+        check("Reset points restores the dragged point to its resting position",
+              abs(resetPt["x"] - rp["x"]) < 0.5 and abs(resetPt["y"] - rp["y"]) < 0.5, str(resetPt))
+        persistCheck = page.evaluate(r"""(gid) => {
+            const g = editor.nodeById(gid);
+            editor.setMeshPoint(g, 1, 1, 55, 47);
+            const ser = editor.serialize();
+            window.mountStageFromText(ser, 'd4reopen');
+            const g2 = editor.stage.querySelector('[data-hv-mesh]');
+            const spec2 = g2 ? JSON.parse(g2.getAttribute('data-hv-mesh')) : null;
+            return { hasMesh: !!g2, pt: spec2 ? spec2.pts[1][1] : null, hasRestPts: spec2 ? Array.isArray(spec2.restPts) : false };
+        }""", d4["gid"])
+        check("dragged mesh point positions + restPts round-trip through the existing hv-live blob, zero new persistence code",
+              persistCheck["hasMesh"] and persistCheck["hasRestPts"] and abs(persistCheck["pt"]["x"] - 55) < 0.5 and abs(persistCheck["pt"]["y"] - 47) < 0.5, str(persistCheck))
+
         # Appearance stack v1 (Epic K.1, SCOPED to fills-only — no strokes/blend-modes/per-layer
         # effects, same "ship a v1" pattern as the rest of this backlog). A <g data-hv-fills>
         # holds ordered {fill,opacity} layers over one shared shape; _regenFills rebuilds one

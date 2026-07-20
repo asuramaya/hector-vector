@@ -1298,6 +1298,12 @@ button:disabled {
 .hv-envgridline { stroke: var(--hl-edit); stroke-width: 1; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; opacity: 0.6; }
 .hv-envhandle { fill: #fff; stroke: var(--hl-edit); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .stage-wrap[data-tool="envelope"] svg { cursor: crosshair; }
+/* Gradient mesh (Epic D.4): the RxC position grid — identical idiom to Envelope's own cage,
+   drawn in the same on-canvas style so the two draggable-grid tools read as one family. */
+.hv-meshhandles { pointer-events: none; }
+.hv-meshgridline { stroke: var(--hl-edit); stroke-width: 1; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; opacity: 0.6; }
+.hv-meshhandle { fill: #fff; stroke: var(--hl-edit); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.stage-wrap[data-tool="mesh"] svg { cursor: crosshair; }
 /* Epic B path-construction tools: live drag trail + cursors */
 .hv-btrail { fill: none; stroke: var(--hl-edit); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
 .hv-btrail-knife { stroke: #e23; stroke-dasharray: 4 3; }
