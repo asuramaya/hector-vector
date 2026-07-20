@@ -40,8 +40,11 @@ const systemDark = () => typeof matchMedia === "function" && matchMedia("(prefer
 // it keeps tracking the OS if the user changes it later — resolving on save would freeze it.
 const resolve = (t) => (t === "system" ? (systemDark() ? "dark" : "light") : t);
 
+// Default is "system" (follow the OS/browser), not a hardcoded theme — matches index.html's
+// pre-paint inline script. A first-time visitor, or an embed (e.g. asuramaya.com's) whose
+// visitor already prefers dark, should see dark without hector-vector guessing wrong.
 export function currentTheme() {
-  try { return localStorage.getItem(KEY) || "light"; } catch { return "light"; }
+  try { return localStorage.getItem(KEY) || "system"; } catch { return "system"; }
 }
 export function currentHighlight() {
   try { return localStorage.getItem(HL_KEY) || ""; } catch { return ""; }

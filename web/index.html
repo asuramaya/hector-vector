@@ -22,12 +22,15 @@
       // worse than having no dark theme at all. Twelve lines here buy one honest paint.
       (function () {
         try {
-          var t = localStorage.getItem("hector-vector:theme") || "light";
+          // Default is "system", not a hardcoded theme: a first-time visitor (or an embed, e.g.
+          // asuramaya.com's) should see the theme their OS/browser already asked for, not always
+          // light regardless. Once someone actually picks one, that stored choice wins forever.
+          var t = localStorage.getItem("hector-vector:theme") || "system";
           if (t === "system") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
           document.documentElement.setAttribute("data-theme", t);
           var hl = localStorage.getItem("hector-vector:highlight");
           if (hl) document.documentElement.style.setProperty("--accent", hl);
-        } catch (e) { /* private mode / no storage: the light theme is the default anyway */ }
+        } catch (e) { /* private mode / no storage: matchMedia above still resolves the system pref */ }
       })();
     </script>
     <title>hector-vector: free vector editor in your browser</title>
