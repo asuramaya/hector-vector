@@ -5710,6 +5710,28 @@ def main():
             " const tp=editor.stage.querySelector('text > textPath'); const pid=editor.stage.querySelector('path[data-hv-id=op_p]').getAttribute('id');"
             " const ok = !!tp && !!pid && tp.getAttribute('href')==='#'+pid && /On a path/.test(tp.textContent||'');"
             " editor.selection=new Set(['op_t']); editor.detachTextFromPath(); t.remove(); path.remove(); return ok; }") is True)
+        # T19 generalization: binding was originally literal-<path>-only, but _layoutGlyphsOnPath
+        # only ever calls getTotalLength/getPointAtLength — the same SVGGeometryElement interface
+        # circle/ellipse/rect/line/polygon/polyline all implement too, so the gate was purely
+        # cosmetic. Confirm a non-path shape (a circle) is now a valid bind target, and a <g>
+        # (no single well-defined outline) is still correctly rejected.
+        check("text-on-path generalizes to any SVGGeometryElement shape, e.g. a circle, not just literal <path>", page.evaluate(
+            "() => { const NS='http://www.w3.org/2000/svg';"
+            " const c=document.createElementNS(NS,'circle'); c.setAttribute('data-hv-id','oc_c'); c.setAttribute('cx','200'); c.setAttribute('cy','120'); c.setAttribute('r','80'); c.setAttribute('fill','none'); c.setAttribute('stroke','#ccc');"
+            " editor.stage.insertBefore(c, editor._overlayEl());"
+            " const t=document.createElementNS(NS,'text'); t.setAttribute('data-hv-id','oc_t'); t.setAttribute('x','20'); t.setAttribute('y','60'); t.setAttribute('font-size','20'); t.textContent='On a circle';"
+            " editor.stage.insertBefore(t, editor._overlayEl());"
+            " editor.selection=new Set(['oc_t','oc_c']); editor.artboardSelected=false;"
+            " const gated = editor._canPutOnPath(editor.selectedNodes());"
+            " editor.putTextOnPath();"
+            " const tp=editor.stage.querySelector('text > textPath'); const cid=editor.stage.querySelector('circle[data-hv-id=oc_c]').getAttribute('id');"
+            " const ok = gated && !!tp && !!cid && tp.getAttribute('href')==='#'+cid && /On a circle/.test(tp.textContent||'');"
+            " editor.selection=new Set(['oc_t']); editor.detachTextFromPath(); t.remove(); c.remove();"
+            " const g=document.createElementNS(NS,'g'); g.setAttribute('data-hv-id','oc_g'); editor.stage.insertBefore(g, editor._overlayEl());"
+            " const t2=document.createElementNS(NS,'text'); t2.setAttribute('data-hv-id','oc_t2'); t2.textContent='x'; editor.stage.insertBefore(t2, editor._overlayEl());"
+            " const groupRejected = !editor._canPutOnPath([t2, g]);"
+            " g.remove(); t2.remove();"
+            " return ok && groupRejected; }") is True)
         # T19/T23 text-on-path → outlines: the former hard-block is gone. Converting on-path text
         # lays each glyph along the curve (origin on the path, rotated to the tangent at its
         # mid-advance) and bakes them into ONE editable all-cubic path whose bbox rides the arch

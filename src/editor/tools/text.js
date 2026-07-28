@@ -533,20 +533,26 @@ export const textMixin = {
     tspans.forEach((t, i) => { t.setAttribute("x", x); t.setAttribute("dy", i === 0 ? "0" : String(Math.round(fs * lh * 100) / 100)); });
   },
   // ---------- text on a path (T19) ----------
-  // True when a 2-object selection is exactly one <text> + one <path> — the bind candidates.
+  // True when a 2-object selection is exactly one <text> + one shape with a real outline to
+  // bind to. Originally literal-<path>-only; generalized to anything SVG's own <textPath>
+  // can natively walk — circle/ellipse/line/polygon/polyline/rect all implement the same
+  // SVGGeometryElement interface (getTotalLength/getPointAtLength) a <path> does, and
+  // _layoutGlyphsOnPath below already only ever calls those two tag-agnostic methods. This
+  // was purely a gating restriction, not an engine limitation — a <g> (no single well-defined
+  // outline) correctly still fails the duck-type check and stays excluded.
   _canPutOnPath(nodes) {
     if (!nodes || nodes.length !== 2) return false;
     const text = nodes.find((n) => n.tagName.toLowerCase() === "text" && !this._hasTextPath(n));
-    const path = nodes.find((n) => n.tagName.toLowerCase() === "path");
-    return !!text && !!path && text !== path;
+    const shape = nodes.find((n) => n !== text && typeof n.getTotalLength === "function");
+    return !!text && !!shape;
   },
-  // Bind the selected text to the selected path: the text becomes a <textPath href="#id"> run
-  // that flows along the curve (the browser lays out the glyphs; SVG-native, serialises cleanly).
+  // Bind the selected text to the selected shape: the text becomes a <textPath href="#id"> run
+  // that flows along the outline (the browser lays out the glyphs; SVG-native, serialises cleanly).
   putTextOnPath() {
     const nodes = this.selectedNodes();
     const text = nodes.find((n) => n.tagName.toLowerCase() === "text");
-    const path = nodes.find((n) => n.tagName.toLowerCase() === "path");
-    if (!text || !path) { setStatus("Select one text and one path to put the text on the path.", 3500); return; }
+    const path = nodes.find((n) => n !== text && typeof n.getTotalLength === "function");
+    if (!text || !path) { setStatus("Select one text and one shape (path/circle/ellipse/rect/line/polygon) to put the text on it.", 3500); return; }
     const content = this._literalLines(text).replace(/\n/g, " ").trim();
     if (!content) { setStatus("This text is empty — type something into it before putting it on the path.", 3000); return; }
     this.push("Text on path");
