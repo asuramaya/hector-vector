@@ -1362,6 +1362,39 @@ def main():
         cen = page.evaluate("""() => { const b=editor.selectionBBox(), vb=editor.stage.viewBox.baseVal;
             return [Math.round((b.x0+b.x1)/2-(vb.x+vb.width/2)), Math.round((b.y0+b.y1)/2-(vb.y+vb.height/2))]; }""")
         check("align centres the selection on the artboard", abs(cen[0]) <= 1 and abs(cen[1]) <= 1, str(cen))
+        # Distribute: only meaningful (and only shown) at 3+ objects — the two extreme
+        # objects anchor the span and don't move, the ones between get equal edge gaps.
+        page.evaluate("""() => { app.selectedOutput=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300">'
+              + '<rect data-hv-id="d1" x="0" y="0" width="20" height="20"/>'
+              + '<rect data-hv-id="d2" x="40" y="0" width="20" height="20"/>'
+              + '<rect data-hv-id="d3" x="200" y="0" width="20" height="20"/></svg>','dist.svg'); }""")
+        page.wait_for_timeout(60)
+        page.evaluate("editor.selection=new Set(['d1','d2','d3']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector();")
+        page.wait_for_timeout(40)
+        check("distribute buttons join the chin once 3+ objects are selected",
+              page.evaluate("document.querySelectorAll('.context-panel .insp-foot .insp-alignbar .insp-iconbtn').length") == 8)
+        page.evaluate("editor.distribute('h')")
+        gaps = page.evaluate("""() => { const bb = id => editor._nodeBBoxUser(editor.nodeById(id));
+            const a=bb('d1'), b=bb('d2'), c=bb('d3'); return [b.x0-a.x1, c.x0-b.x1]; }""")
+        check("distribute equalizes the gaps between bbox edges", gaps == [80, 80], str(gaps))
+        edges = page.evaluate("""() => { const bb = id => editor._nodeBBoxUser(editor.nodeById(id));
+            return [bb('d1').x0, bb('d3').x1]; }""")
+        check("distribute leaves the two extreme objects in place", edges == [0, 220], str(edges))
+        check("fewer than 3 selected: distribute is a no-op",
+              page.evaluate("""() => { editor.selection=new Set(['d1','d2']); editor.artboardSelected=false;
+                const before = JSON.stringify([editor._nodeBBoxUser(editor.nodeById('d1')), editor._nodeBBoxUser(editor.nodeById('d2'))]);
+                editor.distribute('h');
+                const after = JSON.stringify([editor._nodeBBoxUser(editor.nodeById('d1')), editor._nodeBBoxUser(editor.nodeById('d2'))]);
+                return before === after; }"""))
+        # restore the t1/t2 fixture the rest of this section relies on
+        page.evaluate("""() => { app.selectedOutput=null;
+            mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
+              + '<rect data-hv-id="t1" x="20" y="30" width="40" height="40"/>'
+              + '<path data-hv-id="t2" d="M100 100 L140 100 L140 140 Z"/></svg>','obj.svg'); }""")
+        page.wait_for_timeout(60)
+        page.evaluate("editor.selection=new Set(['t1']); editor.artboardSelected=false; editor._renderSelection(); editor._renderInspector();")
+        page.wait_for_timeout(40)
         # W and Rotate scrub LIVE — the shape changes DURING the drag, not just on release.
         def field_label_xy(label):
             return page.evaluate("""(label) => { const f=[...document.querySelectorAll('.context-panel .insp-field')]

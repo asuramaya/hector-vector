@@ -34,6 +34,11 @@ export const ALIGN_ICON = {
   bottom: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="13.6" width="13" height="1.4" fill="currentColor"/><rect x="3.2" y="3" width="3" height="9.5" rx="0.5" fill="currentColor"/><rect x="9.8" y="6.5" width="3" height="6" rx="0.5" fill="currentColor"/></svg>`,
   vmiddle: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="7.3" width="13" height="1.4" fill="currentColor"/><rect x="3.2" y="3" width="3" height="10" rx="0.5" fill="currentColor"/><rect x="9.8" y="5" width="3" height="6" rx="0.5" fill="currentColor"/></svg>`,
 };
+// Distribute glyphs — three bars/blocks with even gaps, one per axis (same style as ALIGN_ICON).
+export const DISTRIBUTE_ICON = {
+  h: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1" y="5" width="2.6" height="6" rx="0.5" fill="currentColor"/><rect x="6.7" y="3.5" width="2.6" height="9" rx="0.5" fill="currentColor"/><rect x="12.4" y="5" width="2.6" height="6" rx="0.5" fill="currentColor"/></svg>`,
+  v: `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="5" y="1" width="6" height="2.6" rx="0.5" fill="currentColor"/><rect x="3.5" y="6.7" width="9" height="2.6" rx="0.5" fill="currentColor"/><rect x="5" y="12.4" width="6" height="2.6" rx="0.5" fill="currentColor"/></svg>`,
+};
 export const AB_FIT_ICON =`<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.1" stroke-dasharray="2 1.4"/><rect x="5" y="5" width="6" height="6" fill="currentColor"/></svg>`;
 export const BLEND_MODES = [
   ["normal", "Normal"], ["multiply", "Multiply"], ["screen", "Screen"], ["overlay", "Overlay"],

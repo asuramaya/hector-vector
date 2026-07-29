@@ -45,7 +45,7 @@ import { artboardsMixin } from "./editor/tools/artboards.js";
 import { multiFillMixin } from "./editor/tools/multifill.js";
 import { snap45 } from "./editor/snap.js";
 import {
-  CAP_GLYPH, JOIN_GLYPH, DASH_GLYPH, ALIGN_ICON, AB_FIT_ICON, BLEND_MODES,
+  CAP_GLYPH, JOIN_GLYPH, DASH_GLYPH, ALIGN_ICON, DISTRIBUTE_ICON, AB_FIT_ICON, BLEND_MODES,
   inspGroup, inspRow, inspBtnRow, selectRow, numPairRow, numHalfRow, numRow, checkRow, ghostBtn,
 } from "./editor/ui-rows.js";
 
@@ -1562,9 +1562,30 @@ const editor = {
     });
     this._renderSelection(); this._renderInspector();
   },
-  // The 6 align-to-artboard buttons as a compact bar for the Properties panel's
-  // bottom chin (always reachable, doesn't scroll away). Returns null when there's
-  // nothing alignable (no non-artboard selection).
+  // Even out the gaps between 3+ selected objects along one axis. The two extreme
+  // objects (by bbox centre) anchor the span and don't move; the ones between them
+  // get equal edge-to-edge gaps — a negative gap (objects too big for the span) just
+  // overlaps them evenly, same as every other vector editor's distribute.
+  distribute(axis) {
+    const nodes = this.selectedNodes(); if (nodes.length < 3 || !this.stage) return;
+    const lo = axis === "h" ? "x0" : "y0", hi = axis === "h" ? "x1" : "y1";
+    const items = nodes.map((n) => ({ n, b: this._nodeBBoxUser(n) }))
+      .sort((a, b) => (a.b[lo] + a.b[hi]) - (b.b[lo] + b.b[hi]));
+    const span = items[items.length - 1].b[hi] - items[0].b[lo];
+    const sumSize = items.reduce((s, it) => s + (it.b[hi] - it.b[lo]), 0);
+    const gap = (span - sumSize) / (items.length - 1);
+    this.push("Distribute");
+    let cursor = items[0].b[hi];
+    for (let i = 1; i < items.length - 1; i++) {
+      const it = items[i], size = it.b[hi] - it.b[lo], target = cursor + gap, d = target - it.b[lo];
+      if (Math.abs(d) > 1e-6) this._translateNode(it.n, axis === "h" ? d : 0, axis === "h" ? 0 : d);
+      cursor = target + size;
+    }
+    this._renderSelection(); this._renderInspector();
+  },
+  // The 6 align-to-artboard buttons (+ 2 distribute, once 3+ objects are selected) as
+  // a compact bar for the Properties panel's bottom chin (always reachable, doesn't
+  // scroll away). Returns null when there's nothing alignable (no non-artboard selection).
   _alignBar() {
     if (!this.stage || this.artboardSelected || !this.selectedNodes().length) return null;
     const bar = document.createElement("div"); bar.className = "insp-alignbar";
@@ -1577,6 +1598,12 @@ const editor = {
       mk(ALIGN_ICON.vmiddle, "vmiddle", "Centre vertically"),
       mk(ALIGN_ICON.bottom, "bottom", "Align bottom edges"),
     );
+    if (this.selectedNodes().length >= 3) {
+      const row = document.createElement("div"); row.className = "insp-distributebar";
+      const mkd = (icon, axis, title) => { const b = document.createElement("button"); b.type = "button"; b.className = "insp-iconbtn"; b.title = title; b.innerHTML = icon; b.addEventListener("click", () => this.distribute(axis)); return b; };
+      row.append(mkd(DISTRIBUTE_ICON.h, "h", "Distribute horizontal spacing"), mkd(DISTRIBUTE_ICON.v, "v", "Distribute vertical spacing"));
+      bar.appendChild(row);
+    }
     return bar;
   },
   // mix-blend-mode via inline style (serialises with the element).

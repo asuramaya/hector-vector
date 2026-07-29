@@ -820,6 +820,8 @@ button:disabled {
 .insp-foot:empty { display: none; }
 .insp-alignbar { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; }
 .insp-alignbar .insp-iconbtn { width: 100%; }
+/* distribute row nests inside the align grid, spanning its full width on its own line */
+.insp-distributebar { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; margin-top: 5px; }
 
 /* inspector swatch (opens the colour picker) */
 .insp-swatch {
