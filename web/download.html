@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Download hector-vector desktop</title>
+  <meta name="description" content="Download the free, open-source hector-vector desktop build: adds AI image processing, batch, and a local library on top of the browser editor. Source tarball, MIT licensed." />
+  <link rel="icon" type="image/svg+xml" href="/assets/hv_logo.svg" />
+  <style>
+    :root { --ink:#000; --bg:#fff; --label:#555; --accent:#1b73e8; --hair:#000; --faint:#f4f4f4; }
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body { margin:0; background:var(--bg); color:var(--ink);
+      font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 0 20px; }
+
+    header.nav { border-bottom: 2px solid var(--hair); }
+    .nav .wrap { display:flex; align-items:center; gap:14px; height:56px; max-width:960px; }
+    .brand { display:flex; align-items:center; gap:9px; font-weight:700; letter-spacing:-.01em; color:var(--ink); }
+    .brand img { width:22px; height:22px; }
+    .nav .spacer { flex:1; }
+    .nav a.navlink { color:var(--ink); font-weight:600; font-size:14px; }
+
+    .hero { padding: 56px 0 36px; border-bottom: 2px solid var(--hair); }
+    .hero h1 { font-size: clamp(26px, 5vw, 38px); line-height:1.15; letter-spacing:-.02em; margin:0 0 14px; }
+    .hero h1 .accent { color: var(--accent); }
+    .hero p.sub { font-size: 16px; color: var(--label); max-width: 560px; margin: 0 0 26px; }
+    .cta-row { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+    .btn { display:inline-flex; align-items:center; gap:8px; padding:14px 24px; border:2px solid var(--ink);
+      font-weight:700; font-size:16px; cursor:pointer; background:var(--bg); color:var(--ink); }
+    .btn.primary { background:var(--ink); color:var(--bg); }
+    .btn.primary:hover { background:var(--accent); border-color:var(--accent); text-decoration:none; color:var(--bg); }
+    .btn:hover { text-decoration:none; border-color:var(--accent); color:var(--accent); }
+    .version { font-size:13px; color:var(--label); }
+
+    section { padding: 36px 0; border-bottom: 2px solid var(--hair); }
+    h2 { font-size: 13px; text-transform: uppercase; letter-spacing:.16em; color:var(--label); font-weight:700; margin:0 0 16px; }
+
+    .steps { counter-reset: step; list-style: none; margin:0; padding:0; }
+    .steps li { counter-increment: step; position:relative; padding:0 0 20px 40px; }
+    .steps li:last-child { padding-bottom:0; }
+    .steps li::before { content: counter(step); position:absolute; left:0; top:0; width:26px; height:26px;
+      border:2px solid var(--ink); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px; }
+    .steps code { background:var(--faint); border:1px solid var(--hair); padding:2px 7px; font-size:14px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .steps p { margin:6px 0 0; color:var(--label); font-size:14px; }
+
+    .reqs { display:grid; grid-template-columns: 1fr 1fr; gap:0; border:2px solid var(--hair); margin-top:4px; }
+    .reqs div { padding:16px 20px; }
+    .reqs div + div { border-left:2px solid var(--hair); }
+    .reqs dt { font-weight:700; font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--label); margin:0 0 4px; }
+    .reqs dd { margin:0; font-size:14px; }
+
+    footer { padding: 32px 0 56px; }
+    footer .wrap { display:flex; flex-wrap:wrap; gap:16px; align-items:center; color:var(--label); font-size:13px; max-width:960px; }
+    footer .spacer { flex:1; }
+
+    @media (max-width: 560px) {
+      .reqs { grid-template-columns:1fr; }
+      .reqs div + div { border-left:0; border-top:2px solid var(--hair); }
+    }
+  </style>
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap">
+      <a class="brand" href="/"><img src="/assets/hv_logo.svg" alt="" /> hector-vector</a>
+      <span class="spacer"></span>
+      <a class="navlink" href="/compare">Compare</a>
+      <a class="navlink" href="/">Open editor</a>
+      <a class="navlink" href="https://github.com/asuramaya/hector-vector" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </header>
+
+  <div class="hero"><div class="wrap">
+    <h1>Download the <span class="accent">desktop build</span>.</h1>
+    <p class="sub">Same open-source editor, plus the AI image pipeline (upscale, background removal, vectorize, restore), batch processing, and a local library with full undo history. Runs entirely on your machine.</p>
+    <div class="cta-row">
+      <a class="btn primary" href="https://github.com/asuramaya/hector-vector/releases/latest" target="_blank" rel="noopener">↓ Get the latest release</a>
+      <span class="version">Source tarball · MIT licensed · always the newest tag</span>
+    </div>
+  </div></div>
+
+  <section><div class="wrap">
+    <h2>Set up</h2>
+    <ol class="steps">
+      <li>Download and extract the source tarball from the release page above.
+        <p>Or clone directly: <code>git clone https://github.com/asuramaya/hector-vector.git</code></p>
+      </li>
+      <li>Run the installer from the extracted folder:
+        <p><code>./install.sh --desktop --app</code></p>
+        <p>Sets up a project-local <code>.venv</code>, installs the runtime deps, adds an app-launcher shortcut, and opens the app window when done. Drop <code>--desktop --app</code> for a bare install (then run <code>./run.sh</code> any time).</p>
+      </li>
+      <li>Optional: install the AI pipeline deps (upscaling, background removal, vectorize) the first time you need them.
+        <p><code>./install.sh --ai</code> — or let the app prompt you on first use.</p>
+      </li>
+    </ol>
+  </div></section>
+
+  <section><div class="wrap">
+    <h2>Requirements</h2>
+    <dl class="reqs">
+      <div><dt>Python</dt><dd>3.10 or newer</dd></div>
+      <div><dt>Platform</dt><dd>Linux, macOS, Windows (WSL)</dd></div>
+    </dl>
+  </div></section>
+
+  <section style="border-bottom:0;"><div class="wrap">
+    <h2>Not sure yet?</h2>
+    <p style="margin:0; font-size:15px;">The full vector toolset already runs free in your browser, no install — <a href="/">open the editor</a>. See exactly what the download adds on the <a href="/compare">comparison page</a>.</p>
+  </div></section>
+
+  <footer><div class="wrap">
+    <a class="brand" href="/"><img src="/assets/hv_logo.svg" alt="" /> hector-vector</a>
+    <span class="spacer"></span>
+    <a href="/">Open the editor</a>
+    <a href="/compare">Compare</a>
+    <a href="https://github.com/asuramaya/hector-vector" target="_blank" rel="noopener">Source (MIT)</a>
+  </div></footer>
+</body>
+</html>
