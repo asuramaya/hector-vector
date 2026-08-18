@@ -149,35 +149,43 @@ Every row here maps to something this session's audit already exercised and conf
 correct — that's deliberate. Phase 1 ships on top of *verified* engine behavior, not
 hopeful behavior.
 
+## Scope principle: action/state parity, not widget parity
+
+The operator's scope answer was explicit: **full parity including UI-only features**, not
+just the drawing engine. Read literally, that could mean a tool for every widget — drag
+this panel into a locking-bezel group, trim the mobile toolbar, switch the theme. It
+shouldn't mean that, and the line is worth stating once, up front, so it governs every
+phase rather than getting re-litigated per tool:
+
+**In scope: anything that changes or reads DOCUMENT or PROJECT state.** New/open/save/
+save-as/export in every format, running a Processor pipeline stage and reading its
+result, browsing and loading from the Library, reading the current selection and its
+properties, reading document structure. An agent reasoning about what to do next needs to
+*see* state as much as it needs to mutate it — introspection tools are not an
+afterthought alongside the write tools, they're the other half of the same contract. This
+is why `hv_get_selection`/`hv_get_document` sit in Phase 1 as first-class tools alongside
+the write operations, not a debugging afterthought.
+
+**Out of scope for v1: anything that only changes how the chrome LOOKS.** Panel position/
+float/dock state, theme, toolbar layout, mobile-shell ergonomics. An agent has no eyes to
+appreciate a docked-vs-floated panel and no thumb that benefits from a trimmed mobile
+toolbar — those affordances exist *because* a human has a screen and a hand with limited
+reach. Building MCP coverage for them is effort spent modeling ergonomics nobody but a
+human needs.
+
+If a demo/narration use case later wants an agent to literally drive panel layout (e.g.
+"open the Colour panel" as a recorded walkthrough step), that's a small, mechanical
+addition once the state-introspection tools below exist — the registries
+(`window.__docks`'s panel state, `layout.js`'s bar arrangement) are already structured
+data, so it's a few more thin wrapper tools, not a redesign. Deliberately not building it
+into v1 on spec. Open question back to the operator: does "full parity including UI-only
+features" mean the action/state reading above, or does it deliberately want widget-level
+coverage too? The reading above is our shared best guess at what's actually useful;
+additive, not a rework, if the answer is "yes, literally that too."
+
 ## Phase 2+ (UI/workspace/library/pipeline parity) — Halcyon's half
 
-### Scoping principle: action/state parity, not widget parity
-
-Before the table — a distinction worth making explicit, since "full parity including
-UI-only features" can be read two ways, and they lead to very different tool lists.
-
-**Widget parity** would mean a tool for every gesture a human hand can make on the
-chrome: `hv_dock_panel`, `hv_float_panel`, `hv_reorder_toolbar`, `hv_shelve_panel`. An
-agent has no eyes to appreciate a panel being docked left vs. floated, and no thumb that
-benefits from a trimmed mobile toolbar — those affordances exist *because* a human has a
-screen and a hand with limited reach. Building MCP coverage for them is real effort spent
-modeling ergonomics nobody but a human needs.
-
-**Action/state parity** — the reading this section actually uses — means: everything a
-human can do that changes what's *in* the document, the project, or a pipeline job, plus
-everything they can *see* that isn't already covered by Phase 1's document/selection
-tools. Library browsing changes what's available to load. Running a pipeline stage
-changes what raster exists. Switching Edit↔Manage changes what an agent (or a human
-narrating an agent's work) is looking at. None of that is chrome — it's real state, same
-category as everything Phase 1 already covers.
-
-Net effect: **panel dock/float/shelve, toolbar customization, and theme are out of scope
-for this table.** If a demo/narration use case later wants an agent to literally drive
-panel layout (e.g. "open the Colour panel" as a recorded walkthrough step), that's a
-small, mechanical addition once this table's state-introspection tools exist — the
-registries (`window.__docks`'s panel state, `layout.js`'s bar arrangement) are already
-structured data, so it's a few more thin wrapper tools, not a redesign. Deliberately not
-building it into v1 on spec.
+That's squarely shell/platform territory, scoped against the principle above.
 
 ### Tool vocabulary
 
@@ -200,12 +208,6 @@ building it into v1 on spec.
 - Mobile/touch-shell-specific state (which form factor is active, rail contents) has no
   agent-facing use I can construct — a CDP-attached agent isn't holding a phone. Not
   listed above; revisit only if a concrete use case surfaces.
-
-Open question back to Ferryman/operator: does "full parity including UI-only features"
-mean the state/action table above, or does it deliberately want widget-level coverage
-too (e.g. for a literal screen-recording/narration product feature)? The table above is
-my read of what's actually useful; happy to add the widget layer if the answer is "yes,
-literally that too" — it's additive, not a rework.
 
 ## What "verify parity" means for either phase
 
@@ -231,6 +233,6 @@ the class of bug this bar exists to catch).
 - Batching: does a multi-step illustration (like the fox) issue one tool call per shape,
   or does the vocabulary want a `hv_batch` tool that takes an ordered command list,
   cutting round-trip overhead for a long build sequence.
-- Raised in Phase 2+ above: does "full parity including UI-only features" mean
-  action/state parity (this doc's Phase 2+ table) or literal widget-level coverage
-  (panel dock/float, toolbar reorder, theme)? Needs the operator's or Ferryman's read.
+- Whether "full parity including UI-only features" means the action/state reading in
+  "Scope principle" above, or deliberately wants widget-level coverage too — see that
+  section; needs the operator's read.
