@@ -826,6 +826,31 @@ def main():
         page.keyboard.press("Control+z"); page.wait_for_timeout(50)
         check("invert-space is undoable", page.evaluate("editor._artworkNodes().length") == 3)
 
+        # Resolution must scale to the SHAPE, not just the artboard: a fixed grid coarse
+        # enough for the whole canvas silently swallows fine detail (a thin glyph stroke,
+        # a serif). Size the rect as a small FRACTION of the live viewBox (well under the
+        # OLD fixed grid's ~1/160th-of-artboard cell size, whatever the artboard's actual
+        # span is) so it would vanish from the inverted result entirely without the fix.
+        fine = page.evaluate("""() => {
+            const NS='http://www.w3.org/2000/svg'; const vb=editor.stage.viewBox.baseVal;
+            const cx=vb.x+vb.width/2, cy=vb.y+vb.height/2, span=Math.max(vb.width,vb.height);
+            const w=span/300, h=span/700;   // ~1/300th of the artboard span — sub-cell at the old fixed res
+            const r=document.createElementNS(NS,'rect'); r.setAttribute('data-hv-id','fine');
+            r.setAttribute('x',String(cx)); r.setAttribute('y',String(cy));
+            r.setAttribute('width',String(w)); r.setAttribute('height',String(h)); r.setAttribute('fill','#000');
+            editor.stage.insertBefore(r, editor._overlayEl());
+            editor.selection=new Set(['fine']); editor.artboardSelected=false;
+            editor.invertSpace();
+            const p = editor.stage.querySelector('path[data-hv-id]');
+            const pt=(x,y)=>{ const sp=editor.stage.createSVGPoint(); sp.x=x; sp.y=y; return p.isPointInFill(sp); };
+            const ok = !pt(cx+w/2, cy+h/2) && pt(cx-span/8, cy);   // centre of the fine shape is a HOLE; well outside it is filled
+            editor.selection=new Set(); editor._renderSelection();
+            return ok;
+        }""")
+        check("invert-space keeps fine detail (a shape far smaller than the artboard is still a real hole)", fine is True)
+        page.keyboard.press("Control+z"); page.wait_for_timeout(50)
+        page.evaluate("() => { const f=editor.stage.querySelector('[data-hv-id=\"fine\"]'); if (f) f.remove(); }")
+
         # tool buttons carry their shortcut letter (rendered as a corner badge via CSS)
         badges = page.evaluate("""() => { const tb = [...document.querySelectorAll('.tool-button[data-tool]')];
             return { total: tb.length, keyed: tb.filter(b => (b.getAttribute('data-key') || '').length >= 1).length,

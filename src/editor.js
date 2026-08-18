@@ -1663,8 +1663,22 @@ const editor = {
     // unlike the old even-odd compound which XOR'd them — that was the Phase-2 caveat).
     // Raster mask, not per-node isPointInFill: invert falls back to every artwork
     // layer, so the vector test (O(nodes) per probe) hung the tab on traced docs.
-    const mask = this._rasterMask(nodes, bb, 1536);
-    const d = marchingSquares((x, y) => inArt(x, y) && !mask.inside(x, y), bb, 160);
+    //
+    // Resolution scales to the SHAPES, not just the artboard: a fixed 160-cell trace grid
+    // over the whole canvas gives ~3+ user-units per cell on a typical document, which is
+    // coarser than a serif or a thin letter stroke — booleanOp's own trace never hits this
+    // because it scopes to the tight bbox of just its operands, so the same shapes get far
+    // more cells there "for free". Invert genuinely needs the full artboard extent (the
+    // negative region isn't bounded by the shapes), so match that density explicitly instead:
+    // scale res up by how much smaller the shapes are than the artboard, capped for perf
+    // (marching-squares cost is quadratic in res).
+    const shapesBB = this._bboxUnion(nodes);
+    const artSpan = Math.max(x1 - x0, y1 - y0);
+    const shapeSpan = Math.max(shapesBB.x1 - shapesBB.x0, shapesBB.y1 - shapesBB.y0, 1e-6);
+    const res = Math.min(1400, Math.max(160, Math.round(140 * artSpan / shapeSpan)));
+    const maskPx = Math.min(4096, Math.max(1536, Math.round(1536 * res / 160)));
+    const mask = this._rasterMask(nodes, bb, maskPx);
+    const d = marchingSquares((x, y) => inArt(x, y) && !mask.inside(x, y), bb, res);
     let color = "#000000";
     for (const n of nodes) { const f = n.getAttribute("fill"); if (f && f !== "none") { color = f; break; } }
     this._commitBoolean(nodes, d, "nonzero", null, "Inverted space — negative bounded by the artboard.", color);
