@@ -184,7 +184,12 @@ export const textMixin = {
   _positionTextOverlay() {
     const te = this._textEdit; if (!te || !this.stage) return;
     const { node, el, wrap } = te;
-    const m = this.stageCTM(); if (!m) return;
+    // The NODE's own screen CTM, not the stage's: a node can carry its own transform (the
+    // Transform tool / W-H fields scale text via a matrix instead of baking, since font-size
+    // is a scalar — see setSelectionSize's comment) or sit inside a nested group (isolation
+    // mode, an artboard). Using only the stage's CTM ignored all of that and positioned the
+    // overlay at the UNSCALED size/place — editing a scaled text opened a tiny, misplaced box.
+    const m = node.getScreenCTM(); if (!m) return;
     const x = parseFloat(node.getAttribute("x")) || 0;
     const y = parseFloat(node.getAttribute("y")) || 0;
     const fs = parseFloat(node.getAttribute("font-size")) || 16;
@@ -407,7 +412,14 @@ export const textMixin = {
   // split out so a threaded box can render only the prefix that fits its own height.
   _renderAreaLines(node, lines) {
     while (node.firstChild) node.removeChild(node.firstChild);
-    const x = node.getAttribute("x") || "0";
+    const boxX = parseFloat(node.getAttribute("x")) || 0;
+    const boxW = parseFloat(node.getAttribute("data-hv-text-width")) || 0;
+    // Every line's own tspan carries the anchor-adjusted x (not always the box's left edge):
+    // text-anchor is set on the parent <text> and inherits down, so "middle"/"end" without this
+    // just anchors each line ON the left edge instead of centring/right-aligning it IN the box —
+    // the text visually spills past the box instead of aligning inside it.
+    const anchor = node.getAttribute("text-anchor") || "start";
+    const x = String(Math.round((anchor === "middle" ? boxX + boxW / 2 : anchor === "end" ? boxX + boxW : boxX) * 100) / 100);
     const fs = parseFloat(node.getAttribute("font-size")) || 16;
     const lh = this._lineHeightOf(node);
     lines.forEach((ln, i) => {
@@ -663,7 +675,7 @@ export const textMixin = {
     rows.push(this._segRow("Style", styleC.mixed ? null : styleC.value, [["normal", "N"], ["italic", "I"]],
       { normal: "Regular", italic: "Italic" }, (v) => this._setTextAttr("font-style", v === "normal" ? null : v, { styleKey: "fontStyle", label: "Style" })));
     rows.push(this._segRow("Align", anchorC.mixed ? null : anchorC.value, [["start", "↤"], ["middle", "↔"], ["end", "↦"]],
-      { start: "Left", middle: "Centre", end: "Right" }, (v) => this._setTextAttr("text-anchor", v === "start" ? null : v, { styleKey: "textAnchor", label: "Align" })));
+      { start: "Left", middle: "Centre", end: "Right" }, (v) => this._setTextAttr("text-anchor", v === "start" ? null : v, { styleKey: "textAnchor", label: "Align", reflow: true })));
     rows.push(numRow("Spacing", lsC.mixed ? "" : r2(lsC.value), null, 0.5,
       (v) => { this.beginCoalesce(); this._applyTextNum("letter-spacing", v, { styleKey: "letterSpacing" }); },
       null, () => { this.commitCoalesce("Letter spacing"); }, !!lsC.mixed));

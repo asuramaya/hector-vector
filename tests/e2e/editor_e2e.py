@@ -5513,6 +5513,14 @@ def main():
             page.wait_for_timeout(120)
             _raw = page.evaluate("() => editor.stage.querySelector('[data-hv-id=rzt]').getBoundingClientRect().width")
             check("resizing text keeps its scale (no snap-back)", _raw > _rb * 1.3, f"{_rb}->{_raw}")
+            # Editing that scaled text must open the overlay AT the scaled size/place, not at
+            # the raw unscaled font-size — _positionTextOverlay used only the stage's CTM,
+            # ignoring the node's own transform matrix left by the scale above.
+            _match = page.evaluate(
+                "() => { const n=editor.stage.querySelector('[data-hv-id=rzt]'); const rr=n.getBoundingClientRect();"
+                " editor._editText(n, false); const or_=editor._textEdit.el.getBoundingClientRect(); editor._commitText();"
+                " return Math.abs(or_.width/rr.width-1)<0.15 && Math.abs(or_.height/rr.height-1)<0.3; }")
+            check("editing scaled text opens the overlay at the scaled size (not the raw font-size)", _match is True)
         page.evaluate("() => { const n=editor.stage.querySelector('[data-hv-id=rzt]'); if(n) n.remove(); editor._xformMode=null; editor.selection=new Set(); editor._renderSelection(); }")
         # text→vector is SHAPED (kerning + ligatures so it matches the rendered text) and emits
         # clean all-cubic geometry with a reported advance. Network-tolerant: passes if offline.
@@ -5635,6 +5643,22 @@ def main():
             " const note=!!p.querySelector('.insp-note-warn');"
             " editor._setAreaHeight(400); const cleared=t.getAttribute('data-hv-overflow')!=='1';"
             " const ok=over && hasH && note && cleared;"
+            " t.remove(); editor.selection=new Set(); editor._renderSelection(); return ok; }") is True)
+        # Area-text Align: text-anchor on a box must align WITHIN the box, not anchor every
+        # line on the box's own left edge (that just spills centre/right text out past the box).
+        # Goes through the real inspector setter (reflow:true) so a change actually re-renders.
+        check("area-text Align centres/right-aligns tspans within the box, not on its left edge", page.evaluate(
+            "() => { const NS='http://www.w3.org/2000/svg'; const t=document.createElementNS(NS,'text');"
+            " t.setAttribute('data-hv-id','aal'); t.setAttribute('x','60'); t.setAttribute('y','40');"
+            " t.setAttribute('font-family','Arial, sans-serif'); t.setAttribute('font-size','20'); t.setAttribute('data-hv-text-width','300');"
+            " editor.stage.insertBefore(t, editor._overlayEl());"
+            " editor._writeAreaContent(t, 'Short line');"
+            " editor.selection=new Set(['aal']); editor.artboardSelected=false;"
+            " editor._setTextAttr('text-anchor','middle',{styleKey:'textAnchor',label:'Align',reflow:true});"
+            " const midX = parseFloat(t.querySelector('tspan').getAttribute('x'));"
+            " editor._setTextAttr('text-anchor','end',{styleKey:'textAnchor',label:'Align',reflow:true});"
+            " const endX = parseFloat(t.querySelector('tspan').getAttribute('x'));"
+            " const ok = Math.abs(midX-210)<0.5 && Math.abs(endX-360)<0.5;"
             " t.remove(); editor.selection=new Set(); editor._renderSelection(); return ok; }") is True)
         # Text styles (Epic P.1): a named, whole-object font bundle shared across text
         # objects — save one from a selection, apply it to another, edit either instance and
