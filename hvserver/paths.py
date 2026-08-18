@@ -137,6 +137,13 @@ DETECT_FACES_SCRIPT = TOOLS_DIR / "detect_faces.py"
 SR_MODELS_DIR = Path.home() / ".cache" / "hector-vector" / "sr"
 INPAINT_DIR = Path.home() / ".cache" / "hector-vector" / "inpaint"
 FACE_DIR = Path.home() / ".cache" / "hector-vector" / "face"
+# MCP server discovery (docs/mcp-server.md): written by the app-window's "Allow agent
+# access" toggle once it exists (Halcyon's half), read by hvserver/mcp_server.py to find
+# the CDP debug port of a running, agent-enabled hector-vector instance. Same directory
+# convention as the model caches above — user-local, never the repo tree. The toggle is
+# the sole writer; readers should treat a missing/stale file as "no agent access enabled",
+# never an error.
+AGENT_PORT_FILE = Path.home() / ".cache" / "hector-vector" / "agent-port"
 LAMA_MODEL = {
     "file": "lama_fp32.onnx", "size_mb": 208,
     "url": "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx"}
