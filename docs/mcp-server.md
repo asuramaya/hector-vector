@@ -71,35 +71,42 @@ explicitly:
   Code, another agent harness), reads the debug port hector-vector's own Chromium is
   listening on, attaches, and exposes the tool surface below.
 
-**Halcyon owns the rest of this section** — exact launch mechanism (does the app-window
-always open with `--remote-debugging-port` so a server can attach opportunistically, or
-is there an explicit "enable agent access" toggle?), and the heartbeat-watchdog
-integration: `HV_IDLE_SHUTDOWN` currently spins the server down after ~90s of UI silence,
-and MCP-driven activity needs to count as "alive" the same way the UI's own keep-alive
-does — a long-running agent task must not get the server yanked out from under it
-mid-edit.
+**BUILT (Halcyon, 2026-08-18).** An explicit "Allow agent access" toggle, off by default,
+in Settings — not an ambient always-on flag. A CDP debug port isn't scoped to hector-
+vector's own document, it's full control of that renderer (arbitrary JS execution,
+cookies, everything), and Chromium binding it to `127.0.0.1` only stops the *network*,
+not other local processes; an always-open port would let any other local process running
+as the same user — a bad npm postinstall script, a compromised browser extension,
+anything — attach and drive the document too, silently. That's a materially bigger local
+attack surface than "an MCP client can drive HV," and it gets the same treatment any
+sensitive local capability does: an explicit opt-in.
 
-**Launch mechanism: an explicit toggle, not always-on.** A CDP debug port isn't scoped to
-hector-vector's own document — it's full control of that renderer (arbitrary JS
-execution, cookies, everything), and Chromium binding it to `127.0.0.1` only stops the
-*network*, not other local processes. Always launching the app-window with
-`--remote-debugging-port` open would mean any other local process running as the same
-user — a bad npm postinstall script, a compromised browser extension, anything — could
-attach and drive the document too, silently. That's a materially bigger local attack
-surface than "an MCP client can drive HV," and it should require the same thing any
-sensitive local capability does: an explicit opt-in, not an ambient default.
+The toggle persists **server-side** (`.hector-config.json`, via
+`hvserver.paths.agent_access_enabled/set_agent_access`, surfaced as `GET`/`POST
+/api/agent-access`) rather than in `localStorage` — `launch.sh` has to read it before the
+page itself has loaded. It takes effect **on the next restart**: this app-window can't
+relaunch itself into a different Chromium process from inside the page (same reason the
+existing "Update & restart" flow in Settings doesn't auto-restart either), so the
+Settings row says so and the human opens a fresh window and closes the old one.
 
-Proposed: a Settings toggle, **off by default**, "Allow agent access." Turning it on
-relaunches (or launches) the app-window with `--remote-debugging-port=0` (OS-assigned
-ephemeral port — never a fixed, guessable one) bound to `127.0.0.1`, writes the resolved
-port to a small local file (`~/.hector-vector/agent-port`, same idea as the existing
-`.hector-config.json`, readable only by the local user) for `mcp_server.py` to discover
-on attach, and shows a **persistent, impossible-to-miss status-bar indicator** ("Agent
-access: on") for as long as it's active. This doubles as the consent model — the toggle
-*is* the one-time consent, durable and visibly discoverable rather than a modal a human
-dismisses once and forgets is still in effect. Answers the doc's own open question on
-auth: yes to a visible signal, no to a repeated prompt — the badge **is** the prompt,
-continuously.
+`launch.sh` is the sole thing that opens (or closes) the actual debug port. When the
+preference is on, it binds a scratch socket to `127.0.0.1:0` to get a free local port,
+immediately releases it, and passes that as `--remote-debugging-port=<port>` — a small,
+accepted bind/release race, not literally Chromium's own `--remote-debugging-port=0`
+stderr-parsed handshake (that needs `exec` to NOT replace the shell process, which this
+script deliberately still does). The resolved port is written to `AGENT_PORT_FILE`
+(`~/.cache/hector-vector/agent-port`, already defined in `hvserver/paths.py` for
+`mcp_server.py` to read — correcting this doc's earlier, wrong `~/.hector-vector/...`
+path). Every launch where the preference is off clears that file, so a stale port from a
+previous agent-enabled session can never outlive a restart.
+
+A **persistent status-bar badge** ("Agent access: on") shows for as long as a debug port
+is actually live — driven by `GET /api/agent-access`'s `active` field (is `AGENT_PORT_FILE`
+present), not just the `enabled` preference, so it never claims a port is open when the
+current window doesn't actually have one yet (freshly toggled on, restart still pending).
+This is the consent model: the badge *is* the ongoing prompt, durable and visibly
+discoverable, not a modal dismissed once and forgotten. Answers the doc's own open
+question on auth: yes to a visible signal, no to a repeated prompt.
 
 **Heartbeat integration: reuse the existing endpoint, don't build a second watchdog.**
 `mcp_server.py` pings the existing `/api/heartbeat` on a short interval (matching the
