@@ -79,6 +79,37 @@ and MCP-driven activity needs to count as "alive" the same way the UI's own keep
 does — a long-running agent task must not get the server yanked out from under it
 mid-edit.
 
+**Launch mechanism: an explicit toggle, not always-on.** A CDP debug port isn't scoped to
+hector-vector's own document — it's full control of that renderer (arbitrary JS
+execution, cookies, everything), and Chromium binding it to `127.0.0.1` only stops the
+*network*, not other local processes. Always launching the app-window with
+`--remote-debugging-port` open would mean any other local process running as the same
+user — a bad npm postinstall script, a compromised browser extension, anything — could
+attach and drive the document too, silently. That's a materially bigger local attack
+surface than "an MCP client can drive HV," and it should require the same thing any
+sensitive local capability does: an explicit opt-in, not an ambient default.
+
+Proposed: a Settings toggle, **off by default**, "Allow agent access." Turning it on
+relaunches (or launches) the app-window with `--remote-debugging-port=0` (OS-assigned
+ephemeral port — never a fixed, guessable one) bound to `127.0.0.1`, writes the resolved
+port to a small local file (`~/.hector-vector/agent-port`, same idea as the existing
+`.hector-config.json`, readable only by the local user) for `mcp_server.py` to discover
+on attach, and shows a **persistent, impossible-to-miss status-bar indicator** ("Agent
+access: on") for as long as it's active. This doubles as the consent model — the toggle
+*is* the one-time consent, durable and visibly discoverable rather than a modal a human
+dismisses once and forgets is still in effect. Answers the doc's own open question on
+auth: yes to a visible signal, no to a repeated prompt — the badge **is** the prompt,
+continuously.
+
+**Heartbeat integration: reuse the existing endpoint, don't build a second watchdog.**
+`mcp_server.py` pings the existing `/api/heartbeat` on a short interval (matching the
+UI's own cadence) for as long as it holds a live CDP attachment, and stops when it
+detaches. Zero changes needed to `_idle_watchdog`/`_touch_heartbeat` in `hvserver/jobs.py`
+— they already treat any heartbeat call as "alive" regardless of caller. This also means
+a crashed or killed `mcp_server.py` that never cleanly detaches self-heals for free: the
+existing 90s idle timeout reclaims the server exactly as it does today for an abandoned
+UI tab, no orphan-process risk introduced.
+
 ### Tool-naming contract
 
 MCP tools wrap `editor.*`/`hv.*` calls; they do **not** expose those internal names
@@ -120,13 +151,61 @@ hopeful behavior.
 
 ## Phase 2+ (UI/workspace/library/pipeline parity) — Halcyon's half
 
-The operator's scope answer was explicit: **full parity including UI-only features**, not
-just the drawing engine — panel/workspace manipulation, Library browsing, batch pipeline
-control. That's squarely shell/platform territory. Halcyon to detail this section:
-candidates visible from the tools audit and the app's own feature surface include panel
-dock/float/shelve state, the Library (browse/search/drag-to-place), Processor pipeline
-jobs (upscale/remove-bg/vectorize as MCP-triggerable operations, not just UI clicks), and
-Manage-screen batch control. Left deliberately unscoped here — not mine to design.
+### Scoping principle: action/state parity, not widget parity
+
+Before the table — a distinction worth making explicit, since "full parity including
+UI-only features" can be read two ways, and they lead to very different tool lists.
+
+**Widget parity** would mean a tool for every gesture a human hand can make on the
+chrome: `hv_dock_panel`, `hv_float_panel`, `hv_reorder_toolbar`, `hv_shelve_panel`. An
+agent has no eyes to appreciate a panel being docked left vs. floated, and no thumb that
+benefits from a trimmed mobile toolbar — those affordances exist *because* a human has a
+screen and a hand with limited reach. Building MCP coverage for them is real effort spent
+modeling ergonomics nobody but a human needs.
+
+**Action/state parity** — the reading this section actually uses — means: everything a
+human can do that changes what's *in* the document, the project, or a pipeline job, plus
+everything they can *see* that isn't already covered by Phase 1's document/selection
+tools. Library browsing changes what's available to load. Running a pipeline stage
+changes what raster exists. Switching Edit↔Manage changes what an agent (or a human
+narrating an agent's work) is looking at. None of that is chrome — it's real state, same
+category as everything Phase 1 already covers.
+
+Net effect: **panel dock/float/shelve, toolbar customization, and theme are out of scope
+for this table.** If a demo/narration use case later wants an agent to literally drive
+panel layout (e.g. "open the Colour panel" as a recorded walkthrough step), that's a
+small, mechanical addition once this table's state-introspection tools exist — the
+registries (`window.__docks`'s panel state, `layout.js`'s bar arrangement) are already
+structured data, so it's a few more thin wrapper tools, not a redesign. Deliberately not
+building it into v1 on spec.
+
+### Tool vocabulary
+
+| Category | Tools | Maps to |
+|---|---|---|
+| **Library** | `hv_library_list` (rasters/vectors/canvases, filter/search), `hv_library_load` (place an item onto the canvas, or open a `.hv` project), `hv_library_info` (dimensions/size/path/element+colour counts) | `ui/library.js`, the Info panel's own data source |
+| **Pipeline** | `hv_pipeline_plan` (the Auto analyzer's classical read → proposed stages + *why*, no side effect), `hv_pipeline_configure` (set which stages are on + their params for a given raster's `data-hv-id`), `hv_pipeline_run` (foreground live-preview on one raster, or background job against the Library batch), `hv_job_status`/`hv_job_list`, `hv_job_cancel` | `tools/analyze.py` via `/api/plan`, `ui/processor.js`, `ui/jobs.js` |
+| **Document view** | `hv_get_view` (current tool, zoom/pan, Edit-vs-Manage mode), `hv_set_view_mode` (switch Edit↔Manage — a real navigation action, not chrome positioning), `hv_fit_view`, `hv_set_zoom` | `app.js` view-swap, `editor.fitToView`/viewport tools |
+| **Project/session** | `hv_open_project` (`.hv`, preserves history), `hv_save_project` | doc I/O beyond Phase 1's plain-SVG `hv_save` |
+
+### Explicitly deferred, not forgotten
+
+- **Theme** is a genuine borderline case under the scoping principle above — it's a
+  document-adjacent *preference*, not document content, so it's excluded by the same
+  logic as panel layout. Flagging rather than silently dropping: if the operator's
+  "UI-only features" phrasing was aimed partly at this (e.g. an agent setting up a
+  themed screenshot), it's a one-tool addition (`hv_set_theme`), not a scope fight.
+- **Settings beyond theme** (source folder, startup behaviour, smart-guides default) —
+  same reasoning, excluded for the same reason, flagged for the same reason.
+- Mobile/touch-shell-specific state (which form factor is active, rail contents) has no
+  agent-facing use I can construct — a CDP-attached agent isn't holding a phone. Not
+  listed above; revisit only if a concrete use case surfaces.
+
+Open question back to Ferryman/operator: does "full parity including UI-only features"
+mean the state/action table above, or does it deliberately want widget-level coverage
+too (e.g. for a literal screen-recording/narration product feature)? The table above is
+my read of what's actually useful; happy to add the widget layer if the answer is "yes,
+literally that too" — it's additive, not a rework.
 
 ## What "verify parity" means for either phase
 
@@ -143,12 +222,15 @@ the class of bug this bar exists to catch).
 - Exact `mcp` Python SDK version/dependency footprint, and whether it lands in the base
   `requirements.txt` or stays optional (matching the existing pattern for `uharfbuzz`
   etc. — optional capabilities the app degrades gracefully without).
-- Auth/consent model even for localhost: should a human get a one-time visible prompt
-  the first time an agent session attaches, or is "you already have the app-window open"
-  consent enough? Worth a security-conscious default even inside the desktop trust
-  boundary.
+- ~~Auth/consent model even for localhost~~ — answered in "Where it lives, how it
+  starts" above: an off-by-default "Allow agent access" toggle that also relaunches with
+  an ephemeral debug port, doubling as durable, visible consent (the status-bar badge
+  *is* the ongoing prompt).
 - Whether `hv_get_document` should return the live SVG text, a structured JSON node
   tree, or both — a tree is easier for an agent to reason about; raw SVG is ground truth.
 - Batching: does a multi-step illustration (like the fox) issue one tool call per shape,
   or does the vocabulary want a `hv_batch` tool that takes an ordered command list,
   cutting round-trip overhead for a long build sequence.
+- Raised in Phase 2+ above: does "full parity including UI-only features" mean
+  action/state parity (this doc's Phase 2+ table) or literal widget-level coverage
+  (panel dock/float, toolbar reorder, theme)? Needs the operator's or Ferryman's read.
