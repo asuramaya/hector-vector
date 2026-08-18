@@ -106,6 +106,9 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/capabilities":
             self.send_json(capabilities_info())
             return
+        if parsed.path == "/api/agent-access":
+            self.send_json(agent_access_info())
+            return
         if parsed.path == "/api/fonts/catalog":
             params = urllib.parse.parse_qs(parsed.query)
             try:
@@ -282,6 +285,8 @@ class Handler(SimpleHTTPRequestHandler):
                 result = reveal_path(payload)
             elif parsed.path == "/api/source":
                 result = set_source_dir_api(payload)
+            elif parsed.path == "/api/agent-access":
+                result = set_agent_access_api(payload)
             elif parsed.path == "/api/jobs/clear":
                 result = clear_finished_jobs()
             elif parsed.path == "/api/jobs/cancel":

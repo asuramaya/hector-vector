@@ -51,7 +51,7 @@ import {
 } from "./ui/modal.js";
 import {
   configureSettings, openAppSettings, openToolsSettings, loadVersion, versionInfo,
-  appSettingsOpen, setAppSettingsOpen, setPwaInstallPrompt,
+  appSettingsOpen, setAppSettingsOpen, setPwaInstallPrompt, initAgentAccessBadge,
 } from "./ui/settings.js";
 import { configureLayoutPicker, openLayoutPicker } from "./ui/layout-picker.js";
 import { setCustomizeHandler, refreshSheetTabs, showSheetTab } from "./ui/formfactor.js";
@@ -2900,6 +2900,7 @@ function syncDockContext() { if (window.__docks && window.__docks.syncContextual
 window.refillInfoContext = infoForCurrentContext;
 
 loadVersion();   // cache the version early so the About panel shows it instantly
+if (!CLOUD) initAgentAccessBadge();   // status-bar consent signal (docs/mcp-server.md)
 // Boot does NOT auto-install heavy deps anymore — that used to kick a Real-ESRGAN download +
 // a cargo build on every cold start with tools missing. Installs are deliberate now, from
 // Settings → "AI models & tools". refreshAll() still fetches tool status so the UI knows

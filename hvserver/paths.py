@@ -119,6 +119,22 @@ def set_source_dir(new_path: str) -> Path:
         _save_config(cfg)
     return path
 
+
+def agent_access_enabled() -> bool:
+    """The persisted "Allow agent access" preference (docs/mcp-server.md) — read by
+    launch.sh at startup to decide whether to open a CDP debug port. Off unless a human
+    has explicitly turned it on via Settings; the config key, not AGENT_PORT_FILE, is the
+    durable toggle (the port file only exists while a launched window actually holds one)."""
+    with _config_lock:
+        return bool(_load_config().get("agent_access"))
+
+
+def set_agent_access(enabled: bool) -> None:
+    with _config_lock:
+        cfg = _load_config()
+        cfg["agent_access"] = bool(enabled)
+        _save_config(cfg)
+
 REALESRGAN_RELEASE = (
     "https://github.com/xinntao/Real-ESRGAN/releases/download/"
     "v0.2.5.0/realesrgan-ncnn-vulkan-20220424-ubuntu.zip"

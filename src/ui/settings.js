@@ -65,6 +65,30 @@ export async function loadVersion() {
   try { versionInfo = { ...versionInfo, ...(await api("/api/version")) }; } catch {}
   return versionInfo;
 }
+
+// "Allow agent access" (docs/mcp-server.md) — off by default. `enabled` is the persisted
+// preference (launch.sh reads it at startup); `active` is whether THIS window actually
+// has a live CDP debug port open (only true after a restart with the preference on — see
+// hvserver/system.py's agent_access_info). Both are needed: a toggle just flipped on is
+// "enabled" but not yet "active" until the next restart, and the status-bar badge below
+// must reflect the live truth, not the preference.
+export let agentAccessInfo = null;
+export async function ensureAgentAccessInfo(force) {
+  if (agentAccessInfo && !force) return agentAccessInfo;
+  try { agentAccessInfo = await api("/api/agent-access"); }
+  catch { agentAccessInfo = { enabled: false, active: false }; }
+  return agentAccessInfo;
+}
+// Status-bar badge: a persistent, hard-to-miss "Agent access: on" indicator for as long
+// as a debug port is actually open — this doubles as the ongoing consent signal (the
+// badge IS the prompt, not a one-time dialog dismissed and forgotten). Called once at
+// boot (desktop only); the state only changes across a restart, so no polling needed.
+export async function initAgentAccessBadge() {
+  const badge = document.getElementById("agent-access-badge");
+  if (!badge) return;
+  const info = await ensureAgentAccessInfo();
+  badge.hidden = !info.active;
+}
 // General app settings: preferences that don't belong to the pipeline, plus the
 // install affordance and an About section. (The per-process backend "Settings"
 // form lives in the Process workspace.)
@@ -319,6 +343,32 @@ export function openAppSettings(opts = {}) {
   updWrap.appendChild(updBox);
   root.appendChild(updWrap);
   }   // !CLOUD (Updates)
+
+  // Agent access (docs/mcp-server.md) — desktop only, off by default. A CDP debug port is
+  // full control of the renderer, not just this document, so turning it on requires the
+  // same explicit opt-in any sensitive local capability does, and it only takes effect on
+  // the next restart (this app-window can't relaunch itself into a different Chromium
+  // process from inside the page — same reason "Update & restart" above doesn't auto-restart).
+  if (!CLOUD) {
+  root.appendChild(sectionTitle("Agent access"));
+  if (agentAccessInfo === null) {
+    const loading = document.createElement("div"); loading.className = "form-hint"; loading.textContent = "Checking agent access…";
+    root.appendChild(loading);
+    ensureAgentAccessInfo().then(() => { if (appSettingsOpen) openAppSettings(); });
+  } else {
+    const info = agentAccessInfo;
+    let hint = "Off. Lets a local MCP-connected agent (e.g. Claude) drive this document through the same commands a click does — full read/write access to whatever's open, only from this machine.";
+    if (info.enabled && info.active) hint = "On — this window has an open debug port for MCP tools. Turn off and restart to close it.";
+    else if (info.enabled && !info.active) hint = "On, but not yet live — restart hector-vector to open the debug port.";
+    root.appendChild(prefToggleRow("Allow agent access", info.enabled, async (checked) => {
+      try {
+        agentAccessInfo = await api("/api/agent-access", "POST", { enabled: checked });
+        setStatus(checked ? "Agent access enabled — restart hector-vector to apply." : "Agent access disabled — restart to fully close the debug port.", 4000);
+      } catch (e) { setStatus(e.message, 3000); }
+      if (appSettingsOpen) openAppSettings();
+    }, hint));
+  }
+  }   // !CLOUD (Agent access)
 
   // The guaranteed way in. Settings lives in the header menu, which is never itself customizable,
   // so this door can't be hidden away — it's the recovery path if you switch off something you

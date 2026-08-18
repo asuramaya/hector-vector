@@ -16,8 +16,8 @@ import svg_render   # noqa: E402  (cairosvg-availability probe for tool_status)
 from hvserver.paths import (
     APP_DIR, DEFAULT_SOURCE_DIR, INPUTS_DIR, OUTPUTS_DIR, WORKSPACE_DIR,
     VENV_DIR, VENV_PYTHON, REALESRGAN_BIN, VTRACER_BIN, APP_VERSION, GITHUB_REPO,
-    IMAGE_EXTENSIONS, source_dir, is_derivative_name, command_exists, shlex_quote,
-    rembg_installed, spandrel_installed,
+    IMAGE_EXTENSIONS, AGENT_PORT_FILE, source_dir, is_derivative_name, command_exists,
+    shlex_quote, rembg_installed, spandrel_installed, agent_access_enabled, set_agent_access,
 )
 from hvserver.files import discover_work_items
 from hvserver.jobs import has_running_job, launch_job
@@ -80,6 +80,25 @@ def tool_status() -> dict:
         "missing_tools": missing_tools,
         "work_items": [str(path) for path in discover_work_items()],
     }
+
+
+# ---------------------------------------------------------------------------
+# Agent access (docs/mcp-server.md) — the "Allow agent access" Settings toggle.
+# `enabled` is the persisted preference launch.sh reads at startup to decide whether to
+# open a CDP debug port; `active` is whether THIS running window actually has one (i.e.
+# whether AGENT_PORT_FILE currently exists — launch.sh is its sole writer, and clears it
+# on every launch where the preference is off, so a stale file can't outlive a restart).
+# Both are surfaced so the toggle can show "on, takes effect on restart" vs. "on and live".
+# ---------------------------------------------------------------------------
+def agent_access_info() -> dict:
+    return {"enabled": agent_access_enabled(), "active": AGENT_PORT_FILE.exists()}
+
+
+def set_agent_access_api(payload: dict) -> dict:
+    if "enabled" not in payload:
+        raise ValueError("Missing 'enabled'.")
+    set_agent_access(bool(payload["enabled"]))
+    return agent_access_info()
 
 
 # ---------------------------------------------------------------------------

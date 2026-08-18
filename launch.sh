@@ -64,6 +64,44 @@ case "$BROWSER" in
 esac
 mkdir -p "$PROFILE_DIR"
 
+# Agent access (docs/mcp-server.md): the "Allow agent access" Settings toggle persists
+# its choice server-side (.hector-config.json, read via hvserver.paths.agent_access_enabled)
+# rather than in this script, since it has to survive across relaunches and be readable
+# before the page itself has loaded. This script is the ONLY thing that opens (or closes) the
+# actual CDP debug port — off by default, so a bare launch never exposes one.
+AGENT_PORT_FILE="$HOME/.cache/hector-vector/agent-port"
+AGENT_FLAGS=()
+if python3 - <<'PY' 2>/dev/null
+import json, sys
+try:
+    cfg = json.load(open(".hector-config.json"))
+except Exception:
+    cfg = {}
+sys.exit(0 if cfg.get("agent_access") else 1)
+PY
+then
+  # A freshly-bound-then-released free port, not a fixed/guessable one (a real OS-assigned
+  # ephemeral port needs parsing Chromium's stderr for "DevTools listening on...", which
+  # `exec` below — deliberately still a plain process replacement, not a subshell — can't
+  # do; this bind-probe is the same idea with a small, accepted release/rebind race).
+  AGENT_PORT="$(python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+)"
+  mkdir -p "$(dirname "$AGENT_PORT_FILE")"
+  printf '%s' "$AGENT_PORT" > "$AGENT_PORT_FILE"
+  AGENT_FLAGS=(--remote-debugging-port="$AGENT_PORT")
+  echo "launch.sh: agent access ON — CDP debug port $AGENT_PORT (127.0.0.1 only, written to $AGENT_PORT_FILE)" >&2
+else
+  # Not enabled this launch — clear any file a prior agent-enabled session left behind so
+  # mcp_server.py's discovery never finds a port nothing is actually listening on anymore.
+  rm -f "$AGENT_PORT_FILE"
+fi
+
 exec "$BROWSER" \
   --app="$URL" \
   --user-data-dir="$PROFILE_DIR" \
@@ -72,4 +110,5 @@ exec "$BROWSER" \
   --ozone-platform-hint=auto \
   --enable-features=DesktopPWAsAdditionalWindowingControls \
   --window-size=1280,820 \
+  "${AGENT_FLAGS[@]}" \
   "$@"
