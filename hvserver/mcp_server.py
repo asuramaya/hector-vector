@@ -189,6 +189,7 @@ async def hv_create_shape(
         raise ValueError(f"kind must be one of {sorted(_SHAPE_KINDS)}, got {kind!r}")
     return await _eval(
         """(a) => {
+            editor.push('Create shape');
             const n = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             const id = 'n' + (++editor.idSeq);
             n.setAttribute('data-hv-id', id);
@@ -216,6 +217,7 @@ async def hv_set_shape_param(id: str, key: str, value: Any) -> dict:
         """(a) => {
             const n = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
             if (!n || !hv.isLiveShape(n)) return { ok: false, reason: 'not a live shape' };
+            editor.push('Shape param');
             hv.setShapeParam(n, a.key, a.value);
             editor._renderSelection(); editor._renderInspector();
             return { ok: true };
@@ -237,6 +239,7 @@ async def hv_apply_fill(ids: list[str], color: str | None) -> dict:
     return await _eval(
         """(a) => {
             editor.selection = new Set(a.ids); editor.artboardSelected = false;
+            editor.push('Apply fill');
             editor.applyPaint('fill', a.color == null ? { kind: 'none' } : { kind: 'solid', color: a.color });
             return { ok: true };
         }""",
@@ -263,6 +266,7 @@ async def hv_apply_gradient(
     return await _eval(
         """(a) => {
             editor.selection = new Set(a.ids); editor.artboardSelected = false;
+            editor.push('Apply gradient');
             for (const id of a.ids) {
                 editor.selection = new Set([id]);
                 editor.applyPaint('fill', { kind: 'gradient', spec: a.spec });

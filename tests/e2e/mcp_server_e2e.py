@@ -45,9 +45,9 @@ async def main() -> int:
 
             os.environ["HV_MCP_PORT"] = str(DEBUG_PORT)
             from hvserver.mcp_server import (
-                hv_apply_gradient, hv_boolean_op, hv_create_shape, hv_duplicate,
-                hv_export_svg, hv_get_document, hv_get_selection, hv_group, hv_move,
-                hv_pathfinder, hv_reflect, hv_select,
+                hv_apply_fill, hv_apply_gradient, hv_boolean_op, hv_create_shape,
+                hv_duplicate, hv_export_svg, hv_get_document, hv_get_selection, hv_group,
+                hv_move, hv_pathfinder, hv_reflect, hv_select, hv_set_shape_param,
             )
 
             # --- attach + read state -------------------------------------------------
@@ -63,9 +63,41 @@ async def main() -> int:
             sel = await hv_get_selection()
             check("hv_create_shape leaves the new shape selected", sel["ids"] == [id2], str(sel))
 
+            # --- undo history: every mutating tool must be a real undo step, or a human
+            # working alongside an agent gets silent history corruption (Halcyon's review
+            # of PR #9 caught 4 tools bypassing history entirely — this section is the
+            # regression test for that class of bug, not just "did the document change").
+            n_before_undo = len((await hv_get_document())["nodes"])
+            await page.evaluate("() => editor.undo()")
+            n_after_undo = len((await hv_get_document())["nodes"])
+            check(
+                "hv_create_shape is a real undo step",
+                n_after_undo == n_before_undo - 1, f"{n_before_undo} -> {n_after_undo}",
+            )
+            id2 = await hv_create_shape(kind="ellipse", x=70, y=20, w=100, h=100, fill="#cc3333")  # redo it for the rest of the run
+
             await hv_select([id1, id2])
             sel2 = await hv_get_selection()
             check("hv_select replaces the selection", set(sel2["ids"]) == {id1, id2}, str(sel2))
+
+            # --- fill + shape-param: both are real editor commands that must land as real
+            # undo steps too (the other half of the bug Halcyon's review found) ----------
+            n_before = len((await hv_get_document())["nodes"])
+            await hv_apply_fill(ids=[id1], color="#00ff00")
+            fill_now = next(n["fill"] for n in (await hv_get_document())["nodes"] if n["id"] == id1)
+            check("hv_apply_fill actually changes the fill", fill_now == "#00ff00", fill_now)
+            await page.evaluate("() => editor.undo()")
+            fill_after_undo = next(n["fill"] for n in (await hv_get_document())["nodes"] if n["id"] == id1)
+            check("hv_apply_fill is a real undo step", fill_after_undo == "#3366cc", fill_after_undo)
+
+            await hv_set_shape_param(id=id1, key="bw", value=250)
+            svg_wide = await hv_export_svg()
+            check("hv_set_shape_param changes the geometry", 'data-hv-bw="250"' in svg_wide, "")
+            await page.evaluate("() => editor.undo()")
+            svg_narrow = await hv_export_svg()
+            check("hv_set_shape_param is a real undo step", 'data-hv-bw="250"' not in svg_narrow, "")
+            n_after = len((await hv_get_document())["nodes"])
+            check("undo of fill/shape-param didn't lose or duplicate nodes", n_after == n_before, f"{n_before} -> {n_after}")
 
             # --- boolean op: verified against the same audit method the tools audit used,
             # not just "did it throw" -------------------------------------------------
@@ -82,6 +114,13 @@ async def main() -> int:
             svg = await hv_export_svg()
             check("hv_apply_gradient embeds a real radialGradient", "radialGradient" in svg, "")
             check("hv_export_svg returns the live document, not a stale cache", result in svg, "")
+            await page.evaluate("() => editor.undo()")
+            svg_after_undo = await hv_export_svg()
+            check("hv_apply_gradient is a real undo step", "radialGradient" not in svg_after_undo, "")
+            await hv_apply_gradient(  # redo it for the rest of the run
+                ids=[result], type="radial",
+                stops=[{"offset": 0, "color": "#ffcc88"}, {"offset": 1, "color": "#884400"}],
+            )
 
             # --- structure: duplicate -> reflect -> move -> group, each checked ---------
             id3 = await hv_create_shape(kind="poly", x=200, y=20, w=40, h=40, fill="#00ff00", params={"sides": 3})
