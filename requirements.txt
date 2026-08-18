@@ -13,6 +13,10 @@ fonttools[woff]>=4.40
 #   uharfbuzz                # browser-exact text shaping for Text → outlines (Arabic/Indic/RTL/
 #                            # marks). Without it the server falls back to Latin-grade GPOS/kern
 #                            # + GSUB ligatures and warns on complex scripts.
+#   mcp playwright           # hvserver/mcp_server.py — agent/human parity (docs/mcp-server.md).
+#                            # playwright is only used to ATTACH over CDP to an already-running
+#                            # tab (connect_over_cdp), never to launch a browser of its own, so
+#                            # the `playwright install` browser download is unnecessary here.
 #
 # External tools auto-install on first run (no pip needed):
 #   Real-ESRGAN NCNN Vulkan  -> downloaded from GitHub releases into ./tools
