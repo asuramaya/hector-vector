@@ -20,11 +20,14 @@ subprocess and talks to it over stdin/stdout, the standard MCP shape).
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
-from hvserver.paths import AGENT_PORT_FILE
+import json as _json
+
+from hvserver.paths import AGENT_PORT_FILE, OUTPUTS_DIR
 from hvserver.files import discover_work_items, work_item_record, work_item_info, list_outputs
-from hvserver.documents import list_projects
+from hvserver.documents import list_projects, save_hv
 
 try:
     from mcp.server.mcpserver import MCPServer
@@ -1671,6 +1674,118 @@ async def hv_set_zoom(zoom: float) -> dict:
         }""",
         {"zoom": zoom},
     )
+
+
+# ---------------------------------------------------------------------------
+# Library load + project I/O — Phase 2+ slice 2. Reads a .hv project's JSON straight
+# off disk (this process shares a filesystem with server.py, same reasoning as the
+# Library-browsing tools above) and hands its parts to the page; a raster/vector item
+# goes through the exact client functions a click already uses (window.app.selectedName,
+# mountStageFromText) so there's still one code path, just reached from Python instead
+# of a pointer event.
+# ---------------------------------------------------------------------------
+
+
+def _resolve_canvas_project(name: str) -> Path:
+    stem = Path(name).name
+    if not stem.lower().endswith(".hv"):
+        stem += ".hv"
+    target = (OUTPUTS_DIR / "canvas" / stem).resolve()
+    try:
+        target.relative_to((OUTPUTS_DIR / "canvas").resolve())
+    except ValueError:
+        raise ValueError(f"Project name resolves outside the canvas folder: {name!r}")
+    if not target.is_file():
+        raise ValueError(f"Project not found: {stem} (see hv_library_list(kind='canvas'))")
+    return target
+
+
+def _read_canvas_project(name: str) -> dict:
+    target = _resolve_canvas_project(name)
+    try:
+        data = _json.loads(target.read_text(encoding="utf-8"))
+    except _json.JSONDecodeError:
+        raise ValueError(f"{target.name} is not valid .hv JSON.")
+    if not isinstance(data.get("svg"), str) or "<svg" not in data["svg"].lower():
+        raise ValueError(f"{target.name} is missing valid svg markup.")
+    return data
+
+
+_OPEN_PROJECT_JS = """(a) => new Promise((resolve) => {
+    mountStageFromText(a.svg, a.name);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        editor.history = Array.isArray(a.history) ? a.history : [];
+        editor.redo = Array.isArray(a.redo) ? a.redo : [];
+        if (editor._renderHistory) editor._renderHistory();
+        if (editor._updateButtons) editor._updateButtons();
+        resolve({ name: a.name, historyLength: editor.history.length });
+    }));
+})"""
+
+
+@mcp.tool()
+async def hv_open_project(name: str) -> dict:
+    """Open a saved .hv project by name (from hv_library_list(kind='canvas')) — restores
+    the canvas markup AND its undo/redo history, same as clicking it in the Library's
+    Canvas tab. Replaces whatever's currently open."""
+    data = _read_canvas_project(name)
+    return await _eval(_OPEN_PROJECT_JS, {"svg": data["svg"], "name": name,
+                                           "history": data.get("history") or [],
+                                           "redo": data.get("redo") or []})
+
+
+@mcp.tool()
+async def hv_save_project(name: str, overwrite: bool = False) -> dict:
+    """Save the current document as a .hv project (markup + full undo history) under
+    `name`, into the Library's Canvas tab — same as File ▸ Save project. `overwrite=True`
+    replaces an existing project with the same name instead of auto-suffixing."""
+    doc = await _eval(
+        """() => ({
+            svg: editor._historyMarkup ? editor._historyMarkup() : editor.serialize(),
+            history: editor.history || [],
+            redo: editor.redo || [],
+        })"""
+    )
+    if not doc.get("svg"):
+        raise ValueError("Nothing to save — no document is open.")
+    return save_hv({"name": name, "svg": doc["svg"], "history": doc["history"],
+                     "redo": doc["redo"], "overwrite": overwrite})
+
+
+@mcp.tool()
+async def hv_library_load(name: str, source: str, folder: str | None = None) -> dict:
+    """Load a Library item by `name` and `source` (as returned by hv_library_list — one
+    of "raster"/"vector"/"canvas"). A raster becomes the active workspace item (same as
+    clicking it in the Library, ready for hv_pipeline_* once those exist); a vector output
+    opens as the live document (pass its `folder` from hv_library_list too); a canvas
+    opens as a full project (markup + history) — identical to hv_open_project."""
+    if source == "canvas":
+        return await hv_open_project(name)
+    if source == "raster":
+        return await _eval(
+            """(a) => {
+                window.app.selectedName = a.name;
+                window.app.manualOutputName = null;
+                return { ok: true, selectedName: a.name };
+            }""",
+            {"name": name},
+        )
+    if source == "vector":
+        target = (OUTPUTS_DIR / (folder or "") / Path(name).name).resolve()
+        try:
+            target.relative_to(OUTPUTS_DIR.resolve())
+        except ValueError:
+            raise ValueError(f"Item resolves outside the outputs folder: {name!r}")
+        if not target.is_file():
+            raise ValueError(f"Vector output not found: {name} (see hv_library_list(kind='vector'))")
+        if target.suffix.lower() != ".svg":
+            raise ValueError("hv_library_load(source='vector') only opens .svg outputs — a .png has nothing to edit as a document.")
+        svg_text = target.read_text(encoding="utf-8")
+        return await _eval(
+            """(a) => { mountStageFromText(a.svg, a.name); return { ok: true, name: a.name }; }""",
+            {"svg": svg_text, "name": name},
+        )
+    raise ValueError(f'source must be "raster", "vector", or "canvas", got {source!r}')
 
 
 if __name__ == "__main__":
