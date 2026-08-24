@@ -215,6 +215,52 @@ def resolve_source_url(url: str) -> Path | None:
     return None
 
 
+_TAGS_FILENAME = ".hector-library-tags.json"
+_tags_lock = threading.Lock()
+
+
+def _tags_path() -> Path:
+    return source_dir() / _TAGS_FILENAME
+
+
+def _load_tags() -> dict[str, list[str]]:
+    try:
+        return json.loads(_tags_path().read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_tags(data: dict[str, list[str]]) -> None:
+    _tags_path().write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def get_tags(name: str) -> list[str]:
+    with _tags_lock:
+        return list(_load_tags().get(name, []))
+
+
+def set_tags(name: str, add: list[str] | None = None, remove: list[str] | None = None) -> list[str]:
+    """Add/remove tags on a raster's sidecar tag file, dot-prefixed in source_dir so
+    discover_work_items() (extension-filtered) never picks it up as an image. Virtual
+    categorisation, not a physical move — the raster library stays a flat directory;
+    tags are the "folder" a caller filters hv_library_list by."""
+    with _tags_lock:
+        data = _load_tags()
+        cur = set(data.get(name, []))
+        for t in (add or []):
+            t = t.strip()
+            if t:
+                cur.add(t)
+        for t in (remove or []):
+            cur.discard(t.strip())
+        if cur:
+            data[name] = sorted(cur)
+        elif name in data:
+            del data[name]
+        _save_tags(data)
+        return data.get(name, [])
+
+
 def work_item_record(path: Path) -> dict:
     try:
         mtime = path.stat().st_mtime
@@ -227,6 +273,7 @@ def work_item_record(path: Path) -> dict:
         "origin": "source",
         "removable": True,
         "modified_at": mtime,
+        "tags": get_tags(path.name),
     }
 
 
@@ -509,6 +556,9 @@ def remove_work_item(payload: dict) -> dict:
         path.unlink()
     except OSError as exc:
         raise ValueError(f"Cannot remove {path.name}: {exc}")
+    existing = get_tags(path.name)
+    if existing:
+        set_tags(path.name, remove=list(existing))   # drop the orphaned tag entry
     return {"message": f"Removed {path.name}."}
 
 
@@ -544,6 +594,10 @@ def rename_work_item(payload: dict) -> dict:
         path.rename(target)
     except OSError as exc:
         raise ValueError(f"Cannot rename {path.name}: {exc}")
+    moved = get_tags(path.name)
+    if moved:
+        set_tags(path.name, remove=list(moved))
+        set_tags(target.name, add=moved)
     return {
         "name": target.name,
         "url": f"/work-items/{urllib.parse.quote(target.name)}",

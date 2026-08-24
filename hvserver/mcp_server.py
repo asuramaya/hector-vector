@@ -32,7 +32,7 @@ import json as _json
 from hvserver.paths import AGENT_PORT_FILE, OUTPUTS_DIR
 from hvserver.files import (
     discover_work_items, work_item_record, work_item_info, list_outputs,
-    rename_work_item, remove_work_item, rename_output, remove_output,
+    rename_work_item, remove_work_item, rename_output, remove_output, set_tags,
 )
 from hvserver.documents import list_projects, save_hv
 from hvserver.pipeline import plan_image, run_pipeline
@@ -1626,12 +1626,16 @@ _LIBRARY_KINDS = {"all", "raster", "vector", "canvas"}
 
 
 @mcp.tool()
-async def hv_library_list(kind: str = "all", q: str | None = None) -> list[dict]:
+async def hv_library_list(kind: str = "all", q: str | None = None, tag: str | None = None) -> list[dict]:
     """Browse the local Library: raster source images ("raster"), rendered vector/PNG
     outputs ("vector"), or saved .hv canvases ("canvas") — or "all" (default) for
-    everything. `q`, if given, filters by a case-insensitive substring of the name. Each
-    item carries `source` (which of the three it is) plus `name`/`url`/`modified_at`; use
-    hv_library_info for a raster's full dimensions/colour-profile detail."""
+    everything. `q`, if given, filters by a case-insensitive substring of the name.
+    `tag`, if given, filters rasters to ones carrying that exact tag (see
+    hv_library_tag) — the library has no real folders, so tags are the closest thing
+    to "browse by category"; non-raster items have no tags and are excluded when `tag`
+    is set. Each item carries `source` (which of the three it is) plus
+    `name`/`url`/`modified_at`, and rasters also carry `tags`; use hv_library_info for
+    a raster's full dimensions/colour-profile detail."""
     if kind not in _LIBRARY_KINDS:
         raise ValueError(f"kind must be one of {sorted(_LIBRARY_KINDS)}, got {kind!r}")
     items: list[dict] = []
@@ -1650,6 +1654,8 @@ async def hv_library_list(kind: str = "all", q: str | None = None) -> list[dict]
     if q:
         needle = q.lower()
         items = [it for it in items if needle in (it.get("name") or "").lower()]
+    if tag:
+        items = [it for it in items if tag in (it.get("tags") or [])]
     return items
 
 
@@ -1661,6 +1667,18 @@ async def hv_library_info(name: str) -> dict:
     outputs and .hv canvases have no equivalent metadata beyond what hv_library_list
     already returns."""
     return work_item_info(name)
+
+
+@mcp.tool()
+async def hv_library_tag(name: str, add: list[str] | None = None, remove: list[str] | None = None) -> list[str]:
+    """Add and/or remove tags on a raster source image — the Library's closest thing
+    to organizing-into-folders, since source_dir is a single flat directory with no
+    real folder structure. Stored in a sidecar `.hector-library-tags.json` in the
+    source folder (dot-prefixed, never picked up as an image itself); survives
+    hv_library_rename (tags move with the file) and is cleared on hv_library_remove.
+    Returns the raster's full tag list after the change. Filter by tag with
+    hv_library_list(tag=...)."""
+    return set_tags(name, add=add, remove=remove)
 
 
 @mcp.tool()
