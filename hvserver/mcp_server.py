@@ -291,22 +291,6 @@ async def hv_apply_fill(ids: list[str], color: str | None) -> dict:
 
 
 @mcp.tool()
-async def hv_apply_stroke(ids: list[str], color: str | None, width: float = 1.0) -> dict:
-    """Set a flat stroke colour + width on the given nodes, or pass color=null for no
-    stroke (width is ignored then). Solid-colour only, matching hv_apply_fill; for a
-    stroke gradient use hv_apply_stroke_gradient."""
-    return await _eval(
-        """(a) => {
-            editor.selection = new Set(a.ids); editor.artboardSelected = false;
-            editor.push('Apply stroke');
-            editor.applyStroke(a.color == null ? 'none' : a.color, a.color == null ? 0 : a.width);
-            return { ok: true };
-        }""",
-        {"ids": ids, "color": color, "width": width},
-    )
-
-
-@mcp.tool()
 async def hv_apply_gradient(
     ids: list[str], type: str, stops: list[dict],
     cx: float = 0.5, cy: float = 0.5, r: float = 0.5,
