@@ -64,9 +64,12 @@ GITHUB_REPO = "asuramaya/hector-vector"
 # URL path -> file on disk, relative to APP_DIR. The served files live in web/, but the URLs
 # they answer on are unchanged and must stay that way: /sw.js in particular has to be served
 # from the origin root or the service worker's scope silently shrinks to its own directory.
+# web/index.html is the marketing/landing page now (hector-vector.com root on Cloudflare Pages,
+# routed there by web/functions/_middleware.js) — the local desktop server has no such edge
+# routing, so it serves the editor itself (web/app.html) directly at "/".
 STATIC_FILES = {
-    "/": "web/index.html",
-    "/index.html": "web/index.html",
+    "/": "web/app.html",
+    "/app.html": "web/app.html",
     "/style.css": "web/style.css",
     "/manifest.webmanifest": "web/manifest.webmanifest",
     "/sw.js": "web/sw.js",

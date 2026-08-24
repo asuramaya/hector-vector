@@ -34,6 +34,7 @@
 
 ## Links
 
-- [Open the editor](https://hector-vector.com/): the vector editor itself. Start drawing in the browser.
-- [Browser vs desktop comparison](https://hector-vector.com/compare): what the free browser build does, and what the desktop app adds.
+- [Open the editor](https://app.hector-vector.com/): the vector editor itself. Start drawing in the browser.
+- [hector-vector.com](https://hector-vector.com/): the overview / landing page, including the browser vs desktop comparison table.
+- [Download the desktop app](https://hector-vector.com/download): setup instructions and the latest release.
 - [Source code (MIT)](https://github.com/asuramaya/hector-vector): the open-source repository.

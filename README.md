@@ -2,7 +2,7 @@
 
 **A real SVG vector editor that runs in your browser, with an AI raster→vector pipeline folded into the same canvas.** Draw and edit vectors, *or* drop in a raster and upscale → cut out → trace it in place. Nothing is uploaded. The browser build computes everything in the tab; the desktop build runs everything on your machine.
 
-### → **[hector-vector.com](https://hector-vector.com)**. Free, no install, no account. Open it and draw.
+### → **[app.hector-vector.com](https://app.hector-vector.com)**. Free, no install, no account. Open it and draw.
 
 `v1.3.0` · MIT · stdlib Python backend + dependency-free ES-module frontend · no build step
 
@@ -12,14 +12,14 @@ It began as a batch "image studio" and grew an editor, and now the canvas is the
 
 **Two ways to run it, one codebase:**
 
-| | **[hector-vector.com](https://hector-vector.com)** (browser) | **The desktop app** (this repo) |
+| | **[app.hector-vector.com](https://app.hector-vector.com)** (browser) | **The desktop app** (this repo) |
 |---|---|---|
 | | The complete vector toolset, free | Everything in the browser, plus… |
 | | Zero install · any browser · phone, tablet or laptop | The **AI image pipeline**: upscale, background removal, vectorize, restore |
 | | Open `.svg`, export SVG / PNG | Batch job queue · local Library · `.hv` projects with history |
 | | Nothing leaves the tab | 2000+ fonts, complex scripts, fully offline |
 
-The browser build is the *same editor*. It just can't run a 500 MB PyTorch model in a tab. [Full comparison →](https://hector-vector.com/compare)
+The browser build is the *same editor*. It just can't run a 500 MB PyTorch model in a tab. [Full comparison →](https://hector-vector.com/#compare)
 
 > **This README is the project's public status surface.** Jump to **[Features](#features)** for everything it does today, or **[Roadmap & status](#roadmap--status)** for what's shipped, in progress, and planned.
 
@@ -52,7 +52,7 @@ The same editor runs on a phone. Not a viewer, not a cut-down "mobile version":
 
 ## Quick start
 
-**In the browser, nothing to install:** open **[hector-vector.com](https://hector-vector.com)** and draw. Works on a phone or tablet too.
+**In the browser, nothing to install:** open **[app.hector-vector.com](https://app.hector-vector.com)** and draw. Works on a phone or tablet too.
 
 **On your machine, the full build with the AI pipeline:**
 
@@ -302,7 +302,7 @@ The deep research behind the pipeline picks (every category, the OSS state of th
 - [x] **Parametric live-links persist.** Warp / Blend / Repeat / Width / Envelope / Mesh / the fill stack / threaded text / text styles all stay live-editable across save and reopen, not baked to static geometry the moment you close the file.
 - [x] **Theme.** Light / Dark / Inverted / follow-the-system, with a curated highlight-colour picker.
 - [x] **Lean inspector.** Collapsible property groups (remembered) and one-shot object commands in a context-gated **Actions** menu (toolbar button **and** object right-click), with the Recolor editor reusing the dock Colour panel.
-- [x] **Free in the browser.** A serverless build of the same editor at **[hector-vector.com](https://hector-vector.com)** (Cloudflare Pages, `./scripts/deploy-cloud.sh`): the full vector toolset, no install, no account, nothing leaving the tab. Server-backed panels (Processor / Library / Jobs) gate behind a **[Get the desktop app](https://hector-vector.com/download)** CTA, which downloads the current tagged release straight from GitHub.
+- [x] **Free in the browser.** A serverless build of the same editor at **[app.hector-vector.com](https://app.hector-vector.com)** (Cloudflare Pages, `./scripts/deploy-cloud.sh`): the full vector toolset, no install, no account, nothing leaving the tab. Server-backed panels (Processor / Library / Jobs) gate behind a **[Get the desktop app](https://hector-vector.com/download)** CTA, which downloads the current tagged release straight from GitHub. `hector-vector.com` itself is the marketing/overview landing page; `app.hector-vector.com` is the editor — one Cloudflare Pages deployment, routed by hostname at the edge (`web/functions/_middleware.js`).
 - [x] **Touch & mobile.** A real phone/tablet shell: selection-aware contextual bars, a tabbed Panels sheet, its own landscape layout, press-and-hold → Actions, touch free-transform with 44px targets, and finger-draggable toolbar customization.
 - [x] **Self-contained SVG export.** Saves and exports bake placed-raster `<image href>`s to data-URIs, so the file is portable off your machine. Oversized rasters fall back to linked, under a byte cap.
 - [x] **PDF / EPS export.** Server-side, desktop build only: `cairosvg` renders the SVG to a real vector PDF (the one format the browser can't produce itself), and EPS goes one hop further through Ghostscript's `eps2write`. Text-on-a-path outlines correctly in both.
@@ -339,7 +339,7 @@ No build step anywhere. The frontend is hand-written ES modules, served as-is.
 - **`server.py`** is a backend on Python's stdlib `http.server`, with a threaded job queue and a JSON API (`/api/run/pipeline`, `/api/vectorize/engines`, `/api/raster-ops`, `/api/capabilities`, `/api/plan`, `/api/work-items`, `/api/install/*`, `/api/heartbeat`, …). It's a thin façade over the `hvserver/` package and is organized around pluggable registries: **vectorize engines** (`clean` / `vtracer` / `pixel`), **raster ops** (`upscale` / `removebg` / restoration), and a **capability registry** (outcome→model routing). Adding a model is a registry entry that surfaces in the UI automatically. A heartbeat watchdog spins the server down when the UI closes. No web framework.
 - **`engine.py`** holds classical mask/cutout image ops.
 - **`tools/`** holds the worker scripts: `pixelvec.py`, `svg_render.py`, `simplify_svg.py` (vector), `ai_cutout.py` (rembg), `upscale_spandrel.py`, `face_restore.py` + `detect_faces.py` (GFPGAN), `inpaint_lama.py` (object removal), and `analyze.py` (the offline analyzer behind the Auto plan). External binaries and weights land here, or in `./.venv`, or in `~/.u2net`, at runtime.
-- **The browser build is the same tree.** There is no separate cloud fork. `index.html` detects the deployed host and flips the app into **cloud mode**: the editor runs untouched, while the three server-backed panels (Processor / Library / Jobs) and the save/open paths swap to client-side equivalents (`src/ui/cloud-*.js`). `./scripts/deploy-cloud.sh` selects the runtime static files into `dist/` and ships them to Cloudflare Pages. Nothing is compiled. What you read in `src/` is what runs in production.
+- **The browser build is the same tree.** There is no separate cloud fork. `app.html` detects the deployed host and flips the app into **cloud mode**: the editor runs untouched, while the three server-backed panels (Processor / Library / Jobs) and the save/open paths swap to client-side equivalents (`src/ui/cloud-*.js`). `web/index.html` is a separate, static marketing/landing page (no app JS at all) served at `hector-vector.com`/`www.`; `web/functions/_middleware.js` is the one piece of edge logic in the whole deploy, and it only does host-based root routing (landing page vs. `app.html`) — everything else is static files. `./scripts/deploy-cloud.sh` selects the runtime static files into `dist/` and ships them to Cloudflare Pages. Nothing is compiled. What you read in `src/` is what runs in production.
 - Vector documents save as **`.hv` projects** under `outputs/canvas/`, and pipeline outputs under `outputs/<process>-<timestamp>/`. Your source images live in `inputs/`, or any folder you point the Library at.
 
 Contributions welcome; see [`CONTRIBUTING.md`](.github/CONTRIBUTING.md). The editor has a real-browser E2E suite (`tests/e2e/editor_e2e.py`) and a backend smoke suite (`tests/test_smoke.py`). The README screenshots are regenerated with `tests/e2e/screenshots.py`.

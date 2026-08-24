@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- viewport-fit=cover exposes env(safe-area-inset-*) for the notch + home indicator;
+         maximum-scale/user-scalable lock page zoom so pinching zooms the CANVAS, not the page
+         (the editor drives its own touch zoom — see src/ui/viewport.js). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <script>
+      // Deploy-target auto-detect (runs before the app module). On a Cloudflare Pages host
+      // (*.pages.dev) or the app subdomain, run the SERVERLESS build — pipeline / library /
+      // batch are gated behind a "download the desktop app" CTA. Local desktop (served from
+      // localhost by the Python app) stays the full app. Same file both ways, no build step.
+      // `?cloud` / `?nocloud` override for testing (handled in src/ui/env.js).
+      // Note: hector-vector.com/www. never load this file directly — web/functions/_middleware.js
+      // rewrites their root to index.html (the marketing landing page) at the edge; app.html only
+      // ever serves from app.hector-vector.com or a pages.dev preview.
+      (function () {
+        var h = location.hostname;
+        if (/\.pages\.dev$/.test(h) || h === "app.hector-vector.com") window.__HV_CLOUD__ = true;
+      })();
+      // Theme, BEFORE first paint. src/ui/theme.js owns this properly, but it is an ES module and so
+      // cannot run until the module graph resolves — by which time the browser has already painted a
+      // white page. On a dark theme that is a full-screen white flash on every single load, which is
+      // worse than having no dark theme at all. Twelve lines here buy one honest paint.
+      (function () {
+        try {
+          // Default is "system", not a hardcoded theme: a first-time visitor (or an embed, e.g.
+          // asuramaya.com's) should see the theme their OS/browser already asked for, not always
+          // light regardless. Once someone actually picks one, that stored choice wins forever.
+          var t = localStorage.getItem("hector-vector:theme") || "system";
+          if (t === "system") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          document.documentElement.setAttribute("data-theme", t);
+          var hl = localStorage.getItem("hector-vector:highlight");
+          if (hl) document.documentElement.style.setProperty("--accent", hl);
+        } catch (e) { /* private mode / no storage: matchMedia above still resolves the system pref */ }
+      })();
+    </script>
+    <title>hector-vector: free vector editor in your browser</title>
+
+    <!-- ── Crawler / answer-engine surface ─────────────────────────────────────────────
+         Static, so Google/Bing and AI answer engines (ChatGPT, Claude, Gemini, Perplexity)
+         can state plainly WHAT this is. See also /robots.txt and /llms.txt. -->
+    <meta name="description" content="hector-vector is a free, browser-based vector editor: pen & path tools, booleans and pathfinder, gradients, live effects, text with web fonts and text-to-outlines, and SVG/PNG export. No install, nothing leaves your browser. An open-source desktop app adds AI image processing (upscale, background removal, vectorize), batch, and a local library." />
+    <meta name="keywords" content="free vector editor, online SVG editor, browser vector graphics, free Illustrator alternative, edit SVG online, vectorize image, pen tool online, open source vector editor, SVG editor no download" />
+    <meta name="author" content="hector-vector" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <link rel="canonical" href="https://app.hector-vector.com/" />
+
+    <meta property="og:title" content="hector-vector: free vector editor in your browser" />
+    <meta property="og:description" content="A free, browser-based vector editor. Paths, booleans, gradients, effects, text-to-outlines, SVG/PNG export. No install, nothing leaves your browser. The open-source desktop app adds AI image processing and batch." />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="hector-vector" />
+    <meta property="og:url" content="https://app.hector-vector.com/" />
+    <meta property="og:image" content="https://hector-vector.com/assets/hv_logo.svg" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="hector-vector: free vector editor in your browser" />
+    <meta name="twitter:description" content="A free, browser-based vector editor. No install. The open-source desktop app adds AI image processing." />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "hector-vector",
+        "url": "https://app.hector-vector.com/",
+        "description": "hector-vector is a free, browser-based vector editor: pen and path tools, booleans and pathfinder, geometric stroker, gradients, patterns, live effects, clipping/opacity masks, blend, symbols, and text with web fonts and text-to-outlines, plus SVG/PNG export. It runs entirely in the browser, with no install, and nothing leaves the tab. An open-source desktop app adds AI image processing (upscale, background removal, vectorize/trace, restoration), batch, and a local library.",
+        "applicationCategory": "DesignApplication",
+        "applicationSubCategory": "Vector Graphics Editor",
+        "operatingSystem": "Web browser (Chrome, Edge, Safari, Firefox)",
+        "browserRequirements": "Requires a modern browser with SVG and ES modules",
+        "isAccessibleForFree": true,
+        "license": "https://opensource.org/licenses/MIT",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "featureList": [
+          "Pen, node, curvature and shape tools for drawing vector paths",
+          "Boolean operations and Pathfinder (divide, trim, merge, crop, minus-back)",
+          "Analytic geometric stroker, outline stroke, offset path, expand",
+          "Variable-width strokes, Shape Builder, scissors, knife, eraser",
+          "Blend, clipping and opacity masks, live effects (drop shadow, blur, glow)",
+          "Gradients, tiling pattern fills, and Recolor Artwork",
+          "Text with system and web fonts, and text-to-outlines",
+          "Place raster reference images to trace over",
+          "Open SVG and export SVG or PNG, entirely client-side",
+          "Open source (MIT); desktop app adds AI upscaling, background removal and image vectorization"
+        ]
+      }
+    </script>
+
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/assets/hv_logo.svg" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="application-name" content="hector-vector" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <!-- `booting`: the phone/landscape shells are composed by JS (ui/formfactor.js MOVES the real bars
+         into place, so every wired handler survives). That can't run until the modules parse, so the
+         browser would otherwise paint the authored DESKTOP layout first — the action bar across the
+         top, an extra strip under the canvas — and snap it into place a beat later. Hidden on touch
+         until the furniture has landed; layout.js drops the class, and the inline script below is the
+         backstop if layout.js ever fails to boot at all. -->
+    <main class="app editor booting">
+      <header class="topbar editor-bar">
+        <div class="panel-actions doc-actions-left">
+          <img class="brand-logo" src="/assets/hv_logo.svg" alt="hector-vector" title="hector-vector" />
+          <div class="menu" data-menu="file">
+            <!-- On a phone the brand logo is MOVED into this button and the glyph hides: the mark you
+                 already recognise becomes the way in, and the whole header row can go. -->
+            <button class="icon-btn menu-trigger" data-key="⇧F" type="button" aria-haspopup="true" aria-expanded="false" title="File — New / Open / Save / Export (Shift+F)"><span class="mt-glyph">≣</span></button>
+            <div class="menu-list" role="menu" hidden></div>
+          </div>
+          <!-- Layout customization lives on the frame itself now: right-click any toolbar's
+               blank space for the Layout menu (customize / profiles / reset). -->
+          <!-- Edit ⇄ Manage: two stations on one bench. Edit = the canvas workbench;
+               Manage borrows Library/Processor/Jobs into a roomy browse + batch surface. -->
+          <div class="view-swap" role="group" aria-label="View">
+            <button id="view-edit" class="view-tab active" type="button" aria-pressed="true" title="Edit — the canvas workbench">Edit</button>
+            <button id="view-manage" class="view-tab" type="button" aria-pressed="false" title="Manage — browse &amp; batch-process your library">Manage</button>
+          </div>
+          <!-- Cloud build only: the pipeline / library / batch live in the local desktop app. -->
+          <a id="get-desktop" class="get-desktop" href="/download" title="What the desktop app unlocks — AI upscaling, background removal, tracing, batch, and your local library">⤓ Get the desktop app</a>
+        </div>
+        <!-- the canvas name + current selection live in the header (frees the stage) -->
+        <span class="doc-title" title="Current document"><span id="output-label">Canvas</span><span id="sel-label" class="doc-sel"></span></span>
+        <!-- Shelf: closed/unused panels park here as squares (click to reopen). Lives in
+             the top-right header space; empty until a panel is closed. -->
+        <div class="panel-shelf" id="panel-shelf" role="toolbar" aria-label="Shelved panels"></div>
+      </header>
+
+      <section class="editor-grid">
+        <!-- Left dock: leftmost column, empty until a panel is docked here (drag a panel's
+             header over it). Hidden from the grid when empty. -->
+        <aside class="leftdock" id="leftdock" aria-label="Left dock">
+          <div class="dock-resizer dock-resizer-l" id="leftdock-resizer" title="Drag to resize"></div>
+        </aside>
+        <!-- Phone-only quick bar. Empty in the markup on purpose: app.js MOVES the real
+             undo/redo + zoom/fit buttons in here on a phone (and back out again above 620px),
+             so every id-wired handler survives instead of being duplicated. -->
+        <nav class="mobilebar" id="mobile-top" role="toolbar" aria-label="Quick actions"></nav>
+        <nav class="toolstrip" role="toolbar" aria-label="Tools">
+          <button class="tool-button tool-primary active" data-tool="select" data-key="V" type="button" title="Select / Move (V) — drag empty space to marquee (Alt = lasso) · Ctrl+T scale · Ctrl+R rotate">▣</button>
+          <button class="tool-button tool-primary" data-tool="node" data-key="A" type="button" title="Edit points (A) — anchors &amp; handles">✥</button>
+          <span class="tool-sep" aria-hidden="true"></span>
+          <button class="tool-button" data-tool="pen" data-key="P" type="button" title="Pen — click to add points (P)">✒</button>
+          <button class="tool-button" data-tool="curvature" data-key="C" type="button" title="Curvature — click to drop auto-smooth points (C)">⌒</button>
+          <span class="tool-sep" aria-hidden="true"></span>
+          <button class="tool-button" data-tool="rect" data-key="R" type="button" title="Rectangle (R)">▭</button>
+          <button class="tool-button" data-tool="ellipse" data-key="E" type="button" title="Ellipse (E)">◯</button>
+          <button class="tool-button" data-tool="line" data-key="L" type="button" title="Line (L)">╱</button>
+          <span class="tool-sep" aria-hidden="true"></span>
+          <button class="tool-button" data-tool="text" data-key="T" type="button" title="Text (T) — click to place, type, Esc to finish">T</button>
+          <span class="tool-sep" aria-hidden="true"></span>
+          <button class="tool-button" data-tool="artboard" data-key="⇧O" type="button" title="Artboard (Shift+O) — drag on the canvas to add one, sized and placed exactly there">▤</button>
+        </nav>
+
+        <article class="stage-wrap preview-panel" data-tool="select">
+          <!-- arrange/structure controls for the selection, across the top of the canvas -->
+          <nav class="stage-toolbar" role="toolbar" aria-label="Arrange">
+            <button id="layer-front" class="tool-button" type="button" title="Bring to front (Ctrl/Cmd+Shift+])" disabled>⤒</button>
+            <button id="layer-forward" class="tool-button" type="button" title="Bring forward (Ctrl/Cmd+])" disabled>↑</button>
+            <button id="layer-backward" class="tool-button" type="button" title="Send backward (Ctrl/Cmd+[)" disabled>↓</button>
+            <button id="layer-back" class="tool-button" type="button" title="Send to back (Ctrl/Cmd+Shift+[)" disabled>⤓</button>
+            <span class="tool-vsep" aria-hidden="true"></span>
+            <button id="layer-group" class="tool-button" data-key="⌘G" type="button" title="Group (Ctrl/Cmd+G)" disabled>⊞</button>
+            <button id="layer-ungroup" class="tool-button" type="button" title="Ungroup (Ctrl/Cmd+Shift+G)" disabled>⊟</button>
+            <button class="tool-button" id="act-clip" type="button" title="Make clipping mask (Ctrl/Cmd+7) — top object clips the rest" disabled>⛶</button>
+            <button class="tool-button" id="act-duplicate" data-key="⌘D" type="button" title="Duplicate (Ctrl/Cmd+D)" disabled>⧉⁺</button>
+            <span class="tool-vsep" aria-hidden="true"></span>
+            <button id="layer-rename" class="tool-button" type="button" title="Rename selected object" disabled>✎</button>
+            <button id="layer-delete" class="tool-button" data-key="⌫" type="button" title="Delete (Del / Backspace)" disabled>✕</button>
+          </nav>
+          <div class="stage-body">
+            <div id="rulers" class="rulers" hidden aria-hidden="true">
+              <div class="ruler-corner"></div>
+              <canvas class="ruler ruler-h"></canvas>
+              <canvas class="ruler ruler-v"></canvas>
+            </div>
+            <div id="output-preview" class="preview-frame empty-frame">Import or open a vector to start.</div>
+            <!-- Fill (primary) / stroke (secondary) swatches: float in the canvas's
+                 inner bottom-right corner (so all four picture-frame bezels stay
+                 identical). Reflect the selection or the default for new shapes. -->
+            <div class="tool-swatches" id="tool-swatches">
+              <button class="swatch swatch-fill" id="swatch-fill" type="button" title="Fill — click to set the fill colour"></button>
+              <button class="swatch swatch-stroke" id="swatch-stroke" type="button" title="Stroke — click to set the stroke colour"></button>
+              <button class="swatch-swap" id="swatch-swap" data-key="⇧X" type="button" title="Swap fill / stroke (Shift+X)">⇄</button>
+              <input type="color" id="swatch-color-input" hidden />
+            </div>
+          </div>
+          <div class="panel-foot">
+            <!-- Navigation + canvas-level controls (object controls are on the side bars). -->
+            <div class="panel-actions viewport-controls">
+              <button class="tool-button" data-vp="output" data-action="zoom-out" data-key="−" type="button" title="Zoom out (-)">−</button>
+              <button class="tool-button" data-vp="output" data-action="fit" data-key="F" type="button" title="Fit to view (f)">⤢</button>
+              <button class="tool-button" data-vp="output" data-action="actual" data-key="0" type="button" title="Actual size (0)">1:1</button>
+              <button class="tool-button" data-vp="output" data-action="zoom-in" data-key="+" type="button" title="Zoom in (+)">+</button>
+              <span class="vp-sep" aria-hidden="true"></span>
+              <button id="vp-selectall" class="tool-button" data-key="⌘A" type="button" title="Select all objects (Ctrl/Cmd+A)">▦</button>
+              <button id="vp-rulers" class="tool-button" type="button" title="Rulers — show measurement rulers" aria-pressed="false">⊢</button>
+              <button id="vp-guides" class="tool-button" type="button" title="Smart guides — snap to other objects' edges &amp; centres" aria-pressed="false">⊹</button>
+              <span class="vp-sep" aria-hidden="true"></span>
+              <!-- Free transform. These were keyboard-only doors: scale was Ctrl+T and rotate had no
+                   binding AT ALL (Ctrl+R went to the rulers) — so on a phone neither existed, and on a
+                   desktop rotate never had. The handles always worked with a finger; there was simply no
+                   way in. They TOGGLE, because a phone has no Esc to get back out with. -->
+              <button class="tool-button" id="act-scale" data-key="⌘T" type="button" title="Scale — drag the box handles (Ctrl/Cmd+T)" disabled>⇲</button>
+              <button class="tool-button" id="act-rotate" type="button" title="Rotate — drag the corner handles" disabled>⟳</button>
+              <span class="vp-sep" aria-hidden="true"></span>
+              <button class="tool-button" id="act-rotate-cw" type="button" title="Rotate 90° clockwise">↻</button>
+              <button class="tool-button" id="act-rotate-ccw" type="button" title="Rotate 90° counter-clockwise">↺</button>
+              <button class="tool-button" id="act-flip-h" type="button" title="Flip horizontal">⇄</button>
+              <button class="tool-button" id="act-flip-v" type="button" title="Flip vertical">⇅</button>
+            </div>
+          </div>
+        </article>
+
+        <nav class="actionbar" role="toolbar" aria-label="Object actions">
+          <button class="tool-button" data-tool="width" data-key="W" type="button" title="Width (W) — drag a stroke perpendicular to swell/pinch it (Alt = one side)">⊳</button>
+          <button class="tool-button" data-tool="envelope" data-key="⇧W" type="button" title="Envelope (Shift+W) — drag any grid point to bend everything inside it">▦</button>
+          <button class="tool-button" data-tool="mesh" data-key="U" type="button" title="Gradient mesh (U) — drag any grid point to warp the colour field">▧</button>
+          <span class="tool-sep" aria-hidden="true"></span>
+          <button class="tool-button" data-tool="shapebuilder" data-key="⇧M" type="button" title="Shape Builder (Shift+M) — paint across overlapping selected shapes to merge regions (Alt removes)">◳</button>
+          <button class="tool-button" data-tool="scissors" data-key="⇧C" type="button" title="Scissors (Shift+C) — click a path to cut it">✄</button>
+          <button class="tool-button" data-tool="knife" data-key="⇧K" type="button" title="Knife (Shift+K) — drag across shapes to cut (Alt = straight)">⚔</button>
+          <button class="tool-button" data-tool="eraser" data-key="⇧E" type="button" title="Eraser (Shift+E) — drag over filled shapes to erase ( [ / ] resize )">⌫</button>
+          <span class="tool-sep" aria-hidden="true"></span>
+          <button class="tool-button" id="act-union" type="button" title="Unite — combine shapes" disabled>∪</button>
+          <button class="tool-button" id="act-subtract" type="button" title="Subtract front from back" disabled>−</button>
+          <button class="tool-button" id="act-intersect" type="button" title="Intersect — keep the overlap" disabled>∩</button>
+          <span class="tool-sep" aria-hidden="true"></span>
+          <button class="tool-button" data-tool="blend" data-key="B" type="button" title="Blend (B) — click two shapes, one after another, to blend between them">◐</button>
+          <span class="tool-sep" aria-hidden="true"></span>
+          <!-- Cut/Copy/Paste stay HERE, not on the arrange bar with the rest of Structure — the arrange
+               bar is selection-gated on mobile (composeShell in formfactor.js merges Scale/Rotate/
+               booleans/Duplicate into it, but deliberately leaves Cut/Copy/Paste out: Paste has to work
+               with NOTHING selected). This is the one rail that's never selection-gated on any shell, so
+               it's the only safe home for them once they're no longer allowed to be a keyboard-only menu. -->
+          <button class="tool-button" id="act-cut" data-key="⌘X" type="button" title="Cut (Ctrl/Cmd+X)" disabled>✂</button>
+          <button class="tool-button" id="act-copy" data-key="⌘C" type="button" title="Copy (Ctrl/Cmd+C)" disabled>⧉</button>
+          <button class="tool-button" id="act-paste" data-key="⌘V" type="button" title="Paste (Ctrl/Cmd+V)" disabled>❏</button>
+        </nav>
+
+        <aside class="rightdock" id="rightdock">
+          <div class="dock-resizer" id="dock-resizer" title="Drag to resize"></div>
+          <div class="rail-section history" data-section="history">
+            <div class="panel-head section-head">
+              <span class="caret" title="History — collapse / expand">▾</span><span class="sec-label">History</span><span class="sec-count" id="history-count"></span>
+              <div class="panel-actions">
+                <button id="undo-button" class="tool-button" type="button" title="Undo (Ctrl/Cmd+Z)" disabled>↶</button>
+                <button id="redo-button" class="tool-button" type="button" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>↷</button>
+              </div>
+            </div>
+            <div id="history-list" class="history-list section-body"></div>
+          </div>
+          <div class="dock-vresizer" id="dock-vresizer" title="Drag to resize History / Layers"></div>
+          <div class="rail-section layers" data-section="layers">
+            <div class="panel-head section-head">
+              <span class="caret" title="Layers — collapse / expand">▾</span><span class="sec-label">Layers</span><span class="sec-count" id="layers-count"></span>
+              <div class="panel-actions">
+                <button id="layer-cleanup" class="tool-button" type="button" title="Clean up ghost layers" disabled>⊘</button>
+                <button id="layer-merge" class="tool-button" type="button" title="Merge same-colour layers" disabled>⊎</button>
+              </div>
+            </div>
+            <div id="layers-list" class="layers-list section-body"></div>
+            <div id="layers-foot" class="layers-foot"></div>
+          </div>
+          <!-- Symbols (Epic Y): a browsable library of reusable masters — click a tile to
+               place a new instance, drag it onto the canvas to place it exactly there. -->
+          <div class="rail-section symbols" data-section="symbols">
+            <div class="panel-head section-head">
+              <span class="caret" title="Symbols — collapse / expand">▾</span><span class="sec-label">Symbols</span><span class="sec-count" id="symbols-count"></span>
+              <div class="panel-actions">
+                <button id="symbols-add" class="tool-button" type="button" title="Make a symbol from the current selection (F8)">⊕</button>
+              </div>
+            </div>
+            <div id="symbols-list" class="symbols-list section-body"></div>
+          </div>
+          <!-- Library: the image gallery, now a first-class dockable panel (drag the
+               header to float/redock). Replaces the gallery trapped in the Process view —
+               first step of dissolving Q into composable panels. -->
+          <div class="rail-section library" data-section="library">
+            <div class="panel-head section-head">
+              <span class="caret" title="Library — collapse / expand">▾</span><span class="sec-label">Library</span><span class="sec-count" id="library-count"></span>
+              <div class="panel-actions">
+                <button id="library-add" class="tool-button" type="button" title="Add images to the library">⊕</button>
+              </div>
+            </div>
+            <div id="library-list" class="library-list section-body"></div>
+            <!-- Chin: filter (≈2/3) + C/R/V source toggle (canvas / raster / vector). -->
+            <div id="library-chin" class="library-chin">
+              <div class="lib-sort" role="group" aria-label="Sort">
+                <button class="lib-sort-dir" data-dir="asc" type="button" title="Sort ascending">↑</button>
+                <button class="lib-sort-dir" data-dir="desc" type="button" title="Sort descending">↓</button>
+                <button id="library-sortkey" class="lib-sort-key" type="button" title="Sort by — click to change (Name / Date)">N</button>
+              </div>
+              <input id="library-filter" class="modal-search library-filter" type="search" placeholder="Filter…" />
+              <div class="lib-mode-btns" role="group" aria-label="Library source">
+                <button class="lib-mode" data-mode="canvas" type="button" title="Canvas — saved .hv projects">C</button>
+                <button class="lib-mode" data-mode="raster" type="button" title="Raster — input images">R</button>
+                <button class="lib-mode" data-mode="vector" type="button" title="Vector — output vectors">V</button>
+              </div>
+            </div>
+          </div>
+          <!-- Processor: the image→vector pipeline as a vertical flow rail (Upscale →
+               Remove BG → Vectorize) — toggle/reorder stages, expand for settings,
+               live-preview the selected raster, Run. Lifts the pipeline out of the
+               cramped raster Properties panel into its own composable dock. -->
+          <div class="rail-section processor" data-section="processor">
+            <div class="panel-head section-head">
+              <span class="caret" title="Processor — collapse / expand">▾</span><span class="sec-label">Processor</span><span class="sec-count" id="processor-out"></span>
+              <div class="panel-actions">
+                <button id="processor-run" class="tool-button" type="button" title="Run the pipeline → canvas" disabled>▸</button>
+              </div>
+            </div>
+            <div id="processor-body" class="processor-body section-body"></div>
+            <!-- Chin: the Run action (+ a Load-to-preview affordance), pinned below the
+                 scrolling stage list — the standard panel chin (ink top-border). -->
+            <div id="processor-chin" class="processor-chin"></div>
+          </div>
+          <!-- Jobs: the batch queue, now a dockable panel so it's visible in the Edit
+               view alongside the canvas (step toward dissolving the Process view). -->
+          <div class="rail-section jobs" data-section="jobs">
+            <div class="panel-head section-head">
+              <span class="caret" title="Jobs — collapse / expand">▾</span><span class="sec-label">Jobs</span><span class="sec-count" id="jobs-count"></span>
+              <div class="panel-actions">
+                <button id="jobs-cancel-all" class="tool-button" type="button" title="Cancel all queued jobs" disabled>⊗</button>
+                <button id="jobs-clear" class="tool-button" type="button" title="Clear finished jobs" disabled>⌦</button>
+              </div>
+            </div>
+            <div id="jobs-list" class="jobs-list section-body"></div>
+          </div>
+        </aside>
+      </section>
+
+      <!-- Mobile only (shown by CSS on coarse-pointer / narrow screens): floats over the
+           canvas to slide the right dock up as a bottom sheet; the scrim dismisses it. -->
+      <button id="mobile-panels" class="mobile-fab" type="button" aria-label="Panels" aria-expanded="false" title="Panels — Properties, Colour, Layers, History"><img class="brand-logo" src="/assets/hv_logo.svg" alt="" aria-hidden="true" /></button>
+      <div id="mobile-scrim" class="mobile-scrim" aria-hidden="true"></div>
+
+      <!-- The standalone Process view was dissolved into dock panels: Library (pick an
+           image) → Processor (compose + run the pipeline) → Jobs (watch). -->
+
+      <!-- Manage screen: the A-side of the Edit/Manage swap. Empty until you switch to it —
+           manage.js borrows the Library / Processor / Jobs sections out of the right dock and
+           reparents them here for a roomy browse + batch-process surface, then hands them back
+           on return to Edit. Hidden via CSS (.app:not(.manage) .manage-grid { display:none }). -->
+      <section class="manage-grid" aria-label="Manage — browse &amp; batch-process"></section>
+
+      <!-- Hidden file inputs: Add images (raster import) + File ▸ Open from file (svg). -->
+      <input id="file-input" type="file" accept="image/*" multiple hidden />
+      <input id="open-file-input" type="file" accept=".svg,image/svg+xml" hidden />
+
+      <footer class="status-bar">
+        <div id="status-text">Ready.</div>
+        <div id="status-progress" class="status-progress" hidden>
+          <div class="status-progress-track"><div id="status-progress-bar" class="status-progress-bar"></div></div>
+          <span id="status-progress-label" class="status-progress-label"></span>
+        </div>
+        <span id="agent-access-badge" class="agent-access-badge" hidden title="A local MCP-connected agent (e.g. Claude) can drive this document — turn off in Settings → Agent access">Agent access: on</span>
+        <div class="status-tools" role="toolbar" aria-label="View">
+          <button id="palette-button" class="bar-btn" type="button" title="Find a command (Ctrl+K) — type what you want to do">⌕</button>
+          <button id="shortcut-button" class="bar-btn" type="button" title="Help">?</button>
+          <button id="rail-toggle" class="bar-btn" type="button" title="Hide side panels">◫</button>
+        </div>
+      </footer>
+    </main>
+
+    <div id="modal-root" class="modal-root" hidden>
+      <div class="modal-backdrop" data-modal-close></div>
+      <div class="modal-window">
+        <header class="panel-head">
+          <span id="modal-title">Browse</span>
+          <div class="panel-actions">
+            <input id="modal-search" class="modal-search" type="search" placeholder="Filter…" hidden />
+            <button class="ghost-button" type="button" data-modal-close>Close</button>
+          </div>
+        </header>
+        <div id="modal-body" class="modal-body"></div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/app.js"></script>
+    <!-- Backstop for `booting` (see <main>). layout.js drops the class the moment the shell is
+         composed; if it ever throws before that — a module that fails to parse, a bad deploy — this
+         guarantees the user sees a broken app rather than a blank white screen. Never let a cosmetic
+         guard become the thing that hides a real failure. -->
+    <script>setTimeout(function () { var a = document.querySelector("main.app"); if (a) a.classList.remove("booting"); }, 2500);</script>
+  </body>
+</html>
