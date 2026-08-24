@@ -643,7 +643,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
         bar.append(done, lab); hostEl.appendChild(bar);
         const pickerHost = document.createElement("div"); pickerHost.className = "cp-recolor-host"; hostEl.appendChild(pickerHost);
         colorCtl = openColorPicker({ title: "Mesh point", host: pickerHost, color: spec.colors[row][col], allowNone: false,
-          onChange: (h) => editor.setMeshColor(g, row, col, h || spec.colors[row][col]) });
+          onChange: (h) => { if (!coalescing) { editor.beginCoalesce(); coalescing = true; } editor.setMeshColor(g, row, col, h || spec.colors[row][col]); scheduleColorCommit(); } });
         return;
       }
       editor._meshPointTarget = null;
@@ -664,7 +664,7 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
         bar.append(done, lab); hostEl.appendChild(bar);
         const pickerHost = document.createElement("div"); pickerHost.className = "cp-recolor-host"; hostEl.appendChild(pickerHost);
         colorCtl = openColorPicker({ title: "Fill layer", host: pickerHost, color: layers[index].fill, alpha: layers[index].opacity, allowNone: false,
-          onChange: (h, a) => editor.setFillLayer(g, index, { fill: h || layers[index].fill, opacity: a }) });
+          onChange: (h, a) => { if (!coalescing) { editor.beginCoalesce(); coalescing = true; } editor.setFillLayer(g, index, { fill: h || layers[index].fill, opacity: a }); scheduleColorCommit(); } });
         return;
       }
       editor._fillLayerTarget = null;
