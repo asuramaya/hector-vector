@@ -46,11 +46,13 @@ async def main() -> int:
             os.environ["HV_MCP_PORT"] = str(DEBUG_PORT)
             from hvserver.mcp_server import (
                 hv_apply_fill, hv_apply_gradient, hv_boolean_op, hv_create_shape,
-                hv_align, hv_break_symbol_link, hv_create_text, hv_distribute,
-                hv_duplicate, hv_export_svg, hv_get_document, hv_get_selection, hv_group,
-                hv_list_symbols, hv_make_symbol, hv_move, hv_pathfinder,
-                hv_place_symbol_instance, hv_reflect, hv_select, hv_set_shape_param,
-                hv_set_text_box, hv_set_text_content, hv_set_text_style,
+                hv_add_fill_layer, hv_align, hv_break_symbol_link, hv_create_text,
+                hv_distribute, hv_duplicate, hv_expand_multi_fill, hv_export_svg,
+                hv_get_document, hv_get_fill_layers, hv_get_selection, hv_group,
+                hv_list_symbols, hv_make_multi_fill, hv_make_symbol, hv_move,
+                hv_move_fill_layer, hv_pathfinder, hv_place_symbol_instance,
+                hv_reflect, hv_remove_fill_layer, hv_select, hv_set_fill_layer,
+                hv_set_shape_param, hv_set_text_box, hv_set_text_content, hv_set_text_style,
             )
 
             # --- attach + read state -------------------------------------------------
@@ -230,6 +232,38 @@ async def main() -> int:
             doc_s3 = await hv_get_document()
             check("hv_break_symbol_link replaces the instance with an independent group", any(n["id"] == grp and n["tag"] == "g" for n in doc_s3["nodes"]) and not any(n["id"] == inst2 for n in doc_s3["nodes"]), str(doc_s3["nodes"]))
             check("hv_break_symbol_link leaves the OTHER instance (inst1) untouched", any(n["id"] == inst1 for n in doc_s3["nodes"]), str(doc_s3["nodes"]))
+
+            # --- multi-fill / appearance --------------------------------------------------
+            fa = await hv_create_shape(kind="rect", x=600, y=200, w=60, h=60, fill="#00aa00")
+            stack = await hv_make_multi_fill(id=fa)
+            layers0 = await hv_get_fill_layers(id=stack)
+            check("hv_make_multi_fill creates a 2-layer stack", layers0 is not None and len(layers0) == 2, str(layers0))
+
+            await hv_add_fill_layer(id=stack)
+            layers1 = await hv_get_fill_layers(id=stack)
+            check("hv_add_fill_layer grows the stack to 3", len(layers1) == 3, str(layers1))
+
+            n_before_fill_undo = len((await hv_get_document())["nodes"])
+            await hv_set_fill_layer(id=stack, index=1, fill="#ff00ff", opacity=0.5)
+            layers2 = await hv_get_fill_layers(id=stack)
+            check("hv_set_fill_layer changes exactly the targeted layer", layers2[1]["fill"] == "#ff00ff" and abs(layers2[1]["opacity"] - 0.5) < 0.01 and layers2[0] == layers1[0], str(layers2))
+            await page.evaluate("() => editor.undo()")
+            layers2_undo = await hv_get_fill_layers(id=stack)
+            check("hv_set_fill_layer is a real undo step", layers2_undo[1]["fill"] != "#ff00ff", str(layers2_undo))
+            await hv_set_fill_layer(id=stack, index=1, fill="#ff00ff", opacity=0.5)  # redo for the rest of the run
+            check("no extra top-level nodes leaked from the fill-layer undo/redo", len((await hv_get_document())["nodes"]) == n_before_fill_undo, "")
+
+            await hv_move_fill_layer(id=stack, index=1, direction="up")
+            layers3 = await hv_get_fill_layers(id=stack)
+            check("hv_move_fill_layer(up) swaps layer 1 to the top", layers3[2]["fill"] == "#ff00ff", str(layers3))
+
+            await hv_remove_fill_layer(id=stack, index=0)
+            layers4 = await hv_get_fill_layers(id=stack)
+            check("hv_remove_fill_layer shrinks the stack", len(layers4) == 2, str(layers4))
+
+            await hv_expand_multi_fill(id=stack)
+            doc_mf = await hv_get_document()
+            check("hv_expand_multi_fill drops the multi-fill group (no longer a stack)", (await hv_get_fill_layers(id=stack)) is None, str(doc_mf["nodes"]))
 
             # --- pathfinder: region-correctness via isPointInFill, same bar the tools
             # audit itself used (this test would have caught the invert-space resolution

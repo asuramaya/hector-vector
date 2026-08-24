@@ -643,6 +643,129 @@ async def hv_place_symbol_instance(symbol_id: str, x: float | None = None, y: fl
 
 
 # ---------------------------------------------------------------------------
+# Multi-fill / Appearance — an ordered stack of fill layers on one shape (widget-parity
+# scope, decision a542832a), fills-only per this app's own scoped v1 (no strokes/blend
+# modes/per-layer effects yet — see multifill.js's own comment). setFillLayer is wrapped
+# with an explicit editor.push() here: the underlying method itself doesn't take history
+# (the live colour-picker caller doesn't coalesce it either — a pre-existing gap outside
+# this tool's own scope, flagged to Halcyon rather than silently patched in their lane),
+# so a single MCP call stays a single real undo step regardless.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def hv_make_multi_fill(id: str) -> str:
+    """Turn one filled shape into a 2-layer fill stack (Illustrator's Appearance panel,
+    fills only) — the current fill duplicated into both layers. Returns the new group's
+    id. Add/reorder/edit layers with the other hv_*_fill_layer tools."""
+    return await _eval(
+        """(a) => {
+            editor.selection = new Set([a.id]); editor.artboardSelected = false;
+            editor.makeMultiFill();
+            return [...editor.selection][0] || null;
+        }""",
+        {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_get_fill_layers(id: str) -> list[dict] | None:
+    """The ordered fill-layer stack on a multi-fill group (index 0 = bottom/first-painted).
+    Each entry is {"fill": "#hex", "opacity": 0..1}. None if `id` isn't a multi-fill group."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            return g && editor.isMultiFillGroup(g) ? editor._fillLayers(g) : null;
+        }""",
+        {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_add_fill_layer(id: str) -> dict:
+    """Add a new top layer to a fill stack, cloning the current top layer's colour/opacity."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isMultiFillGroup(g)) return { ok: false, reason: 'not a multi-fill group' };
+            editor.addFillLayer(g);
+            return { ok: true };
+        }""",
+        {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_remove_fill_layer(id: str, index: int) -> dict:
+    """Remove one layer from a fill stack by index. Refuses (no-op) on the last remaining
+    layer — a stack always keeps at least 1."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isMultiFillGroup(g)) return { ok: false, reason: 'not a multi-fill group' };
+            const before = (editor._fillLayers(g) || []).length;
+            editor.removeFillLayer(g, a.index);
+            const after = (editor._fillLayers(g) || []).length;
+            return { ok: after < before };
+        }""",
+        {"id": id, "index": index},
+    )
+
+
+@mcp.tool()
+async def hv_set_fill_layer(id: str, index: int, fill: str | None = None, opacity: float | None = None) -> dict:
+    """Set one fill layer's colour and/or opacity (only the given fields change)."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isMultiFillGroup(g)) return { ok: false, reason: 'not a multi-fill group' };
+            const layers = editor._fillLayers(g);
+            if (!layers || !layers[a.index]) return { ok: false, reason: 'no such layer index' };
+            editor.push('Fill layer');
+            const patch = {};
+            if (a.fill != null) patch.fill = a.fill;
+            if (a.opacity != null) patch.opacity = a.opacity;
+            editor.setFillLayer(g, a.index, patch);
+            editor._renderInspector();
+            return { ok: true };
+        }""",
+        {"id": id, "index": index, "fill": fill, "opacity": opacity},
+    )
+
+
+@mcp.tool()
+async def hv_move_fill_layer(id: str, index: int, direction: str) -> dict:
+    """Reorder a fill layer up (toward the top/last-painted) or down. `direction` is "up"
+    or "down". No-op at either end of the stack."""
+    if direction not in ("up", "down"):
+        raise ValueError(f'direction must be "up" or "down", got {direction!r}')
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isMultiFillGroup(g)) return { ok: false, reason: 'not a multi-fill group' };
+            editor.moveFillLayer(g, a.index, a.direction === 'up' ? 1 : -1);
+            return { ok: true };
+        }""",
+        {"id": id, "index": index, "direction": direction},
+    )
+
+
+@mcp.tool()
+async def hv_expand_multi_fill(id: str) -> dict:
+    """Expand a fill stack into its independent, plain <path> layers (no longer a linked
+    stack — each layer becomes its own editable shape)."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isMultiFillGroup(g)) return { ok: false, reason: 'not a multi-fill group' };
+            editor.expandMultiFill(g);
+            return { ok: true };
+        }""",
+        {"id": id},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
 
