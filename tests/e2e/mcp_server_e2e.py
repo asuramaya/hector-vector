@@ -62,7 +62,7 @@ async def main() -> int:
                 hv_set_mesh_color, hv_set_mesh_point, hv_set_shape_param, hv_set_stroke,
                 hv_set_stroke_style, hv_set_text_box, hv_set_text_content,
                 hv_set_text_style, hv_set_warp_param, hv_set_width_base,
-                hv_shape_builder_paint, hv_update_effect,
+                hv_shape_builder_paint, hv_update_effect, hv_edit_symbol, hv_finish_symbol_edit,
             )
 
             # --- attach + read state -------------------------------------------------
@@ -242,6 +242,32 @@ async def main() -> int:
             doc_s3 = await hv_get_document()
             check("hv_break_symbol_link replaces the instance with an independent group", any(n["id"] == grp and n["tag"] == "g" for n in doc_s3["nodes"]) and not any(n["id"] == inst2 for n in doc_s3["nodes"]), str(doc_s3["nodes"]))
             check("hv_break_symbol_link leaves the OTHER instance (inst1) untouched", any(n["id"] == inst1 for n in doc_s3["nodes"]), str(doc_s3["nodes"]))
+
+            # --- symbol master interactive editing ----------------------------------------
+            se_shape = await hv_create_shape(kind="rect", x=1100, y=10, w=40, h=40, fill="#123456")
+            se_inst1 = await hv_make_symbol(ids=[se_shape])
+            se_syms = await hv_list_symbols()
+            old_sym_ids = {s["id"] for s in syms}
+            se_master_id = next(s["id"] for s in se_syms if s["id"] not in old_sym_ids)
+            se_inst2 = await hv_place_symbol_instance(symbol_id=se_master_id, x=1200, y=100)
+
+            edit_nodes = await hv_edit_symbol(id=se_inst1)
+            check("hv_edit_symbol surfaces the master's content as editable nodes", len(edit_nodes) == 1, str(edit_nodes))
+
+            master_child = edit_nodes[0]["id"]
+            await hv_apply_fill(ids=[master_child], color="#ff00ff")
+            finish_res = await hv_finish_symbol_edit()
+            check("hv_finish_symbol_edit reports ok", finish_res["ok"], str(finish_res))
+
+            svg_after_symbol_edit = await hv_export_svg()
+            check(
+                "hv_edit_symbol's paint change lands on the shared master (both instances reference it)",
+                f'data-hv-id="{se_inst1}"' in svg_after_symbol_edit and f'data-hv-id="{se_inst2}"' in svg_after_symbol_edit and 'fill="#ff00ff"' in svg_after_symbol_edit,
+                svg_after_symbol_edit,
+            )
+
+            finish_res2 = await hv_finish_symbol_edit()
+            check("hv_finish_symbol_edit is a no-op (ok:false) when no edit is in progress", finish_res2["ok"] is False, str(finish_res2))
 
             # --- multi-fill / appearance --------------------------------------------------
             fa = await hv_create_shape(kind="rect", x=600, y=200, w=60, h=60, fill="#00aa00")
