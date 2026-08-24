@@ -19,7 +19,9 @@ subprocess and talks to it over stdin/stdout, the standard MCP shape).
 """
 from __future__ import annotations
 
+import copy
 import os
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,8 @@ import json as _json
 from hvserver.paths import AGENT_PORT_FILE, OUTPUTS_DIR
 from hvserver.files import discover_work_items, work_item_record, work_item_info, list_outputs
 from hvserver.documents import list_projects, save_hv
+from hvserver.pipeline import plan_image, run_pipeline
+from hvserver.jobs import jobs, jobs_lock, cancel_job
 
 try:
     from mcp.server.mcpserver import MCPServer
@@ -1786,6 +1790,86 @@ async def hv_library_load(name: str, source: str, folder: str | None = None) -> 
             {"svg": svg_text, "name": name},
         )
     raise ValueError(f'source must be "raster", "vector", or "canvas", got {source!r}')
+
+
+# ---------------------------------------------------------------------------
+# Pipeline — Phase 2+ slice 3, the last piece of Halcyon's half. plan_image()/
+# run_pipeline()/the jobs registry are pure Python/filesystem functions (no browser
+# involved) — the SAME functions server.py's /api/plan, /api/run/pipeline, /api/jobs*
+# already call, just reached directly instead of over HTTP. A background job outlives
+# any one tool call, so these don't block: hv_pipeline_run returns immediately with a
+# job id, and hv_job_status/hv_job_list poll it — the same shape the Jobs panel itself
+# polls on a timer.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def hv_pipeline_plan(input_url: str) -> dict:
+    """The Auto analyzer's classical read of a raster — content classification plus a
+    proposed processing plan (auto-applied steps and optional "offered" ones), each
+    checked against the installed capability registry for availability. Read-only, no
+    model, no side effect. `input_url` is the item's `url` from
+    hv_library_list(kind="raster") (e.g. "/work-items/photo.jpg")."""
+    return plan_image({"input_url": input_url})
+
+
+@mcp.tool()
+async def hv_pipeline_run(
+    input_url: str | None = None, input_name: str | None = None,
+    stage_upscale: bool = True, stage_removebg: bool = True, stage_vectorize: bool = True,
+    stage_dejpeg: bool = False, stage_denoise: bool = False, stage_deblur: bool = False,
+    removebg_method: str = "classical", vectorize_method: str = "trace",
+    model: str = "realesrgan-x4plus", scale: int = 4,
+    extra: dict | None = None,
+) -> dict:
+    """Run the raster pipeline (restoration -> upscale -> remove-bg -> vectorize, each
+    stage independently toggleable) as a BACKGROUND job — returns immediately with the
+    started job's id; poll with hv_job_status. `input_url` (a Library raster's `url`)
+    runs a focused job against just that image — `input_name` is the display name for
+    its output files (from hv_library_list; derived from the URL if omitted); omit
+    `input_url` entirely to batch-run every undiscovered raster in the Library (skips
+    ones already processed for this exact stage set unless `extra={"force": true}`).
+    `removebg_method` is "classical"/"ai"/"green"; `vectorize_method` is "trace"/"pixel".
+    `extra` passes any advanced knob run_pipeline() accepts straight through
+    (trace_*/mask_*/pv_* — see hvserver/engines.py's trace_config/mask_config/
+    pixelvec_config) for anything not exposed above."""
+    if input_url and not input_name:
+        input_name = urllib.parse.unquote(Path(urllib.parse.urlparse(input_url).path).name)
+    payload = {
+        "input_url": input_url or "", "input_name": input_name or "",
+        "stage_upscale": stage_upscale, "stage_removebg": stage_removebg, "stage_vectorize": stage_vectorize,
+        "stage_dejpeg": stage_dejpeg, "stage_denoise": stage_denoise, "stage_deblur": stage_deblur,
+        "removebg_method": removebg_method, "vectorize_method": vectorize_method,
+        "model": model, "scale": scale,
+        **(extra or {}),
+    }
+    return run_pipeline(payload)
+
+
+@mcp.tool()
+async def hv_job_status(id: str) -> dict:
+    """Full status/progress/log for one background job (from hv_pipeline_run or a
+    library batch run), by id."""
+    with jobs_lock:
+        job = jobs.get(id)
+        if job is None:
+            raise ValueError(f"Unknown job: {id}")
+        return copy.deepcopy(job)
+
+
+@mcp.tool()
+async def hv_job_list() -> list[dict]:
+    """All jobs (running, queued, and recently finished), newest first — the same list
+    the Jobs panel shows."""
+    with jobs_lock:
+        return copy.deepcopy(list(reversed(list(jobs.values()))))
+
+
+@mcp.tool()
+async def hv_job_cancel(id: str) -> dict:
+    """Cancel a running or queued job by id. A no-op (reports the existing terminal
+    status) if it already finished."""
+    return cancel_job({"id": id})
 
 
 if __name__ == "__main__":
