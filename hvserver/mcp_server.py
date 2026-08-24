@@ -766,6 +766,261 @@ async def hv_expand_multi_fill(id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Deform: Envelope, Gradient Mesh, Warp (widget-parity scope, decision a542832a). All three
+# hold their live spec as a JSON attribute (data-hv-env/-mesh/-warp) regenerated on every
+# edit — same "regen from spec" shape as multi-fill. The per-point setters (setEnvelopePoint/
+# setMeshPoint/setMeshColor/setWarpParam) don't self-manage undo (scrubbable-drag callers
+# coalesce them in the live UI), so each is wrapped with an explicit editor.push() here, same
+# fix pattern as hv_set_fill_layer. Row/col are validated against the spec's own grid size
+# before calling through — the underlying setters silently no-op on an out-of-range index
+# (hit this as a false "bug" during the tools audit; real bug was the test's own bad index).
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def hv_make_envelope(ids: list[str]) -> str:
+    """Wrap the given filled shapes in a draggable deform grid over their combined bounds
+    (Illustrator's Envelope Distort). Returns the new group's id."""
+    return await _eval(
+        """(a) => {
+            editor.selection = new Set(a.ids); editor.artboardSelected = false;
+            editor.makeEnvelope();
+            return [...editor.selection][0] || null;
+        }""",
+        {"ids": ids},
+    )
+
+
+@mcp.tool()
+async def hv_make_envelope_with_top_object(ids: list[str]) -> str:
+    """Same as hv_make_envelope, but the TOPMOST shape in `ids` lends its own silhouette as
+    the grid's rest shape (and is consumed) — the rest of the selection warps to fit inside
+    where it was. Needs 2+ ids. Returns the new group's id."""
+    if len(ids) < 2:
+        raise ValueError("needs 2+ ids — the topmost lends its bounds, the rest get warped")
+    return await _eval(
+        """(a) => {
+            editor.selection = new Set(a.ids); editor.artboardSelected = false;
+            editor.makeEnvelopeWithTopObject();
+            return [...editor.selection][0] || null;
+        }""",
+        {"ids": ids},
+    )
+
+
+@mcp.tool()
+async def hv_get_envelope(id: str) -> dict | None:
+    """An envelope group's grid: {rows, cols, pts} where pts[row][col] = {x, y} in document
+    user-units. None if `id` isn't an envelope group."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isEnvelopeGroup(g)) return null;
+            const spec = editor._envSpec(g);
+            return { rows: spec.rows, cols: spec.cols, pts: spec.pts };
+        }""",
+        {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_set_envelope_point(id: str, row: int, col: int, x: float, y: float) -> dict:
+    """Move one grid point of an envelope, deforming the wrapped content. `row`/`col` must
+    be within the grid returned by hv_get_envelope."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isEnvelopeGroup(g)) return { ok: false, reason: 'not an envelope group' };
+            const spec = editor._envSpec(g);
+            if (!spec.pts[a.row] || !spec.pts[a.row][a.col]) return { ok: false, reason: `row/col out of range (grid is ${spec.rows}x${spec.cols})` };
+            editor.push('Envelope point');
+            editor.setEnvelopePoint(g, a.row, a.col, a.x, a.y);
+            editor._renderSelection();
+            return { ok: true };
+        }""",
+        {"id": id, "row": row, "col": col, "x": x, "y": y},
+    )
+
+
+@mcp.tool()
+async def hv_reset_envelope(id: str) -> dict:
+    """Reset an envelope's grid points to its rest shape (the silhouette for a
+    with-top-object envelope, or a plain rectangle otherwise)."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isEnvelopeGroup(g)) return { ok: false, reason: 'not an envelope group' };
+            editor.resetEnvelope(g);
+            return { ok: true };
+        }""",
+        {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_expand_envelope(id: str) -> dict:
+    """Expand an envelope into its plain, independently-editable deformed geometry."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isEnvelopeGroup(g)) return { ok: false, reason: 'not an envelope group' };
+            editor.expandEnvelope(g);
+            return { ok: true };
+        }""",
+        {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_make_gradient_mesh(id: str) -> str:
+    """Wrap one filled shape in a draggable colour+geometry mesh grid (Illustrator's
+    Gradient Mesh). Every grid point starts at the shape's current fill colour and an
+    evenly-spaced position — vary hv_set_mesh_color/hv_set_mesh_point per point from there.
+    Returns the new group's id."""
+    return await _eval(
+        """(a) => {
+            editor.selection = new Set([a.id]); editor.artboardSelected = false;
+            editor.makeGradientMesh();
+            return [...editor.selection][0] || null;
+        }""",
+        {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_get_gradient_mesh(id: str) -> dict | None:
+    """A gradient-mesh group's grid: {rows, cols, colors, pts} — colors[row][col] is a hex
+    string, pts[row][col] is {x, y} in document user-units. None if not a mesh group."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isMeshGroup(g)) return null;
+            const spec = editor._meshSpec(g);
+            return { rows: spec.rows, cols: spec.cols, colors: spec.colors, pts: spec.pts };
+        }""",
+        {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_set_mesh_color(id: str, row: int, col: int, color: str) -> dict:
+    """Set one gradient-mesh grid point's colour. `row`/`col` must be within the grid
+    returned by hv_get_gradient_mesh."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isMeshGroup(g)) return { ok: false, reason: 'not a mesh group' };
+            const spec = editor._meshSpec(g);
+            if (!spec.colors[a.row] || spec.colors[a.row][a.col] == null) return { ok: false, reason: `row/col out of range (grid is ${spec.rows}x${spec.cols})` };
+            editor.push('Mesh colour');
+            editor.setMeshColor(g, a.row, a.col, a.color);
+            editor._renderSelection();
+            return { ok: true };
+        }""",
+        {"id": id, "row": row, "col": col, "color": color},
+    )
+
+
+@mcp.tool()
+async def hv_set_mesh_point(id: str, row: int, col: int, x: float, y: float) -> dict:
+    """Move one gradient-mesh grid point, deforming the mesh's geometry (independent of its
+    colour). `row`/`col` must be within the grid returned by hv_get_gradient_mesh."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isMeshGroup(g)) return { ok: false, reason: 'not a mesh group' };
+            const spec = editor._meshSpec(g);
+            if (!spec.pts[a.row] || !spec.pts[a.row][a.col]) return { ok: false, reason: `row/col out of range (grid is ${spec.rows}x${spec.cols})` };
+            editor.push('Mesh point');
+            editor.setMeshPoint(g, a.row, a.col, a.x, a.y);
+            editor._renderSelection();
+            return { ok: true };
+        }""",
+        {"id": id, "row": row, "col": col, "x": x, "y": y},
+    )
+
+
+@mcp.tool()
+async def hv_reset_mesh_points(id: str) -> dict:
+    """Reset a gradient mesh's grid points to their rest positions (geometry only, colours
+    are untouched)."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isMeshGroup(g)) return { ok: false, reason: 'not a mesh group' };
+            editor.resetMeshPoints(g);
+            return { ok: true };
+        }""",
+        {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_expand_gradient_mesh(id: str) -> dict:
+    """Expand a gradient mesh into a plain, clipped raster image (no longer editable as a
+    grid)."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isMeshGroup(g)) return { ok: false, reason: 'not a mesh group' };
+            editor.expandGradientMesh(g);
+            return { ok: true };
+        }""",
+        {"id": id},
+    )
+
+
+_WARP_TYPES = {"arc", "bulge", "flag", "fisheye"}
+
+
+@mcp.tool()
+async def hv_make_warp(ids: list[str], type: str) -> str:
+    """Apply a parametric preset deformation over the combined bounds of the given filled
+    shapes. `type` is one of arc/bulge/flag/fisheye. Returns the new group's id; adjust the
+    effect afterward with hv_set_warp_param (key="amount", -1..1)."""
+    if type not in _WARP_TYPES:
+        raise ValueError(f"type must be one of {sorted(_WARP_TYPES)}, got {type!r}")
+    return await _eval(
+        """(a) => {
+            editor.selection = new Set(a.ids); editor.artboardSelected = false;
+            editor.makeWarp(a.type);
+            return [...editor.selection][0] || null;
+        }""",
+        {"ids": ids, "type": type},
+    )
+
+
+@mcp.tool()
+async def hv_set_warp_param(id: str, key: str, value: Any) -> dict:
+    """Change a warp group's `type` (arc/bulge/flag/fisheye) or `amount` (-1..1) and
+    regenerate its geometry."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isWarpGroup(g)) return { ok: false, reason: 'not a warp group' };
+            editor.push('Warp param');
+            editor.setWarpParam(g, a.key, a.value);
+            return { ok: true };
+        }""",
+        {"id": id, "key": key, "value": value},
+    )
+
+
+@mcp.tool()
+async def hv_expand_warp(id: str) -> dict:
+    """Expand a warp group into its plain, independently-editable deformed geometry."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isWarpGroup(g)) return { ok: false, reason: 'not a warp group' };
+            editor.expandWarp(g);
+            return { ok: true };
+        }""",
+        {"id": id},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
 
