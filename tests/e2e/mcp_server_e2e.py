@@ -46,9 +46,10 @@ async def main() -> int:
             os.environ["HV_MCP_PORT"] = str(DEBUG_PORT)
             from hvserver.mcp_server import (
                 hv_apply_fill, hv_apply_gradient, hv_boolean_op, hv_create_shape,
-                hv_align, hv_distribute, hv_duplicate, hv_export_svg, hv_get_document,
-                hv_get_selection, hv_group, hv_move, hv_pathfinder, hv_reflect, hv_select,
-                hv_set_shape_param,
+                hv_align, hv_create_text, hv_distribute, hv_duplicate, hv_export_svg,
+                hv_get_document, hv_get_selection, hv_group, hv_move, hv_pathfinder,
+                hv_reflect, hv_select, hv_set_shape_param, hv_set_text_box,
+                hv_set_text_content, hv_set_text_style,
             )
 
             # --- attach + read state -------------------------------------------------
@@ -169,6 +170,47 @@ async def main() -> int:
             gap1 = boxes[1]["x0"] - boxes[0]["x1"]
             gap2 = boxes[2]["x0"] - boxes[1]["x1"]
             check("hv_distribute(h) equalizes the gaps between 3 nodes", abs(gap1 - gap2) < 0.5, f"gaps={gap1},{gap2} boxes={boxes}")
+
+            # --- text: point, area, style, content, box resize -------------------------
+            tid = await hv_create_text(x=10, y=10, text="Hello\nWorld", style={"fontSize": 24})
+            doc_t = await hv_get_document()
+            node_t = next(n for n in doc_t["nodes"] if n["id"] == tid)
+            check("hv_create_text (point) round-trips its content", node_t["content"] == "Hello\nWorld", str(node_t))
+
+            n_before_text_undo = len((await hv_get_document())["nodes"])
+            await page.evaluate("() => editor.undo()")
+            n_after_text_undo = len((await hv_get_document())["nodes"])
+            check("hv_create_text is a real undo step", n_after_text_undo == n_before_text_undo - 1, f"{n_before_text_undo} -> {n_after_text_undo}")
+            tid = await hv_create_text(x=10, y=10, text="Hello\nWorld", style={"fontSize": 24})  # redo for the rest of the run
+
+            await hv_set_text_content(id=tid, text="Goodbye")
+            doc_t2 = await hv_get_document()
+            node_t2 = next(n for n in doc_t2["nodes"] if n["id"] == tid)
+            check("hv_set_text_content replaces the text", node_t2["content"] == "Goodbye", str(node_t2))
+
+            await hv_set_text_style(ids=[tid], style={"fontWeight": "700", "textAnchor": "middle"})
+            svg_t = await hv_export_svg()
+            check(
+                "hv_set_text_style writes real font-weight/text-anchor attrs",
+                f'data-hv-id="{tid}"' in svg_t and 'font-weight="700"' in svg_t and 'text-anchor="middle"' in svg_t,
+                svg_t,
+            )
+
+            # Soft-wrap boundaries collapse back to spaces on read (_readTextContent joins
+            # them so re-editing doesn't freeze the wrap) — the observable trace of a wrap
+            # is tspan COUNT in the export, not "\n" in the round-tripped content string.
+            async def tspan_count(node_id: str) -> int:
+                svg = await hv_export_svg()
+                seg = svg.split(f'data-hv-id="{node_id}"', 1)[1].split("</text>", 1)[0]
+                return seg.count("<tspan")
+
+            atid = await hv_create_text(x=300, y=10, text="a long line that should wrap inside its box", w=80)
+            n_lines_narrow = await tspan_count(atid)
+            check("hv_create_text (area) wraps a long line into multiple tspans", n_lines_narrow > 1, f"tspans={n_lines_narrow}")
+
+            await hv_set_text_box(id=atid, w=400)
+            n_lines_wide = await tspan_count(atid)
+            check("hv_set_text_box(w=400) re-wraps to fewer tspans", n_lines_wide < n_lines_narrow, f"{n_lines_narrow} -> {n_lines_wide}")
 
             # --- pathfinder: region-correctness via isPointInFill, same bar the tools
             # audit itself used (this test would have caught the invert-space resolution

@@ -125,16 +125,22 @@ async def _eval(js: str, arg: Any = None) -> Any:
 @mcp.tool()
 async def hv_get_document() -> dict:
     """The current document: its artboard viewBox and every top-level artwork node
-    (id, tag, fill, stroke) in z-order back-to-front. Use this to see what's already on
-    the canvas before adding to or editing it."""
+    (id, tag, fill, stroke) in z-order back-to-front — a `text` node also carries its
+    plain-text `content` (via the same read used to reopen it for editing). Use this to see
+    what's already on the canvas before adding to or editing it."""
     return await _eval(
         """() => {
             const vb = editor.stage.viewBox.baseVal;
             const nodes = [...editor.stage.querySelectorAll(':scope > [data-hv-id]')]
-                .map(n => ({
-                    id: n.getAttribute('data-hv-id'), tag: n.tagName.toLowerCase(),
-                    fill: n.getAttribute('fill'), stroke: n.getAttribute('stroke'),
-                }));
+                .map(n => {
+                    const tag = n.tagName.toLowerCase();
+                    const o = {
+                        id: n.getAttribute('data-hv-id'), tag,
+                        fill: n.getAttribute('fill'), stroke: n.getAttribute('stroke'),
+                    };
+                    if (tag === 'text') o.content = editor._readTextContent(n);
+                    return o;
+                });
             return { viewBox: { x: vb.x, y: vb.y, width: vb.width, height: vb.height }, nodes };
         }"""
     )
@@ -426,6 +432,146 @@ async def hv_reflect(ids: list[str], axis: str, copy: bool = False) -> list[str]
             return [...editor.selection];
         }""",
         {"ids": ids, "axis": axis, "copy": copy},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Text — first-class content, not a debugging afterthought (widget-parity scope,
+# decision a542832a): creates/edits go through the same headless path _commitText uses on
+# blur (_writeContent dispatches point/area/on-path correctly), skipping only the
+# interactive contentEditable overlay itself, which has no meaning for an agent caller.
+# ---------------------------------------------------------------------------
+
+_TEXT_STYLE_KEYS = {
+    "fontFamily", "fontSize", "fontWeight", "fontStyle", "textAnchor",
+    "letterSpacing", "lineHeight",
+}
+
+
+@mcp.tool()
+async def hv_create_text(
+    x: float, y: float, text: str, w: float | None = None, h: float | None = None,
+    fill: str = "#000000", style: dict | None = None,
+) -> str:
+    """Create a text node and return its new id. Point text (no `w`) anchors at (x, y);
+    area text (`w` given, `h` optional) is a wrap-flowed box like the Text tool's
+    click-drag. `style` overrides any of fontFamily/fontSize/fontWeight/fontStyle/
+    textAnchor/letterSpacing/lineHeight for this node only (unset fields inherit the
+    current text-style default, same as a human starting a new text object)."""
+    bad = set(style) - _TEXT_STYLE_KEYS if style else set()
+    if bad:
+        raise ValueError(f"style has unknown keys {sorted(bad)}, expected a subset of {sorted(_TEXT_STYLE_KEYS)}")
+    return await _eval(
+        """(a) => {
+            editor.push('Add text');
+            const ts = Object.assign({}, editor._textStyle(), a.style || {});
+            const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            const id = 'n' + (++editor.idSeq);
+            t.setAttribute('data-hv-id', id);
+            t.setAttribute('xml:space', 'preserve');
+            t.setAttribute('x', String(a.x));
+            if (a.w > 0) {
+                t.setAttribute('y', String(a.y + ts.fontSize * 0.8));
+                t.setAttribute('data-hv-text-width', String(a.w));
+                if (a.h > 0) t.setAttribute('data-hv-text-height', String(a.h));
+                editor._applyTextStyleAttrs(t, ts);
+                t.removeAttribute('text-anchor');   // area text is left-flowed
+            } else {
+                t.setAttribute('y', String(a.y));
+                editor._applyTextStyleAttrs(t, ts);
+            }
+            t.setAttribute('fill', a.fill);
+            editor._artHome().insertBefore(t, editor._artBefore());
+            editor._writeContent(t, a.text || '');
+            editor.selection = new Set([id]); editor.artboardSelected = false;
+            editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
+            return id;
+        }""",
+        {"x": x, "y": y, "w": w, "h": h, "text": text, "fill": fill, "style": style or {}},
+    )
+
+
+@mcp.tool()
+async def hv_set_text_content(id: str, text: str) -> dict:
+    """Replace a text node's content. Dispatches correctly for point text (one tspan per
+    "\\n"), area text (re-wraps to its box width), and text-on-path (a single flowing run,
+    newlines collapse to spaces) — same as committing an edit in the app."""
+    return await _eval(
+        """(a) => {
+            const n = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!n || n.tagName.toLowerCase() !== 'text') return { ok: false, reason: 'not a text node' };
+            editor.push('Edit text');
+            editor._writeContent(n, a.text);
+            editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
+            return { ok: true };
+        }""",
+        {"id": id, "text": text},
+    )
+
+
+@mcp.tool()
+async def hv_set_text_style(ids: list[str], style: dict) -> dict:
+    """Set font/text styling on the given text nodes in one undo step. `style` keys:
+    fontFamily (CSS stack string), fontSize (number), fontWeight ("300".."900"), fontStyle
+    ("normal"/"italic"), textAnchor ("start"/"middle"/"end" — left/centre/right), letter
+    Spacing (number), lineHeight (number, ratio of fontSize). Pass null for a key to clear
+    it back to default. Unlisted keys are left untouched."""
+    bad = set(style) - _TEXT_STYLE_KEYS
+    if bad:
+        raise ValueError(f"style has unknown keys {sorted(bad)}, expected a subset of {sorted(_TEXT_STYLE_KEYS)}")
+    return await _eval(
+        """(a) => {
+            const texts = a.ids
+                .map(id => editor.stage.querySelector('[data-hv-id="' + id + '"]'))
+                .filter(n => n && n.tagName.toLowerCase() === 'text');
+            if (!texts.length) return { ok: false, reason: 'no text nodes' };
+            editor.selection = new Set(a.ids); editor.artboardSelected = false;
+            editor.push('Text style');
+            const ATTR = {
+                fontFamily: 'font-family', fontSize: 'font-size', fontWeight: 'font-weight',
+                fontStyle: 'font-style', textAnchor: 'text-anchor', letterSpacing: 'letter-spacing',
+            };
+            const DEFAULT_CLEAR = { fontWeight: '400', fontStyle: 'normal', textAnchor: 'start', letterSpacing: 0 };
+            const REFLOW = new Set(['fontSize', 'textAnchor', 'lineHeight']);
+            for (const [k, v] of Object.entries(a.style)) {
+                for (const n of texts) {
+                    if (k === 'lineHeight') {
+                        if (v == null) n.removeAttribute('data-hv-line-height');
+                        else n.setAttribute('data-hv-line-height', String(v));
+                    } else {
+                        const attr = ATTR[k];
+                        if (v == null || v === DEFAULT_CLEAR[k]) n.removeAttribute(attr);
+                        else n.setAttribute(attr, String(v));
+                    }
+                    if (REFLOW.has(k)) editor._reflowText(n);
+                    editor._syncTextStyleFrom(n);
+                }
+                if (v != null) editor._textStyle()[k] = v;
+            }
+            editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
+            return { ok: true };
+        }""",
+        {"ids": ids, "style": style},
+    )
+
+
+@mcp.tool()
+async def hv_set_text_box(id: str, w: float | None = None, h: float | None = None) -> dict:
+    """Resize an area text's wrap box. `w` (wrap width) re-flows the text live; `h` (frame
+    height) only re-checks overflow, the wrap stays the same. Pass null for `h` to clear
+    the height bound (no overflow limit). No-op on point text (has no box)."""
+    return await _eval(
+        """(a) => {
+            editor.selection = new Set([a.id]); editor.artboardSelected = false;
+            const texts = editor.selectedNodes().filter(n => n.tagName.toLowerCase() === 'text');
+            if (!texts.length) return { ok: false, reason: 'not a text node' };
+            editor.push('Text box');
+            if (a.w != null) editor._setAreaWidth(a.w);
+            if (a.h !== undefined) editor._setAreaHeight(a.h == null ? 0 : a.h);
+            editor._renderSelection(); editor._renderInspector();
+            return { ok: true };
+        }""",
+        {"id": id, "w": w, "h": h},
     )
 
 
