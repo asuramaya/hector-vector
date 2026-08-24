@@ -1207,6 +1207,242 @@ async def hv_remove_effect(id: str, index: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Blend — interpolated steps between two shapes (widget-parity scope, decision a542832a).
+# makeBlend/expandBlend/makeReplaceSpine/removeSpine self-manage undo; setBlendParam (the
+# scrubbable Steps/Reverse control) doesn't, wrapped here same as every other such setter.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def hv_make_blend(ids: list[str]) -> str:
+    """Blend exactly 2 filled shapes into an interpolated step-sequence between them (step
+    count auto-picked from their distance/size). Returns the new group's id."""
+    if len(ids) != 2:
+        raise ValueError("blend needs exactly 2 ids")
+    return await _eval(
+        """(a) => {
+            editor.selection = new Set(a.ids); editor.artboardSelected = false;
+            editor.makeBlend();
+            return [...editor.selection][0] || null;
+        }""",
+        {"ids": ids},
+    )
+
+
+@mcp.tool()
+async def hv_set_blend_param(id: str, key: str, value: Any) -> dict:
+    """Change a blend's `steps` (integer, step count) or `reverse` (bool, swap which
+    endpoint is treated as the start) and regenerate."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isBlendGroup(g)) return { ok: false, reason: 'not a blend group' };
+            editor.push('Blend param');
+            editor.setBlendParam(g, a.key, a.value);
+            return { ok: true };
+        }""",
+        {"id": id, "key": key, "value": value},
+    )
+
+
+@mcp.tool()
+async def hv_expand_blend(id: str) -> dict:
+    """Expand a blend into its plain, independently-editable step shapes."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isBlendGroup(g)) return { ok: false, reason: 'not a blend group' };
+            editor.expandBlend(g);
+            return { ok: true };
+        }""",
+        {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_make_replace_spine(blend_id: str, spine_id: str) -> dict:
+    """Make a blend follow a path instead of a straight line: `spine_id`'s outline becomes
+    the blend's motion path and is consumed (removed). Steps space evenly by arc length
+    along it."""
+    return await _eval(
+        """(a) => {
+            editor.selection = new Set([a.blend_id, a.spine_id]); editor.artboardSelected = false;
+            editor.makeReplaceSpine();
+            return { ok: true };
+        }""",
+        {"blend_id": blend_id, "spine_id": spine_id},
+    )
+
+
+@mcp.tool()
+async def hv_remove_spine(id: str) -> dict:
+    """Release a blend back to a straight-line motion path (undoes hv_make_replace_spine)."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isBlendGroup(g)) return { ok: false, reason: 'not a blend group' };
+            editor.removeSpine(g);
+            return { ok: true };
+        }""",
+        {"id": id},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Width tool — a variable-width stroke ribbon (widget-parity scope). makeWidthStroke/
+# releaseWidthStroke/expandWidthStroke/resetWidthUniform self-manage undo; setWidthBase
+# (scrubbable) is wrapped here. Per-point profile dragging (the interactive handle editor)
+# is deliberately NOT wrapped this slice — same call as editSymbol's isolation-mode editing:
+# a stateful multi-step UI mode, not a single atomic mutation.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def hv_make_width_stroke(ids: list[str]) -> list[str]:
+    """Convert the given stroked paths into variable-width-stroke groups (each keeps its
+    current width uniformly at first — vary it with hv_set_width_base or the interactive
+    Width tool). Returns the new group ids (nodes with no stroke are skipped)."""
+    return await _eval(
+        """(a) => editor.makeWidthStroke(a.ids)""",
+        {"ids": ids},
+    )
+
+
+@mcp.tool()
+async def hv_set_width_base(id: str, width: float) -> dict:
+    """Scale a width-stroke's whole profile proportionally to a new base width (keeps any
+    variation already applied)."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isWidthStroke(g)) return { ok: false, reason: 'not a width-stroke group' };
+            editor.push('Width base');
+            editor.setWidthBase(g, a.width);
+            editor._renderInspector();
+            return { ok: true };
+        }""",
+        {"id": id, "width": width},
+    )
+
+
+@mcp.tool()
+async def hv_reset_width_uniform(id: str) -> dict:
+    """Reset a width-stroke's profile back to uniform (no variation), keeping its base width."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isWidthStroke(g)) return { ok: false, reason: 'not a width-stroke group' };
+            editor.resetWidthUniform(g);
+            return { ok: true };
+        }""",
+        {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_release_width_stroke(id: str) -> dict:
+    """Release a width-stroke group back to a plain stroked path (drops the profile,
+    keeps the current uniform-equivalent width)."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isWidthStroke(g)) return { ok: false, reason: 'not a width-stroke group' };
+            editor.releaseWidthStroke(g);
+            return { ok: true };
+        }""",
+        {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_expand_width_stroke(id: str) -> dict:
+    """Expand a width-stroke group into its plain, independently-editable ribbon/fill paths."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isWidthStroke(g)) return { ok: false, reason: 'not a width-stroke group' };
+            editor.expandWidthStroke(g);
+            return { ok: true };
+        }""",
+        {"id": id},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shape Builder / Scissors / Knife / Eraser (widget-parity scope) — path-construction
+# gesture tools. Each interactive drag/click already delegates to a pure, directly-callable
+# CORE (shapeBuilderPaint / scissorsCut / knifeCut / eraseSweep) built exactly so a caller
+# doesn't need to simulate pointer events — this is that same seam, just reached from MCP
+# instead of a `_xDown` pointer handler. All four self-manage undo, including an internal
+# undo-on-no-op when the gesture didn't actually change anything (a miss, not a failure) —
+# each tool below reports that as ok:false via a before/after export diff rather than
+# reaching into the history stack.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def hv_shape_builder_paint(points: list[dict], subtract: bool = False) -> dict:
+    """Shape Builder: paint over 2+ overlapping, already-selected filled shapes with a
+    polyline of points (each {"x", "y"} in document user-units) to merge the regions it
+    crosses into one shape. `subtract=True` removes the painted regions instead (Alt-drag
+    in the app). Select the shapes first with hv_select."""
+    return await _eval(
+        """(a) => {
+            const before = editor.stage.outerHTML;
+            editor.shapeBuilderPaint(a.points, a.subtract);
+            return { ok: editor.stage.outerHTML !== before, selection: [...editor.selection] };
+        }""",
+        {"points": points, "subtract": subtract},
+    )
+
+
+@mcp.tool()
+async def hv_scissors_cut(x: float, y: float, tolerance: float = 4.0) -> dict:
+    """Scissors: cut the nearest editable path at (x, y) — reopens a closed path, splits an
+    open one into two objects. `tolerance` is the click-radius in document user-units.
+    Fails harmlessly (ok:false) if nothing editable is within tolerance."""
+    return await _eval(
+        """(a) => {
+            const before = editor.stage.outerHTML;
+            editor.scissorsCut(a.x, a.y, a.tolerance);
+            return { ok: editor.stage.outerHTML !== before, selection: [...editor.selection] };
+        }""",
+        {"x": x, "y": y, "tolerance": tolerance},
+    )
+
+
+@mcp.tool()
+async def hv_knife_cut(points: list[dict], straight: bool = False) -> dict:
+    """Knife: cut every filled shape crossed by a polyline (each {"x", "y"} in document
+    user-units), splitting each into two separate objects along the cut. `straight=True`
+    uses only the first/last points (a straight cut, Alt-drag in the app) instead of the
+    full polyline. Acts on the current selection if any, else every filled shape."""
+    return await _eval(
+        """(a) => {
+            const before = editor.stage.outerHTML;
+            editor.knifeCut(a.points, a.straight);
+            return { ok: editor.stage.outerHTML !== before, selection: [...editor.selection] };
+        }""",
+        {"points": points, "straight": straight},
+    )
+
+
+@mcp.tool()
+async def hv_erase_sweep(points: list[dict], radius: float = 14.0) -> dict:
+    """Eraser: subtract a round brush swept along a polyline (each {"x", "y"} in document
+    user-units, `radius` in the same units) from every filled shape it crosses. Acts on the
+    current selection if any, else every filled shape."""
+    return await _eval(
+        """(a) => {
+            const before = editor.stage.outerHTML;
+            editor.eraseSweep(a.points, a.radius);
+            return { ok: editor.stage.outerHTML !== before, selection: [...editor.selection] };
+        }""",
+        {"points": points, "radius": radius},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
 

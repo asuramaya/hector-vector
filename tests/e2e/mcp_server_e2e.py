@@ -53,12 +53,16 @@ async def main() -> int:
                 hv_get_selection, hv_group, hv_list_symbols, hv_make_envelope,
                 hv_make_envelope_with_top_object, hv_make_gradient_mesh, hv_make_multi_fill,
                 hv_make_symbol, hv_make_warp, hv_move, hv_move_fill_layer, hv_pathfinder,
-                hv_add_effect, hv_apply_stroke_gradient, hv_get_effects,
-                hv_place_symbol_instance, hv_reflect, hv_remove_effect, hv_remove_fill_layer,
-                hv_reset_envelope, hv_reset_mesh_points, hv_select, hv_set_envelope_point,
-                hv_set_fill_layer, hv_set_mesh_color, hv_set_mesh_point, hv_set_shape_param,
-                hv_set_stroke, hv_set_stroke_style, hv_set_text_box, hv_set_text_content,
-                hv_set_text_style, hv_set_warp_param, hv_update_effect,
+                hv_add_effect, hv_apply_stroke_gradient, hv_erase_sweep, hv_expand_blend,
+                hv_expand_width_stroke, hv_get_effects, hv_knife_cut, hv_make_blend,
+                hv_make_width_stroke, hv_place_symbol_instance, hv_reflect, hv_release_width_stroke,
+                hv_remove_effect, hv_remove_fill_layer, hv_reset_envelope,
+                hv_reset_mesh_points, hv_reset_width_uniform, hv_scissors_cut, hv_select,
+                hv_set_blend_param, hv_set_envelope_point, hv_set_fill_layer,
+                hv_set_mesh_color, hv_set_mesh_point, hv_set_shape_param, hv_set_stroke,
+                hv_set_stroke_style, hv_set_text_box, hv_set_text_content,
+                hv_set_text_style, hv_set_warp_param, hv_set_width_base,
+                hv_shape_builder_paint, hv_update_effect,
             )
 
             # --- attach + read state -------------------------------------------------
@@ -387,6 +391,76 @@ async def main() -> int:
             await hv_remove_effect(id=fx_id, index=0)
             fx3 = await hv_get_effects(id=fx_id)
             check("hv_remove_effect removes exactly the targeted effect", len(fx3) == 1 and fx3[0]["type"] == "blur", str(fx3))
+
+            # --- blend ---------------------------------------------------------------------
+            ba = await hv_create_shape(kind="rect", x=1000, y=10, w=40, h=40, fill="#3366ff")
+            bb = await hv_create_shape(kind="ellipse", x=1000, y=100, w=40, h=40, fill="#ff3366")
+            blend = await hv_make_blend(ids=[ba, bb])
+            svg_blend = await hv_export_svg()
+            check("hv_make_blend creates a blend group", f'data-hv-id="{blend}"' in svg_blend and "data-hv-blend" in svg_blend, "")
+
+            await hv_set_blend_param(id=blend, key="steps", value=3)
+            svg_blend2 = await hv_export_svg()
+            check("hv_set_blend_param regenerates the blend", svg_blend2 != svg_blend, "")
+
+            await hv_expand_blend(id=blend)
+            svg_blend3 = await hv_export_svg()
+            check("hv_expand_blend drops the data-hv-blend spec attribute", "data-hv-blend" not in svg_blend3, "")
+
+            # --- width stroke ----------------------------------------------------------
+            wa = await hv_create_shape(kind="rect", x=1000, y=200, w=60, h=20, fill="none")
+            await hv_set_stroke(ids=[wa], color="#000000", width=6)
+            ws_ids = await hv_make_width_stroke(ids=[wa])
+            check("hv_make_width_stroke converts the stroked path", len(ws_ids) == 1, str(ws_ids))
+            ws = ws_ids[0]
+
+            spec_before = await page.evaluate("id => JSON.parse(document.querySelector(`[data-hv-id=\"${id}\"]`).getAttribute('data-hv-wstroke')).w", ws)
+            await hv_set_width_base(id=ws, width=20)
+            spec_after = await page.evaluate("id => JSON.parse(document.querySelector(`[data-hv-id=\"${id}\"]`).getAttribute('data-hv-wstroke')).w", ws)
+            check("hv_set_width_base changes the profile's base width", abs(spec_after - 20) < 0.01 and spec_after != spec_before, f"{spec_before} -> {spec_after}")
+
+            await hv_reset_width_uniform(id=ws)
+            svg_ws = await hv_export_svg()
+            check("hv_reset_width_uniform keeps it a width-stroke group", f'data-hv-id="{ws}"' in svg_ws and "data-hv-wstroke" in svg_ws, "")
+
+            await hv_release_width_stroke(id=ws)
+            svg_ws2 = await hv_export_svg()
+            check("hv_release_width_stroke drops back to a plain stroked path", "data-hv-wstroke" not in svg_ws2, "")
+
+            wb = await hv_create_shape(kind="rect", x=1000, y=250, w=60, h=20, fill="none")
+            await hv_set_stroke(ids=[wb], color="#000000", width=6)
+            ws2_ids = await hv_make_width_stroke(ids=[wb])
+            await hv_expand_width_stroke(id=ws2_ids[0])
+            svg_ws3 = await hv_export_svg()
+            check("hv_expand_width_stroke drops the data-hv-wstroke spec attribute", "data-hv-wstroke" not in svg_ws3, "")
+
+            # --- shape builder / scissors / knife / eraser --------------------------------
+            ca = await hv_create_shape(kind="ellipse", x=1000, y=300, w=60, h=60, fill="#22aa55")
+            cb = await hv_create_shape(kind="ellipse", x=1030, y=300, w=60, h=60, fill="#aa5522")
+            n_before_builder = len((await hv_get_document())["nodes"])
+            await hv_select([ca, cb])
+            builder_res = await hv_shape_builder_paint(points=[{"x": 1045, "y": 330}], subtract=False)
+            n_after_builder = len((await hv_get_document())["nodes"])
+            check("hv_shape_builder_paint merges the painted overlap into one shape", builder_res["ok"] and n_after_builder < n_before_builder, f"{builder_res} {n_before_builder}->{n_after_builder}")
+
+            sc = await hv_create_shape(kind="rect", x=1000, y=400, w=60, h=60, fill="#557799")
+            scissors_res = await hv_scissors_cut(x=1000, y=400, tolerance=6)
+            check("hv_scissors_cut hits the corner anchor and cuts the path", scissors_res["ok"] and scissors_res["selection"] != [sc], str(scissors_res))
+
+            kn = await hv_create_shape(kind="rect", x=1000, y=500, w=60, h=60, fill="#997755")
+            n_before_knife = len((await hv_get_document())["nodes"])
+            knife_res = await hv_knife_cut(points=[{"x": 970, "y": 530}, {"x": 1070, "y": 530}])
+            n_after_knife = len((await hv_get_document())["nodes"])
+            check("hv_knife_cut splits the shape into two", knife_res["ok"] and n_after_knife == n_before_knife + 1, f"{knife_res} {n_before_knife}->{n_after_knife}")
+
+            er = await hv_create_shape(kind="rect", x=1000, y=600, w=60, h=60, fill="#775599")
+            svg_before_erase = await hv_export_svg()
+            erase_res = await hv_erase_sweep(points=[{"x": 970, "y": 630}, {"x": 1070, "y": 630}], radius=10)
+            svg_after_erase = await hv_export_svg()
+            check("hv_erase_sweep changes the shape's geometry", erase_res["ok"] and svg_after_erase != svg_before_erase, str(erase_res))
+
+            miss_res = await hv_scissors_cut(x=-9999, y=-9999, tolerance=1)
+            check("hv_scissors_cut reports ok:false on a miss instead of silently doing nothing", miss_res["ok"] is False, str(miss_res))
 
             # --- pathfinder: region-correctness via isPointInFill, same bar the tools
             # audit itself used (this test would have caught the invert-space resolution
