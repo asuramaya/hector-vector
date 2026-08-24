@@ -57,7 +57,8 @@ async def main() -> int:
                 hv_expand_width_stroke, hv_get_effects, hv_knife_cut, hv_make_blend,
                 hv_make_width_stroke, hv_place_symbol_instance, hv_reflect, hv_release_width_stroke,
                 hv_remove_effect, hv_remove_fill_layer, hv_reset_envelope,
-                hv_reset_mesh_points, hv_reset_width_uniform, hv_scissors_cut, hv_select,
+                hv_reset_mesh_points, hv_reset_width_uniform, hv_get_width_profile,
+                hv_set_width_profile_point, hv_scissors_cut, hv_select,
                 hv_set_blend_param, hv_set_envelope_point, hv_set_fill_layer,
                 hv_set_mesh_color, hv_set_mesh_point, hv_set_shape_param, hv_set_stroke,
                 hv_set_stroke_style, hv_set_text_box, hv_set_text_content,
@@ -448,6 +449,26 @@ async def main() -> int:
             await hv_reset_width_uniform(id=ws)
             svg_ws = await hv_export_svg()
             check("hv_reset_width_uniform keeps it a width-stroke group", f'data-hv-id="{ws}"' in svg_ws and "data-hv-wstroke" in svg_ws, "")
+
+            profile0 = await hv_get_width_profile(id=ws)
+            check("hv_get_width_profile reads the uniform 2-stop profile", profile0 is not None and len(profile0["stops"]) == 2, str(profile0))
+
+            await hv_set_width_profile_point(id=ws, t=0.5, half_width=25, side="both")
+            profile1 = await hv_get_width_profile(id=ws)
+            mid_stop = next(s for s in profile1["stops"] if abs(s["t"] - 0.5) < 0.03)
+            check("hv_set_width_profile_point inserts a new stop with the given width", abs(mid_stop["l"] - 25) < 0.01 and abs(mid_stop["r"] - 25) < 0.01 and len(profile1["stops"]) == 3, str(profile1))
+
+            n_before_width_undo = len((await hv_get_document())["nodes"])
+            await page.evaluate("() => editor.undo()")
+            profile1_undo = await hv_get_width_profile(id=ws)
+            check("hv_set_width_profile_point is a real undo step", len(profile1_undo["stops"]) == 2, str(profile1_undo))
+            await hv_set_width_profile_point(id=ws, t=0.5, half_width=25, side="both")  # redo for the rest of the run
+            check("no extra top-level nodes leaked from the width-profile undo/redo", len((await hv_get_document())["nodes"]) == n_before_width_undo, "")
+
+            await hv_set_width_profile_point(id=ws, t=0.5, half_width=8, side="left")
+            profile2 = await hv_get_width_profile(id=ws)
+            mid_stop2 = next(s for s in profile2["stops"] if abs(s["t"] - 0.5) < 0.03)
+            check("hv_set_width_profile_point(side=left) changes only the left half-width", abs(mid_stop2["l"] - 8) < 0.01 and abs(mid_stop2["r"] - 25) < 0.01, str(mid_stop2))
 
             await hv_release_width_stroke(id=ws)
             svg_ws2 = await hv_export_svg()
