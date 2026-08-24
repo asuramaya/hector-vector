@@ -3946,6 +3946,27 @@ def main():
         page.evaluate("closeModal();")
         check("openToolsSettings deep-links to the centralized install hub (no scattered inline installers)", deep)
 
+        section("Settings: long explanations collapse behind an \"i\" info button, not inline paragraphs")
+        # The Highlight/Adaptive-toolbars/Agent-access/Customize-bars rows used to carry a
+        # permanent multi-sentence paragraph as their .form-hint — regression guard for the
+        # cleanup that moved that prose behind a click-to-reveal .info-btn instead.
+        file_menu_click(page, "Settings"); page.wait_for_timeout(100)
+        info_state = page.evaluate("""() => {
+          const hints = [...document.querySelectorAll('#modal-body .form-hint')].map(h => h.textContent);
+          return {
+            infoBtns: document.querySelectorAll('#modal-body .info-btn').length,
+            noLongParagraphInline: hints.every(h => h.length < 90),
+          };
+        }""")
+        check("Settings has info buttons and no long paragraph sits inline as a permanent hint",
+              info_state["infoBtns"] >= 4 and info_state["noLongParagraphInline"], str(info_state))
+        page.click("#modal-body .info-btn"); page.wait_for_timeout(80)
+        pop = page.evaluate("() => document.querySelector('.info-popover')?.textContent || null")
+        check("clicking an info button reveals its full explanation in a popover", bool(pop) and len(pop) > 10, str(pop))
+        page.evaluate("() => document.querySelector('#modal-body').click()"); page.wait_for_timeout(80)
+        check("clicking elsewhere closes the info popover", page.evaluate("!document.querySelector('.info-popover')"))
+        page.evaluate("closeModal();")
+
         section("Cleanup / object removal (LaMa) — overlay hook + /api/cleanup endpoint (#56)")
         check("the cleanup mask-overlay launcher is exposed", page.evaluate("() => typeof window.app.startCleanup === 'function'"))
         # Drive the backend the way the overlay does: a tiny image + a white mask square → /api/cleanup.
@@ -5944,6 +5965,31 @@ def main():
         check("cloud mode: web-font catalog served client-side (Google Fonts, no backend)", cfont is True)
         check("cloud mode: ZERO /api traffic (anti-drift guard — no server dependency on the editor path)",
               not cloud_api_hits, str(cloud_api_hits[:5]))
+
+        # Cloud build has no server to save a .hv project TO — bridged as far as a browser
+        # sandbox allows: a client-side download/open round trip carrying full undo history,
+        # same shape as desktop's server-side save_hv (hvserver/documents.py).
+        page.click('.menu[data-menu="file"] .menu-trigger'); page.wait_for_timeout(60)
+        cloud_file_items = page.evaluate("() => [...document.querySelectorAll('.menu[data-menu=\"file\"] .menu-item')].map(b=>b.textContent.trim())")
+        page.keyboard.press("Escape")
+        check("cloud File menu has a .hv Open + Save-project bridge (not just .svg)",
+              any("Open project" in l and ".hv" in l for l in cloud_file_items)
+              and any("Save project" in l and ".hv" in l for l in cloud_file_items), str(cloud_file_items))
+        hv_doc = page.evaluate("""async () => {
+            editor.push('Create shape');
+            const n = document.createElementNS('http://www.w3.org/2000/svg','path');
+            const id = 'hv1';
+            n.setAttribute('data-hv-id', id); n.setAttribute('data-hv-shape','rect');
+            n.setAttribute('data-hv-bx',10); n.setAttribute('data-hv-by',10);
+            n.setAttribute('data-hv-bw',40); n.setAttribute('data-hv-bh',40);
+            hv.regenShape(n); editor.stage.insertBefore(n, editor._overlayEl());
+            editor.selection = new Set([id]); editor.artboardSelected = false;
+            editor._renderSelection(); editor._renderLayers();
+            const svg = editor._historyMarkup ? editor._historyMarkup() : editor.serialize();
+            return { svgHasRect: svg.includes('data-hv-shape="rect"'), historyLen: editor.history.length };
+        }""")
+        check("cloud .hv save captures live markup + non-empty history (client-side, no /api call)",
+              hv_doc["svgHasRect"] and hv_doc["historyLen"] >= 1, str(hv_doc))
 
         # ---- Mobile / touch (phone-first reflow + pinch-zoom + bottom-sheet dock) ----
         # A fresh emulated-phone context: the shell folds to a single column (canvas + two

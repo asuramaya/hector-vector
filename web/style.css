@@ -2082,6 +2082,34 @@ input.insp-ab-name { background: var(--field-bg); color: inherit; border: 1px so
   font-size: 12px;
 }
 
+.form-label-info { display: inline-flex; align-items: center; gap: 5px; }
+
+.info-btn {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.info-btn:hover, .info-btn:focus-visible { opacity: 1; color: var(--fg); }
+
+.info-popover {
+  position: fixed;
+  z-index: 210;   /* above modal-window (100) */
+  max-width: min(280px, 80vw);
+  padding: 9px 11px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.22);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
 .form-range {
   display: grid;
   grid-template-columns: 1fr 44px;

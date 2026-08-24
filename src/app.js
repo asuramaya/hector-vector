@@ -68,6 +68,7 @@ import {
   configureDocIO, mountStageFromText, mountBlankCanvas, newBlankDoc, loadSvgToStage,
   openOpenModal, openOpenProjectModal, placeFromUrl, openPlaceModal, saveDocument, defaultSaveName,
   saveAsDocument, saveProject, openProject, loadProjects, exportFlow,
+  downloadProject, openProjectFromFile,
 } from "./ui/docio.js";
 import { configureShortcuts, openShortcutsModal } from "./ui/shortcuts.js";
 import { configurePalette, openPalette } from "./ui/palette.js";
@@ -506,11 +507,17 @@ const MENU_ITEMS = {
   "file": () => {
     // Cloud build: no server/Library — file ops are browser-native (open a file, download the
     // .svg, export PNG). openFromFile + downloadCurrentSvg are already fully client-side.
+    // Bridged to desktop as far as a browser sandbox allows: no server to save a project
+    // TO, but a downloaded .hv is a real file with full undo history, and reopening one is
+    // a file-picker read — same round trip as desktop's Open/Save project, just client-only.
     if (CLOUD) return [
       { label: "New blank canvas…", onClick: newBlankDoc },
       { type: "sep" },
       { label: "Open (.svg)…", onClick: openFromFile },
+      { label: "Open project (.hv)…", onClick: openProjectFromFile },
+      { type: "sep" },
       { label: "Download (.svg)", onClick: downloadCurrentSvg },
+      { label: "Save project (.hv, with undo history)…", onClick: downloadProject },
       { type: "sep" },
       { label: "Export…", onClick: exportFlow },
       { label: "Copy SVG markup", onClick: copySvgSource },
