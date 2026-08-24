@@ -241,6 +241,34 @@ async def hv_set_shape_param(id: str, key: str, value: Any) -> dict:
     )
 
 
+@mcp.tool()
+async def hv_create_path(anchors: list[dict], closed: bool = False, fill: str = "#000000") -> str:
+    """Create a live path from pen-style anchors — the same builder the Pen tool itself
+    uses (hv.penPathD), for arbitrary outlines hv_create_shape's parametric primitives
+    (rect/ellipse/poly/star) can't express. Each anchor is {"x","y"} for a straight
+    corner; add "in"/"out" (each {"x","y"}, an ABSOLUTE bezier control-point position,
+    not an offset) for a curved corner — mirror the same in/out point on a smooth
+    corner, give only one (or neither) for a cusp. `closed` wraps the last anchor back
+    to the first. Returns the new path's id — recolor/restyle it afterward with
+    hv_apply_fill/hv_apply_stroke same as any other shape."""
+    return await _eval(
+        """(a) => {
+            editor.push('Create path');
+            const d = hv.penPathD(a.anchors, a.closed, null);
+            const n = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            const id = 'n' + (++editor.idSeq);
+            n.setAttribute('data-hv-id', id);
+            n.setAttribute('d', d);
+            n.setAttribute('fill', a.fill);
+            editor.stage.insertBefore(n, editor._overlayEl());
+            editor.selection = new Set([id]); editor.artboardSelected = false;
+            editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
+            return id;
+        }""",
+        {"anchors": anchors, "closed": closed, "fill": fill},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Paint
 # ---------------------------------------------------------------------------
@@ -259,6 +287,22 @@ async def hv_apply_fill(ids: list[str], color: str | None) -> dict:
             return { ok: true };
         }""",
         {"ids": ids, "color": color},
+    )
+
+
+@mcp.tool()
+async def hv_apply_stroke(ids: list[str], color: str | None, width: float = 1.0) -> dict:
+    """Set a flat stroke colour + width on the given nodes, or pass color=null for no
+    stroke (width is ignored then). Solid-colour only, matching hv_apply_fill; for a
+    stroke gradient use hv_apply_stroke_gradient."""
+    return await _eval(
+        """(a) => {
+            editor.selection = new Set(a.ids); editor.artboardSelected = false;
+            editor.push('Apply stroke');
+            editor.applyStroke(a.color == null ? 'none' : a.color, a.color == null ? 0 : a.width);
+            return { ok: true };
+        }""",
+        {"ids": ids, "color": color, "width": width},
     )
 
 
