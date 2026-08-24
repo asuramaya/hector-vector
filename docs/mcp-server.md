@@ -1,7 +1,9 @@
-# hector-vector MCP server — design doc
+# hector-vector MCP server: design doc
 
-**Status: PROPOSED, not built.** This is the shared reference Ferryman and Halcyon are
-building implementation from — nothing here is live yet. Operator-authorized (2026-08-18):
+**Status: SHIPPED.** ~90 `hv_*` tools are live in `hvserver/mcp_server.py`, giving an AI
+agent widget-level parity with a human via an "Allow agent access" toggle in Settings.
+This remains the shared reference Ferryman and Halcyon built the implementation from.
+Operator-authorized (2026-08-18):
 "worth scoping and building the mcp and making it fully fledged for agent/human parity
 loop... would take hector-vector to the next level and differentiate it from a cool
 looking Adobe Illustrator clone."
