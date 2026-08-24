@@ -1336,9 +1336,10 @@ async def hv_remove_spine(id: str) -> dict:
 # ---------------------------------------------------------------------------
 # Width tool — a variable-width stroke ribbon (widget-parity scope). makeWidthStroke/
 # releaseWidthStroke/expandWidthStroke/resetWidthUniform self-manage undo; setWidthBase
-# (scrubbable) is wrapped here. Per-point profile dragging (the interactive handle editor)
-# is deliberately NOT wrapped this slice — same call as editSymbol's isolation-mode editing:
-# a stateful multi-step UI mode, not a single atomic mutation.
+# (scrubbable) is wrapped here. hv_set_width_profile_point reimplements _widthDown's
+# grab-or-insert-a-stop + set-its-half-width logic as a single-shot call — the source
+# doesn't factor that out into its own directly-callable core (unlike shapeBuilderPaint/
+# scissorsCut/knifeCut/eraseSweep), so it's mirrored here rather than driving a pointer drag.
 # ---------------------------------------------------------------------------
 
 
@@ -1410,6 +1411,58 @@ async def hv_expand_width_stroke(id: str) -> dict:
             return { ok: true };
         }""",
         {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_get_width_profile(id: str) -> dict | None:
+    """A width-stroke's profile: {"base_width", "stops": [{"t", "l", "r"}]} — `t` is
+    position along the spine (0..1), `l`/`r` are the half-width on each side of the spine
+    at that stop (independent, so a profile can be asymmetric). None if `id` isn't a
+    width-stroke group."""
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isWidthStroke(g)) return null;
+            const spec = editor._wsSpec(g);
+            return { base_width: spec.w, stops: (spec.profile || []).map(s => ({ t: s.t, l: s.l, r: s.r })) };
+        }""",
+        {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_set_width_profile_point(id: str, t: float, half_width: float, side: str = "both") -> dict:
+    """Set the width profile at position `t` (0..1 along the spine) — grabs the nearest
+    existing stop within 3% of `t`, or inserts a new one there (seeded from the profile's
+    current width at that point, same as clicking down with the Width tool). `side` is
+    "both" (symmetric), "left", or "right" (only that side of the spine changes, the
+    Alt-drag behaviour). `half_width` must be >= 0."""
+    if half_width < 0:
+        raise ValueError("half_width must be >= 0")
+    if side not in ("both", "left", "right"):
+        raise ValueError(f'side must be "both", "left", or "right", got {side!r}')
+    return await _eval(
+        """(a) => {
+            const g = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!g || !editor.isWidthStroke(g)) return { ok: false, reason: 'not a width-stroke group' };
+            const spec = editor._wsSpec(g);
+            editor.push('Width');
+            let stop = (spec.profile || []).find(s => Math.abs(s.t - a.t) < 0.03);
+            if (!stop) {
+                const w0 = editor._wsWidthAt(spec)(a.t);
+                stop = { t: a.t, l: w0.l, r: w0.r };
+                spec.profile.push(stop);
+                spec.profile.sort((x, y) => x.t - y.t);
+            }
+            if (a.side === 'left') stop.l = a.half_width;
+            else if (a.side === 'right') stop.r = a.half_width;
+            else { stop.l = a.half_width; stop.r = a.half_width; }
+            editor._wsSet(g, spec); editor._regenWidthStroke(g);
+            editor._renderSelection(); editor._renderInspector();
+            return { ok: true, t: stop.t };
+        }""",
+        {"id": id, "t": t, "half_width": half_width, "side": side},
     )
 
 
