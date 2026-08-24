@@ -2705,9 +2705,25 @@ const editor = {
     if (rawSel.length === 1 && this.isRepeatGroup(rawSel[0])) {
       wrap.appendChild(inspGroup("Repeat", this._repeatPanel(rawSel[0])));
     }   // Reflect / Shear / Transform-again / Repeat moved to the Actions menu (_objectActions)
-    // PROCESS — a single raster gets the pipeline stages (upscale / remove-bg /
-    // vectorize) inline. app.js owns the jobs + live trace, so it's injected via a
-    // hook; the editor stays vector-pure and just hosts the returned DOM.
+    // PROCESS — a single raster gets a pointer into the pipeline (upscale / remove-bg /
+    // vectorize / restore), and, if a live trace preview is mid-flight, Keep/Revert
+    // controls. app.js owns the jobs + live trace + where the pipeline actually lives
+    // (the Manage screen's Processor panel), so both are injected via hooks; the editor
+    // stays vector-pure and just hosts the returned DOM / fires the requested callback.
+    //
+    // The pointer button was removed once before on the theory that the Processor panel
+    // "auto-reveals when a raster is the subject" makes it redundant — true once you're
+    // ALREADY in Manage (verified: entering Manage does auto-target whatever raster is
+    // selected), but nothing in Edit mode itself says Manage exists or that this raster
+    // would land pre-targeted there. Restored as a one-line pointer, not the old inline
+    // pipeline-stages panel, so it stays a hint rather than a second copy of Processor.
+    if (isRaster && nodes.length === 1 && typeof this.onProcessRequested === "function") {
+      const go = document.createElement("button");
+      go.type = "button"; go.className = "insp-action"; go.textContent = "Process this image…";
+      go.title = "Open it in the pipeline (upscale / remove background / vectorize / restore) — pre-targeted, ready to run";
+      go.addEventListener("click", () => this.onProcessRequested(reads[0]));
+      wrap.appendChild(inspGroup("Process", [inspRow("", go)]));
+    }
     if (isRaster && nodes.length === 1 && typeof this.rasterTools === "function") {
       const tools = this.rasterTools(reads[0]);
       if (tools) wrap.appendChild(tools);
