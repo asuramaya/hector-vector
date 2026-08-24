@@ -821,6 +821,12 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
   editor.openContextPanel = showContextPanel;   // layers-row right-click → same object panel as the canvas
   editor.showMenu = showContextMenu;            // inspector "Actions ▾" menu (object commands)
   editor.rasterTools = buildRasterTools;         // raster panel: inline pipeline stages + live vectorize
+  // Raster panel's "Process this image…" pointer (Edit mode has no other route into the
+  // pipeline — see manage.js's own "Process this" seam, which already auto-targets
+  // whatever's selected the moment Manage opens; this just gets you there from the
+  // object you're already looking at). No-op in CLOUD, where window.__manage is null —
+  // guard by not wiring the hook at all, so the raster panel doesn't offer a dead button.
+  if (!CLOUD) editor.onProcessRequested = () => { if (window.__manage) window.__manage.enter(); };
   // Prefetch so the Process panels render without a flash. Deferred to a microtask:
   // this block runs during top-level module eval, but engineSchemas/rasterOpSchemas are
   // `let`s declared further down — calling now would hit their temporal dead zone (the

@@ -4061,13 +4061,29 @@ def main():
             const px='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
             editor.placeImage(px,'shot.png',120,120); return false; }""", timeout=6000)
         # Properties is now a COMPACT pointer — the pipeline was de-crammed into the Processor panel.
-        # raster Properties no longer carries a "Process / Open Processor" pointer — the
-        # Processor panel is contextual now, so rasterTools returns null when no live
-        # preview is running (it only surfaces Keep/Revert during a live trace).
+        # rasterTools itself still only surfaces Keep/Revert during a live trace preview
+        # (unchanged) — but Edit mode had NO route into the pipeline at all otherwise
+        # (confirmed via a live investigation, decision 1fe078e9): the "Processor is
+        # contextual, so a pointer is redundant" premise only holds once you're already IN
+        # Manage. Restored a lightweight pointer via editor.onProcessRequested (app.js
+        # wires it to window.__manage.enter()) — separate from rasterTools, which stays
+        # Keep/Revert-only.
         decram = page.evaluate("""() => { const node=editor.stage.querySelector('image[data-hv-id]');
-            return { isImage: node.tagName.toLowerCase()==='image', noPointer: editor.rasterTools(node) === null }; }""")
-        check("raster Properties has no Process pointer (Processor is contextual)",
-              decram["isImage"] and decram["noPointer"], str(decram))
+            return {
+                isImage: node.tagName.toLowerCase()==='image',
+                rasterToolsStillKeepRevertOnly: editor.rasterTools(node) === null,
+                hasProcessPointer: !!document.querySelector('.insp-action')
+                    && [...document.querySelectorAll('.insp-action')].some(b => b.textContent.includes('Process this image')),
+            }; }""")
+        check("rasterTools stays Keep/Revert-only outside a live preview",
+              decram["isImage"] and decram["rasterToolsStillKeepRevertOnly"], str(decram))
+        check("raster Properties HAS a Process pointer into the pipeline (restored — Edit mode had no other route in)",
+              decram["hasProcessPointer"], str(decram))
+        page.click('.insp-action:has-text("Process this image")')
+        page.wait_for_timeout(200)
+        check("Process pointer opens Manage", page.evaluate("document.querySelector('.app').classList.contains('manage')"))
+        page.click("#view-edit")   # back to Edit for the rest of this section
+        page.wait_for_timeout(150)
         # The Processor panel hosts the 6 stages, targeting the selected raster.
         stages = page.evaluate("""() => { renderProcessorPanel();
             return { names:[...document.querySelectorAll('#processor-body .proc-stage .stage-name')].map(s=>s.textContent),
