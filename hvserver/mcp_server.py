@@ -375,6 +375,23 @@ async def hv_pathfinder(ids: list[str], op: str) -> list[str]:
 
 
 @mcp.tool()
+async def hv_delete(ids: list[str]) -> dict:
+    """Delete the given nodes (matching the Delete key / Layers panel's delete). Any
+    gradient/clip/mask/filter that only that node used is reclaimed too. No-op (ok:false)
+    if none of the given ids resolve to a live node."""
+    return await _eval(
+        """(a) => {
+            const nodes = a.ids.map(id => editor.stage.querySelector('[data-hv-id="' + id + '"]')).filter(Boolean);
+            if (!nodes.length) return { ok: false, reason: 'no such nodes' };
+            editor.selection = new Set(a.ids); editor.artboardSelected = false;
+            editor.deleteSelection();
+            return { ok: true };
+        }""",
+        {"ids": ids},
+    )
+
+
+@mcp.tool()
 async def hv_duplicate(ids: list[str]) -> list[str]:
     """Duplicate the given nodes (offset by 12,12 user-units, matching Ctrl/Cmd+D).
     Returns the new nodes' ids. A duplicated named-text-style or symbol instance keeps its

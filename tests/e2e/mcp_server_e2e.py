@@ -64,6 +64,7 @@ async def main() -> int:
                 hv_set_stroke_style, hv_set_text_box, hv_set_text_content,
                 hv_set_text_style, hv_set_warp_param, hv_set_width_base,
                 hv_shape_builder_paint, hv_update_effect, hv_edit_symbol, hv_finish_symbol_edit,
+                hv_delete,
             )
 
             # --- attach + read state -------------------------------------------------
@@ -508,6 +509,20 @@ async def main() -> int:
 
             miss_res = await hv_scissors_cut(x=-9999, y=-9999, tolerance=1)
             check("hv_scissors_cut reports ok:false on a miss instead of silently doing nothing", miss_res["ok"] is False, str(miss_res))
+
+            # --- delete --------------------------------------------------------------------
+            da = await hv_create_shape(kind="rect", x=1100, y=700, w=40, h=40, fill="#334455")
+            n_before_delete = len((await hv_get_document())["nodes"])
+            del_res = await hv_delete(ids=[da])
+            n_after_delete = len((await hv_get_document())["nodes"])
+            check("hv_delete removes exactly the targeted node", del_res["ok"] and n_after_delete == n_before_delete - 1, f"{del_res} {n_before_delete}->{n_after_delete}")
+
+            await page.evaluate("() => editor.undo()")
+            n_after_undo = len((await hv_get_document())["nodes"])
+            check("hv_delete is a real undo step", n_after_undo == n_before_delete, f"{n_after_undo} expected {n_before_delete}")
+
+            miss_del = await hv_delete(ids=["n-does-not-exist"])
+            check("hv_delete reports ok:false for a nonexistent id instead of silently no-op'ing", miss_del["ok"] is False, str(miss_del))
 
             # --- pathfinder: region-correctness via isPointInFill, same bar the tools
             # audit itself used (this test would have caught the invert-space resolution
