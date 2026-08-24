@@ -122,7 +122,13 @@ export function renderGalleryGrid(items, onPick) {
     // <object> document loads and ignore lazy-loading, so a gallery of many
     // vectors leaves most cells blank. <img> paints reliably and lazily — the
     // Process gallery already does this.
-    thumb.innerHTML = `<div class="gallery-thumb"><img src="${item.url}" alt="${item.name}" loading="lazy" decoding="async" /></div>`;
+    // item.icon (a glyph, not a URL) opts a cell out of the <img> thumb entirely — for
+    // non-image resources like a .hv project's JSON, an <img src> would just 404 into a
+    // broken-image icon; same glyph-tile convention as the Library sidebar's own project
+    // cells (renderLibraryCanvases's "⛋").
+    thumb.innerHTML = item.icon
+      ? `<div class="gallery-thumb gallery-thumb-proj">${item.icon}</div>`
+      : `<div class="gallery-thumb"><img src="${item.url}" alt="${item.name}" loading="lazy" decoding="async" /></div>`;
     thumb.addEventListener("click", () => onPick(item));
     cell.appendChild(thumb);
 

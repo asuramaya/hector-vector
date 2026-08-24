@@ -942,7 +942,7 @@ def main():
         # header: File ▾ menu (left), Process centered, no loose New/Open/Save/Export buttons
         check("File menu replaces loose header buttons", page.evaluate(
             "!!document.querySelector('.menu[data-menu=\"file\"]') && !document.querySelector('#open-button') && !document.querySelector('#save-button')"))
-        file_menu_click(page, "Open vector")
+        file_menu_click(page, "Open from Library")
         check("File menu Open opens the browser", page.evaluate("!document.querySelector('#modal-root').hidden"))
         page.evaluate("closeModal()")
 
@@ -4003,7 +4003,7 @@ def main():
 
         # Open modal opens and lists vectors
         page.evaluate("editor.pinned=false")
-        file_menu_click(page, "Open vector"); page.wait_for_timeout(100)
+        file_menu_click(page, "Open from Library"); page.wait_for_timeout(100)
         modal_open = page.evaluate("!document.querySelector('#modal-root').hidden")
         cells = page.evaluate("document.querySelectorAll('#modal-body .gallery-cell').length")
         check("Open modal lists vectors", modal_open and cells >= 0, f"open={modal_open} cells={cells}")
@@ -4242,6 +4242,30 @@ def main():
         page.keyboard.press("Escape")
         check("File menu exposes Open-from-file / Download .svg / Reveal",
               all(any(x in l for l in file_items) for x in ["Open from file", "Download .svg", "Reveal current file"]), str(file_items))
+        # Save project (.hv) had no menu-visible counterpart to open one back up — regression
+        # for that gap (was Library-sidebar-only, via a drag or a right-click info modal).
+        check("File menu has an Open project (.hv) counterpart to Save project",
+              any("Open project" in l and ".hv" in l for l in file_items), str(file_items))
+        check("File menu's Resume toggle mirrors Settings ▸ On launch, not just buried there",
+              any("Reopen last document on launch" in l for l in file_items), str(file_items))
+
+        # Open project (.hv) modal opens (empty-state or populated, either is fine here —
+        # this checks the wiring, not that a project exists in this run).
+        page.click('.menu[data-menu="file"] .menu-trigger'); page.wait_for_timeout(60)
+        page.click('.menu[data-menu="file"] .menu-item:has-text("Open project")'); page.wait_for_timeout(120)
+        check("Open project modal opens", page.evaluate("!document.querySelector('#modal-root').hidden"))
+        page.evaluate("closeModal()")
+
+        # Resume toggle flips prefs.startup and persists it (Settings' own control writes the
+        # same key — this just checks the File-menu mirror actually reaches it).
+        before_startup = page.evaluate("JSON.parse(localStorage.getItem('hector-vector:prefs')||'{}').startup")
+        page.click('.menu[data-menu="file"] .menu-trigger'); page.wait_for_timeout(60)
+        page.click('.menu[data-menu="file"] .menu-item:has-text("Reopen last document on launch")'); page.wait_for_timeout(60)
+        after_startup = page.evaluate("JSON.parse(localStorage.getItem('hector-vector:prefs')||'{}').startup")
+        check("Resume toggle flips + persists prefs.startup", after_startup != before_startup, f"{before_startup} -> {after_startup}")
+        # flip it back so this test stays idempotent across reruns
+        page.click('.menu[data-menu="file"] .menu-trigger'); page.wait_for_timeout(60)
+        page.click('.menu[data-menu="file"] .menu-item:has-text("Reopen last document on launch")'); page.wait_for_timeout(60)
 
         # Download .svg → a synthetic <a download="*.svg"> click (stub the click to avoid a real download)
         page.evaluate("""() => { window.__dl=null;
