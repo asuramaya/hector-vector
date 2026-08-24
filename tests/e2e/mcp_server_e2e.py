@@ -47,12 +47,16 @@ async def main() -> int:
             from hvserver.mcp_server import (
                 hv_apply_fill, hv_apply_gradient, hv_boolean_op, hv_create_shape,
                 hv_add_fill_layer, hv_align, hv_break_symbol_link, hv_create_text,
-                hv_distribute, hv_duplicate, hv_expand_multi_fill, hv_export_svg,
-                hv_get_document, hv_get_fill_layers, hv_get_selection, hv_group,
-                hv_list_symbols, hv_make_multi_fill, hv_make_symbol, hv_move,
-                hv_move_fill_layer, hv_pathfinder, hv_place_symbol_instance,
-                hv_reflect, hv_remove_fill_layer, hv_select, hv_set_fill_layer,
-                hv_set_shape_param, hv_set_text_box, hv_set_text_content, hv_set_text_style,
+                hv_distribute, hv_duplicate, hv_expand_envelope, hv_expand_gradient_mesh,
+                hv_expand_multi_fill, hv_expand_warp, hv_export_svg, hv_get_document,
+                hv_get_envelope, hv_get_fill_layers, hv_get_gradient_mesh,
+                hv_get_selection, hv_group, hv_list_symbols, hv_make_envelope,
+                hv_make_envelope_with_top_object, hv_make_gradient_mesh, hv_make_multi_fill,
+                hv_make_symbol, hv_make_warp, hv_move, hv_move_fill_layer, hv_pathfinder,
+                hv_place_symbol_instance, hv_reflect, hv_remove_fill_layer,
+                hv_reset_envelope, hv_reset_mesh_points, hv_select, hv_set_envelope_point,
+                hv_set_fill_layer, hv_set_mesh_color, hv_set_mesh_point, hv_set_shape_param,
+                hv_set_text_box, hv_set_text_content, hv_set_text_style, hv_set_warp_param,
             )
 
             # --- attach + read state -------------------------------------------------
@@ -264,6 +268,76 @@ async def main() -> int:
             await hv_expand_multi_fill(id=stack)
             doc_mf = await hv_get_document()
             check("hv_expand_multi_fill drops the multi-fill group (no longer a stack)", (await hv_get_fill_layers(id=stack)) is None, str(doc_mf["nodes"]))
+
+            # --- envelope --------------------------------------------------------------
+            ea = await hv_create_shape(kind="rect", x=800, y=10, w=100, h=100, fill="#4477cc")
+            env = await hv_make_envelope(ids=[ea])
+            grid = await hv_get_envelope(id=env)
+            check("hv_make_envelope creates a grid", grid is not None and grid["rows"] >= 2 and grid["cols"] >= 2, str(grid))
+
+            eb = await hv_create_shape(kind="ellipse", x=800, y=150, w=100, h=100, fill="#cc4477")
+            ec = await hv_create_shape(kind="rect", x=820, y=170, w=60, h=60, fill="#77cc44")
+            env2 = await hv_make_envelope_with_top_object(ids=[ec, eb])
+            grid2 = await hv_get_envelope(id=env2)
+            check("hv_make_envelope_with_top_object creates a grid from 2+ shapes", grid2 is not None, str(grid2))
+
+            bad = await hv_set_envelope_point(id=env, row=999, col=0, x=0, y=0)
+            check("hv_set_envelope_point refuses an out-of-range index instead of silently no-op'ing", bad["ok"] is False, str(bad))
+
+            r0, c0 = 0, 0
+            before_pt = grid["pts"][r0][c0]
+            await hv_set_envelope_point(id=env, row=r0, col=c0, x=before_pt["x"] + 40, y=before_pt["y"] + 40)
+            grid_after = await hv_get_envelope(id=env)
+            check("hv_set_envelope_point moves the targeted grid point", abs(grid_after["pts"][r0][c0]["x"] - (before_pt["x"] + 40)) < 0.5, str(grid_after["pts"][r0][c0]))
+            await page.evaluate("() => editor.undo()")
+            grid_undo = await hv_get_envelope(id=env)
+            check("hv_set_envelope_point is a real undo step", abs(grid_undo["pts"][r0][c0]["x"] - before_pt["x"]) < 0.5, str(grid_undo["pts"][r0][c0]))
+
+            await hv_reset_envelope(id=env)
+            grid_reset = await hv_get_envelope(id=env)
+            check("hv_reset_envelope restores the rest grid", abs(grid_reset["pts"][r0][c0]["x"] - before_pt["x"]) < 0.5, str(grid_reset["pts"][r0][c0]))
+
+            await hv_expand_envelope(id=env)
+            check("hv_expand_envelope drops the envelope group", (await hv_get_envelope(id=env)) is None, "")
+
+            # --- gradient mesh -----------------------------------------------------------
+            ma = await hv_create_shape(kind="rect", x=800, y=280, w=80, h=80, fill="#808080")
+            mesh = await hv_make_gradient_mesh(id=ma)
+            mgrid = await hv_get_gradient_mesh(id=mesh)
+            check("hv_make_gradient_mesh creates a colour+position grid", mgrid is not None and mgrid["rows"] >= 2 and mgrid["cols"] >= 2, str(mgrid))
+
+            await hv_set_mesh_color(id=mesh, row=0, col=0, color="#ff0000")
+            mgrid2 = await hv_get_gradient_mesh(id=mesh)
+            check("hv_set_mesh_color changes exactly the targeted point's colour", mgrid2["colors"][0][0] == "#ff0000" and mgrid2["colors"][0][1] == mgrid["colors"][0][1], str(mgrid2["colors"]))
+
+            mp0 = mgrid["pts"][0][0]
+            await hv_set_mesh_point(id=mesh, row=0, col=0, x=mp0["x"] + 15, y=mp0["y"] + 15)
+            mgrid3 = await hv_get_gradient_mesh(id=mesh)
+            check("hv_set_mesh_point moves the targeted point independent of colour", abs(mgrid3["pts"][0][0]["x"] - (mp0["x"] + 15)) < 0.5 and mgrid3["colors"][0][0] == "#ff0000", str(mgrid3["pts"][0][0]))
+
+            await hv_reset_mesh_points(id=mesh)
+            mgrid4 = await hv_get_gradient_mesh(id=mesh)
+            check("hv_reset_mesh_points resets geometry but leaves colours alone", abs(mgrid4["pts"][0][0]["x"] - mp0["x"]) < 0.5 and mgrid4["colors"][0][0] == "#ff0000", str(mgrid4))
+
+            await hv_expand_gradient_mesh(id=mesh)
+            check("hv_expand_gradient_mesh drops the mesh group", (await hv_get_gradient_mesh(id=mesh)) is None, "")
+
+            # --- warp ----------------------------------------------------------------
+            wa = await hv_create_shape(kind="rect", x=800, y=400, w=100, h=60, fill="#2288aa")
+            warp_svg_before = await hv_export_svg()
+            warp = await hv_make_warp(ids=[wa], type="bulge")
+            warp_svg_after = await hv_export_svg()
+            check("hv_make_warp produces different path geometry than the flat input", f'data-hv-id="{warp}"' in warp_svg_after and warp_svg_after != warp_svg_before, "")
+
+            await hv_set_warp_param(id=warp, key="amount", value=0.9)
+            svg_amt = await hv_export_svg()
+            await hv_set_warp_param(id=warp, key="type", value="fisheye")
+            svg_type = await hv_export_svg()
+            check("hv_set_warp_param(type=fisheye) changes the geometry from the bulge result", svg_type != svg_amt, "")
+
+            await hv_expand_warp(id=warp)
+            svg_expanded = await hv_export_svg()
+            check("hv_expand_warp drops the data-hv-warp spec attribute", "data-hv-warp" not in svg_expanded, "")
 
             # --- pathfinder: region-correctness via isPointInFill, same bar the tools
             # audit itself used (this test would have caught the invert-space resolution
