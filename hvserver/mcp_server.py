@@ -25,10 +25,15 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
+from PIL import Image
+
 import json as _json
 
 from hvserver.paths import AGENT_PORT_FILE, OUTPUTS_DIR
-from hvserver.files import discover_work_items, work_item_record, work_item_info, list_outputs
+from hvserver.files import (
+    discover_work_items, work_item_record, work_item_info, list_outputs,
+    rename_work_item, remove_work_item, rename_output, remove_output,
+)
 from hvserver.documents import list_projects, save_hv
 from hvserver.pipeline import plan_image, run_pipeline
 from hvserver.jobs import jobs, jobs_lock, cancel_job
@@ -1658,6 +1663,94 @@ async def hv_library_info(name: str) -> dict:
     return work_item_info(name)
 
 
+@mcp.tool()
+async def hv_library_rename(name: str, new_name: str, source: str = "raster") -> dict:
+    """Rename a Library item in place (extension preserved). `source` is "raster"
+    (from hv_library_list) — anything else (vector/canvas) is renamed via the same
+    outputs-tree rename a .hv project's internal name field is kept in sync too."""
+    if source == "raster":
+        return rename_work_item({"name": name, "new_name": new_name})
+    return rename_output({"name": name, "new_name": new_name})
+
+
+@mcp.tool()
+async def hv_library_remove(name: str, source: str = "raster") -> dict:
+    """Delete a Library item permanently — no undo, no trash. `source` is "raster"
+    (from hv_library_list) or "vector"/"canvas" (outputs tree, .svg/.png/.hv). Review
+    what you're deleting first (hv_library_info, or a hv_library_find_duplicates
+    cluster) — this is the same irreversible action as the Library's own delete button."""
+    if source == "raster":
+        return remove_work_item({"name": name})
+    return remove_output({"name": name})
+
+
+def _ahash(path: Path, size: int = 8) -> int:
+    """8x8 average-hash: cheap, dependency-free perceptual fingerprint. Two images
+    with a small Hamming distance between hashes look visually similar even if their
+    bytes/filenames differ completely — the same idea pHash/dHash use, simplified."""
+    with Image.open(path) as im:
+        pixels = list(im.convert("L").resize((size, size), Image.Resampling.LANCZOS).getdata())
+    avg = sum(pixels) / len(pixels)
+    bits = 0
+    for i, p in enumerate(pixels):
+        if p > avg:
+            bits |= 1 << i
+    return bits
+
+
+@mcp.tool()
+async def hv_library_find_duplicates(max_distance: int = 6) -> list[list[dict]]:
+    """Find visually near-duplicate raster images in the Library via a perceptual hash
+    (8x8 average-hash, Hamming distance) — catches the same photo saved multiple times,
+    near-identical burst shots, or a re-export under a different name, none of which
+    filename comparison alone would catch. `max_distance` is the Hamming-distance
+    tolerance out of 64 bits (0 = pixel-identical hash; ~6 default catches
+    near-duplicates; raise it for looser "similar, not identical" grouping). Returns
+    clusters — each a list of {"name","url","distance_from_first"} — sorted largest
+    cluster first. Read-only; pair with hv_library_remove once you've reviewed a
+    cluster and picked which copies to keep."""
+    hashed: list[tuple[Path, int]] = []
+    for path in discover_work_items():
+        try:
+            hashed.append((path, _ahash(path)))
+        except Exception:  # noqa: BLE001 — a corrupt/unreadable image just gets skipped
+            continue
+    parent = list(range(len(hashed)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i: int, j: int) -> None:
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[ri] = rj
+
+    for i in range(len(hashed)):
+        for j in range(i + 1, len(hashed)):
+            if bin(hashed[i][1] ^ hashed[j][1]).count("1") <= max_distance:
+                union(i, j)
+
+    groups: dict[int, list[tuple[Path, int]]] = {}
+    for i, entry in enumerate(hashed):
+        groups.setdefault(find(i), []).append(entry)
+
+    clusters = []
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        base_hash = group[0][1]
+        clusters.append([
+            {"name": p.name, "url": f"/work-items/{urllib.parse.quote(p.name)}",
+             "distance_from_first": bin(h ^ base_hash).count("1")}
+            for p, h in group
+        ])
+    clusters.sort(key=len, reverse=True)
+    return clusters
+
+
 # ---------------------------------------------------------------------------
 # Document view — current tool, zoom/pan, Edit-vs-Manage mode. A real navigation
 # action (hv_set_view_mode switches what's actually on screen for a human watching the
@@ -1861,6 +1954,7 @@ async def hv_pipeline_plan(input_url: str) -> dict:
 @mcp.tool()
 async def hv_pipeline_run(
     input_url: str | None = None, input_name: str | None = None,
+    inputs: list[str] | None = None,
     stage_upscale: bool = True, stage_removebg: bool = True, stage_vectorize: bool = True,
     stage_dejpeg: bool = False, stage_denoise: bool = False, stage_deblur: bool = False,
     removebg_method: str = "classical", vectorize_method: str = "trace",
@@ -1869,10 +1963,13 @@ async def hv_pipeline_run(
 ) -> dict:
     """Run the raster pipeline (restoration -> upscale -> remove-bg -> vectorize, each
     stage independently toggleable) as a BACKGROUND job — returns immediately with the
-    started job's id; poll with hv_job_status. `input_url` (a Library raster's `url`)
-    runs a focused job against just that image — `input_name` is the display name for
-    its output files (from hv_library_list; derived from the URL if omitted); omit
-    `input_url` entirely to batch-run every undiscovered raster in the Library (skips
+    started job's id(s); poll with hv_job_status/hv_job_list. Three targeting modes,
+    in priority order: `input_url` (a Library raster's `url`) runs a focused job
+    against just that image — `input_name` is the display name for its output files,
+    derived from the URL if omitted; `inputs` (a list of raster filenames, from
+    hv_library_list(kind="raster")'s `name` field) batch-runs exactly that explicit
+    subset — the right choice for "reprocess these 12 flagged files", not the whole
+    Library; omit both to batch-run every undiscovered raster in the Library (skips
     ones already processed for this exact stage set unless `extra={"force": true}`).
     `removebg_method` is "classical"/"ai"/"green"; `vectorize_method` is "trace"/"pixel".
     `extra` passes any advanced knob run_pipeline() accepts straight through
@@ -1881,7 +1978,7 @@ async def hv_pipeline_run(
     if input_url and not input_name:
         input_name = urllib.parse.unquote(Path(urllib.parse.urlparse(input_url).path).name)
     payload = {
-        "input_url": input_url or "", "input_name": input_name or "",
+        "input_url": input_url or "", "input_name": input_name or "", "inputs": inputs or [],
         "stage_upscale": stage_upscale, "stage_removebg": stage_removebg, "stage_vectorize": stage_vectorize,
         "stage_dejpeg": stage_dejpeg, "stage_denoise": stage_denoise, "stage_deblur": stage_deblur,
         "removebg_method": removebg_method, "vectorize_method": vectorize_method,
