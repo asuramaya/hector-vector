@@ -642,6 +642,51 @@ async def hv_place_symbol_instance(symbol_id: str, x: float | None = None, y: fl
     )
 
 
+@mcp.tool()
+async def hv_edit_symbol(id: str) -> list[dict]:
+    """Enter symbol-master editing (Isolation mode): surface the instance's master onto the
+    stage so its content becomes directly selectable/editable by the other hv_* tools
+    (paint, move, set_shape_param, etc.) — every OTHER instance updates live as you edit.
+    Returns the master's now-editable content nodes (same shape as hv_get_document's
+    `nodes`). Call hv_finish_symbol_edit when done, before editing anything else.
+
+    CAVEAT: hv_create_shape and hv_create_text insert at the TOP-LEVEL stage regardless of
+    an active symbol edit (they don't route through isolation-aware insertion), so they
+    will NOT land inside the master — a known limitation, not silently worked around. To
+    add new content to a master while editing it, hv_duplicate one of the returned content
+    nodes instead of creating a fresh shape."""
+    return await _eval(
+        """(a) => {
+            const use = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!use || !editor.isSymbolInstance(use)) return [];
+            editor.editSymbol(use);
+            const root = editor.nodeById(editor._isoStack[editor._isoStack.length - 1]);
+            if (!root) return [];
+            return [...root.querySelectorAll(':scope > [data-hv-id]')].map(n => {
+                const tag = n.tagName.toLowerCase();
+                const o = { id: n.getAttribute('data-hv-id'), tag, fill: n.getAttribute('fill'), stroke: n.getAttribute('stroke') };
+                if (tag === 'text') o.content = editor._readTextContent(n);
+                return o;
+            });
+        }""",
+        {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_finish_symbol_edit() -> dict:
+    """Finish the current symbol-master edit (started by hv_edit_symbol) and return the
+    master to <defs> — every instance (including the one originally clicked) reflects the
+    edit from here on. No-op if no edit is in progress."""
+    return await _eval(
+        """() => {
+            if (!editor._isoStack || !editor._isoStack.length) return { ok: false, reason: 'no edit in progress' };
+            editor.exitIsolation();
+            return { ok: true };
+        }"""
+    )
+
+
 # ---------------------------------------------------------------------------
 # Multi-fill / Appearance — an ordered stack of fill layers on one shape (widget-parity
 # scope, decision a542832a), fills-only per this app's own scoped v1 (no strokes/blend
