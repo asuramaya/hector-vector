@@ -23,6 +23,8 @@ import os
 from typing import Any
 
 from hvserver.paths import AGENT_PORT_FILE
+from hvserver.files import discover_work_items, work_item_record, work_item_info, list_outputs
+from hvserver.documents import list_projects
 
 try:
     from mcp.server.mcpserver import MCPServer
@@ -1551,6 +1553,124 @@ async def hv_export_svg() -> str:
     a file. Ground truth — if you need to double-check exactly what a sequence of tool
     calls produced, this is more reliable than reasoning about it from the calls alone."""
     return await _eval("() => editor.stage.outerHTML")
+
+
+# ---------------------------------------------------------------------------
+# Library — Halcyon's Phase 2+ slice (docs/mcp-server.md), first piece: read-only
+# browsing. Answered straight from the same Python helpers server.py's own
+# /api/work-items etc. endpoints already use — this process and server.py share one
+# filesystem and one hvserver package, so there's no second source of truth to keep
+# in sync, and no need to round-trip through the page/HTTP layer for a pure read.
+# hv_library_load (place an item on the canvas / open a .hv project) and full
+# project I/O are a follow-up slice — see thread opened alongside this one.
+# ---------------------------------------------------------------------------
+
+_LIBRARY_KINDS = {"all", "raster", "vector", "canvas"}
+
+
+@mcp.tool()
+async def hv_library_list(kind: str = "all", q: str | None = None) -> list[dict]:
+    """Browse the local Library: raster source images ("raster"), rendered vector/PNG
+    outputs ("vector"), or saved .hv canvases ("canvas") — or "all" (default) for
+    everything. `q`, if given, filters by a case-insensitive substring of the name. Each
+    item carries `source` (which of the three it is) plus `name`/`url`/`modified_at`; use
+    hv_library_info for a raster's full dimensions/colour-profile detail."""
+    if kind not in _LIBRARY_KINDS:
+        raise ValueError(f"kind must be one of {sorted(_LIBRARY_KINDS)}, got {kind!r}")
+    items: list[dict] = []
+    if kind in ("all", "raster"):
+        for path in discover_work_items():
+            rec = dict(work_item_record(path)); rec["source"] = "raster"
+            items.append(rec)
+    if kind in ("all", "vector"):
+        for rec in list_outputs():
+            rec = dict(rec); rec["source"] = "vector"
+            items.append(rec)
+    if kind in ("all", "canvas"):
+        for rec in list_projects():
+            rec = dict(rec); rec["source"] = "canvas"
+            items.append(rec)
+    if q:
+        needle = q.lower()
+        items = [it for it in items if needle in (it.get("name") or "").lower()]
+    return items
+
+
+@mcp.tool()
+async def hv_library_info(name: str) -> dict:
+    """Full detail for one raster source image in the Library: pixel dimensions, colour
+    mode/alpha, format, ICC profile name, DPI, EXIF orientation — the same data the app's
+    Info panel shows. Rasters only (from hv_library_list's "raster" source); vector
+    outputs and .hv canvases have no equivalent metadata beyond what hv_library_list
+    already returns."""
+    return work_item_info(name)
+
+
+# ---------------------------------------------------------------------------
+# Document view — current tool, zoom/pan, Edit-vs-Manage mode. A real navigation
+# action (hv_set_view_mode switches what's actually on screen for a human watching the
+# same tab), not chrome positioning — in scope under the operator's widget-parity
+# ruling (decision a542832a) same as everything else here.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def hv_get_view() -> dict:
+    """Current view state: the active tool name, whether the app is in "edit" (the live
+    canvas) or "manage" (the browse/batch-process grid) mode, and the editing canvas's
+    zoom level + pan offset."""
+    return await _eval(
+        """() => ({
+            tool: editor.tool,
+            mode: (window.__manage && window.__manage.isManage()) ? 'manage' : 'edit',
+            zoom: viewports.output.scale,
+            pan: { x: viewports.output.x, y: viewports.output.y },
+        })"""
+    )
+
+
+@mcp.tool()
+async def hv_set_view_mode(mode: str) -> dict:
+    """Switch between "edit" (the live canvas) and "manage" (the browse/batch-process
+    grid — Library/Processor/Jobs). A real navigation action, not a cosmetic one — an
+    agent working the Library or a batch pipeline run needs Manage mode the same way a
+    human clicking the Edit/Manage toggle does."""
+    if mode not in ("edit", "manage"):
+        raise ValueError(f'mode must be "edit" or "manage", got {mode!r}')
+    return await _eval(
+        """(a) => {
+            if (!window.__manage) return { ok: false, reason: 'Manage screen unavailable (cloud build)' };
+            const isManage = window.__manage.isManage();
+            if (a.mode === 'manage' && !isManage) window.__manage.enter();
+            else if (a.mode === 'edit' && isManage) window.__manage.leave();
+            return { ok: true, mode: window.__manage.isManage() ? 'manage' : 'edit' };
+        }""",
+        {"mode": mode},
+    )
+
+
+@mcp.tool()
+async def hv_fit_view() -> dict:
+    """Fit the editing canvas to frame (same as the Fit button / shortcut). Returns the
+    resulting zoom level."""
+    return await _eval(
+        "() => { fitVp(viewports.output); return { zoom: viewports.output.scale }; }"
+    )
+
+
+@mcp.tool()
+async def hv_set_zoom(zoom: float) -> dict:
+    """Set the editing canvas's zoom to an absolute scale (1.0 = 100%). Clamped to the
+    app's own 2%..4000% range. Returns the resulting zoom level (may differ from the
+    requested value if clamped)."""
+    return await _eval(
+        """(a) => {
+            const vp = viewports.output;
+            zoomVp(vp, a.zoom / (vp.scale || 1));
+            return { zoom: vp.scale };
+        }""",
+        {"zoom": zoom},
+    )
 
 
 if __name__ == "__main__":
