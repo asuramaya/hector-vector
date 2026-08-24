@@ -10,7 +10,7 @@ import { openModal, closeModal } from "./modal.js";
 import { sectionTitle, fieldRow, makeNumberRaw } from "./widgets.js";
 import { serializeForSave, openExportModal } from "./export.js";
 import { hideContextMenu } from "./menus.js";
-import { renderGalleryGrid } from "./gallery.js";
+import { renderGalleryGrid, downloadBlob } from "./gallery.js";
 import { viewports, applyBgMode, measureFit } from "./viewport.js";
 import {
   selectedOutput, outputs, workItems, projects,
@@ -266,6 +266,55 @@ export async function openProject(item) {
     if (editor._updateButtons) editor._updateButtons();
   }));
   setStatus(`Opened project ${item.name}.`, 2000);
+}
+
+// ---------- client-side .hv (no server — the cloud build's only project I/O) ----------
+// Same on-disk shape as save_hv (hvserver/documents.py): {version, name, svg, history,
+// redo}, just written straight to the browser's download folder instead of a server
+// outputs/canvas/ dir. This is how the cloud build gets to "save a real project, not
+// just a flattened .svg" at all — it has no backend to save one server-side, but a
+// browser download is a real file on disk either way, and openProjectFromFile below
+// reads it back bit-for-bit (undo history included), same round trip as desktop's
+// Open project (.hv)… — just file-picker in, download out, instead of both via server.
+export async function downloadProject() {
+  if (!editor.stage) { setStatus("Open or create a canvas first, then save the project.", 3000); return; }
+  const svg = editor._historyMarkup ? editor._historyMarkup() : editor.serialize();
+  if (!svg) return;
+  const doc = { version: 1, name: null, svg, history: editor.history || [], redo: editor.redo || [] };
+  const name = defaultSaveName().replace(/\.svg$/i, "") + ".hv";
+  doc.name = name;
+  downloadBlob(name, JSON.stringify(doc), "application/json");
+  setStatus(`Downloaded ${name}.`, 2000);
+}
+
+export function openProjectFromFile() {
+  const inp = document.querySelector("#open-hv-file-input");
+  if (!inp) return;
+  inp.value = "";
+  inp.onchange = () => {
+    const file = inp.files && inp.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      let data;
+      try { data = JSON.parse(String(reader.result || "")); }
+      catch { setStatus("That doesn't look like a .hv project file.", 3000); return; }
+      if (!data || typeof data.svg !== "string" || !/<svg[\s>]/i.test(data.svg)) { setStatus("That .hv project is invalid.", 3000); return; }
+      setSelectedName(null); setManualOutputName(null); setSelectedOutput(null);
+      mountStageFromText(data.svg, file.name);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        editor.history = Array.isArray(data.history) ? data.history : [];
+        editor.redo = Array.isArray(data.redo) ? data.redo : [];
+        if (editor._renderHistory) editor._renderHistory();
+        if (editor._updateButtons) editor._updateButtons();
+      }));
+      rememberLastDoc();
+      setStatus(`Opened project ${file.name}.`, 2000);
+    };
+    reader.onerror = () => setStatus("Could not read that file.", 3000);
+    reader.readAsText(file);
+  };
+  inp.click();
 }
 
 export async function loadProjects() {

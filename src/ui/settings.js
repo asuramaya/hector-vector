@@ -6,7 +6,7 @@
 // through the exported setters); the rest of its shell seams are injected.
 import { editor, ghostBtn } from "../editor.js";
 import { api } from "./api.js";
-import { sectionTitle, fieldRow, makeSelectRaw } from "./widgets.js";
+import { sectionTitle, fieldRow, fieldRowInfo, infoButton, makeSelectRaw } from "./widgets.js";
 import { capsInfo, ensureCapsInfo } from "./processor.js";
 import { loadJobs, installJobActive } from "./jobs.js";
 import { CLOUD } from "./env.js";
@@ -93,9 +93,12 @@ export async function initAgentAccessBadge() {
 // install affordance and an About section. (The per-process backend "Settings"
 // form lives in the Process workspace.)
 export let appSettingsOpen = false;
+// `hint` is either a short inline string (as before) or `{ hint, info }` — a short status
+// that stays visible plus the long explanation behind an "i" button (see fieldRowInfo).
 function prefToggleRow(label, checked, onChange, hint) {
   const inp = document.createElement("input"); inp.type = "checkbox"; inp.checked = !!checked;
   inp.addEventListener("change", () => onChange(inp.checked));
+  if (hint && typeof hint === "object") return fieldRowInfo(label, inp, hint.info, hint.hint);
   return fieldRow(label, inp, hint);
 }
 // Point the library at a different source folder. Re-fetches the whole workspace
@@ -176,7 +179,7 @@ export function openAppSettings(opts = {}) {
   hlRow.appendChild(swatches);
   hlRow.appendChild(hl);
   paint();
-  root.appendChild(fieldRow("Highlight", hlRow,
+  root.appendChild(fieldRowInfo("Highlight", hlRow,
     "Recolours everything the app uses to point at things: hover, what's switched on, what's selected, and the handles on the canvas."));
 
   // Where the library reads source images from (the backend /api/source endpoint) — desktop
@@ -357,23 +360,27 @@ export function openAppSettings(opts = {}) {
     ensureAgentAccessInfo().then(() => { if (appSettingsOpen) openAppSettings(); });
   } else {
     const info = agentAccessInfo;
-    let hint = "Off. Lets a local MCP-connected agent (e.g. Claude) drive this document through the same commands a click does — full read/write access to whatever's open, only from this machine.";
-    if (info.enabled && info.active) hint = "On — this window has an open debug port for MCP tools. Turn off and restart to close it.";
-    else if (info.enabled && !info.active) hint = "On, but not yet live — restart hector-vector to open the debug port.";
+    let state = "Off.";
+    if (info.enabled && info.active) state = "On — active.";
+    else if (info.enabled && !info.active) state = "On, not yet live — restart to apply.";
+    const explain = "Lets a local MCP-connected agent (e.g. Claude) drive this document through the "
+      + "same commands a click does — full read/write access to whatever's open, only from this "
+      + "machine. Takes effect on the next restart, and turning it off needs one too, to fully "
+      + "close the debug port.";
     root.appendChild(prefToggleRow("Allow agent access", info.enabled, async (checked) => {
       try {
         agentAccessInfo = await api("/api/agent-access", "POST", { enabled: checked });
         setStatus(checked ? "Agent access enabled — restart hector-vector to apply." : "Agent access disabled — restart to fully close the debug port.", 4000);
       } catch (e) { setStatus(e.message, 3000); }
       if (appSettingsOpen) openAppSettings();
-    }, hint));
+    }, { hint: state, info: explain }));
   }
   }   // !CLOUD (Agent access)
 
   // The guaranteed way in. Settings lives in the header menu, which is never itself customizable,
   // so this door can't be hidden away — it's the recovery path if you switch off something you
   // needed, and on a phone it's the only entry point that doesn't rely on a right-click.
-  root.appendChild(fieldRow("Adaptive toolbars",
+  root.appendChild(fieldRowInfo("Adaptive toolbars",
     makeSelectRaw(prefs.adaptiveBars || "suggest-only", [
       ["off", "Off — bars never change"],
       ["suggest-only", "Suggestions only"],
@@ -387,17 +394,17 @@ export function openAppSettings(opts = {}) {
   const barsWrap = document.createElement("div"); barsWrap.className = "form-row";
   const barsBox = document.createElement("div"); barsBox.className = "form-actions";
   barsBox.appendChild(ghostBtn("Customize bars…", () => { closeModal(); openLayoutPicker(); }));
-  const barsHint = document.createElement("div"); barsHint.className = "form-hint";
-  barsHint.textContent = "Choose which buttons appear on each toolbar, and in what order. "
-    + "Hiding a button only trims the bar — its keyboard shortcut keeps working. Phone and desktop keep separate layouts.";
-  barsWrap.appendChild(barsBox); barsWrap.appendChild(barsHint);
+  barsBox.appendChild(infoButton("Choose which buttons appear on each toolbar, and in what order. "
+    + "Hiding a button only trims the bar — its keyboard shortcut keeps working. Phone and desktop keep separate layouts."));
+  barsWrap.appendChild(barsBox);
   root.appendChild(barsWrap);
 
   root.appendChild(sectionTitle("Debug"));
   root.appendChild(prefToggleRow("Touch debug overlay", isTouchDebugVisualOn() || prefs.touchDebug,
     (v) => { prefs.touchDebug = v; persistPrefs(); setTouchDebugVisual(v); },
-    "Red dot = your raw touch point. Blue dot = where the app actually rendered a probe there. " +
-    "A mismatch is the iOS touch-coordinate bug. Same as adding ?touchdebug to the URL, but sticks across reloads."));
+    { hint: "Red = raw touch, blue = rendered probe.",
+      info: "Red dot = your raw touch point. Blue dot = where the app actually rendered a probe there. " +
+        "A mismatch is the iOS touch-coordinate bug. Same as adding ?touchdebug to the URL, but sticks across reloads." }));
   const diagSnap = getTouchDebugSnapshot();
   const diagWrap = document.createElement("div"); diagWrap.className = "form-row";
   const diagLabel = document.createElement("span"); diagLabel.className = "form-label"; diagLabel.textContent = "Last touch";
