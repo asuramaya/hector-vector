@@ -576,6 +576,73 @@ async def hv_set_text_box(id: str, w: float | None = None, h: float | None = Non
 
 
 # ---------------------------------------------------------------------------
+# Symbols — reusable masters (widget-parity scope, decision a542832a). A symbol is a
+# `<g class="hv-symbol">` living in <defs>; each instance on the stage is a live `<use>`
+# referencing it, so editing the master updates every instance for free (SVG-native, no
+# app-level bookkeeping to keep in sync). editSymbol's interactive isolation-mode editing
+# session is NOT wrapped here — it's a stateful multi-step UI mode, not a single atomic
+# mutation, and out of scope for this slice; an agent can already edit a master's rendered
+# content indirectly (create/select/paint tools operate on whatever's on the stage).
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def hv_list_symbols() -> list[dict]:
+    """Every symbol master defined in the document: its def-id (pass to
+    hv_place_symbol_instance) and display name. Empty if none exist yet."""
+    return await _eval(
+        """() => [...editor.stage.querySelectorAll('defs .hv-symbol')].map(sym => ({
+            id: sym.getAttribute('id'), name: editor._symbolName(sym),
+        }))"""
+    )
+
+
+@mcp.tool()
+async def hv_make_symbol(ids: list[str]) -> str:
+    """Turn the given nodes into a reusable symbol master (moved into <defs>) and replace
+    them on the stage with one instance (a `<use>`) in their place. Returns the new
+    instance's node id. Duplicate the instance (hv_duplicate) or hv_place_symbol_instance
+    for more copies — every instance updates live if the master is edited later."""
+    return await _eval(
+        """(a) => {
+            editor.selection = new Set(a.ids); editor.artboardSelected = false;
+            editor.makeSymbol();
+            return [...editor.selection][0] || null;
+        }""",
+        {"ids": ids},
+    )
+
+
+@mcp.tool()
+async def hv_break_symbol_link(id: str) -> str:
+    """Replace a symbol instance with an independent concrete copy of its master's content
+    (no longer updates if the master changes later). Returns the new group's node id."""
+    return await _eval(
+        """(a) => {
+            const use = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!use || !editor.isSymbolInstance(use)) return null;
+            editor.breakSymbolLink(use);
+            return [...editor.selection][0] || null;
+        }""",
+        {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_place_symbol_instance(symbol_id: str, x: float | None = None, y: float | None = None) -> str:
+    """Place a NEW instance of an existing symbol master (from hv_list_symbols' `id`) at
+    (x, y) — its own centre in document user-units, defaulting to the artboard's centre.
+    Distinct from hv_duplicate, which copies an existing instance instead of the master."""
+    return await _eval(
+        """(a) => {
+            editor.placeSymbolInstance(a.symbol_id, a.x, a.y);
+            return [...editor.selection][0] || null;
+        }""",
+        {"symbol_id": symbol_id, "x": x, "y": y},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
 
