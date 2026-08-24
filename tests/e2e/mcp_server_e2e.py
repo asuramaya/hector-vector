@@ -46,8 +46,9 @@ async def main() -> int:
             os.environ["HV_MCP_PORT"] = str(DEBUG_PORT)
             from hvserver.mcp_server import (
                 hv_apply_fill, hv_apply_gradient, hv_boolean_op, hv_create_shape,
-                hv_duplicate, hv_export_svg, hv_get_document, hv_get_selection, hv_group,
-                hv_move, hv_pathfinder, hv_reflect, hv_select, hv_set_shape_param,
+                hv_align, hv_distribute, hv_duplicate, hv_export_svg, hv_get_document,
+                hv_get_selection, hv_group, hv_move, hv_pathfinder, hv_reflect, hv_select,
+                hv_set_shape_param,
             )
 
             # --- attach + read state -------------------------------------------------
@@ -146,6 +147,28 @@ async def main() -> int:
             grp = await hv_group(ids=[id3] + refl)
             doc3 = await hv_get_document()
             check("hv_group produces exactly one new top-level node", any(n["id"] == grp and n["tag"] == "g" for n in doc3["nodes"]), str(doc3["nodes"]))
+
+            # --- align / distribute -----------------------------------------------------
+            vb = doc3["viewBox"]
+            aid = await hv_create_shape(kind="rect", x=17, y=17, w=30, h=30, fill="#123456")
+            await hv_align(ids=[aid], mode="left")
+            b_left = (await hv_get_selection())["boxes"][0]
+            check("hv_align(left) snaps the node's x0 to the artboard's left edge", abs(b_left["x0"] - vb["x"]) < 0.5, f"{b_left} vb={vb}")
+            n_before_align_undo = len((await hv_get_document())["nodes"])
+            await page.evaluate("() => editor.undo()")
+            b_after_undo = (await hv_get_selection())["boxes"]
+            check("hv_align is a real undo step", not b_after_undo or abs(b_after_undo[0]["x0"] - vb["x"]) > 0.5, f"{b_after_undo} vb={vb}")
+            await hv_align(ids=[aid], mode="left")  # redo for the rest of the run
+
+            da = await hv_create_shape(kind="rect", x=0, y=500, w=20, h=20, fill="#111111")
+            db = await hv_create_shape(kind="rect", x=50, y=500, w=20, h=20, fill="#222222")
+            dc = await hv_create_shape(kind="rect", x=200, y=500, w=20, h=20, fill="#333333")
+            await hv_distribute(ids=[da, db, dc], axis="h")
+            await hv_select([da, db, dc])
+            boxes = sorted((await hv_get_selection())["boxes"], key=lambda b: b["x0"])
+            gap1 = boxes[1]["x0"] - boxes[0]["x1"]
+            gap2 = boxes[2]["x0"] - boxes[1]["x1"]
+            check("hv_distribute(h) equalizes the gaps between 3 nodes", abs(gap1 - gap2) < 0.5, f"gaps={gap1},{gap2} boxes={boxes}")
 
             # --- pathfinder: region-correctness via isPointInFill, same bar the tools
             # audit itself used (this test would have caught the invert-space resolution
