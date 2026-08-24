@@ -1021,6 +1021,192 @@ async def hv_expand_warp(id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Stroke — colour/width via applyStroke (Object Properties panel's Width row); the rest of
+# the panel (align/join/cap/dash/miter) bundles into one hv_set_stroke_style call so an
+# agent doesn't need 5 round-trips for what's one visual "Stroke" group to a human. None of
+# the underlying setters self-manage undo (the panel coalesces them live), so each tool
+# takes exactly one editor.push() regardless of how many fields it touches — setStrokeAlign
+# is deliberately NOT called here even though it exists (it self-pushes internally, which
+# would split one MCP call into two undo steps); its own align/_syncStrokeAlign logic is
+# inlined instead. Widget-parity scope, decision a542832a.
+# ---------------------------------------------------------------------------
+
+_STROKE_ALIGNS = {"inside", "center", "outside"}
+_STROKE_JOINS = {"miter", "round", "bevel"}
+_STROKE_CAPS = {"butt", "round", "square"}
+
+
+@mcp.tool()
+async def hv_set_stroke(ids: list[str], color: str | None = None, width: float | None = None) -> dict:
+    """Set stroke colour and/or width (Object Properties' Width row). Pass width=0 (or
+    color=null with no stroke already present) to remove the stroke entirely — clears
+    every other stroke property (align/join/cap/dash) with it, matching the panel. Passing
+    only one of color/width keeps the other at its current value on each node (falls back
+    to black / 1 if the node had no stroke yet)."""
+    return await _eval(
+        """(a) => {
+            const nodes = a.ids.map(id => editor.stage.querySelector('[data-hv-id="' + id + '"]')).filter(Boolean);
+            if (!nodes.length) return { ok: false, reason: 'no such nodes' };
+            editor.push('Stroke');
+            for (const n of nodes) {
+                if (editor.isRaster(n)) continue;
+                const curColor = n.getAttribute('stroke') && n.getAttribute('stroke') !== 'none' ? n.getAttribute('stroke') : '#000000';
+                const curWidth = parseFloat(n.getAttribute('stroke-width')) || 1;
+                editor.selection = new Set([n.getAttribute('data-hv-id')]); editor.artboardSelected = false;
+                editor.applyStroke(a.color != null ? a.color : curColor, a.width != null ? a.width : curWidth);
+            }
+            editor.selection = new Set(a.ids); editor.artboardSelected = false;
+            editor._renderSelection(); editor._renderInspector();
+            return { ok: true };
+        }""",
+        {"ids": ids, "color": color, "width": width},
+    )
+
+
+@mcp.tool()
+async def hv_apply_stroke_gradient(
+    ids: list[str], type: str, stops: list[dict],
+    cx: float = 0.5, cy: float = 0.5, r: float = 0.5,
+    x1: float = 0.0, y1: float = 0.0, x2: float = 1.0, y2: float = 0.0,
+) -> dict:
+    """Apply a linear or radial gradient to the STROKE (same shape as hv_apply_gradient,
+    which is fill-only). Needs each node to already have a stroke width — set one first
+    with hv_set_stroke if it doesn't."""
+    spec: dict[str, Any] = {"type": type, "stops": stops}
+    if type == "radial":
+        spec.update(cx=cx, cy=cy, r=r)
+    else:
+        spec.update(x1=x1, y1=y1, x2=x2, y2=y2)
+    return await _eval(
+        """(a) => {
+            editor.push('Apply stroke gradient');
+            for (const id of a.ids) {
+                editor.selection = new Set([id]); editor.artboardSelected = false;
+                editor.applyPaint('stroke', { kind: 'gradient', spec: a.spec });
+            }
+            editor.selection = new Set(a.ids); editor.artboardSelected = false;
+            return { ok: true };
+        }""",
+        {"ids": ids, "spec": spec},
+    )
+
+
+@mcp.tool()
+async def hv_set_stroke_style(
+    ids: list[str], align: str | None = None, join: str | None = None,
+    cap: str | None = None, dasharray: str | None = None, miter_limit: float | None = None,
+) -> dict:
+    """Set stroke align/join/cap/dash/miter-limit in one undo step (only the given fields
+    change). `align` is inside/center/outside; `join` is miter/round/bevel; `cap` is
+    butt/round/square; `dasharray` is an SVG dash-pattern string (e.g. "4 4", or "" to
+    clear it back to solid); `miter_limit` only matters when join is "miter"."""
+    if align is not None and align not in _STROKE_ALIGNS:
+        raise ValueError(f"align must be one of {sorted(_STROKE_ALIGNS)}, got {align!r}")
+    if join is not None and join not in _STROKE_JOINS:
+        raise ValueError(f"join must be one of {sorted(_STROKE_JOINS)}, got {join!r}")
+    if cap is not None and cap not in _STROKE_CAPS:
+        raise ValueError(f"cap must be one of {sorted(_STROKE_CAPS)}, got {cap!r}")
+    return await _eval(
+        """(a) => {
+            const nodes = a.ids.map(id => editor.stage.querySelector('[data-hv-id="' + id + '"]')).filter(Boolean);
+            if (!nodes.length) return { ok: false, reason: 'no such nodes' };
+            editor.push('Stroke style');
+            for (const n of nodes) {
+                if (editor.isRaster(n)) continue;
+                if (a.align != null) {
+                    if (a.align === 'center') n.removeAttribute('data-hv-stroke-align');
+                    else n.setAttribute('data-hv-stroke-align', a.align);
+                    editor._syncStrokeAlign(n);
+                }
+                if (a.join != null) n.setAttribute('stroke-linejoin', a.join);
+                if (a.cap != null) n.setAttribute('stroke-linecap', a.cap);
+                if (a.dasharray != null) { if (a.dasharray === '') n.removeAttribute('stroke-dasharray'); else n.setAttribute('stroke-dasharray', a.dasharray); }
+                if (a.miter_limit != null) n.setAttribute('stroke-miterlimit', String(a.miter_limit));
+            }
+            editor._renderSelection(); editor._renderInspector();
+            return { ok: true };
+        }""",
+        {"ids": ids, "align": align, "join": join, "cap": cap, "dasharray": dasharray, "miter_limit": miter_limit},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Effects — a per-object stack of live filter effects (blur / drop shadow / glow), widget-
+# parity scope. addEffect/removeEffect self-manage undo; updateEffect (the per-param live-
+# drag setter) doesn't, so it's wrapped with an explicit push() here, same pattern as every
+# other scrubbable-field tool in this file.
+# ---------------------------------------------------------------------------
+
+_EFFECT_TYPES = {"blur", "shadow", "glow"}
+
+
+@mcp.tool()
+async def hv_get_effects(id: str) -> list[dict]:
+    """The effect stack on one node, in apply order: {"type": "blur", "amount": n} |
+    {"type": "shadow"|"glow", "dx", "dy", "blur", "color", "opacity"} (dx/dy omitted for
+    glow — it's a shadow with zero offset). Empty list if the node has no effects."""
+    return await _eval(
+        """(a) => {
+            const n = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            return n ? editor.effectsOf(n) : [];
+        }""",
+        {"id": id},
+    )
+
+
+@mcp.tool()
+async def hv_add_effect(ids: list[str], type: str) -> dict:
+    """Add a new effect to the given nodes' stacks, each with its usual default params.
+    `type` is blur/shadow/glow. Tune it afterward with hv_update_effect."""
+    if type not in _EFFECT_TYPES:
+        raise ValueError(f"type must be one of {sorted(_EFFECT_TYPES)}, got {type!r}")
+    return await _eval(
+        """(a) => {
+            editor.selection = new Set(a.ids); editor.artboardSelected = false;
+            editor.addEffect(a.type);
+            return { ok: true };
+        }""",
+        {"ids": ids, "type": type},
+    )
+
+
+@mcp.tool()
+async def hv_update_effect(id: str, index: int, patch: dict) -> dict:
+    """Change params on one node's effect at `index` (from hv_get_effects). `patch` keys
+    match the effect's own shape: "amount" for blur; "dx"/"dy"/"blur"/"color"/"opacity" for
+    shadow/glow. Only the given keys change."""
+    return await _eval(
+        """(a) => {
+            const n = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!n) return { ok: false, reason: 'no such node' };
+            const fx = editor.effectsOf(n);
+            if (!fx[a.index]) return { ok: false, reason: 'no such effect index' };
+            editor.push('Effect');
+            editor.updateEffect(n, a.index, a.patch);
+            editor._renderInspector();
+            return { ok: true };
+        }""",
+        {"id": id, "index": index, "patch": patch},
+    )
+
+
+@mcp.tool()
+async def hv_remove_effect(id: str, index: int) -> dict:
+    """Remove one effect from a node's stack by index."""
+    return await _eval(
+        """(a) => {
+            const n = editor.stage.querySelector('[data-hv-id="' + a.id + '"]');
+            if (!n) return { ok: false, reason: 'no such node' };
+            const before = editor.effectsOf(n).length;
+            editor.removeEffect(n, a.index);
+            const after = editor.effectsOf(n).length;
+            return { ok: after < before };
+        }""",
+        {"id": id, "index": index},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
 

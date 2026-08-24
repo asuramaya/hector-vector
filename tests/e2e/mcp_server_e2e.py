@@ -53,10 +53,12 @@ async def main() -> int:
                 hv_get_selection, hv_group, hv_list_symbols, hv_make_envelope,
                 hv_make_envelope_with_top_object, hv_make_gradient_mesh, hv_make_multi_fill,
                 hv_make_symbol, hv_make_warp, hv_move, hv_move_fill_layer, hv_pathfinder,
-                hv_place_symbol_instance, hv_reflect, hv_remove_fill_layer,
+                hv_add_effect, hv_apply_stroke_gradient, hv_get_effects,
+                hv_place_symbol_instance, hv_reflect, hv_remove_effect, hv_remove_fill_layer,
                 hv_reset_envelope, hv_reset_mesh_points, hv_select, hv_set_envelope_point,
                 hv_set_fill_layer, hv_set_mesh_color, hv_set_mesh_point, hv_set_shape_param,
-                hv_set_text_box, hv_set_text_content, hv_set_text_style, hv_set_warp_param,
+                hv_set_stroke, hv_set_stroke_style, hv_set_text_box, hv_set_text_content,
+                hv_set_text_style, hv_set_warp_param, hv_update_effect,
             )
 
             # --- attach + read state -------------------------------------------------
@@ -338,6 +340,53 @@ async def main() -> int:
             await hv_expand_warp(id=warp)
             svg_expanded = await hv_export_svg()
             check("hv_expand_warp drops the data-hv-warp spec attribute", "data-hv-warp" not in svg_expanded, "")
+
+            # --- stroke ------------------------------------------------------------------
+            sk = await hv_create_shape(kind="rect", x=900, y=10, w=60, h=60, fill="#dddddd")
+            await hv_set_stroke(ids=[sk], color="#ff8800", width=6)
+            svg_sk = await hv_export_svg()
+            check("hv_set_stroke writes real stroke color + width", f'data-hv-id="{sk}"' in svg_sk and 'stroke="#ff8800"' in svg_sk and 'stroke-width="6"' in svg_sk, svg_sk)
+
+            n_before_stroke_undo = len((await hv_get_document())["nodes"])
+            await page.evaluate("() => editor.undo()")
+            svg_sk_undo = await hv_export_svg()
+            check("hv_set_stroke is a real undo step", 'stroke="#ff8800"' not in svg_sk_undo, "")
+            await hv_set_stroke(ids=[sk], color="#ff8800", width=6)  # redo for the rest of the run
+            check("no extra top-level nodes leaked from the stroke undo/redo", len((await hv_get_document())["nodes"]) == n_before_stroke_undo, "")
+
+            await hv_set_stroke_style(ids=[sk], align="inside", join="round", cap="round", dasharray="4 2", miter_limit=8)
+            svg_style = await hv_export_svg()
+            check(
+                "hv_set_stroke_style writes join/cap/dash in one call",
+                f'data-hv-id="{sk}"' in svg_style and 'stroke-linejoin="round"' in svg_style and 'stroke-dasharray="4 2"' in svg_style,
+                svg_style,
+            )
+
+            await hv_apply_stroke_gradient(ids=[sk], type="linear", stops=[{"offset": 0, "color": "#000000"}, {"offset": 1, "color": "#ffffff"}])
+            svg_grad = await hv_export_svg()
+            check("hv_apply_stroke_gradient embeds a real linearGradient on the stroke attr", "linearGradient" in svg_grad and "stroke=\"url(#" in svg_grad, svg_grad)
+
+            # --- effects -------------------------------------------------------------------
+            fx_id = await hv_create_shape(kind="ellipse", x=900, y=150, w=60, h=60, fill="#3355dd")
+            await hv_add_effect(ids=[fx_id], type="shadow")
+            fx0 = await hv_get_effects(id=fx_id)
+            check("hv_add_effect adds a shadow with its defaults", len(fx0) == 1 and fx0[0]["type"] == "shadow", str(fx0))
+
+            await hv_update_effect(id=fx_id, index=0, patch={"dx": 20, "color": "#ff0000"})
+            fx1 = await hv_get_effects(id=fx_id)
+            check("hv_update_effect changes only the given fields", abs(fx1[0]["dx"] - 20) < 0.01 and fx1[0]["color"] == "#ff0000" and fx1[0]["blur"] == fx0[0]["blur"], str(fx1))
+            await page.evaluate("() => editor.undo()")
+            fx1_undo = await hv_get_effects(id=fx_id)
+            check("hv_update_effect is a real undo step", abs(fx1_undo[0]["dx"] - 20) > 0.01, str(fx1_undo))
+            await hv_update_effect(id=fx_id, index=0, patch={"dx": 20, "color": "#ff0000"})  # redo for the rest of the run
+
+            await hv_add_effect(ids=[fx_id], type="blur")
+            fx2 = await hv_get_effects(id=fx_id)
+            check("hv_add_effect stacks a second effect", len(fx2) == 2 and fx2[1]["type"] == "blur", str(fx2))
+
+            await hv_remove_effect(id=fx_id, index=0)
+            fx3 = await hv_get_effects(id=fx_id)
+            check("hv_remove_effect removes exactly the targeted effect", len(fx3) == 1 and fx3[0]["type"] == "blur", str(fx3))
 
             # --- pathfinder: region-correctness via isPointInFill, same bar the tools
             # audit itself used (this test would have caught the invert-space resolution
