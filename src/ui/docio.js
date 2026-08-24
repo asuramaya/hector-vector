@@ -13,7 +13,7 @@ import { hideContextMenu } from "./menus.js";
 import { renderGalleryGrid } from "./gallery.js";
 import { viewports, applyBgMode, measureFit } from "./viewport.js";
 import {
-  selectedOutput, outputs, workItems,
+  selectedOutput, outputs, workItems, projects,
   setSelectedName, setSelectedOutput, setManualOutputName, setProjects,
 } from "./docstate.js";
 
@@ -114,6 +114,29 @@ export function openOpenModal() {
   };
   modalSearchEl.oninput = apply;
   apply();
+}
+
+// Open a saved .hv PROJECT (canvas + full undo/redo history) — the missing counterpart to
+// Save project below; before this, a project could only be reopened by finding it in the
+// Library sidebar's Canvas tab and either dragging it onto the canvas or digging into its
+// right-click info modal, with no File-menu path at all despite Save living right there.
+// A click here opens immediately (unlike the Library grid's click-to-select — this picker's
+// only job is "open one"), same one-step gesture as the vector Open modal above.
+export function openOpenProjectModal() {
+  const render = () => {
+    openModal(`Open project — ${projects.length} saved`);
+    const items = projects.map((p) => ({ name: p.name, url: p.url, icon: "⛋" }));
+    const apply = () => {
+      const q = modalSearchEl.value.trim().toLowerCase();
+      const vis = q ? items.filter((i) => i.name.toLowerCase().includes(q)) : items;
+      renderGalleryGrid(vis, (picked) => { closeModal(); openProject(picked); });
+    };
+    modalSearchEl.oninput = apply;
+    apply();
+  };
+  // The Canvas library tab lazily loads projects on first visit — a session that never
+  // opened it would otherwise show a false "0 saved" here.
+  if (projects.length) render(); else loadProjects().then(render);
 }
 
 export async function placeFromUrl(url, name) {

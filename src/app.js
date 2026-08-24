@@ -66,7 +66,7 @@ import {
 } from "./ui/docstate.js";
 import {
   configureDocIO, mountStageFromText, mountBlankCanvas, newBlankDoc, loadSvgToStage,
-  openOpenModal, placeFromUrl, openPlaceModal, saveDocument, defaultSaveName,
+  openOpenModal, openOpenProjectModal, placeFromUrl, openPlaceModal, saveDocument, defaultSaveName,
   saveAsDocument, saveProject, openProject, loadProjects, exportFlow,
 } from "./ui/docio.js";
 import { configureShortcuts, openShortcutsModal } from "./ui/shortcuts.js";
@@ -518,17 +518,29 @@ const MENU_ITEMS = {
       { label: "Settings…", onClick: openAppSettings },
     ];
     const canReveal = !!(selectedOutput && selectedOutput.path);
+    // Two file families, kept visually apart (their own sep-bracketed groups) since they
+    // answer different questions: the .svg group is the PORTABLE deliverable (what you'd
+    // hand off or publish); the .hv group is the WORKING project — canvas + full undo/redo
+    // history — round-tripped in place of it existing only in the Library sidebar's Canvas
+    // tab before (see openOpenProjectModal's own comment: Save had no menu-visible Open).
     const items = [
       { label: "New blank canvas…", onClick: newBlankDoc },
       { type: "sep" },
-      { label: "Open vector…", onClick: openOpenModal },
+      { label: "Open from Library…", onClick: openOpenModal },
       { label: "Open from file…", onClick: openFromFile },
+      { label: "Open project (.hv)…", onClick: openOpenProjectModal },
       { label: "Place into canvas…", onClick: openPlaceModal },
+      { type: "sep" },
+      // Mirrors Settings ▸ On launch (prefs.startup) — surfaced here too since "will my
+      // work still be here next time" is a File-menu question, not just a Settings one.
+      { label: "Reopen last document on launch", type: "toggle", checked: prefs.startup === "resume",
+        onClick: () => { prefs.startup = prefs.startup === "resume" ? "blank" : "resume"; persistPrefs(); } },
       { type: "sep" },
       { label: "Save (.svg)", onClick: saveDocument },
       { label: "Save as…", onClick: () => saveAsDocument() },
-      { label: "Save project (.hv)…", onClick: saveProject },
       { label: "Download .svg", onClick: downloadCurrentSvg },
+      { type: "sep" },
+      { label: "Save project (.hv, with undo history)…", onClick: saveProject },
       { type: "sep" },
       { label: "Export…", onClick: exportFlow },
       { label: "Reveal current file", onClick: revealCurrentFile, disabled: !canReveal },
