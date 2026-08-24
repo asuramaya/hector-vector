@@ -373,6 +373,45 @@ async def hv_move(ids: list[str], dx: float, dy: float) -> dict:
     )
 
 
+_ALIGN_MODES = {"left", "hcenter", "right", "top", "vmiddle", "bottom"}
+
+
+@mcp.tool()
+async def hv_align(ids: list[str], mode: str) -> dict:
+    """Align the given nodes to the artboard edges/centre. `mode` is one of left/hcenter/
+    right (horizontal) or top/vmiddle/bottom (vertical) — each node moves independently to
+    that artboard edge/centre line, same as the Properties panel's align bar."""
+    if mode not in _ALIGN_MODES:
+        raise ValueError(f"mode must be one of {sorted(_ALIGN_MODES)}, got {mode!r}")
+    return await _eval(
+        """(a) => {
+            editor.selection = new Set(a.ids); editor.artboardSelected = false;
+            editor.align(a.mode);
+            return { ok: true };
+        }""",
+        {"ids": ids, "mode": mode},
+    )
+
+
+@mcp.tool()
+async def hv_distribute(ids: list[str], axis: str) -> dict:
+    """Even out the gaps between 3+ selected nodes along one axis. `axis` is "h"
+    (horizontal spacing) or "v" (vertical spacing). The two extreme nodes (by bbox centre)
+    anchor the span and don't move; the ones between get equal edge-to-edge gaps."""
+    if axis not in ("h", "v"):
+        raise ValueError(f'axis must be "h" or "v", got {axis!r}')
+    if len(ids) < 3:
+        raise ValueError("distribute needs 3+ node ids")
+    return await _eval(
+        """(a) => {
+            editor.selection = new Set(a.ids); editor.artboardSelected = false;
+            editor.distribute(a.axis);
+            return { ok: true };
+        }""",
+        {"ids": ids, "axis": axis},
+    )
+
+
 @mcp.tool()
 async def hv_reflect(ids: list[str], axis: str, copy: bool = False) -> list[str]:
     """Reflect the given nodes across their own combined centre. `axis` is "horizontal"
