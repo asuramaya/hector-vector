@@ -46,10 +46,11 @@ async def main() -> int:
             os.environ["HV_MCP_PORT"] = str(DEBUG_PORT)
             from hvserver.mcp_server import (
                 hv_apply_fill, hv_apply_gradient, hv_boolean_op, hv_create_shape,
-                hv_align, hv_create_text, hv_distribute, hv_duplicate, hv_export_svg,
-                hv_get_document, hv_get_selection, hv_group, hv_move, hv_pathfinder,
-                hv_reflect, hv_select, hv_set_shape_param, hv_set_text_box,
-                hv_set_text_content, hv_set_text_style,
+                hv_align, hv_break_symbol_link, hv_create_text, hv_distribute,
+                hv_duplicate, hv_export_svg, hv_get_document, hv_get_selection, hv_group,
+                hv_list_symbols, hv_make_symbol, hv_move, hv_pathfinder,
+                hv_place_symbol_instance, hv_reflect, hv_select, hv_set_shape_param,
+                hv_set_text_box, hv_set_text_content, hv_set_text_style,
             )
 
             # --- attach + read state -------------------------------------------------
@@ -211,6 +212,24 @@ async def main() -> int:
             await hv_set_text_box(id=atid, w=400)
             n_lines_wide = await tspan_count(atid)
             check("hv_set_text_box(w=400) re-wraps to fewer tspans", n_lines_wide < n_lines_narrow, f"{n_lines_narrow} -> {n_lines_wide}")
+
+            # --- symbols: make, list, place, break ---------------------------------------
+            sa = await hv_create_shape(kind="star", x=600, y=10, w=40, h=40, fill="#e07a2f")
+            inst1 = await hv_make_symbol(ids=[sa])
+            syms = await hv_list_symbols()
+            check("hv_make_symbol creates exactly one symbol master", len(syms) == 1, str(syms))
+
+            doc_s = await hv_get_document()
+            check("hv_make_symbol replaces the source node with one <use> instance", any(n["id"] == inst1 and n["tag"] == "use" for n in doc_s["nodes"]), str(doc_s["nodes"]))
+
+            inst2 = await hv_place_symbol_instance(symbol_id=syms[0]["id"], x=700, y=100)
+            doc_s2 = await hv_get_document()
+            check("hv_place_symbol_instance adds a second independent <use>", inst2 != inst1 and any(n["id"] == inst2 and n["tag"] == "use" for n in doc_s2["nodes"]), str(doc_s2["nodes"]))
+
+            grp = await hv_break_symbol_link(id=inst2)
+            doc_s3 = await hv_get_document()
+            check("hv_break_symbol_link replaces the instance with an independent group", any(n["id"] == grp and n["tag"] == "g" for n in doc_s3["nodes"]) and not any(n["id"] == inst2 for n in doc_s3["nodes"]), str(doc_s3["nodes"]))
+            check("hv_break_symbol_link leaves the OTHER instance (inst1) untouched", any(n["id"] == inst1 for n in doc_s3["nodes"]), str(doc_s3["nodes"]))
 
             # --- pathfinder: region-correctness via isPointInFill, same bar the tools
             # audit itself used (this test would have caught the invert-space resolution
