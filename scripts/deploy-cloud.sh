@@ -26,4 +26,10 @@ cp tests/pen-probe.html "$DIST"/pen-probe.html               # does this device'
 
 echo "── bundle ──"; find "$DIST" -type f | sed "s|^$DIST/|  |" | sort
 echo "── deploying to Cloudflare Pages (project: hector-vector) ──"
-npx wrangler pages deploy "$DIST" --project-name hector-vector --branch main --commit-dirty=true
+# `cd` into dist/ and deploy "." rather than deploying "dist" from the repo root: wrangler looks
+# for a functions/ dir relative to its OWN invocation cwd, not the deploy-target directory you
+# pass it — invoked from the repo root, it never sees dist/functions/_middleware.js at all, and
+# the deployment silently comes back `uses_functions: false` with no error. cd first, and it finds
+# ./functions correctly (verified: `wrangler pages deployment <id>` in the Pages API flips to
+# `uses_functions: true` and the host-based routing actually runs).
+(cd "$DIST" && npx wrangler pages deploy . --project-name hector-vector --branch main --commit-dirty=true)
