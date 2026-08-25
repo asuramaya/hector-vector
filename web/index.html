@@ -217,8 +217,8 @@
       <thead><tr><th class="feat">Feature</th><th class="c">Browser</th><th class="c">Desktop</th></tr></thead>
       <tbody>
         <tr><td>System fonts</td><td class="c yes">✅</td><td class="c yes">✅</td></tr>
-        <tr><td>Web-font browse &amp; apply</td><td class="c part">🟡 ~86 Google</td><td class="c yes">✅ 2000+</td></tr>
-        <tr><td>Convert text → outlines</td><td class="c part">🟡 Latin</td><td class="c yes">✅ full shaping</td></tr>
+        <tr><td>Web-font browse &amp; apply</td><td class="c part">🟡 ~1900 Google</td><td class="c yes">✅ 2000+, 4 sources</td></tr>
+        <tr><td>Convert text → outlines</td><td class="c part">🟡 real shaping, single script per run</td><td class="c yes">✅ full shaping, mixed scripts</td></tr>
       </tbody>
     </table>
 
@@ -263,7 +263,7 @@
       </tbody>
     </table>
 
-    <p class="note">Coming next: a deeper web-font catalog and full text shaping in the browser build, closing the two rows above that still show 🟡. The AI pipeline row stays desktop-only by design; it needs real compute a browser sandbox can't provide.</p>
+    <p class="note">The AI pipeline row stays desktop-only by design; it needs real compute a browser sandbox can't provide. Everything else in this table is either full parity or closing — the browser build now shapes text with real HarfBuzz (ligatures, kerning, complex scripts), same engine as desktop.</p>
   </div></section>
 
   <section style="border-bottom:0;"><div class="wrap">

@@ -1,45 +1,36 @@
 // Cloud fonts adapter — the platform.fontCatalog / loadFont / installedFonts implementations for
 // the serverless build. There's no backend proxy, so:
-//   • discovery uses a bundled curated catalog of popular Google Fonts families (no API key), and
+//   • discovery reads a bundled snapshot of the ENTIRE Google Fonts catalog (~1900 families, no
+//     API key, no live cross-origin call — see below), and
 //   • loading fetches the family's woff2 straight from the Google Fonts CSS2 API (CORS-open) and
 //     hands the URL back to fonts.js, which registers it as a live FontFace exactly as on desktop.
-// Latin subset only (v1) — good for the common design-tool case; the desktop app remains the full
-// multi-source + complex-script path.
+// The per-family loader already worked for any family name; the catalog was the only thing
+// artificially small. Latin-grade text-to-outlines shaping remains a separate limitation, handled
+// in cloud-text.js.
 
-// A curated slice of Google Fonts (family + category). Kept deliberately small + hand-picked;
-// expand freely. fontCatalog filters this by the search query.
-const CATALOG = [
-  ["Inter", "sans-serif"], ["Roboto", "sans-serif"], ["Open Sans", "sans-serif"], ["Lato", "sans-serif"],
-  ["Montserrat", "sans-serif"], ["Poppins", "sans-serif"], ["Raleway", "sans-serif"], ["Nunito", "sans-serif"],
-  ["Nunito Sans", "sans-serif"], ["Work Sans", "sans-serif"], ["Rubik", "sans-serif"], ["Mulish", "sans-serif"],
-  ["DM Sans", "sans-serif"], ["Manrope", "sans-serif"], ["Karla", "sans-serif"], ["Barlow", "sans-serif"],
-  ["Source Sans 3", "sans-serif"], ["Figtree", "sans-serif"], ["Plus Jakarta Sans", "sans-serif"],
-  ["Outfit", "sans-serif"], ["Sora", "sans-serif"], ["Space Grotesk", "sans-serif"], ["Kanit", "sans-serif"],
-  ["Oswald", "sans-serif"], ["Josefin Sans", "sans-serif"], ["Quicksand", "sans-serif"], ["Comfortaa", "sans-serif"],
-  ["Archivo", "sans-serif"], ["Archivo Narrow", "sans-serif"], ["Bebas Neue", "sans-serif"], ["Anton", "sans-serif"],
-  ["Fira Sans", "sans-serif"], ["PT Sans", "sans-serif"], ["Cabin", "sans-serif"], ["Titillium Web", "sans-serif"],
-  ["Hind", "sans-serif"], ["Heebo", "sans-serif"], ["Assistant", "sans-serif"], ["Signika", "sans-serif"],
-  ["Merriweather", "serif"], ["Playfair Display", "serif"], ["PT Serif", "serif"], ["Lora", "serif"],
-  ["Roboto Slab", "serif"], ["Noto Serif", "serif"], ["Bitter", "serif"], ["Crimson Text", "serif"],
-  ["EB Garamond", "serif"], ["Cormorant Garamond", "serif"], ["Libre Baskerville", "serif"], ["Zilla Slab", "serif"],
-  ["Domine", "serif"], ["Spectral", "serif"], ["Source Serif 4", "serif"], ["Frank Ruhl Libre", "serif"],
-  ["Roboto Mono", "monospace"], ["Source Code Pro", "monospace"], ["JetBrains Mono", "monospace"],
-  ["Fira Code", "monospace"], ["IBM Plex Mono", "monospace"], ["Space Mono", "monospace"], ["Inconsolata", "monospace"],
-  ["Ubuntu Mono", "monospace"], ["Courier Prime", "monospace"],
-  ["Pacifico", "handwriting"], ["Caveat", "handwriting"], ["Dancing Script", "handwriting"], ["Lobster", "handwriting"],
-  ["Shadows Into Light", "handwriting"], ["Satisfy", "handwriting"], ["Great Vibes", "handwriting"],
-  ["Sacramento", "handwriting"], ["Kalam", "handwriting"], ["Permanent Marker", "handwriting"],
-  ["Abril Fatface", "display"], ["Righteous", "display"], ["Fredoka", "display"], ["Alfa Slab One", "display"],
-  ["Bungee", "display"], ["Passion One", "display"], ["Titan One", "display"], ["Bangers", "display"],
-  ["Cinzel", "display"], ["Philosopher", "display"], ["Orbitron", "display"], ["Audiowide", "display"],
-];
+// /assets/google-fonts-catalog.json: [family, category, subsets[]] tuples, ~1900 entries, sorted by
+// Google's own popularity ranking. Generated from https://fonts.google.com/metadata/fonts (public,
+// keyless, but no CORS headers — so it can't be fetched live from the browser at all; this snapshot
+// is fetched server-side once and checked in instead). Regenerate by re-running that same fetch and
+// re-deriving this shape; there's no live-refresh path by design (matches the no-build-step,
+// static-assets-only cloud deploy). subsets is carried through for a future script-aware loader.
+let _catalogPromise = null;
+function loadBundledCatalog() {
+  if (!_catalogPromise) {
+    _catalogPromise = fetch("/assets/google-fonts-catalog.json")
+      .then((r) => { if (!r.ok) throw new Error("font catalog fetch failed"); return r.json(); })
+      .catch(() => []);   // offline/blocked: search just comes back empty rather than throwing
+  }
+  return _catalogPromise;
+}
 
 export async function cloudFontCatalog(qs) {
   const params = new URLSearchParams(qs || "");
   const q = (params.get("q") || "").toLowerCase().trim();
   const limit = parseInt(params.get("limit") || "150", 10) || 150;
-  let fonts = CATALOG.map(([family, category]) => ({
-    family, category, source: "google", weights: [400, 700], subsets: ["latin"],
+  const raw = await loadBundledCatalog();
+  let fonts = raw.map(([family, category, subsets]) => ({
+    family, category, source: "google", weights: [400, 700], subsets,
   }));
   if (q) fonts = fonts.filter((f) => f.family.toLowerCase().includes(q));
   return { fonts: fonts.slice(0, limit), total: fonts.length, providers: ["google"] };

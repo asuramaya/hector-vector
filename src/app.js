@@ -344,11 +344,12 @@ configureJobs({ setStatus, renderJobsPanel, revealPanel, canReplaceStatus,
 // (both are hoisted top-level fns, so they're in scope at module-eval time).
 configureColorPicker({ floatingInput, showContextMenu });
 // Platform adapters for the editor's server-touching features (fonts, text→outlines). Desktop
-// routes them through the Python backend; the cloud build has no backend, so it gets stub
-// adapters until the real client ones land (C4 fonts-from-CDN, C5 WASM/degraded shaping). The
-// editor code is identical either way — it only ever calls platform.*.
+// routes them through the Python backend; the cloud build has no backend, so it gets client-side
+// adapters instead (C4 fonts-from-CDN, C5 real HarfBuzz-WASM shaping). The editor code is
+// identical either way — it only ever calls platform.*.
 configurePlatform(CLOUD ? {
-  // Cloud: fonts from Google Fonts CSS2, text→outlines via opentype.js + jsDelivr Fontsource TTF.
+  // Cloud: the full Google Fonts catalog via CSS2, text→outlines via real HarfBuzz-WASM shaping
+  // (harfbuzzjs) + jsDelivr Fontsource TTFs — see cloud-text.js for the shaping/subset details.
   fontCatalog: cloudFontCatalog,
   installedFonts: cloudInstalledFonts,
   loadFont: cloudLoadFont,
