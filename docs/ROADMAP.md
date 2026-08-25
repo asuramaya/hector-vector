@@ -213,7 +213,18 @@ Net: the edge is a *distribution* ambition that costs a full rewrite and fights 
 
 All of the above still stands, and **[hector-vector.com](https://hector-vector.com) does not contradict it**, because it moves no compute to the edge. The rejected idea was porting the *pipeline* (vtracer, k-means, ESRGAN, rembg) into WASM/ONNX so the cloud could do the AI work. That is still rejected, for every reason listed.
 
-What shipped is the part that never needed Python at all. The **vector editor is already ~100% client-side**: SVG in the DOM, geometry in `src/hv/`, PNG export on a canvas. Serving it from Cloudflare Pages therefore costs *no rewrite*. Same `src/` tree, no build step, no second implementation, no parity treadmill. `index.html` detects the deployed host and gates the three server-backed panels (Processor / Library / Jobs) behind a "get the desktop app" CTA. Everything else just runs.
+What shipped is the part that never needed Python at all. The **vector editor is already ~100% client-side**: SVG in the DOM, geometry in `src/hv/`, PNG export on a canvas. Serving it from Cloudflare Pages therefore costs *no rewrite*. Same `src/` tree, no build step, no second implementation, no parity treadmill. `app.html` detects the deployed host and gates the three server-backed panels (Processor / Library / Jobs) behind a "get the desktop app" CTA. Everything else just runs.
+
+### Why not the companion bridge either (considered and rejected, 2026-08-25)
+
+"Connect the desktop app from the browser" — the browser editor discovering and calling out to a companion server on your own machine over the local network — sat in the unfinished list with its spike already done: CORS/PNA headers work, the permission grant survives a reload. This is exactly the "open the app from your own machine" mode-switch the edge rejection above already named as the unsatisfying fallback, and pressed on directly, it didn't clear the bar:
+
+- **It doesn't remove the install.** The only way the bridge has anything to connect to is a desktop install already running. The win it offers past that point is narrower than it sounds: not "the free browser build gets the AI pipeline," but "you don't have to alt-tab to the app window you already installed."
+- **Desktop users who've already installed won't route through the browser to get to it.** If launching locally is one command away, going to hector-vector.com first just to bridge back to the thing sitting on your own machine is a longer path to the same place, not a shorter one.
+- **Mobile is the one case where the browser build is genuinely the whole story** — no install path exists there at all — and mobile never touches this feature anyway; there's no local companion server to discover on a phone.
+- **Building it properly grows the surface the free build was designed to avoid.** A bridge worth trusting eventually wants auth, a persistent notion of "this browser is paired with that machine," maybe account-level state — exactly the account/storage system the cloud-mode plan ([`docs/mcp-server.md`](mcp-server.md) sibling doc, and the original serverless-editor plan) deliberately kept out of scope to stay a static, no-account Pages deploy.
+
+Net: same shape as the edge-compute rejection above, for the same underlying reason — it's a *distribution* convenience that costs real scope and doesn't move the free build's actual ceiling (the AI pipeline still needs a real machine to run on). Removed from the roadmap rather than left parked; the spike's findings (CORS/PNA headers, permission-grant persistence) still stand as a reference if a future case makes the trade worth it again.
 
 So the split is clean, and it is the one this document argued for all along:
 
