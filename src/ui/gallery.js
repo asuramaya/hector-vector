@@ -188,7 +188,9 @@ export async function downloadCurrentSvg() {
   setStatus(`Downloaded ${name}.`, 2000);
 }
 
-// Open an .svg straight from disk (browser file picker) — untracked, so Save → Save-As.
+// Open an .svg, .pdf, or .ai straight from disk (browser file picker) — untracked, so
+// Save → Save-As. .ai reuses the .pdf path verbatim: a PDF-compatible .ai file IS a PDF
+// (see pdf-import.js) — same importer, just a different extension check up front.
 export function openFromFile() {
   const inp = document.querySelector("#open-file-input");
   if (!inp) return;
@@ -196,10 +198,19 @@ export function openFromFile() {
   inp.onchange = () => {
     const file = inp.files && inp.files[0];
     if (!file) return;
+    const isPdfLike = /\.(pdf|ai)$/i.test(file.name);
     const reader = new FileReader();
-    reader.onload = () => {
-      const text = String(reader.result || "");
-      if (!/<svg[\s>]/i.test(text)) { setStatus("That doesn't look like an SVG file.", 3000); return; }
+    reader.onload = async () => {
+      let text;
+      if (isPdfLike) {
+        try {
+          const { pdfToSvgString } = await import("./pdf-import.js");
+          text = await pdfToSvgString(reader.result);
+        } catch (e) { setStatus(`Couldn't open that ${/\.ai$/i.test(file.name) ? "AI" : "PDF"} file: ${e.message}`, 4000); return; }
+      } else {
+        text = String(reader.result || "");
+        if (!/<svg[\s>]/i.test(text)) { setStatus("That doesn't look like an SVG file.", 3000); return; }
+      }
       setSelectedName(null); setManualOutputName(null);
       mountStageFromText(text, file.name);
       setSelectedOutput(null);            // disk-opened doc has no server target → Save = Save-As
@@ -207,7 +218,7 @@ export function openFromFile() {
       setStatus(`Opened ${file.name}.`, 2000);
     };
     reader.onerror = () => setStatus("Could not read that file.", 3000);
-    reader.readAsText(file);
+    if (isPdfLike) reader.readAsArrayBuffer(file); else reader.readAsText(file);
   };
   inp.click();
 }

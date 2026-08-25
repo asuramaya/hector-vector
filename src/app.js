@@ -514,7 +514,7 @@ const MENU_ITEMS = {
     if (CLOUD) return [
       { label: "New blank canvas…", onClick: newBlankDoc },
       { type: "sep" },
-      { label: "Open (.svg)…", onClick: openFromFile },
+      { label: "Open (.svg, .pdf, .ai)…", onClick: openFromFile },
       { label: "Open project (.hv)…", onClick: openProjectFromFile },
       { type: "sep" },
       { label: "Download (.svg)", onClick: downloadCurrentSvg },

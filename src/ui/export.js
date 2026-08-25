@@ -6,6 +6,8 @@
 // modal/status/refresh seams + a getter/setter for the shared doc-selection state.
 import { editor, ghostBtn } from "../editor.js";
 import { api } from "./api.js";
+import { CLOUD } from "./env.js";
+import { cloudRenderSvgToPdfBlob } from "./cloud-pdf.js";
 import { sectionTitle, makeSelectRaw, makeNumberRaw, fieldRow, fmtBytes } from "./widgets.js";
 
 let setStatus, confirmDialog, openModal, closeModal,
@@ -129,16 +131,15 @@ export function renderSvgToPngBlob(svgText, w, h, background) {
   });
 }
 
-// PDF export (Epic O.1): the one format the browser can't produce itself — there is no
-// client API that turns SVG into real PDF vector drawing commands, only a rasterised page.
-// So this is the one export path that leaves the browser: the server converts via cairosvg
-// (see hvserver/export_pdf.py). CLOUD build has no server — api() already fails fast with
-// "This needs the hector-vector desktop app.", surfaced the same way a missing-cairosvg
-// error is (both just land in the modal's existing catch block as a form-hint).
+// PDF export (Epic O.1): desktop renders server-side via cairosvg (hvserver/export_pdf.py) —
+// mature, already good, left as-is. The cloud build has no server, so it gets a real client-side
+// equivalent instead (cloud-pdf.js, jsPDF + svg2pdf.js — genuine vector PDF drawing commands,
+// not a rasterised page; lazy-loaded, only when a PDF/.ai export is actually requested).
 async function renderSvgToPdfBlob(svgText, background) {
   const data = await api("/api/export-pdf", "POST", { svg: svgText, background });
   return base64ToBlob(data.pdf_base64, "application/pdf");
 }
+const pdfRender = CLOUD ? cloudRenderSvgToPdfBlob : renderSvgToPdfBlob;
 
 // EPS (Epic O.2): same server round-trip as PDF (also CLOUD-gated for free via api()'s
 // existing check — no new gating code, same as PDF), one hop further through Ghostscript
@@ -157,10 +158,13 @@ function base64ToBlob(b64, mime) {
   return new Blob([bytes], { type: mime });
 }
 
-// PDF + EPS are both vector, server-rendered, and Download-only (no <img> preview, no
-// pixel size picker, no Save-to-library) — everything PNG offers that a vector export can't.
+// PDF/AI/EPS are all vector and Download-only (no <img> preview, no pixel size picker, no
+// Save-to-library) — everything PNG offers that a vector export can't. AI reuses the exact same
+// PDF bytes under a different name/label: a PDF-compatible .ai file IS a PDF (see cloud-pdf.js);
+// Illustrator opens it as real artwork, just without Illustrator's own private data stream.
 const VECTOR_FORMATS = {
-  pdf: { label: "PDF", mime: "application/pdf", render: renderSvgToPdfBlob, canOpen: true },
+  pdf: { label: "PDF", mime: "application/pdf", render: pdfRender, canOpen: true },
+  ai: { label: "AI (PDF-compatible)", mime: "application/pdf", render: pdfRender, canOpen: true },
   eps: { label: "EPS", mime: "application/postscript", render: renderSvgToEpsBlob, canOpen: false },   // no browser can render EPS inline
 };
 
@@ -234,6 +238,7 @@ export function openExportModal() {
   const fmtSel = makeSelectRaw(exportState.format, [
     ["png", "PNG (raster image)"],
     ["pdf", "PDF (vector, print-ready)"],
+    ["ai", "AI (vector, PDF-compatible)"],
     ["eps", "EPS (vector, legacy print)"],
   ], (v) => { exportState.format = v; openExportModal(); });
   root.appendChild(fieldRow("Format", fmtSel));
