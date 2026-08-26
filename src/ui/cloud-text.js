@@ -15,8 +15,18 @@
 // within one object are a bigger feature (segment text into script runs, shape+font each
 // separately, stitch the paths together) — not attempted here.
 //
-// Returns the exact shape text.js expects: { d } for a text block, { glyphs:[{d,w,adv}] } for an
-// on-path run.
+// Returns the exact shape text.js expects: { colors:[{color,d}] } for a text block (one path per
+// distinct run color — SVG can't mix fills within one <path>; color:null means "caller's own
+// default fill"), { glyphs:[{d,w,adv}] } for an on-path run (on-path stays single-style, v1 —
+// see text.js's own header comment on why rich runs are scoped to point/area text only).
+//
+// Rich runs (v1: per-run bold/italic/color, one family/size for the whole object — see text.js):
+// `payload.lines`, when given, REPLACES `text`: [{runs:[{text,bold,italic,color}]}], one entry
+// per paragraph. Every run loads its OWN (weight,italic) font via loadOutlineFont (already
+// cached there per family+subset+weight+style, so a repeated combo across runs/lines is free)
+// and is shaped independently, but all runs on one line share ONE continuous pen position (in
+// px, not font units — different runs can be different UPM-scaled fonts) so glyphs sit flush
+// across a run boundary, matching the desktop server's identical approach in text_to_outline.
 
 const HB_URL = "https://cdn.jsdelivr.net/npm/harfbuzzjs@1.6.0/dist/index.mjs";
 let _hbPromise = null;
@@ -206,23 +216,40 @@ export async function cloudTextOutline(payload) {
   const {
     text = "", family, weight = 400, italic = false, fontSize = 16,
     letterSpacing = 0, lineHeight = fontSize * 1.2, anchor = "start", x = 0, y = 0, perGlyph = false,
+    lines: rawLines = null,
   } = payload || {};
-  const subset = detectSubset(text);
-  const { font, upem, substituted } = await loadOutlineFont(hb, family, weight, italic, subset);
-  const scale = fontSize / (upem || 1000);
-  const missing = missingChars(font, text);
+  // Subset (script) detection stays whole-object even with rich runs: every run shares one
+  // family, and script picks which SUBSET/fallback of that family loads, not the family itself.
+  const allText = rawLines ? rawLines.flatMap((l) => (l.runs || []).map((r) => r.text || "")).join("") : text;
+  const subset = detectSubset(allText);
+  const missing = new Set();
+  let substituted = null;
   // Real HarfBuzz shaping runs unconditionally here (no optional-dependency fallback tier the
   // way desktop has for a missing uharfbuzz install), so there's no "the fallback shaper can't
   // handle this script" case to flag — always null, kept for contract parity with desktop's
   // { missing, substituted, complexScript } shape that text.js reads on both builds.
   const complexScript = null;
+  const _loaded = new Map();   // (weight,italic) -> {font,upem,substituted}, this call only
+  async function fontFor(bold, runItalic) {
+    const w = bold ? 700 : weight, it = italic || runItalic;
+    const key = w + "|" + it;
+    if (_loaded.has(key)) return _loaded.get(key);
+    const r = await loadOutlineFont(hb, family, w, it, subset);
+    if (r.substituted && !substituted) substituted = r.substituted;
+    _loaded.set(key, r);
+    return r;
+  }
 
   if (perGlyph) {
-    // One line (a textPath run): each glyph at local origin (0,0), text.js lays them along the
-    // curve. Real shaping can merge characters into ligatures, so the output array's length may
-    // be shorter than the input string's — that's correct, not a bug. gid 0 (.notdef, a character
-    // the font truly has no glyph for) draws nothing — a clean gap, same as desktop's "skip it"
-    // — but still keeps its shaped advance so spacing along the path doesn't collapse.
+    // On-path text is scoped OUT of rich runs (v1, see text.js) — always single-style; `lines`
+    // is never set here. One line (a textPath run): each glyph at local origin (0,0), text.js
+    // lays them along the curve. Real shaping can merge characters into ligatures, so the output
+    // array's length may be shorter than the input string's — that's correct, not a bug. gid 0
+    // (.notdef, a character the font truly has no glyph for) draws nothing — a clean gap, same
+    // as desktop's "skip it" — but still keeps its shaped advance so spacing doesn't collapse.
+    const { font, upem } = await fontFor(false, false);
+    const scale = fontSize / (upem || 1000);
+    for (const ch of missingChars(font, text)) missing.add(ch);
     const glyphs = shapeLine(hb, font, String(text).replace(/\n/g, " "));
     return {
       glyphs: glyphs.map(({ gid, pos }) => {
@@ -230,25 +257,54 @@ export async function cloudTextOutline(payload) {
         const d = gid === 0 ? "" : glyphPath(hb, font, gid, scale, pos.xOffset * scale, -pos.yOffset * scale);
         return { d, w, adv: w + letterSpacing };
       }),
-      missing, substituted, complexScript,
+      missing: [...missing].sort(), substituted, complexScript,
     };
   }
 
-  // A text block: lay out each visual line, apply the anchor, concat into one absolute-coords path.
-  const parts = [];
-  String(text).split("\n").forEach((line, li) => {
-    const shaped = shapeLine(hb, font, line);
-    let lw = shaped.reduce((s, { pos }) => s + pos.xAdvance * scale + letterSpacing, 0);
-    if (shaped.length) lw -= letterSpacing;   // no trailing tracking
-    let cx = x - (anchor === "middle" ? lw / 2 : anchor === "end" ? lw : 0);
-    const ly = y + li * lineHeight;
-    for (const { gid, pos } of shaped) {
-      if (gid !== 0) {   // .notdef: skip drawing (clean gap), still advance below
-        const d = glyphPath(hb, font, gid, scale, cx + pos.xOffset * scale, ly - pos.yOffset * scale);
-        if (d) parts.push(d);
-      }
-      cx += pos.xAdvance * scale + letterSpacing;
+  // lines: [{runs:[{text,bold,italic,color}]}] when rich; a plain `text` string becomes one
+  // default-style run per \n-separated paragraph, so the loop below is the ONE code path either way.
+  const lines = rawLines || String(text).split("\n").map((t) => ({ runs: [{ text: t, bold: false, italic: false, color: null }] }));
+  // colors[key] accumulates this run-color's own path fragments across every line — one <path>
+  // per distinct color on the client (a path has one fill). key=null is "no override, caller's
+  // own default fill applies" — always present, even empty, so a plain text keeps returning a
+  // single, familiar entry (color:null). Mirrors the desktop server's identical structure.
+  const colors = new Map([[null, []]]);
+  let glyphCount = 0, maxAdvance = 0;
+  for (let li = 0; li < lines.length; li++) {
+    const runShapes = [];   // {font, upem, scale, shaped, color}
+    let totalPx = 0;
+    for (const run of (lines[li].runs || [])) {
+      const runText = run.text || ""; if (!runText) continue;
+      const { font, upem } = await fontFor(!!run.bold, !!run.italic);
+      const scale = fontSize / (upem || 1000);
+      for (const ch of missingChars(font, runText)) missing.add(ch);
+      const shaped = shapeLine(hb, font, runText);
+      runShapes.push({ font, scale, shaped, color: run.color || null });
+      totalPx += shaped.reduce((s, { pos }) => s + pos.xAdvance * scale + letterSpacing, 0) - (shaped.length ? letterSpacing : 0);
     }
-  });
-  return { d: parts.join(" ") || null, missing, substituted, complexScript };
+    if (!runShapes.length) continue;
+    maxAdvance = Math.max(maxAdvance, totalPx);
+    let cx = x - (anchor === "middle" ? totalPx / 2 : anchor === "end" ? totalPx : 0);
+    const ly = y + li * lineHeight;
+    for (const { font, scale, shaped, color } of runShapes) {
+      if (!colors.has(color)) colors.set(color, []);
+      const parts = colors.get(color);
+      for (const { gid, pos } of shaped) {
+        if (gid !== 0) {   // .notdef: skip drawing (clean gap), still advance below
+          const d = glyphPath(hb, font, gid, scale, cx + pos.xOffset * scale, ly - pos.yOffset * scale);
+          if (d) parts.push(d);
+          glyphCount++;
+        }
+        cx += pos.xAdvance * scale + letterSpacing;
+      }
+    }
+  }
+  const colorEntries = [...colors.entries()]
+    .filter(([color, parts]) => parts.length || color === null)
+    .map(([color, parts]) => ({ color, d: parts.join(" ") || null }));
+  return {
+    colors: colorEntries, d: colorEntries.length === 1 ? colorEntries[0].d : null,
+    empty: glyphCount === 0, glyphs: glyphCount, advance: maxAdvance,
+    missing: [...missing].sort(), substituted, complexScript,
+  };
 }

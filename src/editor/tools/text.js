@@ -155,29 +155,57 @@ export const textMixin = {
   },
 
   // ---------- the overlay editor ----------
+  // Rich runs (bold/italic/color) are scoped to POINT and AREA text only (v1) — on-path text
+  // keeps its old flat single-line editor, since a <textPath> has no line-tspans to hang runs
+  // off in the first place, and a curved run mixing styles mid-glyph-layout is real extra
+  // engine work for a genuinely rare case. Its overlay is unchanged below.
   _editText(node, isNew) {
     if (this._textEdit) this._commitText();
     this.tool = "text";
+    const rich = !this._hasTextPath(node);
     const wrap = document.createElement("div");
     wrap.className = "hv-text-overlay-wrap";
     const ed = document.createElement("div");
     ed.className = "hv-text-overlay";
     ed.contentEditable = "true";
     ed.spellcheck = false;
-    ed.textContent = this._readTextContent(node);   // textContent (not innerHTML) → no markup injection
+    if (rich) ed.innerHTML = this._runLinesToHTML(this._readTextParagraphs(node));
+    else ed.textContent = this._readTextContent(node);   // textContent (not innerHTML) → no markup injection
     wrap.appendChild(ed);
     document.body.appendChild(wrap);
+    // The toolbar is a SIBLING of wrap, appended straight to <body> — not a child of it. `wrap`
+    // carries the stage's screen-CTM as a CSS transform (_positionTextOverlay), and a
+    // `position:fixed` descendant of a transformed ancestor is positioned relative to THAT
+    // ancestor's box, not the true viewport (CSS containing-block rules) — putting the toolbar
+    // inside wrap would double-transform its viewport-rect-based left/top.
+    let toolbar = null;
+    if (rich) { toolbar = this._buildTextToolbar(ed); document.body.appendChild(toolbar); }
     // On-path text stays VISIBLE while editing so the curve re-renders live as you type (the
     // overlay is transparent — just a caret); point/area text hides behind its flat overlay.
     if (!this._hasTextPath(node)) node.classList.add("hv-text-editing");
-    this._textEdit = { node, id: node.getAttribute("data-hv-id"), el: ed, wrap, isNew, before: this._readTextContent(node) };
+    this._textEdit = { node, id: node.getAttribute("data-hv-id"), el: ed, wrap, toolbar, isNew, rich, beforeRuns: rich ? this._readTextParagraphs(node) : null, before: this._readTextContent(node) };
     this._positionTextOverlay();
     ed.focus();
     this._caretToEnd(ed);
     ed.addEventListener("keydown", (e) => this._textKey(e));
     ed.addEventListener("input", () => this._onTextInput());
-    ed.addEventListener("blur", () => this._commitText());
-    setStatus("Type your text · Esc or click away to finish · Enter for a new line", 0);
+    ed.addEventListener("blur", (e) => {
+      // The color swatch is a real <input>, so clicking it (unlike the B/I buttons, which
+      // preventDefault their own mousedown to keep focus on `ed` entirely) does blur the
+      // editable — don't commit (and tear the overlay down) out from under that click.
+      const te2 = this._textEdit;
+      if (te2 && ((te2.wrap && te2.wrap.contains(e.relatedTarget)) || (te2.toolbar && te2.toolbar.contains(e.relatedTarget)))) return;
+      this._commitText();
+    });
+    if (rich) {
+      ed.addEventListener("paste", (e) => {
+        e.preventDefault();
+        const text = (e.clipboardData || window.clipboardData).getData("text/plain");
+        document.execCommand("insertText", false, text);
+      });
+      document.addEventListener("selectionchange", this._textSelHandler = () => this._updateTextToolbar());
+    }
+    setStatus(rich ? "Type your text · select some to bold/italic/color it · Esc or click away to finish" : "Type your text · Esc or click away to finish · Enter for a new line", 0);
   },
   // Carry the stage's screen CTM onto the wrapper so the inner editable can use plain
   // local user-units; reposition on every zoom/pan so the box tracks the canvas live.
@@ -251,20 +279,138 @@ export const textMixin = {
     const tp = node.querySelector(":scope > textPath");
     if (tp) tp.textContent = this._readEditable(el).replace(/\n/g, " ");
   },
+  // ---- rich overlay: HTML <-> runs, and the selection-aware format toolbar ----
+  _escapeHTML(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; },
+  _runHTML(r) {
+    let s = this._escapeHTML(r.text || "");
+    if (!s) return "";
+    if (r.bold) s = `<b>${s}</b>`;
+    if (r.italic) s = `<i>${s}</i>`;
+    if (r.color) s = `<span style="color:${this._escapeHTML(r.color)}">${s}</span>`;
+    return s;
+  },
+  // One <div> per line, contentEditable's own natural Enter-creates-a-new-block shape — reading
+  // it back (_readOverlayRuns) walks exactly this same div-per-line structure. An empty line
+  // needs a <br> inside its div or the browser collapses it to zero height and the caret can't
+  // land there.
+  _runLinesToHTML(lines) {
+    return lines.map((ln) => {
+      const inner = ln.runs.map((r) => this._runHTML(r)).join("");
+      return `<div>${inner || "<br>"}</div>`;
+    }).join("");
+  },
+  // Reverse of the above: each top-level <div> (or, before the first Enter, stray inline
+  // content sitting directly under the editable) is one PARAGRAPH — CSS pre-wrap only visually
+  // folds a long paragraph into several rows, it never touches the underlying markup, so a
+  // div boundary here always means a real user Enter, matching data-hv-br's own meaning.
+  _readOverlayRuns(el) {
+    const kids = [...el.childNodes];
+    const blocks = [];
+    let loose = null;
+    for (const n of kids) {
+      if (n.nodeType === 1 && n.tagName === "DIV") { blocks.push(n); loose = null; }
+      else if (n.nodeType === 1 && n.tagName === "BR" && !blocks.length) { blocks.push(loose = null); }
+      else { if (!loose) { loose = document.createElement("div"); blocks.push(loose); } loose.appendChild(n.cloneNode(true)); }
+    }
+    if (!blocks.length) blocks.push(el);
+    return blocks.map((b, i) => ({ runs: b ? this._inlineRuns(b) : [this._defaultRun("")], br: i > 0 }));
+  },
+  _inlineRuns(container) {
+    const runs = [];
+    const push = (text, bold, italic, color) => {
+      if (!text) return;
+      const last = runs[runs.length - 1];
+      if (last && !!last.bold === !!bold && !!last.italic === !!italic && (last.color || null) === (color || null)) last.text += text;
+      else runs.push({ text, bold: !!bold, italic: !!italic, color: color || null });
+    };
+    const walk = (node, bold, italic, color) => {
+      for (const child of node.childNodes) {
+        if (child.nodeType === 3) { push(child.nodeValue, bold, italic, color); continue; }
+        if (child.nodeType !== 1) continue;
+        const tag = child.tagName;
+        if (tag === "BR") continue;
+        if (tag === "B" || tag === "STRONG") { walk(child, true, italic, color); continue; }
+        if (tag === "I" || tag === "EM") { walk(child, bold, true, color); continue; }
+        if (tag === "SPAN" || tag === "FONT") { walk(child, bold, italic, this._colorOf(child) || color); continue; }
+        walk(child, bold, italic, color);   // an unrecognized wrapper — still walk its text plainly
+      }
+    };
+    walk(container, false, false, null);
+    return runs.length ? runs : [this._defaultRun("")];
+  },
+  _colorOf(el) {
+    if (el.tagName === "FONT" && el.getAttribute("color")) return this._normalizeColor(el.getAttribute("color"));
+    return el.style && el.style.color ? this._normalizeColor(el.style.color) : null;
+  },
+  // execCommand("foreColor") reports back as rgb(...); SVG fill wants hex, and this also
+  // normalizes anything else the browser might hand back (named colors, hsl, …).
+  _normalizeColor(c) {
+    const probe = document.createElement("div"); probe.style.color = c;
+    probe.style.display = "none"; document.body.appendChild(probe);
+    const rgb = getComputedStyle(probe).color; probe.remove();
+    const m = rgb.match(/\d+/g); if (!m) return null;
+    return "#" + m.slice(0, 3).map((n) => Number(n).toString(16).padStart(2, "0")).join("");
+  },
+  // A small floating Bold/Italic/Color bar, shown only while there's a real (non-collapsed)
+  // selection inside the overlay — mousedown (not click) with preventDefault so the button
+  // press doesn't itself collapse the contentEditable selection before the command runs.
+  _buildTextToolbar(ed) {
+    const bar = document.createElement("div");
+    bar.className = "hv-text-toolbar"; bar.hidden = true;
+    const btn = (label, title, cmd) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "hv-text-tb-btn"; b.textContent = label; b.title = title;
+      b.addEventListener("mousedown", (e) => { e.preventDefault(); document.execCommand(cmd); this._updateTextToolbar(); });
+      bar.appendChild(b);
+      return b;
+    };
+    this._tbBold = btn("B", "Bold", "bold");
+    this._tbItalic = btn("I", "Italic", "italic");
+    const swatch = document.createElement("input");
+    swatch.type = "color"; swatch.className = "hv-text-tb-color"; swatch.title = "Color";
+    swatch.addEventListener("mousedown", (e) => e.stopPropagation());
+    // Unlike the B/I buttons (mousedown.preventDefault keeps focus on `ed` throughout), opening
+    // the native color picker DOES steal focus onto this <input> — restore it afterward, or
+    // `ed`'s own blur handler (the click-away-commits path for anything outside the canvas)
+    // never fires again and the overlay can get stuck open.
+    swatch.addEventListener("input", () => { document.execCommand("foreColor", false, swatch.value); ed.focus(); this._updateTextToolbar(); });
+    bar.appendChild(swatch);
+    this._tbColor = swatch;
+    return bar;
+  },
+  // Reposition + show/hide the toolbar above the current selection; called on every
+  // selectionchange while the rich overlay is open.
+  _updateTextToolbar() {
+    const te = this._textEdit; if (!te || !te.rich) return;
+    const ed = te.el, bar = te.toolbar; if (!bar) return;
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || sel.isCollapsed || !ed.contains(sel.anchorNode)) { bar.hidden = true; return; }
+    const r = sel.getRangeAt(0).getBoundingClientRect();
+    if (!r || (!r.width && !r.height)) { bar.hidden = true; return; }
+    bar.hidden = false;
+    bar.style.left = (r.left + r.width / 2) + "px";
+    bar.style.top = (r.top - 6) + "px";
+    this._tbBold.classList.toggle("on", document.queryCommandState("bold"));
+    this._tbItalic.classList.toggle("on", document.queryCommandState("italic"));
+  },
   _commitText() {
     const te = this._textEdit; if (!te) return;
     this._textEdit = null;   // null FIRST so the blur handler can't re-enter mid-commit
-    const { node, el, wrap, isNew, before } = te;
-    const str = this._readEditable(el);
+    const { node, el, wrap, toolbar, isNew, rich, before, beforeRuns } = te;
+    if (this._textSelHandler) { document.removeEventListener("selectionchange", this._textSelHandler); this._textSelHandler = null; }
+    const input = rich ? this._readOverlayRuns(el) : this._readEditable(el);
+    const str = rich ? input.map((l) => this._runsToPlain(l.runs)).join("\n") : input;
     wrap.remove();
+    if (toolbar) toolbar.remove();
     node.classList.remove("hv-text-editing");
     const empty = !str.trim();
+    const changed = rich ? JSON.stringify(input) !== JSON.stringify(beforeRuns) : str !== before;
     if (isNew) {
       if (empty) { node.remove(); this.cancelCoalesce(); this.selection = new Set(); }
-      else { this._writeContent(node, str); this.commitCoalesce("Add text"); this.selection = new Set([node.getAttribute("data-hv-id")]); }
+      else { this._writeContent(node, input); this.commitCoalesce("Add text"); this.selection = new Set([node.getAttribute("data-hv-id")]); }
     } else {
       if (empty) { this.push("Delete text"); node.remove(); this.selection = new Set(); }
-      else if (str !== before) { this.push("Edit text"); this._writeContent(node, str); }
+      else if (changed) { this.push("Edit text"); this._writeContent(node, input); }
     }
     this._renderSelection(); this._renderInspector(); this._renderLayers();
     this._showHint();
@@ -277,26 +423,65 @@ export const textMixin = {
   // Read a <text> back to a string for the editor. Point text → one tspan per line ("\n").
   // Area text → rebuild the FLOW: soft-wrapped lines re-join with a space, hard-break starts
   // (data-hv-br) with "\n", so the editor re-wraps faithfully instead of freezing the wrap.
-  _readTextContent(node) {
+  // ---- rich runs ("Rich text runs"): per-word bold/italic/color ----
+  // A LINE is any element carrying its own `x` (always true for a multi-line point-text
+  // tspan and every area-text line, per _writeTextContent/_renderAreaLines below), or the
+  // <text>/<textPath> element itself when there's no line-tspan at all (an unwrapped
+  // single-line doc). Within a line, plain textContent = one default run; nested <tspan>
+  // children WITHOUT an `x` attribute (never present on a line-tspan) are explicit runs, one
+  // per bold/italic/color span. That `x`-attribute test is the one thing distinguishing a
+  // line-tspan from a run-tspan; both are otherwise the same element type.
+  _defaultRun(text) { return { text: text || "", bold: false, italic: false, color: null }; },
+  _runsOf(container) {
+    const kids = [...container.childNodes].filter((n) => n.nodeType === 1 && n.tagName.toLowerCase() === "tspan" && !n.hasAttribute("x"));
+    if (!kids.length) return [this._defaultRun(container.textContent)];
+    return kids.map((k) => ({
+      text: k.textContent || "",
+      bold: (k.getAttribute("font-weight") || "") === "700",
+      italic: (k.getAttribute("font-style") || "") === "italic",
+      color: k.getAttribute("fill") || null,
+    }));
+  },
+  // Read a <text> back to STRUCTURED lines: [{runs:[{text,bold,italic,color}], br}]. On-path
+  // text is scoped OUT of rich runs (v1) — always one plain line, whatever markup is there.
+  _readTextRuns(node) {
     const tp = node.querySelector(":scope > textPath");
-    if (tp) return tp.textContent || "";   // text-on-path: a single run flows along the path
-    const tspans = node.querySelectorAll(":scope > tspan");
-    if (!tspans.length) return node.textContent || "";
+    if (tp) return [{ runs: [this._defaultRun(tp.textContent)], br: false }];
+    const lineEls = [...node.querySelectorAll(":scope > tspan[x]")];
+    if (!lineEls.length) return [{ runs: this._runsOf(node), br: false }];
+    return lineEls.map((t) => ({ runs: this._runsOf(t), br: !!t.getAttribute("data-hv-br") }));
+  },
+  // _readTextRuns, but for AREA text, soft-wrapped rendered lines are rejoined into their
+  // original PARAGRAPHS first (via _linesToRuns) — the shape re-wrapping/re-editing actually
+  // wants. Point text never soft-wraps (each rendered line IS a paragraph already), so it
+  // passes through unchanged. Skipping this step for area text is exactly the bug that made a
+  // re-wrap at a new width freeze the OLD wrap points as fake hard breaks.
+  _readTextParagraphs(node) {
+    const lines = this._readTextRuns(node);
+    return parseFloat(node.getAttribute("data-hv-text-width")) > 0 ? this._linesToRuns(lines) : lines;
+  },
+  _runsToPlain(runs) { return runs.map((r) => r.text).join(""); },
+  // Read a <text> back to a string for the editor. Point text -> one tspan per line ("\n").
+  // Area text -> rebuild the FLOW: soft-wrapped lines re-join with a space, hard-break starts
+  // (data-hv-br) with "\n", so the editor re-wraps faithfully instead of freezing the wrap.
+  // Formatting-blind by design -- callers that need runs use _readTextRuns instead.
+  _readTextContent(node) {
+    const lines = this._readTextRuns(node);
+    if (this._hasTextPath(node)) return this._runsToPlain(lines[0].runs);
     if (parseFloat(node.getAttribute("data-hv-text-width")) > 0) {
       let s = "";
-      tspans.forEach((t, i) => { if (i > 0) s += t.getAttribute("data-hv-br") ? "\n" : " "; s += t.textContent || ""; });
+      lines.forEach((ln, i) => { if (i > 0) s += ln.br ? "\n" : " "; s += this._runsToPlain(ln.runs); });
       return s;
     }
-    return [...tspans].map((t) => t.textContent || "").join("\n");
+    return lines.map((ln) => this._runsToPlain(ln.runs)).join("\n");
   },
-  // The literal on-screen lines (one per tspan) — area text already wrapped. Used by
-  // convert-to-outlines so the outline matches the rendered wrapping exactly.
+  // The literal on-screen lines (one per tspan) -- area text already wrapped. Used by
+  // convert-to-outlines so the outline matches the rendered wrapping exactly. Formatting-blind
+  // (plain text); run-aware outline conversion reads _readTextRuns directly instead.
   _literalLines(node) {
-    const tp = node.querySelector(":scope > textPath");
-    if (tp) return tp.textContent || "";
-    const tspans = node.querySelectorAll(":scope > tspan");
-    if (tspans.length) return [...tspans].map((t) => t.textContent || "").join("\n");
-    return node.textContent || "";
+    const lines = this._readTextRuns(node);
+    if (this._hasTextPath(node)) return this._runsToPlain(lines[0].runs);
+    return lines.map((ln) => this._runsToPlain(ln.runs)).join("\n");
   },
   _hasTextPath(node) { return !!(node && node.querySelector && node.querySelector(":scope > textPath")); },
   // The <path> element a text node is bound to via its <textPath href>, or null. Searches
@@ -310,43 +495,93 @@ export const textMixin = {
     return href ? (root || this.stage).querySelector("#" + CSS.escape(href.slice(1))) : null;
   },
   // Dispatch: on-path → single run; AREA (has a wrap width) → word-wrap; POINT → hard breaks only.
-  _writeContent(node, str) {
+  // `input` is either a plain string (legacy callers — MCP's hv_set_text, thread-cascade
+  // fallbacks) or a structured lines array from _readTextRuns/_wrapRunLines (the rich commit
+  // path) — _plainToLines below normalizes either into one shape before rendering.
+  _writeContent(node, input) {
     const tp = node.querySelector(":scope > textPath");
-    if (tp) { tp.textContent = str.replace(/\n/g, " "); return; }   // path text is one flowing run
-    if (parseFloat(node.getAttribute("data-hv-text-width")) > 0) this._writeAreaContent(node, str);
-    else this._writeTextContent(node, str);
+    if (tp) { tp.textContent = (typeof input === "string" ? input : this._runsToPlain(input.flatMap((l) => l.runs))).replace(/\n/g, " "); return; }
+    if (parseFloat(node.getAttribute("data-hv-text-width")) > 0) this._writeAreaContent(node, input);
+    else this._writeTextContent(node, input);
+  },
+  // A plain string -> one default-run "paragraph" per \n-separated line (br on every line
+  // after the first, matching how a hard Enter always started a fresh paragraph before runs
+  // existed). Already-structured input passes through unchanged.
+  _plainToLines(input) {
+    if (Array.isArray(input)) return input;
+    return String(input).split("\n").map((t, i) => ({ runs: [this._defaultRun(t)], br: i > 0 }));
   },
   // A reusable canvas 2D context for text measurement (the font is loaded → metrics are real).
   _measureCtx() { return (this._measCtx = this._measCtx || document.createElement("canvas").getContext("2d")); },
-  // Greedy word-wrap `text` to `width` user-units using the node's actual font metrics. Each
-  // \n paragraph wraps independently. Returns [{text, br}] where `br` flags a line that starts
-  // a hard-break paragraph (so re-editing can reconstruct the user's breaks, not just the flow).
-  _wrapLines(node, text, width) {
+  // Greedy word-wrap to `width` user-units using the node's own base font (family/size never
+  // vary per run in v1 — only weight/style/color do) plus each RUN's own bold/italic, so a
+  // bold run measures against its own metrics instead of the object's default. `input` is
+  // either a plain string or already-structured paragraph lines (_readTextRuns' shape, before
+  // wrapping). Returns [{runs, br}] — the SAME shape, now soft-wrapped to width; a run that
+  // crosses a wrap point is split, its two halves keeping the same bold/italic/color.
+  _wrapRunLines(node, input, width) {
+    const paraLines = this._plainToLines(input);
     const ctx = this._measureCtx();
+    const fam = node.getAttribute("font-family") || "sans-serif";
     const fs = parseFloat(node.getAttribute("font-size")) || 16;
-    ctx.font = `${node.getAttribute("font-style") || "normal"} ${node.getAttribute("font-weight") || "400"} ${fs}px ${node.getAttribute("font-family") || "sans-serif"}`;
-    // Match the live overlay's CSS wrap (white-space:pre-wrap; overflow-wrap:break-word). Canvas
-    // measureText ignores letter-spacing, so add it (≈ ls per char) — otherwise tracked text wraps
-    // at a different column than the overlay showed. And char-break a token too long to fit any
-    // line (a long URL/word), like break-word — else it wraps in the overlay but overflows the box.
     const ls = parseFloat(node.getAttribute("letter-spacing")) || 0;
-    const w = (s) => (s ? ctx.measureText(s).width + ls * s.length : 0);
-    const fitPrefix = (s) => { let lo = 1, hi = s.length, n = 1; while (lo <= hi) { const m = (lo + hi) >> 1; if (w(s.slice(0, m)) <= width) { n = m; lo = m + 1; } else hi = m - 1; } return n; };
-    const out = [];
-    String(text).split("\n").forEach((para, pi) => {
-      if (!para.trim()) { out.push({ text: "", br: pi > 0 }); return; }
-      let line = "", first = true;
-      const push = (t) => { out.push({ text: t, br: pi > 0 && first }); first = false; };
-      // Emit full-width chunks of an overlong token; return the trailing remainder that fits.
-      const charBreak = (s) => { let rest = s; while (w(rest) > width) { const n = fitPrefix(rest); push(rest.slice(0, n)); rest = rest.slice(n); } return rest; };
-      for (const tok of para.split(/(\s+)/)) {
-        if (line.trim() && w(line + tok) > width) { push(line.replace(/\s+$/, "")); line = ""; }
-        if (!line.trim()) { const head = tok.replace(/^\s+/, ""); line = (w(head) > width) ? charBreak(head) : head; }
-        else line += tok;
+    const fontOf = (run) => `${run.italic ? "italic" : "normal"} ${run.bold ? "700" : "400"} ${fs}px ${fam}`;
+    const w = (run, s) => { if (!s) return 0; ctx.font = fontOf(run); return ctx.measureText(s).width + ls * s.length; };
+    const merge = (pieces) => {
+      const runs = [];
+      for (const p of pieces) {
+        const last = runs[runs.length - 1];
+        if (last && !!last.bold === !!p.run.bold && !!last.italic === !!p.run.italic && (last.color || null) === (p.run.color || null)) last.text += p.text;
+        else runs.push({ text: p.text, bold: !!p.run.bold, italic: !!p.run.italic, color: p.run.color || null });
       }
-      push(line.replace(/\s+$/, ""));
+      return runs.length ? runs : [this._defaultRun("")];
+    };
+    const out = [];
+    paraLines.forEach((para, pi) => {
+      const tokens = [];
+      for (const run of para.runs) for (const t of String(run.text || "").split(/(\s+)/)) if (t) tokens.push({ text: t, run });
+      if (!tokens.some((t) => t.text.trim())) { out.push({ runs: [this._defaultRun("")], br: pi > 0 }); return; }
+      let pieces = [], lineW = 0, first = true, hasContent = false;
+      const flush = () => {
+        while (pieces.length && !pieces[pieces.length - 1].text.trim()) pieces.pop();
+        out.push({ runs: merge(pieces), br: pi > 0 && first });
+        first = false; pieces = []; lineW = 0; hasContent = false;
+      };
+      const fitPrefix = (run, s) => { let lo = 1, hi = s.length, n = 1; while (lo <= hi) { const m = (lo + hi) >> 1; if (w(run, s.slice(0, m)) <= width) { n = m; lo = m + 1; } else hi = m - 1; } return n; };
+      for (const tok of tokens) {
+        const tw = w(tok.run, tok.text);
+        if (hasContent && lineW + tw > width) flush();
+        // A whitespace-only token opening a fresh line is dropped (matches the pre-runs
+        // algorithm's `tok.replace(/^\s+/, "")`) — checked AFTER the flush above, not just at
+        // the top of the loop: when the overflowing token IS the space itself (not the word
+        // after it), flush() resets hasContent to false mid-iteration for THIS token, and only
+        // a post-flush check catches it — otherwise that space lands as the new line's first
+        // piece, e.g. "fox" / " jumps" instead of "fox" / "jumps".
+        if (!hasContent && !tok.text.trim()) continue;
+        if (!hasContent && tw > width && tok.text.trim()) {
+          // Char-break an overlong token (a long word/URL), possibly across several lines —
+          // same idea as break-word, generalized to this token's own run/font.
+          let rest = tok.text;
+          while (w(tok.run, rest) > width && rest.length > 1) {
+            const n = fitPrefix(tok.run, rest);
+            pieces.push({ text: rest.slice(0, n), run: tok.run }); flush();
+            rest = rest.slice(n);
+          }
+          pieces.push({ text: rest, run: tok.run }); lineW = w(tok.run, rest); hasContent = !!rest.trim();
+          continue;
+        }
+        pieces.push({ text: tok.text, run: tok.run }); lineW += tw;
+        if (tok.text.trim()) hasContent = true;
+      }
+      flush();
     });
     return out;
+  },
+  // Legacy plain-string wrap — thin wrapper over _wrapRunLines, returns [{text, br}] the way
+  // callers before runs existed expect (used nowhere internally anymore, kept for anyone
+  // reaching in from outside, e.g. tests exercising the wrap directly).
+  _wrapLines(node, text, width) {
+    return this._wrapRunLines(node, text, width).map((l) => ({ text: this._runsToPlain(l.runs), br: l.br }));
   },
   // ---------- threaded text (Epic P.2/P.3) ----------
   // A chain is just a forward pointer: data-hv-text-next names the successor's data-hv-id.
@@ -380,7 +615,7 @@ export const textMixin = {
     while (cur && guard++ < 500) { if (cur === a) { setStatus("That would thread the boxes in a loop.", 3200); return; } cur = this._threadNextOf(cur); }
     this.push("Thread text");
     a.setAttribute("data-hv-text-next", b.getAttribute("data-hv-id"));
-    this._writeAreaContent(a, this._readTextContent(a));   // cascades into b right away
+    this._writeAreaContent(a, this._readTextParagraphs(a));   // cascades into b right away, formatting intact
     this._renderSelection(); this._renderInspector();
     setStatus("Threaded — overflow now flows from the first box into the second.", 2600);
   },
@@ -393,7 +628,7 @@ export const textMixin = {
     if (!source) return;
     this.push("Unthread text");
     source.removeAttribute("data-hv-text-next");
-    this._writeAreaContent(source, this._readTextContent(source));
+    this._writeAreaContent(source, this._readTextParagraphs(source));
     this._renderSelection(); this._renderInspector();
     setStatus("Unthreaded.", 2000);
   },
@@ -407,6 +642,27 @@ export const textMixin = {
     const lh = this._lineHeightOf(node);
     for (let n = lineCount; n > 0; n--) if (((n - 1) * fs * lh + fs) <= boxH + 0.5) return n;
     return 0;
+  },
+  // Append `runs` as this LINE element's content: a single default (unbold/unitalic/no-color)
+  // run renders as plain textContent (byte-identical to a pre-rich-runs document — no nested
+  // tspan clutter for the common case); anything else becomes one nested run-tspan per run,
+  // each carrying only the attributes that differ from the object's own default. A run-tspan
+  // never gets an `x` — that's the exact marker _readTextRuns uses to tell a run apart from a
+  // LINE (which always has one).
+  _renderRunsInto(container, runs) {
+    while (container.firstChild) container.removeChild(container.firstChild);
+    if (runs.length === 1 && !runs[0].bold && !runs[0].italic && !runs[0].color) {
+      container.textContent = runs[0].text;
+      return;
+    }
+    for (const r of runs) {
+      const rs = document.createElementNS(SVG_NS, "tspan");
+      if (r.bold) rs.setAttribute("font-weight", "700");
+      if (r.italic) rs.setAttribute("font-style", "italic");
+      if (r.color) rs.setAttribute("fill", r.color);
+      rs.textContent = r.text;
+      container.appendChild(rs);
+    }
   },
   // Render exactly these wrapped lines as tspans — the write half of _writeAreaContent,
   // split out so a threaded box can render only the prefix that fits its own height.
@@ -428,18 +684,33 @@ export const textMixin = {
       ts.setAttribute("dy", i === 0 ? "0" : String(Math.round(fs * lh * 100) / 100));
       ts.setAttribute("xml:space", "preserve");
       if (i > 0 && ln.br) ts.setAttribute("data-hv-br", "1");
-      ts.textContent = ln.text;
+      this._renderRunsInto(ts, ln.runs);
       node.appendChild(ts);
     });
   },
-  // Reassemble a wrapped-lines array back into a logical string — soft-wrapped lines
-  // rejoin with a space, hard breaks (br) with "\n". Mirrors _readTextContent's own tspan
-  // loop exactly, so a threaded tail re-wraps at the next box's width the same way
+  // Reassemble a wrapped-lines array back into a logical RUNS array — soft-wrapped lines
+  // rejoin with a space (appended as a plain-run token to whatever the last run was), hard
+  // breaks (br) start a fresh paragraph. Mirrors _readTextRuns' own line loop, so a threaded
+  // tail re-wraps at the next box's width — WITH its formatting intact — the same way
   // re-editing the source would.
-  _linesToText(lines) {
-    let s = "";
-    lines.forEach((ln, i) => { if (i > 0) s += ln.br ? "\n" : " "; s += ln.text; });
-    return s;
+  _linesToRuns(lines) {
+    const out = [];
+    lines.forEach((ln, i) => {
+      const runs = ln.runs.map((r) => ({ ...r }));
+      if (i === 0) { out.push({ runs, br: false }); return; }
+      if (ln.br) { out.push({ runs, br: true }); return; }
+      // Soft-wrapped continuation: glue onto the previous paragraph with a space, so re-wrapping
+      // sees one flowing run of text rather than an artificial hard break at the old wrap point.
+      const prev = out[out.length - 1];
+      const lastRun = prev.runs[prev.runs.length - 1];
+      const firstNew = runs[0];
+      if (lastRun && !!lastRun.bold === !!firstNew.bold && !!lastRun.italic === !!firstNew.italic && (lastRun.color || null) === (firstNew.color || null)) {
+        lastRun.text += " " + firstNew.text; prev.runs.push(...runs.slice(1));
+      } else {
+        prev.runs.push({ text: " ", bold: false, italic: false, color: null }, ...runs);
+      }
+    });
+    return out;
   },
   // A dashed connector between threaded boxes, drawn only while one end is selected (a
   // permanent line per pair would clutter a canvas with several threads — Illustrator's own
@@ -476,9 +747,9 @@ export const textMixin = {
   // Threaded (has data-hv-text-next): only the prefix that fits THIS box's own height is
   // rendered here; whatever's left over is reassembled and cascaded into the next box —
   // recursively, so a whole chain reflows from one edit at its head.
-  _writeAreaContent(node, str) {
+  _writeAreaContent(node, input) {
     const width = parseFloat(node.getAttribute("data-hv-text-width")) || 200;
-    const lines = this._wrapLines(node, str, width);
+    const lines = this._wrapRunLines(node, input, width);
     const next = this._threadNextOf(node);
     let shown = lines, tail = null;
     if (next) {
@@ -490,7 +761,7 @@ export const textMixin = {
     // boxes with somewhere for the overflow to go aren't "overflowing" — they're flowing.
     if (!next && this._areaOverflows(node, lines.length)) node.setAttribute("data-hv-overflow", "1");
     else node.removeAttribute("data-hv-overflow");
-    if (next) this._writeAreaContent(next, tail ? this._linesToText(tail) : "");
+    if (next) this._writeAreaContent(next, tail ? this._linesToRuns(tail) : "");
   },
   // True when the wrapped area text is taller than its box height (0/unset height never overflows).
   _areaOverflows(node, lineCount) {
@@ -501,12 +772,13 @@ export const textMixin = {
     const n = lineCount != null ? lineCount : (node.querySelectorAll(":scope > tspan").length || 1);
     return ((n - 1) * fs * lh + fs) > boxH + 0.5;
   },
-  // Write a string into a <text>: single line → textContent; multi-line → a tspan per
-  // line, each re-anchored to x with a dy of fontSize*lineHeight (first line dy 0).
-  _writeTextContent(node, str) {
+  // Write into a <text>: a single default-style line → plain textContent (or, with runs, run-
+  // tspans directly under <text> itself — still no line-tspan, since there's only one line);
+  // multiple lines → a line-tspan per line (x/dy as before), each carrying its own runs.
+  _writeTextContent(node, input) {
     while (node.firstChild) node.removeChild(node.firstChild);
-    const lines = str.split("\n");
-    if (lines.length <= 1) { node.textContent = lines[0] || ""; return; }
+    const lines = this._plainToLines(input);
+    if (lines.length <= 1) { this._renderRunsInto(node, (lines[0] || { runs: [this._defaultRun("")] }).runs); return; }
     const x = node.getAttribute("x") || "0";
     const fs = parseFloat(node.getAttribute("font-size")) || 16;
     const lh = this._lineHeightOf(node);
@@ -515,7 +787,7 @@ export const textMixin = {
       ts.setAttribute("x", x);
       ts.setAttribute("dy", i === 0 ? "0" : String(Math.round(fs * lh * 100) / 100));
       ts.setAttribute("xml:space", "preserve");
-      ts.textContent = ln;
+      this._renderRunsInto(ts, ln.runs);
       node.appendChild(ts);
     });
   },
@@ -534,7 +806,7 @@ export const textMixin = {
   // (new metrics → new line breaks); point text just re-spaces its existing tspans.
   _reflowText(node) {
     if (parseFloat(node.getAttribute("data-hv-text-width")) > 0) {
-      this._writeAreaContent(node, this._readTextContent(node));
+      this._writeAreaContent(node, this._readTextParagraphs(node));
       return;
     }
     const tspans = node.querySelectorAll(":scope > tspan");
@@ -875,32 +1147,47 @@ export const textMixin = {
     return out.length ? out.join(" ") : null;
   },
 
+  // Shared job-payload builder for both convertSelectedTextToOutlines and outlineTextForExport.
+  // Point/area text sends `lines` (WITH runs — one <path> per distinct run color comes back,
+  // since a run's bold/italic/color needs its own font/fill and SVG can't mix fills within one
+  // path); on-path text keeps sending a single flat `text` (rich runs are scoped OUT of on-path,
+  // v1 — see this file's _editText comment) and still comes back as one path via perGlyph.
+  _textOutlineJob(node) {
+    const onPath = this._hasTextPath(node);
+    const fam = window.__fonts.primaryFamily(node.getAttribute("font-family") || "");
+    const base = {
+      family: fam,
+      source: window.__fonts.webFontSource(fam),   // same source the family loaded from (else server resolves by name)
+      weight: parseInt(node.getAttribute("font-weight") || "400", 10) || 400,
+      italic: (node.getAttribute("font-style") || "") === "italic",
+      fontSize: parseFloat(node.getAttribute("font-size")) || 16,
+      letterSpacing: parseFloat(node.getAttribute("letter-spacing")) || 0,
+      lineHeight: this._lineHeightOf(node),
+      anchor: node.getAttribute("text-anchor") || "start",
+      x: parseFloat(node.getAttribute("x")) || 0,
+      y: parseFloat(node.getAttribute("y")) || 0,
+      perGlyph: onPath,   // on-path → per-glyph outlines, laid along the curve client-side
+    };
+    if (onPath) {
+      const t = node.querySelector(":scope > textPath").textContent || "";
+      if (!t.trim()) return null;
+      return { onPath, payload: { ...base, text: t.replace(/\n/g, " ") } };
+    }
+    const lines = this._readTextRuns(node);   // VISUAL lines (area text already wrapped), WITH runs
+    if (!lines.some((ln) => this._runsToPlain(ln.runs).trim())) return null;
+    return { onPath, payload: { ...base, lines: lines.map((ln) => ({ runs: ln.runs })) } };
+  },
+  // colors:[{color,d}] (run-aware result) or a lone d (perGlyph/legacy) -> one path spec per
+  // distinct fill actually used. color:null means "this text's own fill", not "no path".
+  _pathsFromOutlineResult(res) {
+    if (res.colors && res.colors.length) return res.colors.filter((e) => e.d).map((e) => ({ d: e.d, color: e.color }));
+    return res.d ? [{ d: res.d, color: null }] : [];
+  },
   async convertSelectedTextToOutlines() {
     if (this._textEdit) this._commitText();   // flush in-progress typing so we outline live content, not the stale pre-edit text
     const texts = this.selectedNodes().filter((n) => n.tagName.toLowerCase() === "text");
     if (!texts.length || !window.__fonts) return;
-    const jobs = [];
-    for (const node of texts) {
-      const onPath = this._hasTextPath(node);
-      const text = onPath ? (node.querySelector(":scope > textPath").textContent || "")
-                          : this._literalLines(node);   // VISUAL lines (area text already wrapped)
-      if (!text.trim()) continue;
-      const fam = window.__fonts.primaryFamily(node.getAttribute("font-family") || "");
-      jobs.push({ node, onPath, payload: {
-        text: onPath ? text.replace(/\n/g, " ") : text,   // a textPath run is a single line
-        family: fam,
-        source: window.__fonts.webFontSource(fam),   // same source the family loaded from (else server resolves by name)
-        weight: parseInt(node.getAttribute("font-weight") || "400", 10) || 400,
-        italic: (node.getAttribute("font-style") || "") === "italic",
-        fontSize: parseFloat(node.getAttribute("font-size")) || 16,
-        letterSpacing: parseFloat(node.getAttribute("letter-spacing")) || 0,
-        lineHeight: this._lineHeightOf(node),
-        anchor: node.getAttribute("text-anchor") || "start",
-        x: parseFloat(node.getAttribute("x")) || 0,
-        y: parseFloat(node.getAttribute("y")) || 0,
-        perGlyph: onPath,   // on-path → per-glyph outlines, laid along the curve client-side
-      } });
-    }
+    const jobs = texts.map((node) => ({ node, ...(this._textOutlineJob(node) || {}) })).filter((j) => j.payload);
     if (!jobs.length) return;
     setStatus("Converting text to outlines…", 0);
     let results;
@@ -910,29 +1197,39 @@ export const textMixin = {
     const newIds = [];
     jobs.forEach((j, i) => {
       const res = results[i] || {};
-      const d = j.onPath ? this._layoutGlyphsOnPath(j.node, res.glyphs || []) : res.d;
-      if (!d) return;
-      const path = document.createElementNS(SVG_NS, "path");
-      path.setAttribute("d", d);
-      // Carry over EVERYTHING that isn't text-layout-specific, so paint (fill/stroke/opacity)
-      // plus masks, filters, clip-path and custom data-* survive the conversion. x/y/transform
-      // are dropped for on-path geometry (already baked into the glyph coords via getPointAtLength).
+      const paths = j.onPath
+        ? [{ d: this._layoutGlyphsOnPath(j.node, res.glyphs || []), color: null }].filter((p) => p.d)
+        : this._pathsFromOutlineResult(res);
+      if (!paths.length) return;
       const drop = new Set(["x", "y", "dx", "dy", "font-family", "font-size", "font-weight",
         "font-style", "font-stretch", "text-anchor", "letter-spacing", "word-spacing", "xml:space",
         "data-hv-id", "data-hv-name", "data-hv-line-height", "data-hv-text-width", "data-hv-br"]);
       if (j.onPath) drop.add("transform");
-      for (const at of [...j.node.attributes]) {
-        if (!drop.has(at.name)) path.setAttribute(at.name, at.value);
-      }
-      if (!path.getAttribute("fill")) path.setAttribute("fill", j.node.getAttribute("fill") || "#000000");
-      // Glyph counters (the holes in o/e/a/8) are cut by OPPOSITE contour winding — explicit
-      // nonzero so they render as holes regardless of the document/boolean-engine default.
-      path.setAttribute("fill-rule", "nonzero");
-      const id = j.node.getAttribute("data-hv-id") || ("n" + (++this.idSeq));
-      path.setAttribute("data-hv-id", id);
-      const nm = this.nodeName(j.node); if (nm && nm !== "Text") path.setAttribute("data-hv-name", nm.length > 40 ? nm.slice(0, 40) : nm);
-      j.node.replaceWith(path);
-      newIds.push(id);
+      const nm = this.nodeName(j.node); const nmTrim = nm && nm !== "Text" ? (nm.length > 40 ? nm.slice(0, 40) : nm) : null;
+      let firstId = null;
+      const made = paths.map((p) => {
+        const path = document.createElementNS(SVG_NS, "path");
+        path.setAttribute("d", p.d);
+        // Carry over EVERYTHING that isn't text-layout-specific, so paint (stroke/opacity) plus
+        // masks, filters, clip-path and custom data-* survive the conversion — fill is set below
+        // instead, per-path (a rich run's own color, when it has one). x/y/transform are dropped
+        // for on-path geometry (already baked into the glyph coords via getPointAtLength).
+        for (const at of [...j.node.attributes]) if (!drop.has(at.name)) path.setAttribute(at.name, at.value);
+        path.setAttribute("fill", p.color || j.node.getAttribute("fill") || "#000000");
+        // Glyph counters (the holes in o/e/a/8) are cut by OPPOSITE contour winding — explicit
+        // nonzero so they render as holes regardless of the document/boolean-engine default.
+        path.setAttribute("fill-rule", "nonzero");
+        // Only the FIRST path of a multi-color conversion reuses the original data-hv-id (keeps
+        // selection/undo continuity where there used to be exactly one node); the rest mint fresh.
+        const id = firstId ? ("n" + (++this.idSeq)) : (j.node.getAttribute("data-hv-id") || ("n" + (++this.idSeq)));
+        if (!firstId) firstId = id;
+        path.setAttribute("data-hv-id", id);
+        if (nmTrim) path.setAttribute("data-hv-name", nmTrim);
+        return path;
+      });
+      for (const p of made) j.node.parentNode.insertBefore(p, j.node);
+      j.node.remove();
+      newIds.push(...made.map((p) => p.getAttribute("data-hv-id")));
     });
     // Selection is preserved by REUSING each text's data-hv-id on its new path, so a caller
     // that converted a mixed selection (e.g. booleanOp's guard rail) keeps every member.
@@ -985,25 +1282,9 @@ export const textMixin = {
       if (root.tagName.toLowerCase() !== "svg") return svgText;
       const texts = [...root.querySelectorAll("text")];
       if (!texts.length) return svgText;
-      const jobs = texts.map((node) => {
-        const onPath = this._hasTextPath(node);
-        const text = onPath ? (node.querySelector(":scope > textPath").textContent || "")
-                            : this._literalLines(node);
-        const fam = window.__fonts.primaryFamily(node.getAttribute("font-family") || "");
-        return { node, onPath, payload: {
-          text: onPath ? text.replace(/\n/g, " ") : text,
-          family: fam, source: window.__fonts.webFontSource(fam),
-          weight: parseInt(node.getAttribute("font-weight") || "400", 10) || 400,
-          italic: (node.getAttribute("font-style") || "") === "italic",
-          fontSize: parseFloat(node.getAttribute("font-size")) || 16,
-          letterSpacing: parseFloat(node.getAttribute("letter-spacing")) || 0,
-          lineHeight: this._lineHeightOf(node),
-          anchor: node.getAttribute("text-anchor") || "start",
-          x: parseFloat(node.getAttribute("x")) || 0,
-          y: parseFloat(node.getAttribute("y")) || 0,
-          perGlyph: onPath,
-        } };
-      }).filter((j) => j.payload.text.trim());
+      // _textOutlineJob is pure DOM (no stage/live-document dependency), so it works unchanged
+      // against this DETACHED clone's own <text> nodes.
+      const jobs = texts.map((node) => ({ node, ...(this._textOutlineJob(node) || {}) })).filter((j) => j.payload);
       if (!jobs.length) return svgText;
       const results = await Promise.all(jobs.map((j) => platform.textOutline(j.payload)));
       const drop = new Set(["x", "y", "dx", "dy", "font-family", "font-size", "font-weight",
@@ -1011,15 +1292,21 @@ export const textMixin = {
         "data-hv-id", "data-hv-name", "data-hv-line-height", "data-hv-text-width", "data-hv-br"]);
       jobs.forEach((j, i) => {
         const res = results[i] || {};
-        const d = j.onPath ? this._layoutGlyphsOnPath(j.node, res.glyphs || [], root) : res.d;
-        if (!d) return;   // this one text run failed to outline — leave it as <text>, don't fail the export
-        const path = doc.createElementNS(SVG_NS, "path");
-        path.setAttribute("d", d);
+        const paths = j.onPath
+          ? [{ d: this._layoutGlyphsOnPath(j.node, res.glyphs || [], root), color: null }].filter((p) => p.d)
+          : this._pathsFromOutlineResult(res);
+        if (!paths.length) return;   // this one text run failed to outline — leave it as <text>, don't fail the export
         const nodeDrop = j.onPath ? new Set([...drop, "transform"]) : drop;
-        for (const at of [...j.node.attributes]) if (!nodeDrop.has(at.name)) path.setAttribute(at.name, at.value);
-        if (!path.getAttribute("fill")) path.setAttribute("fill", j.node.getAttribute("fill") || "#000000");
-        path.setAttribute("fill-rule", "nonzero");
-        j.node.replaceWith(path);
+        const made = paths.map((p) => {
+          const path = doc.createElementNS(SVG_NS, "path");
+          path.setAttribute("d", p.d);
+          for (const at of [...j.node.attributes]) if (!nodeDrop.has(at.name)) path.setAttribute(at.name, at.value);
+          path.setAttribute("fill", p.color || j.node.getAttribute("fill") || "#000000");
+          path.setAttribute("fill-rule", "nonzero");
+          return path;
+        });
+        for (const p of made) j.node.parentNode.insertBefore(p, j.node);
+        j.node.remove();
       });
       return new XMLSerializer().serializeToString(root);
     } catch { return svgText; }
