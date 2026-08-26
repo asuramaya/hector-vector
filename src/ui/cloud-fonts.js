@@ -5,8 +5,8 @@
 //   • loading fetches the family's woff2 straight from the Google Fonts CSS2 API (CORS-open) and
 //     hands the URL back to fonts.js, which registers it as a live FontFace exactly as on desktop.
 // The per-family loader already worked for any family name; the catalog was the only thing
-// artificially small. Latin-grade text-to-outlines shaping remains a separate limitation, handled
-// in cloud-text.js.
+// artificially small. Text-to-outlines shaping (real HarfBuzz, not a Latin-grade approximation)
+// is handled in cloud-text.js.
 
 // /assets/google-fonts-catalog.json: [family, category, subsets[]] tuples, ~1900 entries, sorted by
 // Google's own popularity ranking. Generated from https://fonts.google.com/metadata/fonts (public,

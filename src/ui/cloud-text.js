@@ -58,8 +58,16 @@ const SCRIPT_RANGES = [
 function detectSubset(text) {
   const counts = Object.create(null);
   for (const ch of Array.from(String(text || ""))) {
+    // ASCII letters must vote for "latin" too, not be silently skipped — otherwise a single
+    // stray non-Latin character (a pasted accented name, a smart quote outside 0x80... this
+    // still catches real script chars, curly quotes/em-dashes are outside SCRIPT_RANGES and
+    // fall through to the ignored branch below) in an otherwise-Latin string would outvote the
+    // dominant script 1-to-0 and hijack the WHOLE run onto the wrong font, not just leave that
+    // one character unmapped — found live via a "Test क" test case that shaped the entire word
+    // "Test" as missing glyphs instead of just the trailing Devanagari character.
+    if (/[A-Za-z]/.test(ch)) { counts.latin = (counts.latin || 0) + 1; continue; }
     const cp = ch.codePointAt(0);
-    if (cp < 0x80) continue;   // ASCII (incl. plain digits/punctuation) carries no script signal
+    if (cp < 0x80) continue;   // digits/punctuation/whitespace carry no script signal
     for (const [subset, ranges] of SCRIPT_RANGES) {
       if (ranges.some(([a, b]) => cp >= a && cp <= b)) {
         counts[subset] = (counts[subset] || 0) + 1;
@@ -71,6 +79,19 @@ function detectSubset(text) {
   for (const [subset, n] of Object.entries(counts)) if (n > bestN) { best = subset; bestN = n; }
   return best;
 }
+
+// System/undownloadable-face -> metric-compatible OFL stand-in, mirrored from desktop's
+// _FONT_SUBSTITUTES (hvserver/fonts.py) so a document that names "Arial" gets the SAME reported
+// substitute on both builds, not just a fallback that happens to also work.
+const FONT_SUBSTITUTES = {
+  arial: "Arimo", helvetica: "Arimo", "helvetica neue": "Arimo", "liberation sans": "Arimo",
+  times: "Tinos", "times new roman": "Tinos", "liberation serif": "Tinos",
+  courier: "Cousine", "courier new": "Cousine", "liberation mono": "Cousine",
+  georgia: "Gelasio",
+  "sans-serif": "Arimo", serif: "Tinos", monospace: "Cousine", "ui-sans-serif": "Arimo",
+  verdana: "Arimo", tahoma: "Arimo", "trebuchet ms": "Arimo", "segoe ui": "Arimo",
+  calibri: "Arimo", "system-ui": "Arimo", "ui-serif": "Tinos", "ui-monospace": "Cousine",
+};
 
 // Every non-Latin subset above has its own single-script Noto family on Fontsource (verified:
 // noto-sans-arabic, noto-sans-devanagari, ... one per script) — the base "noto-sans" family only
@@ -98,16 +119,22 @@ async function loadOutlineFont(hb, family, weight, italic, subset) {
     `https://cdn.jsdelivr.net/fontsource/fonts/${id}@latest/${subset}-400-${style}.ttf`,
     `https://cdn.jsdelivr.net/fontsource/fonts/${id}@latest/${subset}-400-normal.ttf`,
   ];
-  const ids = [fontsourceId(family)];
-  if (FALLBACK_FAMILY[subset]) ids.push(FALLBACK_FAMILY[subset]);   // requested family lacks the script
-  else if (subset !== "latin") ids.push("noto-sans");                // latin-adjacent subset, base Noto covers it
+  // Reported to the caller as `substituted` whenever the family that actually loaded isn't the
+  // one asked for — a named system-font stand-in (Arial -> Arimo, same table desktop uses) tried
+  // first so the user sees the SAME substitute name on both builds, then the generic script
+  // fallback for anything else that doesn't ship the detected subset.
+  const namedSub = FONT_SUBSTITUTES[fontsourceId(family).replace(/-/g, " ")];
+  const ids = [{ id: fontsourceId(family), label: null }];
+  if (namedSub) ids.push({ id: fontsourceId(namedSub), label: namedSub });
+  if (FALLBACK_FAMILY[subset]) ids.push({ id: FALLBACK_FAMILY[subset], label: FALLBACK_FAMILY[subset] });
+  else if (subset !== "latin") ids.push({ id: "noto-sans", label: "Noto Sans" });
 
-  let buf = null;
-  outer: for (const id of ids) {
+  let buf = null, substituted = null;
+  outer: for (const { id, label } of ids) {
     for (const u of urlsFor(id)) {
       try {
         const r = await fetch(u);
-        if (r.ok) { buf = await r.arrayBuffer(); break outer; }
+        if (r.ok) { buf = await r.arrayBuffer(); substituted = label; break outer; }
       } catch { /* try next */ }
     }
   }
@@ -115,7 +142,7 @@ async function loadOutlineFont(hb, family, weight, italic, subset) {
 
   const face = new hb.Face(new hb.Blob(buf));
   const font = new hb.Font(face);
-  const result = { font, upem: face.upem };
+  const result = { font, upem: face.upem, substituted };
   _fontCache.set(key, result);
   return result;
 }
@@ -150,6 +177,19 @@ function glyphPath(hb, font, gid, scale, tx, ty) {
   return d.out.join("");
 }
 
+// Characters the font has no glyph for at all — checked BEFORE shaping (same as desktop's cmap
+// check), independent of what GSUB substitution does afterward, since post-shaping glyph ids
+// don't map 1:1 back to input characters (ligatures merge several into one). Matches desktop's
+// `ch.strip()` filter: whitespace never counts as "missing".
+function missingChars(font, text) {
+  const missing = new Set();
+  for (const ch of Array.from(String(text || ""))) {
+    if (!ch.trim()) continue;
+    if (font.nominalGlyph(ch.codePointAt(0)) === undefined) missing.add(ch);
+  }
+  return [...missing].sort();
+}
+
 function shapeLine(hb, font, text) {
   const buffer = new hb.Buffer();
   buffer.addText(text);
@@ -168,20 +208,29 @@ export async function cloudTextOutline(payload) {
     letterSpacing = 0, lineHeight = fontSize * 1.2, anchor = "start", x = 0, y = 0, perGlyph = false,
   } = payload || {};
   const subset = detectSubset(text);
-  const { font, upem } = await loadOutlineFont(hb, family, weight, italic, subset);
+  const { font, upem, substituted } = await loadOutlineFont(hb, family, weight, italic, subset);
   const scale = fontSize / (upem || 1000);
+  const missing = missingChars(font, text);
+  // Real HarfBuzz shaping runs unconditionally here (no optional-dependency fallback tier the
+  // way desktop has for a missing uharfbuzz install), so there's no "the fallback shaper can't
+  // handle this script" case to flag — always null, kept for contract parity with desktop's
+  // { missing, substituted, complexScript } shape that text.js reads on both builds.
+  const complexScript = null;
 
   if (perGlyph) {
     // One line (a textPath run): each glyph at local origin (0,0), text.js lays them along the
     // curve. Real shaping can merge characters into ligatures, so the output array's length may
-    // be shorter than the input string's — that's correct, not a bug.
+    // be shorter than the input string's — that's correct, not a bug. gid 0 (.notdef, a character
+    // the font truly has no glyph for) draws nothing — a clean gap, same as desktop's "skip it"
+    // — but still keeps its shaped advance so spacing along the path doesn't collapse.
     const glyphs = shapeLine(hb, font, String(text).replace(/\n/g, " "));
     return {
       glyphs: glyphs.map(({ gid, pos }) => {
         const w = pos.xAdvance * scale;
-        const d = glyphPath(hb, font, gid, scale, pos.xOffset * scale, -pos.yOffset * scale);
+        const d = gid === 0 ? "" : glyphPath(hb, font, gid, scale, pos.xOffset * scale, -pos.yOffset * scale);
         return { d, w, adv: w + letterSpacing };
       }),
+      missing, substituted, complexScript,
     };
   }
 
@@ -194,10 +243,12 @@ export async function cloudTextOutline(payload) {
     let cx = x - (anchor === "middle" ? lw / 2 : anchor === "end" ? lw : 0);
     const ly = y + li * lineHeight;
     for (const { gid, pos } of shaped) {
-      const d = glyphPath(hb, font, gid, scale, cx + pos.xOffset * scale, ly - pos.yOffset * scale);
-      if (d) parts.push(d);
+      if (gid !== 0) {   // .notdef: skip drawing (clean gap), still advance below
+        const d = glyphPath(hb, font, gid, scale, cx + pos.xOffset * scale, ly - pos.yOffset * scale);
+        if (d) parts.push(d);
+      }
       cx += pos.xAdvance * scale + letterSpacing;
     }
   });
-  return { d: parts.join(" ") || null };
+  return { d: parts.join(" ") || null, missing, substituted, complexScript };
 }
