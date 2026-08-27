@@ -318,19 +318,22 @@ button:disabled {
    track added only when that dock is shown. Empty/folded docks are set display:none. */
 .leftdock { display: none; }   /* default until JS shows it / a panel docks here */
 
-/* ---- Manage screen (Edit/Manage swap) ----
-   The A-side surface. Lives in the same grid cell as .editor-grid; display toggles by
-   the .app.manage class (a display:none element is not a grid item, so auto-placement
-   just works — header→row1, whichever grid is shown→1fr row2, footer→row3). manage.js
-   reparents Library / Processor / Jobs into here, so they get room the 270px dock can't. */
-.manage-grid { display: none; min-height: 0; }
-.app.manage .editor-grid { display: none; }
-.app.manage .manage-grid {
+/* ---- Manage screen (overlay over the live canvas) ----
+   manage.js reparents Library / Processor / Jobs into here (once, permanently), so they
+   get room the 270px dock can't. The grid itself lives in one of two homes: parked under
+   .app (hidden) when closed, moved into #modal-body (visible) when Manage is open — see
+   manage.js's enter()/parkGrid(). Visibility is [hidden] alone, not a .app.manage class
+   toggle: the canvas is never hidden underneath, so this has to work standalone wherever
+   it's currently parented, not just inside a specific ancestor. */
+.manage-grid {
   display: grid;
+  min-height: 0;
+  height: 100%;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 340px) minmax(280px, 340px);
   grid-template-rows: minmax(0, 1fr) minmax(140px, 0.6fr);
   gap: 10px;
 }
+.manage-grid[hidden] { display: none; }
 /* Library = the big browse pane (full-height, leftmost). Info and Processor/Jobs used to
    share ONE column, stacked three deep — Info squeezed into the middle row meant it read as
    a minor status strip between two "real" panels, when it's actually the other primary
@@ -1845,6 +1848,14 @@ input.insp-ab-name { background: var(--field-bg); color: inherit; border: 1px so
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
 }
 .modal-window.modal-narrow { width: min(460px, 92vw); }
+/* Manage's overlay (manage.js) — full-viewport density instead of a dialog-sized box, since
+   its 3-column rail grid needs the room the 960px class doesn't give it. Still a modal: same
+   backdrop/dismiss, just sized to fill instead of centre-float. */
+.modal-window.modal-fullscreen { width: 96vw; height: 96dvh; max-height: 96dvh; }
+/* Manage's grid manages its own internal scroll per rail-section — an outer scrollbar on
+   modal-body would just double up. Only scoped to fullscreen (Manage today); other modals
+   keep modal-body's normal overflow-y/padding. */
+.modal-fullscreen .modal-body { overflow: hidden; padding: 10px; }
 
 /* ---- Pipeline stage cards (Processor dock panel) ---- */
 .gallery-cell.processed .gallery-caption { color: var(--accent); }

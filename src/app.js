@@ -1311,7 +1311,7 @@ function buildRasterTools(node) {
   //      roomy grid (extracted → src/ui/manage.js). ----
   // Manage borrows the Library/Processor/Jobs panels into a browse+batch grid — all server-only,
   // so there's nothing to manage in the cloud build.
-  window.__manage = CLOUD ? null : createManage({ docks: window.__docks, measureFit, viewports });
+  window.__manage = CLOUD ? null : createManage({ docks: window.__docks, measureFit, viewports, modalBodyEl, modalSearchEl, openModal, closeModal });
   window.__fonts = fonts;   // text inspector's font browser + save-embed/export hooks
   fonts.hydrateInstalled();   // re-register cached fonts after a reload (Installed list + save-embed)
 

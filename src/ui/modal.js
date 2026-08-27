@@ -32,18 +32,28 @@ export function floatingInput({ value = "", placeholder = "", title = "", x, y, 
 // here so dismissals it doesn't own still settle its promise — see :openModal.
 let modalOnClose = null;
 
-export function openModal(title, narrow = false) {
+// A normal modal owns disposable content (Open/Place/Settings all rebuild modalBody
+// fresh on every open), so closeModal wipes it. A HOST modal instead reparents in a
+// permanent element that lives elsewhere (Manage's grid — borrowed once at startup,
+// see manage.js) — wiping innerHTML would destroy it, not just hide it. Passing
+// hostDetach opts out of the wipe: closeModal calls it to move the content back home.
+let modalHostDetach = null;
+
+export function openModal(title, narrow = false, { fullscreen = false, hostDetach = null, onClose = null } = {}) {
   modalTitleEl.textContent = title;
   modalSearchEl.value = "";
+  modalHostDetach = hostDetach;
+  modalOnClose = onClose;
   const win = modalRootEl.querySelector(".modal-window");
-  if (win) win.classList.toggle("modal-narrow", !!narrow);
+  if (win) { win.classList.toggle("modal-narrow", !!narrow); win.classList.toggle("modal-fullscreen", !!fullscreen); }
   modalRootEl.hidden = false;
   setTimeout(() => modalSearchEl.focus(), 0);
 }
 
 export function closeModal() {
   modalRootEl.hidden = true;
-  modalBodyEl.innerHTML = "";
+  const detach = modalHostDetach; modalHostDetach = null;
+  if (detach) detach(); else modalBodyEl.innerHTML = "";
   onAnyClose();
   const cb = modalOnClose; modalOnClose = null;
   if (cb) cb();
