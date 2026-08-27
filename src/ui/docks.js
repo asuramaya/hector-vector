@@ -869,6 +869,9 @@ export function createDocks({ editor, measureFit, viewports, renderProcessorPane
         b.dataset.shelf = name;
         b.textContent = SHELF_GLYPH[name] || (PANEL_LABEL[name] || name)[0];
         const label = PANEL_LABEL[name] || name;
+        // title= doubles as BOTH the native fallback tooltip AND the text the app.js hover-chin
+        // mechanism reads (BAR_SEL includes .panel-shelf; explain() falls back to title= for any
+        // tile with no palette-registry entry) — one string, shown in both places.
         b.title = `${label}${state[name].autoShelved ? " (idle — nothing to act on)" : ""} — click to open, right-click for options`;
         b.addEventListener("click", () => openFromShelf(name));
         // Right-click → choose where it opens (restore / float / dock either side).

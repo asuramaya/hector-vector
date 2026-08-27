@@ -51,7 +51,8 @@ import {
 } from "./ui/modal.js";
 import {
   configureSettings, openAppSettings, openToolsSettings, loadVersion, versionInfo,
-  appSettingsOpen, setAppSettingsOpen, setPwaInstallPrompt, initAgentAccessBadge,
+  appSettingsOpen, setAppSettingsOpen, setPwaInstallPrompt,
+  agentAccessInfo, ensureAgentAccessInfo,
 } from "./ui/settings.js";
 import { configureLayoutPicker, openLayoutPicker } from "./ui/layout-picker.js";
 import { setCustomizeHandler, refreshSheetTabs, showSheetTab } from "./ui/formfactor.js";
@@ -554,11 +555,23 @@ const MENU_ITEMS = {
       { label: "Reveal current file", onClick: revealCurrentFile, disabled: !canReveal },
       { label: "Copy SVG markup", onClick: copySvgSource },
       { type: "sep" },
+      // Replaces the old always-on header badge: a live status line right where you'd go to
+      // change it, instead of a permanent screen fixture for something checked occasionally.
+      // Recomputed every time the menu opens, so it reads the actual live state, not a snapshot.
+      { label: agentAccessLabel(), onClick: () => openAppSettings({ focus: "agent-access" }) },
       { label: "Settings…", onClick: openAppSettings },
     ];
     return items;
   },
 };
+// Label for the File menu's "Agent access" status line — mirrors the Settings toggle's own
+// three states (docs/mcp-server.md). null (not yet fetched) reads as "off" rather than blank.
+function agentAccessLabel() {
+  const info = agentAccessInfo;
+  if (info && info.active) return "⬤ Agent access: on";
+  if (info && info.enabled) return "Agent access: on, not yet live";
+  return "Agent access: off";
+}
 // Menus live in src/ui/menus.js; inject setStatus (error toasts) + the header menu map
 // now that MENU_ITEMS is defined. The eval-time trigger/dismissal wiring stays below.
 configureMenus({ setStatus, menuItems: MENU_ITEMS });
@@ -1591,7 +1604,14 @@ function openStageContext(clientX, clientY, target) {
 //               button does WITHOUT firing it — which is the entire point, and is the one thing a
 //               phone could never do before.
 {
-  const BAR_SEL = ".toolstrip, .actionbar, .stage-toolbar, .viewport-controls, #mobile-top, .panel-actions";
+  // Every bar/tray that holds icon-only (or glyph + title) chrome — full parity means NEW chrome
+  // added anywhere in here explains itself for free, with no separate registration step beyond
+  // giving the button a real title=. Bars added for parity with the palette-registered tool
+  // strips: .status-tools (⌕/?/◫), .panel-shelf (parked panel squares), .tool-swatches (fill/
+  // stroke/swap), .library-chin (sort + C/R/V source toggle), .doc-actions-left (the File menu
+  // trigger + Edit/Manage tabs).
+  const BAR_SEL = ".toolstrip, .actionbar, .stage-toolbar, .viewport-controls, #mobile-top, "
+    + ".panel-actions, .status-tools, .panel-shelf, .tool-swatches, .library-chin, .doc-actions-left";
   // Restore whatever the strip was saying before we hijacked it. editor._hint() is the resting
   // state (the current tool's purpose); a transient message with a hold (e.g. "Saved.") outranks us
   // and is left alone.
@@ -1600,16 +1620,22 @@ function openStageContext(clientX, clientY, target) {
     const key = tile.id ? "#" + tile.id
       : tile.dataset.tool ? "tool:" + tile.dataset.tool
         : (tile.dataset.vp && tile.dataset.action) ? "vp:" + tile.dataset.action : null;
-    if (!key) return false;
-    const info = whyFor(key, selectionFacts(editor));
-    if (!info) return false;
+    const info = key && whyFor(key, selectionFacts(editor));
     // A disabled tile still explains itself. "What is this and why is it greyed out" is the most
     // common question a beginner has, and refusing to answer it is how a toolbar stays alien.
     const dim = tile.disabled ? " (not available right now)" : "";
-    setStatus(info.label ? `${info.label}: ${info.why}${dim}` : `${info.why}${dim}`);
-    return true;
+    if (info) { setStatus(info.label ? `${info.label}: ${info.why}${dim}` : `${info.why}${dim}`); return true; }
+    // No palette-registry entry for this one (a dock panel-head action, a shelved-panel square,
+    // a status-bar tool, a swatch, …) — fall back to whatever explanatory text the tile already
+    // carries. Full parity means a button that already bothered to write a real title= explains
+    // itself here too, not just the handful someone remembered to add to actions.js.
+    const fallback = tile.getAttribute("title") || tile.getAttribute("aria-label");
+    if (fallback) { setStatus(`${fallback}${dim}`); return true; }
+    return false;
   };
-  const tileUnder = (e) => e.target && e.target.closest && e.target.closest(".tool-button");
+  // Any button/link, not just .tool-button — the shelf squares, swatches, and status-bar tools
+  // are their own classes with no shared marker beyond "a clickable glyph inside one of these bars".
+  const tileUnder = (e) => e.target && e.target.closest && e.target.closest("button, a");
 
   for (const bar of document.querySelectorAll(BAR_SEL)) {
     bar.addEventListener("pointerover", (e) => {
@@ -1625,7 +1651,7 @@ function openStageContext(clientX, clientY, target) {
     bindLongPress(bar, {
       shouldIgnore: (e) => !tileUnder(e) || (window.__layout && window.__layout.isEditing()),
       onLongPress: (x, y, target) => {
-        const tile = target && target.closest && target.closest(".tool-button");
+        const tile = tileUnder({ target });
         if (!tile || !explain(tile)) return;
         // Hold the explanation on screen long enough to actually read it — the finger is still on
         // the button, and lifting must not snap the strip straight back to the tool hint.
@@ -2926,7 +2952,7 @@ function syncDockContext() { if (window.__docks && window.__docks.syncContextual
 window.refillInfoContext = infoForCurrentContext;
 
 loadVersion();   // cache the version early so the About panel shows it instantly
-if (!CLOUD) initAgentAccessBadge();   // status-bar consent signal (docs/mcp-server.md)
+if (!CLOUD) ensureAgentAccessInfo();   // warm the cache so the File menu's status line is ready by first open (docs/mcp-server.md)
 // Boot does NOT auto-install heavy deps anymore — that used to kick a Real-ESRGAN download +
 // a cargo build on every cold start with tools missing. Installs are deliberate now, from
 // Settings → "AI models & tools". refreshAll() still fetches tool status so the UI knows
