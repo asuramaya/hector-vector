@@ -78,13 +78,15 @@ export function renderLibrary() {
   else renderLibraryRasters(host, q);
   host.scrollTop = keepScroll;
 }
-// A brief highlight pulse on a Manage-grid panel — the visible half of "clicking a Library
+// A brief highlight pulse on a dock panel — the visible half of "clicking a Library
 // tile updates Info + Processor". Without it the update is real (new content lands in both
 // panels) but silent: nothing on screen draws the eye there, so a click can easily read as
-// having done nothing. Restart-safe (classList.remove + reflow + re-add) so clicking a
-// second tile before the first pulse finishes still flashes again instead of no-op'ing.
+// having done nothing — worth more now that Info/Processor are permanently docked rather
+// than opened into a dedicated grid. Restart-safe (classList.remove + reflow + re-add) so
+// clicking a second tile before the first pulse finishes still flashes again instead of
+// no-op'ing. Matches by section (docked, floated, or grouped — wherever it currently lives).
 function bringAttention(sectionName) {
-  const s = document.querySelector(`.manage-grid .rail-section.${sectionName}`);
+  const s = document.querySelector(`.rail-section.${sectionName}`);
   if (!s) return;
   s.classList.remove("hv-attn");
   void s.offsetWidth;
@@ -165,8 +167,8 @@ function renderLibraryRasters(host, q) {
       badge: itemIsProcessed(item.name) ? " ✓" : "", title: `${item.name} — click to select + inspect, drag to the canvas`,
       // Selecting a library raster makes it the Processor's target when the canvas is empty,
       // so re-render the Processor (target row + auto-routing banner) + run the contextual
-      // reveal — otherwise picking an image in the Library / Manage browse never surfaces its
-      // plan (a raster already on the canvas still wins the target, so this is then a no-op).
+      // reveal — otherwise picking an image in the Library never surfaces its plan (a raster
+      // already on the canvas still wins the target, so this is then a no-op).
       onClick: () => {
         setSelectedName(item.name); setManualOutputName(null); refreshLibrary();
         if (typeof renderProcessorPanel === "function") renderProcessorPanel();

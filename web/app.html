@@ -111,12 +111,6 @@
           </div>
           <!-- Layout customization lives on the frame itself now: right-click any toolbar's
                blank space for the Layout menu (customize / profiles / reset). -->
-          <!-- Edit ⇄ Manage: two stations on one bench. Edit = the canvas workbench;
-               Manage borrows Library/Processor/Jobs into a roomy browse + batch surface. -->
-          <div class="view-swap" role="group" aria-label="View">
-            <button id="view-edit" class="view-tab active" type="button" aria-pressed="true" title="Edit — the canvas workbench">Edit</button>
-            <button id="view-manage" class="view-tab" type="button" aria-pressed="false" title="Manage — browse &amp; batch-process your library">Manage</button>
-          </div>
           <!-- Cloud build only: the pipeline / library / batch live in the local desktop app. -->
           <a id="get-desktop" class="get-desktop" href="/download" title="What the desktop app unlocks — AI upscaling, background removal, tracing, batch, and your local library">⤓ Get the desktop app</a>
         </div>
@@ -337,13 +331,10 @@
       <div id="mobile-scrim" class="mobile-scrim" aria-hidden="true"></div>
 
       <!-- The standalone Process view was dissolved into dock panels: Library (pick an
-           image) → Processor (compose + run the pipeline) → Jobs (watch). -->
-
-      <!-- Manage screen: the A-side of the Edit/Manage swap. Empty until you switch to it —
-           manage.js borrows the Library / Processor / Jobs sections out of the right dock and
-           reparents them here for a roomy browse + batch-process surface, then hands them back
-           on return to Edit. Hidden via CSS (.app:not(.manage) .manage-grid { display:none }). -->
-      <section class="manage-grid" aria-label="Manage — browse &amp; batch-process"></section>
+           image) → Processor (compose + run the pipeline) → Jobs (watch). They're always
+           docked beside the canvas now — Manage (a later, separate summon/dismiss overlay
+           for browsing) was killed entirely per an explicit operator ruling: browsing and
+           editing aren't different modes, so there's no "go to" left at all. -->
 
       <!-- Hidden file inputs: Add images (raster import) + File ▸ Open from file (svg). -->
       <input id="file-input" type="file" accept="image/*" multiple hidden />
