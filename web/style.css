@@ -1908,14 +1908,6 @@ input.insp-ab-name { background: var(--field-bg); color: inherit; border: 1px so
 .status-progress-label { flex: 0 0 auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
 @keyframes hv-indet { 0% { transform: translateX(-120%); } 100% { transform: translateX(320%); } }
 
-/* Persistent consent signal for docs/mcp-server.md's "Allow agent access" toggle — the
-   badge IS the ongoing prompt (Settings → Agent access), not a one-time dialog dismissed
-   and forgotten. Only shown while a debug port is actually live (see initAgentAccessBadge). */
-.agent-access-badge {
-  flex: 0 0 auto; font-size: 12px; font-weight: 600; white-space: nowrap;
-  padding: 2px 8px; border: 1px solid var(--danger); color: var(--danger);
-}
-.agent-access-badge[hidden] { display: none; }
 
 .modal-search {
   border: 1px solid var(--line);

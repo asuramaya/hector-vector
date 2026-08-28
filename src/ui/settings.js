@@ -79,16 +79,6 @@ export async function ensureAgentAccessInfo(force) {
   catch { agentAccessInfo = { enabled: false, active: false }; }
   return agentAccessInfo;
 }
-// Status-bar badge: a persistent, hard-to-miss "Agent access: on" indicator for as long
-// as a debug port is actually open — this doubles as the ongoing consent signal (the
-// badge IS the prompt, not a one-time dialog dismissed and forgotten). Called once at
-// boot (desktop only); the state only changes across a restart, so no polling needed.
-export async function initAgentAccessBadge() {
-  const badge = document.getElementById("agent-access-badge");
-  if (!badge) return;
-  const info = await ensureAgentAccessInfo();
-  badge.hidden = !info.active;
-}
 // General app settings: preferences that don't belong to the pipeline, plus the
 // install affordance and an About section. (The per-process backend "Settings"
 // form lives in the Process workspace.)
@@ -352,8 +342,10 @@ export function openAppSettings(opts = {}) {
   // same explicit opt-in any sensitive local capability does, and it only takes effect on
   // the next restart (this app-window can't relaunch itself into a different Chromium
   // process from inside the page — same reason "Update & restart" above doesn't auto-restart).
+  let agentTitle = null;   // captured so the focus:"agent-access" deep-link below (from the File menu) can scroll to it
   if (!CLOUD) {
-  root.appendChild(sectionTitle("Agent access"));
+  agentTitle = sectionTitle("Agent access");
+  root.appendChild(agentTitle);
   if (agentAccessInfo === null) {
     const loading = document.createElement("div"); loading.className = "form-hint"; loading.textContent = "Checking agent access…";
     root.appendChild(loading);
@@ -444,12 +436,16 @@ export function openAppSettings(opts = {}) {
   modalBodyEl.innerHTML = ""; modalBodyEl.appendChild(root);
   // Deep-link: when opened from a stage that needs a missing tool, scroll to + briefly
   // highlight the tools section so the user lands exactly where they install it.
-  if (opts.focus === "tools" && toolsTitle) {
+  // Same deep-link idea for the File-menu's "Agent access" entry (replaces the old always-on
+  // header badge — a menu item you actually open beats a permanent screen fixture for something
+  // checked occasionally, and it still lands you exactly on the toggle either way).
+  const focusTitle = opts.focus === "tools" ? toolsTitle : opts.focus === "agent-access" ? agentTitle : null;
+  if (focusTitle) {
     setTimeout(() => {
       try {
-        toolsTitle.scrollIntoView({ block: "start", behavior: "smooth" });
-        toolsTitle.classList.add("settings-focus");
-        setTimeout(() => toolsTitle.classList.remove("settings-focus"), 1500);
+        focusTitle.scrollIntoView({ block: "start", behavior: "smooth" });
+        focusTitle.classList.add("settings-focus");
+        setTimeout(() => focusTitle.classList.remove("settings-focus"), 1500);
       } catch {}
     }, 30);
   }
