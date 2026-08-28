@@ -141,6 +141,7 @@ export async function uploadFiles(files) {
   if (!res.ok) throw new Error(data.error || `Upload failed: ${res.status}`);
   await refreshAll((data.files || []).at(-1) || null);
   setStatus(data.message, 2500);
+  return data;
 }
 
 export async function fetchQueue() {

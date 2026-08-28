@@ -2595,7 +2595,11 @@ function buildAutoBanner(t) {
   const wrap = document.createElement("div"); wrap.className = "proc-auto";
   if (url.startsWith("data:")) {
     wrap.classList.add("muted");
-    wrap.textContent = "Import this image to the library to auto-analyze it.";
+    const msg = document.createElement("span"); msg.textContent = "Import this image to the library to process it.";
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "proc-auto-apply"; btn.textContent = "Import";
+    btn.addEventListener("click", () => importCanvasRasterToLibrary(t.node));
+    wrap.appendChild(msg); wrap.appendChild(btn);
     return wrap;
   }
   if (!procPlannable(url)) return null;   // an asset/non-library source the planner can't read
@@ -2737,6 +2741,34 @@ function startCleanup(node) {
   ov.appendChild(bar);
   document.body.appendChild(ov);
   setStatus("Cleanup: paint over the object, then Remove (Esc to cancel).", 0);
+}
+
+// A canvas raster placed by drag-drop (or any client-side path) has a data: URL href —
+// no file on disk, so rasterSourceUsable()/procPlannable() correctly refuse to process or
+// auto-analyze it. Until now that refusal was a dead end: the Processor banner said
+// "Import this image to the library" with no way to actually do that. This is the way:
+// upload the data: bytes as a real work-item file, then swap the node's href to point at
+// it — same one-undo-step href-swap pattern as restoreFaces/applyRestore below.
+async function importCanvasRasterToLibrary(node) {
+  node = node || (processTarget().node);
+  if (!node || !editor.isRaster(node)) { setStatus("Select a raster on the canvas first.", 2800); return; }
+  const href = rasterHref(node);
+  if (!href.startsWith("data:")) { setStatus("This image is already in the library.", 2500); return; }
+  setStatus("Importing to library…", 0);
+  try {
+    const blob = await (await fetch(href)).blob();
+    const ext = (blob.type.split("/")[1] || "png").replace("jpeg", "jpg");
+    const file = new File([blob], `${rasterName(node)}.${ext}`, { type: blob.type });
+    const data = await uploadFiles([file]);
+    const savedName = data && data.files && data.files[0];
+    if (!savedName) throw new Error("Upload didn't report a filename.");
+    if (!node.isConnected || !editor.isRaster(node)) { setStatus("The canvas changed; import discarded.", 4000); return; }
+    node.setAttribute("href", `/work-items/${encodeURIComponent(savedName)}`);
+    editor.push("Import to library");
+    editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
+    renderProcessorPanel();   // target thumbnail + auto-plan banner now resolve for real
+    setStatus(`Imported as ${savedName}.`, 2500);
+  } catch (e) { setStatus(`Import failed: ${e.message}`, 4500); }
 }
 
 // One-shot face restoration (GFPGAN): detects faces server-side, no mask. Swaps the result
