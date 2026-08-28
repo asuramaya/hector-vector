@@ -10,7 +10,7 @@ import { openModal, closeModal } from "./modal.js";
 import { sectionTitle, fieldRow, makeNumberRaw } from "./widgets.js";
 import { serializeForSave, openExportModal } from "./export.js";
 import { hideContextMenu } from "./menus.js";
-import { renderGalleryGrid, downloadBlob } from "./gallery.js";
+import { renderGalleryGrid, downloadBlob, loadRasterToCanvas } from "./gallery.js";
 import { viewports, applyBgMode, measureFit } from "./viewport.js";
 import {
   selectedOutput, outputs, workItems, projects,
@@ -148,16 +148,27 @@ export async function placeFromUrl(url, name) {
   } catch (e) { setStatus(`Place failed: ${e.message}`, 3000); }
 }
 
-// Place / merge another vector into the current canvas (vs Open, which replaces).
+// Place / merge another vector OR raster into the current canvas (vs Open, which
+// replaces). Library rasters (workItems — the R tab's pipeline-source images) get
+// listed alongside output vectors, same grid, same search — picking one routes to
+// loadRasterToCanvas instead of placeFromUrl. This is the fix for the raster→vectorize
+// round trip: grab an image straight from the library without leaving Edit for Manage.
 export function openPlaceModal() {
   if (!editor.stage) { setStatus("Open or create a canvas first, then place into it.", 3500); return; }
   const svgs = outputs.filter((o) => o.kind === "svg");
-  openModal(`Place into canvas — ${svgs.length} vector(s)`);
-  const items = svgs.map((o) => ({ name: o.name, url: o.url, kind: "svg", folder: o.folder, path: o.path, active: false }));
+  openModal(`Place into canvas — ${svgs.length} vector(s), ${workItems.length} image(s)`);
+  const items = [
+    ...svgs.map((o) => ({ name: o.name, url: o.url, kind: "svg", folder: o.folder, path: o.path, active: false })),
+    ...workItems.map((w) => ({ name: w.name, url: w.url, kind: "raster", active: false })),
+  ];
   const apply = () => {
     const q = modalSearchEl.value.trim().toLowerCase();
     const vis = q ? items.filter((i) => i.name.toLowerCase().includes(q)) : items;
-    renderGalleryGrid(vis, (picked) => { closeModal(); placeFromUrl(picked.url, picked.name); });
+    renderGalleryGrid(vis, (picked) => {
+      closeModal();
+      if (picked.kind === "raster") loadRasterToCanvas(picked);
+      else placeFromUrl(picked.url, picked.name);
+    });
   };
   modalSearchEl.oninput = apply;
   apply();
