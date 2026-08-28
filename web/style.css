@@ -288,13 +288,13 @@ button:disabled {
 
 .app.editor { grid-template-rows: auto 1fr auto; }
 
-/* File icon (left) · Edit/Process view-swap (right). Undo/redo live by the
+/* File icon (left) · panel shelf (right). Undo/redo live by the
    viewport BG button; help/collapse live in the ready bar. */
 .editor-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .doc-actions-left { justify-self: start; }
 .brand-logo { height: 22px; width: auto; display: block; flex: 0 0 auto; }
 /* document name, centred in the header (moved out of the stage so the canvas gets the
-   full height). flex:1 between the File icon and the view-swap → centred + truncates. */
+   full height). flex:1 between the File icon and the header's right-side group → centred + truncates. */
 .doc-title { flex: 1 1 auto; min-width: 0; text-align: center; font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .doc-sel { color: var(--accent); font-weight: 600; }
 .brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
@@ -318,30 +318,10 @@ button:disabled {
    track added only when that dock is shown. Empty/folded docks are set display:none. */
 .leftdock { display: none; }   /* default until JS shows it / a panel docks here */
 
-/* ---- Manage screen (Edit/Manage swap) ----
-   The A-side surface. Lives in the same grid cell as .editor-grid; display toggles by
-   the .app.manage class (a display:none element is not a grid item, so auto-placement
-   just works — header→row1, whichever grid is shown→1fr row2, footer→row3). manage.js
-   reparents Library / Processor / Jobs into here, so they get room the 270px dock can't. */
-.manage-grid { display: none; min-height: 0; }
-.app.manage .editor-grid { display: none; }
-.app.manage .manage-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px) minmax(280px, 340px);
-  grid-template-rows: minmax(0, 1fr) minmax(140px, 0.6fr);
-  gap: 10px;
-}
-/* Library = the big browse pane (full-height, leftmost). Info and Processor/Jobs used to
-   share ONE column, stacked three deep — Info squeezed into the middle row meant it read as
-   a minor status strip between two "real" panels, when it's actually the other primary
-   surface here (whatever you last clicked lands in it). Two persistent columns instead:
-   Info stays full-height on its own (a click brings a fresh image into full view, not a
-   190px-tall crop), Processor + Jobs pair up on the right — they're the natural pair (Jobs
-   is the queue Processor's Run feeds), not Info's neighbor. */
-.manage-grid .rail-section.library { grid-column: 1; grid-row: 1 / span 2; }
-.manage-grid .rail-section.info { grid-column: 2; grid-row: 1 / span 2; }
-.manage-grid .rail-section.processor { grid-column: 3; grid-row: 1; }
-.manage-grid .rail-section.jobs { grid-column: 3; grid-row: 2; }
+/* Library / Processor / Info / Jobs are ordinary dock panels — same tier as Properties /
+   Colour (collapsible, floatable, closeable to the shelf). Manage — a separate summon/
+   dismiss surface that used to borrow these out of the dock into its own grid — was killed
+   entirely per an explicit operator ruling: browsing and editing aren't different modes. */
 /* The click-a-Library-tile "bring attention" pulse (library.js's bringAttention) — Info and
    Processor are what a click updates, but neither is what you physically clicked, so without
    this the update is real but silent. Restart-safe via bringAttention's remove+reflow+re-add. */
@@ -349,19 +329,8 @@ button:disabled {
   0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--hl-drop) 60%, transparent); }
   100% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--hl-drop) 0%, transparent); }
 }
-.manage-grid .rail-section.hv-attn { animation: hv-attn-pulse 0.7s ease-out; }
-.manage-grid .rail-section.info .fp-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
-.manage-grid .rail-section .panel-x { display: none; }   /* a Manage citizen has no close button */
+.rail-section.hv-attn { animation: hv-attn-pulse 0.7s ease-out; }
 .info-empty { padding: 14px 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
-/* In the dock the sections share the dock's frame; standalone in the grid they need
-   their own border/surface + rounded corners, and must clip their own scroll. */
-.manage-grid .rail-section {
-  border: 1px solid var(--line); background: var(--bg); border-radius: var(--r);
-  min-height: 0; min-width: 0; overflow: hidden; flex: 1 1 auto;
-}
-/* Borrowed panels are never collapsed/floated here — neutralise the dock's collapse caret. */
-.manage-grid .rail-section.collapsed { flex: 1 1 auto; }
-.manage-grid .rail-section .caret { display: none; }
 
 /* Phone-only quick bar (undo/redo + zoom/fit). Off a phone it holds nothing — app.js only moves
    the real buttons into it below 620px — so it must not claim a grid row here. */
@@ -452,13 +421,9 @@ button:disabled {
 .icon-btn.hdr-text { width: auto; padding: 0 10px; font-size: 13px; }
 .icon-btn.hdr-text.active { background: var(--hl-on); color: var(--on-ink); border-color: var(--hl-on); }
 .menu.open .icon-btn[data-key]::after, .icon-btn:hover[data-key]::after { color: rgba(255, 255, 255, 0.8); }
-/* Ableton-style view swap: two icon boxes, the active view highlighted. Lifted
-   above the modal (z 50) so you can swap back to Edit while Process is open. */
-.view-swap { display: inline-flex; gap: 0; position: relative; z-index: 60; }
-/* Cloud build: no Manage station (its Library/Processor/Jobs panels don't exist); show the
+/* Cloud build: the desktop-only panels (Library/Processor/Jobs) don't exist; show the
    download-the-desktop-app CTA instead. `.cloud` is set on <html> by env.js. */
 .get-desktop { display: none; }
-.cloud .view-swap { display: none; }
 .cloud .get-desktop { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; margin-left: 4px;
   font-size: 12px; font-weight: 600; color: var(--fg); background: var(--panel); border: 1px solid var(--hair);
   border-radius: var(--r); text-decoration: none; white-space: nowrap; }
@@ -478,18 +443,6 @@ button:disabled {
   font-size: 9px; font-weight: 700; line-height: 14px; text-align: center;
 }
 .view-count:empty { display: none; }
-/* Edit ⇄ Manage tabs: text-labelled segmented control (the icon .view-btn is for the
-   old swap). The active station reads inked; click the other to cross the seam. */
-.view-tab {
-  box-sizing: border-box; height: 30px; padding: 0 14px; border: 1px solid var(--line);
-  background: var(--bg); color: var(--muted); font: inherit; font-size: 12px; font-weight: 600;
-  letter-spacing: 0.02em; line-height: 1; cursor: pointer;
-}
-.view-tab + .view-tab { border-left: 0; }
-.view-tab:first-child { border-radius: var(--r) 0 0 var(--r); }
-.view-tab:last-child { border-radius: 0 var(--r) var(--r) 0; }
-.view-tab:hover:not(.active) { background: var(--surface); color: var(--ink); }
-.view-tab.active { background: var(--ink); color: var(--on-ink); border-color: var(--ink); }
 .tool-sep { height: 1px; background: var(--line); margin: 2px 4px; align-self: stretch; }
 /* Fill (primary) / stroke (secondary) swatches — float in the canvas's inner
    bottom-right corner (over the stage body, above the rulers). */
@@ -1415,9 +1368,9 @@ input.insp-ab-name { background: var(--field-bg); color: inherit; border: 1px so
   top: calc(100% + 4px);
   left: 0;          /* open rightward from the trigger (keeps left-edge menus in bounds) */
   right: auto;
-  /* Above the bars, below the modals. It was 40 — under the Edit/Manage swap (60), which on a phone
-     sits right beside the File button, so the dropdown opened *behind* the tabs it overlapped.
-     Order of this app's world: FAB 55 · scrim 58 · view-swap/sheet 60 · [menus 70] · modal 100. */
+  /* Above the bars, below the modals. It was 40 — under chrome that used to sit right beside the
+     File button on a phone, so the dropdown opened *behind* what it overlapped.
+     Order of this app's world: FAB 55 · scrim 58 · sheet 60 · [menus 70] · modal 100. */
   z-index: 70;
   min-width: 190px;
   background: var(--bg);
@@ -2927,7 +2880,6 @@ text.hv-text-editing { visibility: hidden; }
   }
   .menu-trigger.has-logo .mt-glyph { display: none; }
   .menu-trigger.has-logo .brand-logo { display: block; width: 26px; height: 26px; }
-  .mobile-chrome .view-swap .view-tab { min-height: 42px; padding: 0 10px; }
 }
 
 /* ---- Short LANDSCAPE (phones held sideways) ----

@@ -202,7 +202,7 @@ That's squarely shell/platform territory, scoped against the principle above.
 |---|---|---|
 | **Library** | `hv_library_list` (rasters/vectors/canvases, filter/search), `hv_library_load` (place an item onto the canvas, or open a `.hv` project), `hv_library_info` (dimensions/size/path/element+colour counts) | `ui/library.js`, the Info panel's own data source |
 | **Pipeline** | `hv_pipeline_plan` (the Auto analyzer's classical read → proposed stages + *why*, no side effect), `hv_pipeline_configure` (set which stages are on + their params for a given raster's `data-hv-id`), `hv_pipeline_run` (foreground live-preview on one raster, or background job against the Library batch), `hv_job_status`/`hv_job_list`, `hv_job_cancel` | `tools/analyze.py` via `/api/plan`, `ui/processor.js`, `ui/jobs.js` |
-| **Document view** | `hv_get_view` (current tool, zoom/pan, Edit-vs-Manage mode), `hv_set_view_mode` (switch Edit↔Manage — a real navigation action, not chrome positioning), `hv_fit_view`, `hv_set_zoom` | `app.js` view-swap, `editor.fitToView`/viewport tools |
+| **Document view** | `hv_get_view` (current tool, zoom/pan — `mode` is always `"edit"` now: Manage was killed, Library/Processor/Info/Jobs are ordinary docked panels), `hv_set_view_mode` (kept as a backward-compatible no-op), `hv_fit_view`, `hv_set_zoom` | `editor.fitToView`/viewport tools |
 | **Project/session** | `hv_open_project` (`.hv`, preserves history), `hv_save_project` | doc I/O beyond Phase 1's plain-SVG `hv_save` |
 
 ### Explicitly deferred, not forgotten

@@ -131,9 +131,8 @@ function activate(sheet, key) {
   }
 }
 
-// Rebuild the strip from what is ACTUALLY in the sheet right now. Panels come and go under us:
-// Manage borrows Library/Processor/Jobs, the cloud build has no server panels at all — and a tab
-// pointing at nothing is worse than no tab.
+// Rebuild the strip from what is ACTUALLY in the sheet right now. Panels come and go under us —
+// the cloud build has no server panels at all — and a tab pointing at nothing is worse than no tab.
 //
 // `reset` is the difference between opening the sheet and the sheet changing while you're reading
 // it. On open we re-derive the default (the selection may have changed since you last looked). While
@@ -210,7 +209,7 @@ function buildTabs(sheet) {
   // what's there.
   sheet.querySelectorAll(":scope > .rail-section").forEach((s) => { s.style.flex = ""; });
   // Watch the sheet's own children rather than trying to find every code path that adds or removes a
-  // panel (docks' shelve/float/close, manage.js's borrow, the cloud build's panel purge).
+  // panel (docks' shelve/float/close, the cloud build's panel purge).
   watcher = new MutationObserver(() => refreshSheetTabs());
   watcher.observe(sheet, { childList: true });
 }

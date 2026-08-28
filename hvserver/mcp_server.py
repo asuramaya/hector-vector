@@ -1770,22 +1770,26 @@ async def hv_library_find_duplicates(max_distance: int = 6) -> list[list[dict]]:
 
 
 # ---------------------------------------------------------------------------
-# Document view — current tool, zoom/pan, Edit-vs-Manage mode. A real navigation
-# action (hv_set_view_mode switches what's actually on screen for a human watching the
-# same tab), not chrome positioning — in scope under the operator's widget-parity
-# ruling (decision a542832a) same as everything else here.
+# Document view — current tool, zoom/pan. Edit-vs-Manage mode no longer exists (Manage
+# was killed entirely per an explicit operator ruling: Library/Processor/Info/Jobs are
+# now ordinary always-docked panels, same tier as Properties/Colour — no mode, no
+# summon/dismiss, no separate destination ever). hv_get_view/hv_set_view_mode are kept
+# as harmless no-ops rather than removed outright, since they're a documented, named
+# MCP surface another agent's script may already call — "edit" is simply the only mode
+# there is now.
 # ---------------------------------------------------------------------------
 
 
 @mcp.tool()
 async def hv_get_view() -> dict:
-    """Current view state: the active tool name, whether the app is in "edit" (the live
-    canvas) or "manage" (the browse/batch-process grid) mode, and the editing canvas's
-    zoom level + pan offset."""
+    """Current view state: the active tool name, the editing canvas's zoom level + pan
+    offset. `mode` is always "edit" — Manage (a separate browse/batch-process mode) no
+    longer exists; Library/Processor/Info/Jobs are ordinary docked panels now, kept
+    field-compatible for any existing caller that checks mode === "edit"."""
     return await _eval(
         """() => ({
             tool: editor.tool,
-            mode: (window.__manage && window.__manage.isManage()) ? 'manage' : 'edit',
+            mode: 'edit',
             zoom: viewports.output.scale,
             pan: { x: viewports.output.x, y: viewports.output.y },
         })"""
@@ -1794,22 +1798,15 @@ async def hv_get_view() -> dict:
 
 @mcp.tool()
 async def hv_set_view_mode(mode: str) -> dict:
-    """Switch between "edit" (the live canvas) and "manage" (the browse/batch-process
-    grid — Library/Processor/Jobs). A real navigation action, not a cosmetic one — an
-    agent working the Library or a batch pipeline run needs Manage mode the same way a
-    human clicking the Edit/Manage toggle does."""
+    """No-op kept for backward compatibility — Manage (the separate browse/batch-process
+    mode this used to switch to) no longer exists; Library/Processor/Info/Jobs are
+    ordinary always-docked panels now. mode="edit" trivially succeeds (it's the only mode
+    there is); mode="manage" reports failure rather than pretending to switch anywhere."""
     if mode not in ("edit", "manage"):
         raise ValueError(f'mode must be "edit" or "manage", got {mode!r}')
-    return await _eval(
-        """(a) => {
-            if (!window.__manage) return { ok: false, reason: 'Manage screen unavailable (cloud build)' };
-            const isManage = window.__manage.isManage();
-            if (a.mode === 'manage' && !isManage) window.__manage.enter();
-            else if (a.mode === 'edit' && isManage) window.__manage.leave();
-            return { ok: true, mode: window.__manage.isManage() ? 'manage' : 'edit' };
-        }""",
-        {"mode": mode},
-    )
+    if mode == "manage":
+        return {"ok": False, "reason": "Manage no longer exists — Library/Processor/Info/Jobs are always-docked panels now, nothing to switch to"}
+    return {"ok": True, "mode": "edit"}
 
 
 @mcp.tool()

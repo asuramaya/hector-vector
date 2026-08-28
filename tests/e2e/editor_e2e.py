@@ -927,8 +927,6 @@ def main():
 
         section("F. Header structure (the standalone Process VIEW is dissolved into panels)")
         # The old disconnected Process VIEW (a modal #process-view + its #process-button) is gone.
-        # NB: #view-edit / #view-manage now belong to the NEW Edit/Manage screen swap (Section Z),
-        # a different feature — so we no longer assert their absence here.
         check("Process view fully removed (no #process-view modal, no #process-button)",
               page.evaluate("!document.querySelector('#process-view') && !document.querySelector('#process-button')"))
         # the q/Tab Process-view shortcut is GONE — its shims are removed (q is a free key now).
@@ -4082,13 +4080,11 @@ def main():
             const px='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
             editor.placeImage(px,'shot.png',120,120); return false; }""", timeout=6000)
         # Properties is now a COMPACT pointer — the pipeline was de-crammed into the Processor panel.
-        # rasterTools itself still only surfaces Keep/Revert during a live trace preview
-        # (unchanged) — but Edit mode had NO route into the pipeline at all otherwise
-        # (confirmed via a live investigation, decision 1fe078e9): the "Processor is
-        # contextual, so a pointer is redundant" premise only holds once you're already IN
-        # Manage. Restored a lightweight pointer via editor.onProcessRequested (app.js
-        # wires it to window.__manage.enter()) — separate from rasterTools, which stays
-        # Keep/Revert-only.
+        # rasterTools itself still only surfaces Keep/Revert during a live trace preview (unchanged).
+        # Library/Processor/Info/Jobs are always-docked panels now (Manage — a separate summon/
+        # dismiss surface for this — was killed per an explicit operator ruling), so the pointer's
+        # job is just to reveal (un-collapse + scroll into view) the already-present Processor panel
+        # via editor.onProcessRequested (app.js wires it to revealPanel("processor")).
         decram = page.evaluate("""() => { const node=editor.stage.querySelector('image[data-hv-id]');
             return {
                 isImage: node.tagName.toLowerCase()==='image',
@@ -4100,11 +4096,11 @@ def main():
               decram["isImage"] and decram["rasterToolsStillKeepRevertOnly"], str(decram))
         check("raster Properties HAS a Process pointer into the pipeline (restored — Edit mode had no other route in)",
               decram["hasProcessPointer"], str(decram))
+        page.evaluate("() => { const s = document.querySelector('.rail-section.processor'); if (s) s.classList.add('collapsed'); }")
         page.click('.insp-action:has-text("Process this image")')
         page.wait_for_timeout(200)
-        check("Process pointer opens Manage", page.evaluate("document.querySelector('.app').classList.contains('manage')"))
-        page.click("#view-edit")   # back to Edit for the rest of this section
-        page.wait_for_timeout(150)
+        check("Process pointer reveals the (always-docked) Processor panel",
+              page.evaluate("() => { const s = document.querySelector('.rail-section.processor'); return !!s && !s.classList.contains('collapsed'); }"))
         # The Processor panel hosts the 6 stages, targeting the selected raster.
         stages = page.evaluate("""() => { renderProcessorPanel();
             return { names:[...document.querySelectorAll('#processor-body .proc-stage .stage-name')].map(s=>s.textContent),
@@ -4585,17 +4581,16 @@ def main():
         section("auto-routing: clicking a library raster surfaces its plan banner (#50 + browse→process)")
         # The auto-pipeline banner (.proc-auto) reads the analyzer's plan for the focused raster.
         # Regression guard: a Library raster CLICK must drive the Processor (re-render + schedule
-        # /api/plan), not merely highlight the cell — else the Manage browse→process flow never
-        # surfaces a plan. With a blank canvas the library pick IS the Processor target, so the
-        # banner must appear where it was absent. It renders synchronously in its "Reading the
-        # image…" busy state, so we don't wait on the (variable-cost) server analyze.
-        # The Library + Processor live on the Manage screen, so drive this from there. Mount an
-        # EMPTY stage (mountStageFromText, NOT newBlankDoc — that opens a modal) so the canvas holds
-        # no raster and the library pick becomes the Processor target, then open Manage.
+        # /api/plan), not merely highlight the cell — else the browse→process flow never surfaces
+        # a plan. With a blank canvas the library pick IS the Processor target, so the banner must
+        # appear where it was absent. It renders synchronously in its "Reading the image…" busy
+        # state, so we don't wait on the (variable-cost) server analyze.
+        # Library + Processor are always-docked panels (not a separate Manage screen to switch
+        # to) — drive them directly. Mount an EMPTY stage (mountStageFromText, NOT newBlankDoc —
+        # that opens a modal) so the canvas holds no raster and the library pick becomes the target.
         page.evaluate("""() => {
             mountStageFromText('<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"></svg>', 'autoplan-probe.svg');
             app.selectedName=null; editor.selection=new Set(); editor.artboardSelected=false; renderProcessorPanel(); }""")
-        page.click("#view-manage"); page.wait_for_function("() => document.querySelector('.app').classList.contains('manage')", timeout=4000)
         page.wait_for_timeout(80)
         page.evaluate("""() => { const r=document.querySelector('.lib-mode[data-mode="raster"]'); if (r) r.click(); }""")
         page.wait_for_timeout(60)
@@ -4612,9 +4607,9 @@ def main():
         else:
             check("auto-banner browse→process check (skipped — empty library)", True)
         # Drop the library selection so the in-flight /api/plan is superseded+aborted (don't leave
-        # the server analyzing a 150MP image into later sections), then return to Edit.
+        # the server analyzing a 150MP image into later sections).
         page.evaluate("() => { app.selectedName=null; editor.selection=new Set(); renderProcessorPanel(); }")
-        page.click("#view-edit"); page.wait_for_timeout(60)
+        page.wait_for_timeout(60)
 
         section("res-swing regression: a float shoved off-screen (e.g. a 4K layout opened on a")
         #      1080p screen) re-clamps fully into the viewport instead of stranding unreachable ----
@@ -5214,9 +5209,10 @@ def main():
         # leftdock is the leftmost grid child (before the toolstrip)
         check("left dock is the leftmost column",
               page.evaluate("() => document.querySelector('.editor-grid').firstElementChild.id === 'leftdock'"))
-        # Properties + Colour + Symbols default docked-right; float them out so the
-        # History/Layers checks below see a clean right dock. (Library/Processor/Jobs aren't
-        # dock panels — they live on the Manage screen — so they're already absent from the dock.)
+        # Properties + Colour default docked-right; float them (+ Symbols, left-docked but
+        # unrelated to this check) so the History/Layers checks below see a clean right dock.
+        # Library/Processor/Info/Jobs default LEFT-docked (DEFAULT_LOC, docks.js) — irrelevant
+        # to a right-dock cleanliness check either way.
         page.evaluate("window.__docks.float('properties'); window.__docks.float('color'); window.__docks.float('symbols')"); page.wait_for_timeout(60)
         # float History (no detach button — controller / header-drag does it)
         page.evaluate("window.__docks.float('history')"); page.wait_for_timeout(80)
@@ -5297,25 +5293,22 @@ def main():
         check("collapsing a snapped panel folds it to its header (no blank slot)",
               fold["collapsed"] and fold["hugs"], str(fold))
         page.evaluate("window.__docks.dock('history','right'); window.__docks.dock('layers','right')"); page.wait_for_timeout(40)
-        # Jobs + Processor are Manage-screen citizens now (not Edit-dock panels): they live in the
-        # manage-grid, render their panels there, and are exempt from dock float/shelve. Verify they
-        # render + their controls work AND that they do NOT sit in the Edit dock.
-        jb = page.evaluate("""() => ({ notInEditDock: !document.querySelector('#rightdock .rail-section.jobs'),
-            inGrid: !!document.querySelector('.manage-grid .rail-section.jobs'),
-            hasPanel: !!document.querySelector('#jobs-list .jobs-panel'),
-            away: window.__docks.isAway('jobs') })""")
-        check("Jobs is a Manage-screen panel (renders), not in the Edit dock",
-              jb["notInEditDock"] and jb["inGrid"] and jb["hasPanel"] and jb["away"], str(jb))
+        # Jobs + Processor are ordinary dock panels now (same tier as Properties/Colour — Manage,
+        # a separate summon/dismiss surface that used to host them, was killed per an explicit
+        # operator ruling). Default-docked LEFT (DEFAULT_LOC, docks.js) — verify they render +
+        # their controls work there, same as any other panel.
+        jb = page.evaluate("""() => ({ inLeftDock: !!document.querySelector('#leftdock .rail-section.jobs'),
+            hasPanel: !!document.querySelector('#jobs-list .jobs-panel') })""")
+        check("Jobs is an ordinary left-docked panel that renders", jb["inLeftDock"] and jb["hasPanel"], str(jb))
         proc = page.evaluate("""() => {
             const stages = [...document.querySelectorAll('#processor-body .proc-stage')].map(c => c.dataset.stage);
             const up = document.querySelector('#processor-body .proc-stage[data-stage="upscale"] .stage-toggle');
             const wasOn = up.checked; up.click(); const toggled = up.checked !== wasOn; up.click();
-            return { notInEditDock: !document.querySelector('#rightdock .rail-section.processor'),
-                     inGrid: !!document.querySelector('.manage-grid .rail-section.processor'),
-                     stages, hasStages: stages.length === 6, toggled, away: window.__docks.isAway('processor') };
+            return { inLeftDock: !!document.querySelector('#leftdock .rail-section.processor'),
+                     stages, hasStages: stages.length === 6, toggled };
         }""")
-        check("Processor is a Manage-screen flow-rail (stages render + toggle), not in the Edit dock",
-              proc["notInEditDock"] and proc["inGrid"] and proc["hasStages"] and proc["toggled"] and proc["away"], str(proc))
+        check("Processor is an ordinary left-docked flow-rail (stages render + toggle)",
+              proc["inLeftDock"] and proc["hasStages"] and proc["toggled"], str(proc))
         # Properties is the same kind of object — float it, then dock it back
         page.evaluate("window.__docks.float('properties')"); page.wait_for_timeout(60)
         check("Properties can float into a window",
@@ -5360,12 +5353,11 @@ def main():
             const shelved = !document.querySelector('#rightdock .rail-section.layers') && !!document.querySelector('#panel-shelf .shelf-sq[data-shelf="layers"]');
             window.__docks.unshelve('layers'); return shelved; }""")
         check("right-clicking a panel header shelves it", rc, str(rc))
-        # Info is a Manage-screen citizen now (the selection inspector), not an Edit shelf/dock
-        # panel — it lives in the manage-grid and is a standard panel (no ghost context-panel chrome).
-        check("Info is a Manage-grid panel (standard chrome, not on the Edit shelf)",
-              page.evaluate("""() => { const s=document.querySelector('.manage-grid .rail-section.info');
-                  return !!s && !s.classList.contains('context-panel') && window.__docks.isAway('info')
-                      && !document.querySelector('#panel-shelf .shelf-sq[data-shelf="info"]'); }"""))
+        # Info (the selection inspector) is an ordinary dock panel now — same tier as
+        # Properties/Colour, standard chrome (no ghost context-panel styling), default LEFT-docked.
+        check("Info is an ordinary left-docked panel (standard chrome, not the ghost context-panel)",
+              page.evaluate("""() => { const s=document.querySelector('#leftdock .rail-section.info');
+                  return !!s && !s.classList.contains('context-panel'); }"""))
         # state memory: a FLOATING panel that's shelved reopens FLOATING (not docked), on-screen
         mem = page.evaluate("""() => {
             window.__docks.float('history'); window.__docks.shelve('history'); window.__docks.unshelve('history');
@@ -5403,13 +5395,13 @@ def main():
             const stayed = !!document.querySelector('#rightdock .rail-section.color');
             window.__docks.state().color.pinned = false; return stayed; }""")
         check("a user-pinned panel is exempt from contextual auto-shelving", pin, str(pin))
-        # Info is the Manage selection inspector — its grid panel is never blank (a hint until an
-        # image is opened into it; refillInfoContext fills it with the current context).
+        # Info (the selection inspector) is never blank (a hint until an image is opened into
+        # it; refillInfoContext fills it with the current context).
         info = page.evaluate("""() => {
             if (typeof window.refillInfoContext === 'function') window.refillInfoContext();
-            const b = document.querySelector('.manage-grid .rail-section.info .fp-body');
+            const b = document.querySelector('.rail-section.info .fp-body');
             return { ok: !!b && b.textContent.trim().length > 0, text:(b?b.textContent:'').slice(0,40) }; }""")
-        check("the Manage Info inspector fills with context (never blank)", info["ok"], str(info))
+        check("the Info inspector fills with context (never blank)", info["ok"], str(info))
         # right-clicking a shelf square opens an options menu (open / float / dock either side)
         menu = page.evaluate("""() => {
             window.__docks.shelve('history');
@@ -5465,40 +5457,39 @@ def main():
         check("dock layout is persisted",
               page.evaluate("() => { const s=JSON.parse(localStorage.getItem('hector-vector:docks')||'{}'); return !!s.history && !!s.layers; }"))
 
-        section("Manage screen: Library/Processor/Jobs are Manage citizens, NOT in the Edit dock")
-        # The Manage screen A/Bs with the workbench. Library / Processor / Jobs are NOT Edit-dock
-        # panels — they live permanently in the .manage-grid (moved there once at startup, marked
-        # "away" so the dock won't reclaim them), and the Edit dock keeps only the editing panels.
-        # The toggle just shows/hides the grid — no per-switch reparenting. See manage-screen-plan.
-        check("Edit/Manage tabs exist; Edit active by default",
-              page.evaluate("() => !!document.querySelector('#view-edit') && !!document.querySelector('#view-manage') && document.querySelector('#view-edit').classList.contains('active')"))
-        parent = lambda sel: page.evaluate("(s) => { const e=document.querySelector(s); return e && e.parentElement ? (e.parentElement.id || e.parentElement.className) : null; }", sel)
-        # In EDIT, the manage panels are NOT in the dock (they live hidden in the manage-grid) and
-        # the Edit dock holds only editing panels (no library/processor/jobs leaking in).
-        check("Library/Processor/Info/Jobs live in .manage-grid, not the Edit dock",
-              all("manage-grid" in (parent(".rail-section." + n) or "") for n in ("library", "processor", "info", "jobs")))
-        check("the Edit right-dock + header shelf have NO manage panels (only editing panels)",
-              page.evaluate("() => [...document.querySelectorAll('#rightdock > .rail-section')].every(s => !['library','processor','info','jobs'].includes(s.dataset.section)) && !document.querySelector('#panel-shelf .shelf-sq[data-shelf=\"info\"]')"))
-        check("docks marks them 'away' (exempt from dock reconcile / shelving)",
-              page.evaluate("() => window.__docks.isAway('library') && window.__docks.isAway('processor') && window.__docks.isAway('info') && window.__docks.isAway('jobs')"))
-        check("in Edit the manage-grid is hidden", page.evaluate("() => getComputedStyle(document.querySelector('.manage-grid')).display === 'none'"))
-        # ENTER Manage → reveal the grid, hide the canvas; panels DON'T move (already there).
-        page.click("#view-manage"); page.wait_for_function("() => document.querySelector('.app').classList.contains('manage')", timeout=4000)
-        page.wait_for_timeout(60)
-        check("Manage shows the grid + hides the editor-grid; panels stay put",
-              page.evaluate("() => getComputedStyle(document.querySelector('.editor-grid')).display === 'none' && getComputedStyle(document.querySelector('.manage-grid')).display === 'grid'")
-              and "manage-grid" in (parent(".rail-section.library") or ""))
-        check("panel renderers still target their fixed IDs in the grid",
-              page.evaluate("() => !!document.querySelector('.manage-grid #library-list') && (document.querySelector('#processor-body')||{}).childElementCount >= 0"))
-        # LEAVE → canvas back, panels STAY in the grid (now hidden), never re-entering the dock.
-        page.click("#view-edit"); page.wait_for_function("() => !document.querySelector('.app').classList.contains('manage')", timeout=4000)
-        page.wait_for_timeout(60)
-        check("back in Edit: editor-grid visible, manage panels still in the (hidden) grid — never leak into the dock",
-              page.evaluate("() => document.querySelector('#view-edit').classList.contains('active') && getComputedStyle(document.querySelector('.editor-grid')).display !== 'none'")
-              and "manage-grid" in (parent(".rail-section.library") or ""))
-        # a second round-trip is stable
-        page.click("#view-manage"); page.wait_for_timeout(60); page.click("#view-edit"); page.wait_for_timeout(60)
-        check("Manage round-trip is stable (library stays a grid citizen)", "manage-grid" in (parent(".rail-section.library") or ""))
+        section("Library/Processor/Info/Jobs are ordinary dock panels — no separate Manage mode")
+        # Manage — a separate summon/dismiss screen that used to borrow these panels out of the
+        # dock into its own grid — was killed entirely per an explicit operator ruling: browsing
+        # and editing aren't different modes, so there's no "go to" left at all. Library / Processor
+        # / Info / Jobs are now the same kind of object as Properties / Colour: default LEFT-docked
+        # (DEFAULT_LOC, docks.js), fully collapsible/floatable/shelvable, canvas never hidden.
+        check("no Edit/Manage tabs, no manage-grid element — the mode is gone",
+              page.evaluate("() => !document.querySelector('#view-edit') && !document.querySelector('#view-manage') && !document.querySelector('.manage-grid')"))
+        check("Library/Processor/Info/Jobs default-dock LEFT, alongside Symbols",
+              page.evaluate("""() => ['library','processor','info','jobs'].every(n =>
+                  !!document.querySelector('#leftdock .rail-section.' + n))"""))
+        check("the canvas (editor-grid) is visible regardless — there's nothing to hide it behind",
+              page.evaluate("() => getComputedStyle(document.querySelector('.editor-grid')).display !== 'none'"))
+        # Regression guard for the NEW capability: these panels are no longer exempt from dock
+        # mechanics — Info can float out, dock back, and shelve/unshelve exactly like Properties/
+        # Colour/History do elsewhere in this file. (isAway/borrow/restore don't exist anymore —
+        # there's nothing left that would make a panel exempt.)
+        rt = page.evaluate("""() => {
+            window.__docks.float('info');
+            const floated = window.__docks.loc('info') === 'float'
+                && !!document.querySelector('.dock-window[data-dock-window="info"]');
+            window.__docks.dock('info', 'left');
+            const docked = window.__docks.loc('info') === 'left'
+                && !!document.querySelector('#leftdock .rail-section.info');
+            window.__docks.shelve('info');
+            const shelved = !document.querySelector('#leftdock .rail-section.info')
+                && !!document.querySelector('#panel-shelf .shelf-sq[data-shelf="info"]');
+            window.__docks.unshelve('info');
+            const back = !!document.querySelector('#leftdock .rail-section.info');
+            return { floated, docked, shelved, back };
+        }""")
+        check("Info floats, docks, and shelves like any ordinary panel (no longer exempt)",
+              rt["floated"] and rt["docked"] and rt["shelved"] and rt["back"], str(rt))
 
         section("Text: tool, inspector, multi-source fonts, convert-to-outlines (T1-T22)")
         # Deterministic, network-free coverage of the text feature. Creation via the overlay
@@ -5942,7 +5933,6 @@ def main():
         cloud = page.evaluate(r"""() => ({
             cloudClass: document.documentElement.classList.contains('cloud'),
             panelsGone: ['library','processor','jobs'].every(n => !document.querySelector('.rail-section[data-section="'+n+'"]')),
-            manageHidden: (() => { const t=document.getElementById('view-manage'); return !t || t.offsetParent===null; })(),
             ctaShown: (() => { const a=document.getElementById('get-desktop'); return !!a && a.offsetParent!==null; })(),
         })""")
         page.evaluate("() => window.mountStageFromText('<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 200 200\" width=\"200\" height=\"200\"><rect data-hv-id=\"a\" data-hv-shape=\"rect\" x=\"20\" y=\"20\" width=\"90\" height=\"90\" fill=\"#e55\"/><circle data-hv-id=\"b\" data-hv-shape=\"circle\" cx=\"120\" cy=\"120\" r=\"55\" fill=\"#5af\"/></svg>','c')")
@@ -5955,8 +5945,8 @@ def main():
         }""")
         page.wait_for_timeout(120)
         page.remove_listener("request", _cloud_listener)
-        check("cloud mode: .cloud set, server panels removed, Manage hidden + download CTA shown",
-              cloud["cloudClass"] and cloud["panelsGone"] and cloud["manageHidden"] and cloud["ctaShown"], str(cloud))
+        check("cloud mode: .cloud set, server panels removed, download CTA shown",
+              cloud["cloudClass"] and cloud["panelsGone"] and cloud["ctaShown"], str(cloud))
         check("cloud mode: draw + boolean + SVG export work fully client-side",
               cloud2["boolean"] and cloud2["export"], str(cloud2))
         # Web-font discovery is served from a bundled Google-Fonts catalog client-side (the actual

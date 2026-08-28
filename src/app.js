@@ -9,7 +9,6 @@ import { shapeToAbsPath } from "./hv/index.js";
 import { editor, ghostBtn } from "./editor.js";
 import { createLayoutCustomize } from "./ui/layout.js";
 import { createDocks } from "./ui/docks.js";
-import { createManage } from "./ui/manage.js";
 import { api } from "./ui/api.js";
 import * as fonts from "./ui/fonts.js";
 import {
@@ -419,9 +418,8 @@ let setSheet = () => {};
   setSheet = (open) => {
     appEl.classList.toggle("sheet-open", open);
     fab.setAttribute("aria-expanded", open ? "true" : "false");
-    // Rebuild the tab strip at the moment you look at it: panels come and go (Manage borrows the
-    // server panels), and reset the default tab — the selection may well have changed since you last
-    // had the sheet open.
+    // Rebuild the tab strip at the moment you look at it, and reset the default tab — the
+    // selection may well have changed since you last had the sheet open.
     if (open) refreshSheetTabs({ reset: true });
   };
   fab.addEventListener("click", () => setSheet(!appEl.classList.contains("sheet-open")));
@@ -842,12 +840,13 @@ document.querySelectorAll(".tool-button").forEach((b) => b.addEventListener("cli
   editor.openContextPanel = showContextPanel;   // layers-row right-click → same object panel as the canvas
   editor.showMenu = showContextMenu;            // inspector "Actions ▾" menu (object commands)
   editor.rasterTools = buildRasterTools;         // raster panel: inline pipeline stages + live vectorize
-  // Raster panel's "Process this image…" pointer (Edit mode has no other route into the
-  // pipeline — see manage.js's own "Process this" seam, which already auto-targets
-  // whatever's selected the moment Manage opens; this just gets you there from the
-  // object you're already looking at). No-op in CLOUD, where window.__manage is null —
+  // Raster panel's "Process this image…" pointer: the Processor panel is always docked
+  // beside the canvas now (Manage — a separate summon/dismiss surface for this — was
+  // killed per an explicit operator ruling: no mode, no separate destination, ever), so
+  // this just reveals it (un-collapses + scrolls into view) instead of switching views.
+  // No-op in CLOUD, where the Processor panel doesn't exist (SERVER_PANELS, docks.js) —
   // guard by not wiring the hook at all, so the raster panel doesn't offer a dead button.
-  if (!CLOUD) editor.onProcessRequested = () => { if (window.__manage) window.__manage.enter(); };
+  if (!CLOUD) editor.onProcessRequested = () => revealPanel("processor");
   // Prefetch so the Process panels render without a flash. Deferred to a microtask:
   // this block runs during top-level module eval, but engineSchemas/rasterOpSchemas are
   // `let`s declared further down — calling now would hit their temporal dead zone (the
@@ -1319,12 +1318,6 @@ function buildRasterTools(node) {
   // dynamically-built panels (Properties, Colour) get a working caret too.
   // ---- Dockable panels + collapse carets + shelf + bezel groups (extracted → src/ui/docks.js) ----
   window.__docks = createDocks({ editor, measureFit, viewports, renderProcessorPanel, renderLibrary, renderJobsPanel, processorRelevant, cycleBg });
-
-  // ---- Manage screen: A/Bs with the workbench; borrows Library/Processor/Jobs into a
-  //      roomy grid (extracted → src/ui/manage.js). ----
-  // Manage borrows the Library/Processor/Jobs panels into a browse+batch grid — all server-only,
-  // so there's nothing to manage in the cloud build.
-  window.__manage = CLOUD ? null : createManage({ docks: window.__docks, measureFit, viewports });
   window.__fonts = fonts;   // text inspector's font browser + save-embed/export hooks
   fonts.hydrateInstalled();   // re-register cached fonts after a reload (Installed list + save-embed)
 
@@ -1814,7 +1807,7 @@ async function pasteCommand() {
   }
   editor.paste();
 }
-// Test hook (mirrors window.__fonts/__manage): exercise the sanitize + place path deterministically.
+// Test hook (mirrors window.__fonts): exercise the sanitize + place path deterministically.
 window.__paste = { extractSvg: _extractSvgMarkup, sanitize: _sanitizeSvgMarkup, svgIntoCanvas: pasteSvgIntoCanvas };
 // Epic A1 — "render -> png": the seam tools/render_png.py drives headlessly to get real eyes
 // on the live canvas (the browser's own renderer, not a second one). See ui/export.js.
@@ -1984,10 +1977,6 @@ async function runProcess(btn) {
     const payload = { ...settings };
     const force = processForce;
     const t = processTarget();
-    // Seam (Manage → workbench): a focused "Run → canvas" delivers its result onto the
-    // canvas, so cross back to Edit and let it land in front of you. A batch run is headless
-    // (watch it in the Jobs panel) — stay on the Manage screen.
-    if (!t.batch && window.__manage && window.__manage.isManage()) window.__manage.leave();
     // Resolve the FOCUSED target node — the raster whose result lands on the canvas in
     // place. The pipeline dissolves into the editor for BOTH cases:
     //   • on-canvas raster  → process its href directly
@@ -2908,15 +2897,7 @@ function fillProcessorChin(chin, t) {
     const wi = workItems.find((i) => i.name === t.name);
     const load = document.createElement("button"); load.type = "button"; load.className = "proc-foot-load";
     load.textContent = "↓ Load to preview"; load.title = `Load “${t.name}” onto the canvas to tune a live preview first (Run loads it automatically)`;
-    // Same Manage → workbench seam runProcess() uses for "Run → canvas" (see its comment): this
-    // button places content on the canvas exactly like Run does, but was missing the handoff back
-    // to Edit — so clicking it from the Manage screen silently edited the (hidden, off-screen)
-    // canvas with no visible result at all, just a status-line message easy to miss entirely.
-    load.addEventListener("click", () => {
-      if (!wi) return;
-      if (window.__manage && window.__manage.isManage()) window.__manage.leave();
-      loadRasterToCanvas({ name: wi.name, url: wi.url });
-    });
+    load.addEventListener("click", () => { if (wi) loadRasterToCanvas({ name: wi.name, url: wi.url }); });
     chin.appendChild(load);
   } else if (!t.batch && !t.name) {
     const hint = document.createElement("span"); hint.className = "proc-foot-hint";
