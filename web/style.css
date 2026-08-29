@@ -2189,6 +2189,24 @@ input.insp-ab-name { background: var(--field-bg); color: inherit; border: 1px so
   min-width: 1px; min-height: 1em;
 }
 text.hv-text-editing { visibility: hidden; }
+/* Rich text runs: a small Bold/Italic/Color bar that appears above a real (non-collapsed)
+   selection inside the overlay. Appended straight to <body> (a sibling of hv-text-overlay-wrap,
+   never a child of it) so its position:fixed left/top — computed from the selection's own
+   viewport rect — isn't re-interpreted through the wrap's screen-CTM transform. */
+.hv-text-toolbar {
+  position: fixed; z-index: 1201; transform: translate(-50%, -100%);
+  display: flex; align-items: center; gap: 2px; padding: 3px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--r);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.22);
+}
+.hv-text-tb-btn {
+  min-width: 22px; height: 22px; padding: 0 5px; border: 1px solid transparent; border-radius: var(--r);
+  background: transparent; color: var(--fg); font: 700 12px/1 inherit; cursor: pointer;
+}
+.hv-text-tb-btn:nth-child(2) { font-style: italic; }
+.hv-text-tb-btn:hover { border-color: var(--line); }
+.hv-text-tb-btn.on { background: var(--fg); color: var(--bg); }
+.hv-text-tb-color { width: 20px; height: 20px; padding: 0; border: 1px solid var(--line); border-radius: var(--r); background: none; cursor: pointer; }
 /* The drag-to-create rubber-band for an AREA text box (lives in the overlay layer). */
 .hv-textbox-preview { fill: none; stroke: var(--hl-edit); stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
 /* Threaded text (Epic P): a dashed connector + in/out port dots between linked boxes,

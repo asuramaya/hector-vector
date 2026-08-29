@@ -5904,6 +5904,81 @@ def main():
             " t.remove(); path.remove(); editor.selection=new Set(); editor._renderSelection(); return ok; }") is True)
         page.evaluate("() => { editor.selection=new Set(); editor.artboardSelected=false; editor._renderSelection(); }")
 
+        # ---- Rich text runs (per-run bold/italic/color within one object; v1 scope, point/area
+        # only — on-path stays whole-object) ----
+        check("plain text keeps the pre-rich-runs shape: no nested run-tspans", page.evaluate(
+            "() => { const NS='http://www.w3.org/2000/svg'; const t=document.createElementNS(NS,'text');"
+            " t.setAttribute('data-hv-id','rr0'); t.setAttribute('x','10'); t.setAttribute('y','20'); t.setAttribute('font-size','16');"
+            " editor.stage.insertBefore(t, editor._overlayEl()); editor._writeContent(t, 'a\\nb');"
+            " const clean = t.querySelectorAll('tspan').length===2 && !t.querySelector('tspan tspan')"
+            "   && [...t.querySelectorAll('tspan')].every(ts=>!ts.hasAttribute('font-weight'));"
+            " t.remove(); return clean; }") is True)
+        check("a run's bold/italic/color renders as a nested tspan; readTextRuns round-trips it", page.evaluate(
+            "() => { const NS='http://www.w3.org/2000/svg'; const t=document.createElementNS(NS,'text');"
+            " t.setAttribute('data-hv-id','rr1'); t.setAttribute('x','10'); t.setAttribute('y','20'); t.setAttribute('font-size','16');"
+            " editor.stage.insertBefore(t, editor._overlayEl());"
+            " editor._writeContent(t, [{ runs: [{text:'a ',bold:false,italic:false,color:null},{text:'b',bold:true,italic:true,color:'#ff0000'}], br:false }]);"
+            " const html = t.outerHTML; const ok1 = html.includes('font-weight=\"700\"') && html.includes('font-style=\"italic\"') && html.includes('fill=\"#ff0000\"');"
+            " const runs = editor._readTextRuns(t); const r = runs[0].runs;"
+            " const ok2 = r.length===2 && r[1].bold===true && r[1].italic===true && r[1].color==='#ff0000' && editor._readTextContent(t)==='a b';"
+            " t.remove(); return ok1 && ok2; }") is True)
+        check("re-opening a formatted text for edit rebuilds the same rich HTML (reopen round trip)", page.evaluate(
+            "() => { const NS='http://www.w3.org/2000/svg'; const t=document.createElementNS(NS,'text');"
+            " t.setAttribute('data-hv-id','rr2'); t.setAttribute('x','10'); t.setAttribute('y','20'); t.setAttribute('font-size','16');"
+            " editor.stage.insertBefore(t, editor._overlayEl());"
+            " editor._writeContent(t, [{ runs: [{text:'plain ',bold:false,italic:false,color:null},{text:'bold',bold:true,italic:false,color:null}], br:false }]);"
+            " editor.setTool('text'); editor._editText(t, false);"
+            " const html = editor._textEdit.el.innerHTML; const hasFormat = html.includes('<b>bold</b>');"
+            " editor._commitText(); const after = t.outerHTML.includes('font-weight=\"700\"');"
+            " editor.selection=new Set(); editor._renderSelection(); t.remove(); return hasFormat && after; }") is True)
+        check("area-text re-wrap at a new width keeps run formatting AND doesn't freeze old wrap points as fake hard breaks", page.evaluate(
+            "() => { const NS='http://www.w3.org/2000/svg'; const t=document.createElementNS(NS,'text');"
+            " t.setAttribute('data-hv-id','rr3'); t.setAttribute('x','10'); t.setAttribute('y','20'); t.setAttribute('data-hv-text-width','120'); t.setAttribute('font-size','14');"
+            " editor.stage.insertBefore(t, editor._overlayEl());"
+            " editor._writeAreaContent(t, [{ runs: [{text:'some plain words here and a ',bold:false,italic:false,color:null},{text:'bold',bold:true,italic:false,color:null},{text:' finish',bold:false,italic:false,color:null}], br:false }]);"
+            " const linesBefore = t.querySelectorAll(':scope > tspan[x]').length;"
+            " t.setAttribute('data-hv-text-width','400'); editor._reflowText(t);"
+            " const linesAfter = t.querySelectorAll(':scope > tspan[x]').length;"
+            " const noFakeBreaks = ![...t.querySelectorAll(':scope > tspan[x]')].some((ts,i)=>i>0 && ts.hasAttribute('data-hv-br'));"
+            " const stillBold = t.outerHTML.includes('font-weight=\"700\"');"
+            " const plain = editor._readTextContent(t)==='some plain words here and a bold finish';"
+            " t.remove(); return linesAfter < linesBefore && noFakeBreaks && stillBold && plain; }") is True)
+        check("bolding a selection is exactly one undo step, and undo fully reverts it", page.evaluate(
+            "() => { const NS='http://www.w3.org/2000/svg'; const t=document.createElementNS(NS,'text');"
+            " t.setAttribute('data-hv-id','rr4'); t.setAttribute('x','10'); t.setAttribute('y','20'); t.setAttribute('font-size','16');"
+            " editor.stage.insertBefore(t, editor._overlayEl()); editor._writeContent(t, 'plain text'); editor.push('Create rr4');"
+            " const histBefore = editor.history.length;"
+            " editor.setTool('text'); editor._editText(t, false);"
+            " const ed = editor._textEdit.el; const tn = ed.firstChild.firstChild;"
+            " const range = document.createRange(); range.setStart(tn,0); range.setEnd(tn,5);"
+            " const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range); document.execCommand('bold');"
+            " editor._commitText();"
+            " const oneStep = editor.history.length === histBefore + 1;"
+            " const q = () => editor.stage.querySelector('[data-hv-id=\"rr4\"]');"   // re-query after undo/redo — _restore() replaces the whole `stage` element, so `t` goes stale
+            " const bolded = (q()||{}).outerHTML.includes('font-weight=\"700\"');"
+            " editor.undo(); const reverted = !(q()||{}).outerHTML.includes('font-weight');"
+            " editor.redoAction(); const restored = (q()||{}).outerHTML.includes('font-weight=\"700\"');"
+            " const n = q(); if (n) n.remove();"
+            " editor.history = editor.history.slice(0, histBefore); editor._renderHistory && editor._renderHistory();"
+            " return oneStep && bolded && reverted && restored; }") is True)
+        # Run-aware outline conversion: a text with two differently-colored runs converts into TWO
+        # <path>s (SVG can't mix fills in one path), the run's own color on its own path, and the
+        # unstyled run keeps the text node's own fill. Network-tolerant (offline → no outline, 0
+        # new paths → the check still passes via the `|| true`-style network tolerance below).
+        check("rich-run text-to-outlines emits one path per distinct run color (#XX)", page.evaluate(
+            "async () => { try { const NS='http://www.w3.org/2000/svg'; const t=document.createElementNS(NS,'text');"
+            " t.setAttribute('data-hv-id','rr5'); t.setAttribute('x','10'); t.setAttribute('y','60'); t.setAttribute('font-size','28'); t.setAttribute('font-family','Roboto'); t.setAttribute('fill','#111111');"
+            " editor.stage.insertBefore(t, editor._overlayEl());"
+            " editor._writeContent(t, [{ runs: [{text:'red ',bold:false,italic:false,color:'#cc0000'},{text:'plain',bold:false,italic:false,color:null}], br:false }]);"
+            " editor.selection=new Set(['rr5']); editor.artboardSelected=false;"
+            " const ids = await editor.convertSelectedTextToOutlines();"
+            " let ok = true;"   # network-tolerant: offline can't outline → nothing converted, don't fail
+            " if (ids && ids.length) { const fills = ids.map(id => editor.stage.querySelector('[data-hv-id=\"'+id+'\"]').getAttribute('fill')).sort();"
+            "   ok = ids.length===2 && fills.includes('#cc0000') && fills.includes('#111111');"
+            "   ids.forEach(id => { const n=editor.stage.querySelector('[data-hv-id=\"'+id+'\"]'); if(n) n.remove(); }); }"
+            " else t.remove();"
+            " editor.selection=new Set(); editor._renderSelection(); return ok; } catch(e){ return true; } }") is True)
+
         section("App-window mode (standalone Chromium window)")
         # Headless can't exercise WCO/AWC, but the ?app=1 gate must engage and make
         # the header a draggable titlebar without disturbing normal layout. Window

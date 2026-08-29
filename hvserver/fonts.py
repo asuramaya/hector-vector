@@ -674,110 +674,158 @@ def text_to_outline(payload: dict) -> dict:
     anchor = payload.get("anchor", "start")
     x0 = float(payload.get("x", 0))
     y0 = float(payload.get("y", 0))
+    # Rich text runs (v1: per-run bold/italic/color, same family/size throughout — see
+    # src/editor/tools/text.js's own header comment for why family/size stay whole-object).
+    # `lines`, when given, REPLACES `text`: [{runs:[{text,bold,italic,color}]}], one entry per
+    # paragraph. Absent -> the single-style whole-object path below, unchanged.
+    raw_lines = payload.get("lines")
+    if raw_lines:
+        lines = [[(r.get("text") or "", bool(r.get("bold")), bool(r.get("italic")), r.get("color") or None)
+                  for r in (ln.get("runs") or [])] for ln in raw_lines]
+    else:
+        lines = [[(ln, False, False, None)] for ln in text.split("\n")]
 
-    # Outline the requested face; if it isn't a downloadable web font (a system font like Arial),
-    # fall back to a metric-compatible OFL stand-in so the text can still be vectorised.
+    # One font load per DISTINCT (weight, italic) actually used — usually 1 (plain) or 2
+    # (plain + bold), never reloaded twice for the same combination across runs/lines.
+    _font_cache: dict[tuple[int, bool], dict] = {}
     substituted = None
-    try:
-        path = ensure_font(family, weight, italic, source)
-    except Exception:
-        sub = _font_substitute(family)
-        if not sub:
-            raise
-        path = ensure_font(sub, weight, italic, "")
-        substituted = sub
-    font = TTFont(path)
-    upm = font["head"].unitsPerEm or 1000
-    scale = size / upm
-    glyphset = font.getGlyphSet()
-    tables = _shape_tables(path, font)
-    # HarfBuzz needs to re-emit the SFNT (font.save), which can fail on some inputs even when the
-    # uharfbuzz import succeeded — fall back to the fontTools shaper rather than 500 the request.
-    hbfont = None
-    if _hb is not None:
-        try:
-            hbfont = _hb_font(font)
-        except Exception:  # noqa: BLE001
-            hbfont = None
-    ls_font = (letter_spacing / scale) if scale else 0       # tracking, converted to font units
-    # Characters the font has no glyph for — they'd shape to a blank advance (silent gap), so
-    # report them and the client warns the user instead of letting them vanish.
-    _cmap = set(font.getBestCmap().keys())
-    missing = sorted({ch for ch in text if ch.strip() and ord(ch) not in _cmap})
-    # Complex scripts need a real shaping engine; without HarfBuzz the fallback may mis-order or
-    # mis-position them. Report the script so the client warns (we still emit a best-effort outline).
-    complex_script = _complex_script(text) if hbfont is None else None
 
-    def emit_glyph(gname, tx, ty, ds):
-        spen = SVGPathPen(glyphset)
-        tpen = TransformPen(spen, (scale, 0, 0, -scale, tx, ty))
+    def resolve_font(bold: bool, run_italic: bool):
+        nonlocal substituted
+        w = 700 if bold else weight
+        it = italic or run_italic
+        key = (w, it)
+        cached = _font_cache.get(key)
+        if cached:
+            return cached
+        try:
+            path = ensure_font(family, w, it, source)
+            sub = None
+        except Exception:
+            sub = _font_substitute(family)
+            if not sub:
+                raise
+            path = ensure_font(sub, w, it, "")
+        if sub and substituted is None:
+            substituted = sub
+        font = TTFont(path)
+        upm = font["head"].unitsPerEm or 1000
+        hbfont = None
+        if _hb is not None:
+            try:
+                hbfont = _hb_font(font)
+            except Exception:  # noqa: BLE001 — SFNT re-emit can fail on some inputs; fall back below
+                hbfont = None
+        entry = {
+            "font": font, "scale": size / upm, "glyphset": font.getGlyphSet(),
+            "tables": _shape_tables(path, font), "hbfont": hbfont,
+            "cmap": set(font.getBestCmap().keys()),
+        }
+        _font_cache[key] = entry
+        return entry
+
+    ls_scale = resolve_font(False, False)["scale"]
+    ls_font = (letter_spacing / ls_scale) if ls_scale else 0   # tracking, converted to font units (base face)
+    all_text = "".join(t for ln in lines for t, *_ in ln)
+    missing: set[str] = set()
+    any_hb = False
+
+    def emit_glyph(fe, gname, tx, ty, ds):
+        spen = SVGPathPen(fe["glyphset"])
+        tpen = TransformPen(spen, (fe["scale"], 0, 0, -fe["scale"], tx, ty))
         try:
             # Decompose composites (accents, ligatures like f_f_i) to contours FIRST, so their
             # quadratics flow through Qu2CuPen (all_cubic → clean, node-editable cubics) — a raw
             # addComponent would slip past the converter and leave quadratic Q segments.
-            rec = DecomposingRecordingPen(glyphset)
-            glyphset[gname].draw(rec)
+            rec = DecomposingRecordingPen(fe["glyphset"])
+            fe["glyphset"][gname].draw(rec)
             rec.replay(Qu2CuPen(tpen, max_err=0.25, all_cubic=True))
         except Exception:  # noqa: BLE001 — odd glyph: draw directly (still correct, may be quadratic)
-            glyphset[gname].draw(tpen)
+            fe["glyphset"][gname].draw(tpen)
         d = spen.getCommands()
         if d:
             ds.append(d)
         return d
 
-    # Per-glyph mode (text-on-path, T19): the curve layout is done in the browser (it owns the
-    # bound path's getPointAtLength), so emit each glyph at a LOCAL origin (baseline y=0, pen
-    # x=0) with its own advance + the kern/tracking step. The client places + rotates each glyph
-    # along the path and bakes them into one editable all-cubic path. Single line (the textPath
-    # run is one line; the caller already flattened newlines to spaces).
+    # Per-glyph mode (text-on-path, T19) — on-path text is scoped OUT of rich runs (v1, see
+    # text.js), so this always shapes a single whole-object run; `lines` is never set here.
     if bool(payload.get("perGlyph")):
+        fe = resolve_font(False, False)
+        missing = {ch for ch in text if ch.strip() and ord(ch) not in fe["cmap"]}
+        complex_script = _complex_script(text) if fe["hbfont"] is None else None
         line = text.replace("\n", " ")
-        shaped = _shape_line(font, hbfont, line, tables)
+        shaped = _shape_line(fe["font"], fe["hbfont"], line, fe["tables"])
         out_glyphs = []
         run = 0.0
         for gname, xadv, xoff, yoff in shaped:
             gd = ""
             if gname is not None:
-                gd = emit_glyph(gname, xoff * scale, -yoff * scale, []) or ""
+                gd = emit_glyph(fe, gname, xoff * fe["scale"], -yoff * fe["scale"], []) or ""
                 if gd:
                     gd = re.sub(r"-?\d+\.\d+", lambda m: _num(m.group()), gd)
-            w = xadv * scale                                  # the glyph's own advance (px)
-            step = w + ls_font * scale                        # advance + tracking → next pen pos
+            w = xadv * fe["scale"]                            # the glyph's own advance (px)
+            step = w + ls_font * fe["scale"]                  # advance + tracking → next pen pos
             out_glyphs.append({"d": gd, "w": round(w, 3), "adv": round(step, 3),
                                "missing": gname is None})
             run += step
         return {"glyphs": out_glyphs, "count": len(out_glyphs),
                 "empty": not any(g["d"] for g in out_glyphs),
-                "advance": round(run, 2), "missing": missing, "substituted": substituted,
+                "advance": round(run, 2), "missing": sorted(missing), "substituted": substituted,
                 "complexScript": complex_script,
-                "shaper": "harfbuzz" if hbfont is not None else "fonttools"}
+                "shaper": "harfbuzz" if fe["hbfont"] is not None else "fonttools"}
 
-    ds: list[str] = []
+    # colors[key] accumulates this run-color's own path fragments across every line — one <path>
+    # per distinct color on the client, exactly like SVG needs (a path has one fill). key=None is
+    # "no run override, caller's own default fill applies" — always present even if empty, so a
+    # plain (no rich runs) text keeps returning a single, familiar entry.
+    colors: "dict[str | None, list[str]]" = {None: []}
     glyph_count = 0
     max_advance = 0.0
-    for i, line in enumerate(text.split("\n")):
-        shaped = _shape_line(font, hbfont, line, tables)
-        # total advance (font units) incl. kerning + tracking, for anchor alignment
-        total = sum(g[1] for g in shaped) + ls_font * max(0, len(shaped) - 1)
-        lw = total * scale
+    for i, line_runs in enumerate(lines):
+        # Shape every run in this line FIRST (their own font/weight/style each), tracking one
+        # continuous pen position in a COMMON unit (px, not font units — different runs can be
+        # different UPM-scaled fonts) so glyphs sit flush across a run boundary, exactly as if
+        # HarfBuzz had shaped the whole line as one buffer.
+        run_shapes = []   # (font_entry, [(gname,xadv,xoff,yoff)], color)
+        total_px = 0.0
+        for text_, bold, run_italic, color in line_runs:
+            if not text_:
+                continue
+            fe = resolve_font(bold, run_italic)
+            missing |= {ch for ch in text_ if ch.strip() and ord(ch) not in fe["cmap"]}
+            any_hb = any_hb or fe["hbfont"] is not None
+            shaped = _shape_line(fe["font"], fe["hbfont"], text_, fe["tables"])
+            run_shapes.append((fe, shaped, color))
+            total_px += sum(g[1] for g in shaped) * fe["scale"] + ls_font * ls_scale * len(shaped)
+        if not run_shapes:
+            continue
+        lw = total_px
         max_advance = max(max_advance, lw)
         lx = x0 - (lw / 2 if anchor == "middle" else lw if anchor == "end" else 0)
         ly = y0 + i * size * line_height
-        penx = 0.0                                           # running advance in FONT units
-        for gname, xadv, xoff, yoff in shaped:
-            if gname is not None:
-                tx = lx + (penx + xoff) * scale
-                ty = ly - yoff * scale
-                emit_glyph(gname, tx, ty, ds)
-                glyph_count += 1
-            penx += xadv + ls_font
+        penx_px = 0.0                                          # running advance in PX (common across runs)
+        for fe, shaped, color in run_shapes:
+            ds = colors.setdefault(color, [])
+            for gname, xadv, xoff, yoff in shaped:
+                if gname is not None:
+                    tx = lx + penx_px + xoff * fe["scale"]
+                    ty = ly - yoff * fe["scale"]
+                    emit_glyph(fe, gname, tx, ty, ds)
+                    glyph_count += 1
+                penx_px += xadv * fe["scale"] + ls_font * fe["scale"]
 
-    d = " ".join(ds)
-    d = re.sub(r"-?\d+\.\d+", lambda m: _num(m.group()), d)   # round coords → clean, small path
-    return {"d": d, "empty": not ds, "glyphs": glyph_count,
-            "advance": round(max_advance, 2), "missing": missing, "substituted": substituted,
+    color_entries = []
+    for color, ds in colors.items():
+        if not ds and color is not None:
+            continue   # never-used color key (a run color that produced zero glyphs) — drop it
+        d = re.sub(r"-?\d+\.\d+", lambda m: _num(m.group()), " ".join(ds))
+        color_entries.append({"color": color, "d": d})
+    complex_script = _complex_script(all_text) if not any_hb else None
+    return {"colors": color_entries, "d": color_entries[0]["d"] if len(color_entries) == 1 else None,
+            "empty": glyph_count == 0, "glyphs": glyph_count,
+            "advance": round(max_advance, 2), "missing": sorted(missing), "substituted": substituted,
             "complexScript": complex_script,
-            "shaper": "harfbuzz" if hbfont is not None else "fonttools"}
+            "shaper": "harfbuzz" if any_hb else "fonttools"}
 
 
 def _num(s: str) -> str:
