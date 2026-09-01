@@ -1515,6 +1515,34 @@ function pointMenuItems() {
     { label: n > 1 ? `Delete ${n} points` : "Delete point", onClick: () => editor.deleteNodeSelection() },
   ];
 }
+// Right-click on a selected raster: _objectActions() deliberately returns [] for an all-raster
+// selection (none of the vector commands apply), which used to mean the menu was skipped
+// entirely — right-click just jumped to Properties with zero choices offered. Rasters have a
+// real command set, it just lived only in the Processor panel and the library. Surface it here
+// instead of leaving raster right-click as the one dead end in the app.
+function rasterMenuItems(node, clientX, clientY) {
+  const items = [
+    { label: "Process (Vectorize / Remove BG / Upscale)…", onClick: () => revealPanel("processor") },
+    { label: "Remove object…", onClick: () => startCleanup(node) },
+  ];
+  if (rasterHref(node).startsWith("data:")) items.push({ label: "Import to library", onClick: () => importCanvasRasterToLibrary(node) });
+  items.push({ type: "sep" }, { label: "Open Properties…", onClick: () => showContextPanel(clientX, clientY, "object") });
+  return items;
+}
+// Right-click on empty canvas / the artboard: same dead end as rasters — always skipped straight
+// to Properties, even though Paste/Select all/Add artboard are all real, reachable commands
+// (keyboard shortcut or a toolbar button) that just weren't offered where a right-click naturally
+// looks for them.
+function canvasMenuItems(clientX, clientY) {
+  return [
+    { label: "Paste", disabled: !editor.clipboard.length, onClick: () => editor.paste() },
+    { label: "Select all", onClick: () => editor.selectAll() },
+    { type: "sep" },
+    { label: "Add artboard", onClick: () => editor.addArtboard() },
+    { type: "sep" },
+    { label: "Open Properties…", onClick: () => showContextPanel(clientX, clientY, "canvas") },
+  ];
+}
 // The context menu, reached by TWO gestures that mean the same thing: right-click with a mouse, and
 // press-and-hold with a finger. One implementation, so the phone can never drift into offering a
 // different (or smaller) set of commands than the desktop.
@@ -1537,22 +1565,21 @@ function openStageContext(clientX, clientY, target) {
       editor._renderSelection(); editor._renderInspector(); editor._renderLayers();
     }
     // An object → the same context-gated Actions commands as the inspector's "Actions ▾" button,
-    // plus a fallback to open the full Properties panel. Rasters (no vector commands) fall straight
-    // through to Properties.
-    const acts = editor._objectActions ? editor._objectActions(editor.selectedNodes()) : [];
-    if (acts.length) {
-      showContextMenu(clientX, clientY, [
-        ...acts,
-        { type: "sep" },
-        { label: "Open Properties…", onClick: () => showContextPanel(clientX, clientY, "object") },
-      ]);
-    } else {
-      showContextPanel(clientX, clientY, "object");
+    // plus a fallback to open the full Properties panel. A raster selection gets its own
+    // raster-specific commands (see rasterMenuItems) instead of no menu at all.
+    const nodes = editor.selectedNodes();
+    if (nodes.length && nodes.every((n) => editor.isRaster(n))) {
+      showContextMenu(clientX, clientY, rasterMenuItems(nodes[0], clientX, clientY));
+      return;
     }
+    const acts = editor._objectActions ? editor._objectActions(nodes) : [];
+    const items = acts.length ? [...acts, { type: "sep" }] : [];
+    items.push({ label: "Open Properties…", onClick: () => showContextPanel(clientX, clientY, "object") });
+    showContextMenu(clientX, clientY, items);
   } else {
     editor.selection = new Set(); editor.artboardSelected = true;
     editor._renderSelection(); editor._renderInspector();
-    showContextPanel(clientX, clientY, "canvas");
+    showContextMenu(clientX, clientY, canvasMenuItems(clientX, clientY));
   }
 }
 {

@@ -9,6 +9,32 @@ export function configureMenus(deps) {
   ({ setStatus, menuItems } = deps);
 }
 
+// Submenu flyouts (`item.type === "sub"`, `item.items`: the nested list). One item vocabulary,
+// so a right-click object menu and a header dropdown group the exact same way. Each open flyout
+// is its own `.context-menu`, portalled to <body> like the top menu itself — nesting it as a DOM
+// child would get clipped by `.context-menu`'s own `overflow-y: auto` (the same clipping
+// populateMenuList's sibling, openMenu, already works around for header dropdowns). Tracked as a
+// depth-keyed stack so opening a new flyout — or dismissing the whole menu — tears down every
+// flyout nested under it, never just the one that changed.
+let openSubmenus = [];
+function closeSubmenus(fromDepth = 0) {
+  while (openSubmenus.length > fromDepth) {
+    const { el, ownerList } = openSubmenus.pop();
+    el.remove();
+    if (ownerList) ownerList._openSubBtn = null;   // so re-hovering the same trigger later reopens it, not no-ops
+  }
+}
+function placeSubmenu(el, anchorRect) {
+  const r = el.getBoundingClientRect();
+  let x = anchorRect.right - 2;
+  if (x + r.width > window.innerWidth - 4) x = anchorRect.left - r.width + 2;   // flip to the left edge
+  x = Math.max(2, x);
+  let y = anchorRect.top;
+  if (y + r.height > window.innerHeight - 4) y = window.innerHeight - r.height - 4;
+  y = Math.max(2, y);
+  el.style.left = x + "px"; el.style.top = y + "px";
+}
+
 // Currently-open header dropdown element (null when none). Live binding: app.js's
 // trigger wiring reads it to toggle; only ever reassigned inside this module.
 export let openMenuEl = null;
@@ -17,6 +43,7 @@ export let openMenuEl = null;
 let openListEl = null, listHome = null;
 export function closeMenus() {
   if (!openMenuEl) return;
+  closeSubmenus(0);
   // NOT querySelector: the list may have been portalled out to <body>, so the menu no longer contains
   // it. Track the element we actually opened.
   const list = openListEl || openMenuEl.querySelector(".menu-list");
@@ -41,9 +68,41 @@ export function closeMenus() {
 function populateMenuList(list, items, opts = {}) {
   const dismiss = opts.dismiss || (() => {});
   const refresh = opts.refresh || (() => {});
+  const depth = opts.depth || 0;
+  closeSubmenus(depth);   // rebuilding this level invalidates any flyout it was hosting
+  list._openSubBtn = null;
   list.innerHTML = "";
+  // Hovering ANY item at this level closes a still-open flyout from a sibling — otherwise the
+  // previous submenu lingers next to whatever you're now pointing at.
+  list.onmouseover = (e) => {
+    const hit = e.target.closest(".menu-item, .menu-row");
+    if (hit && hit.parentElement === list && hit !== list._openSubBtn) closeSubmenus(depth);
+  };
   for (const item of items) {
     if (item.type === "sep") { const sep = document.createElement("div"); sep.className = "menu-sep"; list.appendChild(sep); continue; }
+    if (item.type === "sub") {
+      const btn = document.createElement("button");
+      btn.type = "button"; btn.className = "menu-item menu-sub"; btn.setAttribute("role", "menuitem"); btn.setAttribute("aria-haspopup", "true");
+      btn.innerHTML = `<span class="menu-check"></span><span class="menu-label"></span><span class="menu-sub-arrow">›</span>`;
+      btn.querySelector(".menu-label").textContent = item.label;
+      const openSub = () => {
+        const wasOpen = list._openSubBtn === btn;
+        closeSubmenus(depth);
+        if (wasOpen) return;   // tapping/re-hovering an already-open flyout's trigger toggles it closed
+        const sub = document.createElement("div");
+        sub.className = "context-menu menu-list submenu";
+        sub.setAttribute("role", "menu");
+        document.body.appendChild(sub);
+        populateMenuList(sub, item.items, { dismiss, refresh, depth: depth + 1 });
+        placeSubmenu(sub, btn.getBoundingClientRect());
+        openSubmenus.push({ el: sub, depth, ownerList: list, btn });
+        list._openSubBtn = btn;
+      };
+      btn.addEventListener("mouseenter", openSub);
+      btn.addEventListener("click", (e) => { e.stopPropagation(); openSub(); });   // touch has no hover
+      list.appendChild(btn);
+      continue;
+    }
     // a manageable row: a label that activates the item + inline rename / delete buttons
     // (used by the Layout profiles). Refresh the menu after a mutation so the list updates.
     const badgeHTML = item.badge ? `<span class="menu-badge">${item.badge}</span>` : "";
@@ -126,33 +185,22 @@ export function openMenu(menuEl) {
 // ---------- right-click context menu (canvas + objects) ----------
 // Live binding: app.js's click-away/Esc/blur dismissal reads it; only reassigned here.
 export let ctxMenuEl = null;
-export function hideContextMenu() { if (ctxMenuEl) { ctxMenuEl.remove(); ctxMenuEl = null; } }
-function appendMenuItems(menu, items, afterClick) {
-  for (const item of items) {
-    if (item.type === "sep") { const s = document.createElement("div"); s.className = "menu-sep"; menu.appendChild(s); continue; }
-    const btn = document.createElement("button");
-    btn.type = "button"; btn.className = "menu-item"; btn.disabled = !!item.disabled; btn.setAttribute("role", "menuitem");
-    btn.innerHTML = `<span class="menu-check"></span><span class="menu-label"></span>`;
-    btn.querySelector(".menu-label").textContent = item.label;
-    btn.addEventListener("click", () => {
-      try { item.onClick(); } catch (e) { setStatus(e.message || String(e), 3000); }
-      if (afterClick) afterClick(); else hideContextMenu();
-    });
-    menu.appendChild(btn);
-  }
-}
+export function hideContextMenu() { closeSubmenus(0); if (ctxMenuEl) { ctxMenuEl.remove(); ctxMenuEl = null; } }
 function placeAt(el, x, y) {
   const r = el.getBoundingClientRect();
   el.style.left = Math.max(2, Math.min(x, window.innerWidth - r.width - 4)) + "px";
   el.style.top = Math.max(2, Math.min(y, window.innerHeight - r.height - 4)) + "px";
 }
+// Flat right-click menu (canvas/object commands). Routed through the same populateMenuList core
+// as the rich menu below, so a flat item list can ALSO carry `type: "sub"` flyouts (grouping a
+// long object-actions list — Warp/Repeat/Pathfinder — without a second submenu implementation).
 export function showContextMenu(x, y, items) {
   hideContextMenu();
   const menu = document.createElement("div");
   menu.className = "context-menu menu-list";
   menu.setAttribute("role", "menu");
-  appendMenuItems(menu, items, null);
   document.body.appendChild(menu);
+  populateMenuList(menu, items, { dismiss: hideContextMenu });
   placeAt(menu, x, y);
   ctxMenuEl = menu;
 }
@@ -165,8 +213,8 @@ export function showRichContextMenu(x, y, itemsFn) {
   const menu = document.createElement("div");
   menu.className = "context-menu menu-list";
   menu.setAttribute("role", "menu");
-  populateMenuList(menu, itemsFn(), { dismiss: hideContextMenu, refresh: () => showRichContextMenu(x, y, itemsFn) });
   document.body.appendChild(menu);
+  populateMenuList(menu, itemsFn(), { dismiss: hideContextMenu, refresh: () => showRichContextMenu(x, y, itemsFn) });
   placeAt(menu, x, y);
   ctxMenuEl = menu;
 }
