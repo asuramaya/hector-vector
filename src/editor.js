@@ -2273,9 +2273,9 @@ const editor = {
     if (hasStroke) items.push({ label: "Outline stroke", onClick: () => this.outlineStroke() });
     if (hasPath) items.push({ label: "Offset path…", onClick: () => this._promptOffsetPath() });
     if (fillable >= 2) {
-      items.push({ type: "sep" });
-      for (const [op, lab] of [["divide", "Divide"], ["trim", "Trim"], ["merge", "Merge"], ["crop", "Crop"], ["minus-back", "Minus Back"], ["outline", "Outline"]])
-        items.push({ label: "Pathfinder: " + lab, onClick: () => this.pathfinder(op) });
+      const pathfinderItems = [["divide", "Divide"], ["trim", "Trim"], ["merge", "Merge"], ["crop", "Crop"], ["minus-back", "Minus Back"], ["outline", "Outline"]]
+        .map(([op, lab]) => ({ label: lab, onClick: () => this.pathfinder(op) }));
+      items.push({ type: "sep" }, { type: "sub", label: "Pathfinder", items: pathfinderItems });
     }
     const areaTexts = nodes.length === 2 && nodes.every((n) => this._isAreaText && this._isAreaText(n));
     const singleThreadable = single && this._isAreaText && this._isAreaText(single)
@@ -2293,24 +2293,33 @@ const editor = {
     if (!anyInstance) makes.push({ label: "Make symbol", onClick: () => this.makeSymbol() });
     if (areaTexts) makes.push({ label: "Thread text", onClick: () => this.linkTextFrames() });
     if (singleThreadable) makes.push({ label: "Unthread text", onClick: () => this.unlinkTextFrames() });
-    if (fillable >= 1) for (const t of WARP_TYPES) makes.push({ label: "Warp: " + WARP_LABELS[t], onClick: () => this.makeWarp(t) });
+    if (fillable >= 1) {
+      const warpItems = WARP_TYPES.map((t) => ({ label: WARP_LABELS[t], onClick: () => this.makeWarp(t) }));
+      makes.push({ type: "sub", label: "Warp", items: warpItems });
+    }
     if (fillable >= 1 && !isEnvelope) makes.push({ label: "Make envelope", onClick: () => { this.makeEnvelope(); this.setTool("envelope"); } });
     if (fillable >= 2 && !isEnvelope) makes.push({ label: "Make envelope with top object", onClick: () => { this.makeEnvelopeWithTopObject(); this.setTool("envelope"); } });
     if (single && !isMesh && shapeToAbsPath(single)) makes.push({ label: "Make gradient mesh", onClick: () => this.makeGradientMesh() });
     if (single && !isMultiFill && shapeToAbsPath(single)) makes.push({ label: "Add fill", onClick: () => this.makeMultiFill() });
     if (isMultiFill) { makes.push({ label: "Add fill layer", onClick: () => this.addFillLayer(single) }); makes.push({ label: "Expand fill stack", onClick: () => this.expandMultiFill(single) }); }
-    if (makes.length) { items.push({ type: "sep" }, ...makes); }
+    if (makes.length) { items.push({ type: "sep" }, { type: "sub", label: "Make", items: makes }); }
     if (!isRepeat) {
-      items.push({ type: "sep" },
-        { label: "Reflect — vertical axis", onClick: () => this.reflectSelection("vertical") },
-        { label: "Reflect — horizontal axis", onClick: () => this.reflectSelection("horizontal") },
+      const reflectItems = [
+        { label: "Vertical axis", onClick: () => this.reflectSelection("vertical") },
+        { label: "Horizontal axis", onClick: () => this.reflectSelection("horizontal") },
         { label: "Reflect a copy", onClick: () => this.reflectSelection("vertical", { copy: true }) },
+      ];
+      const repeatItems = [
+        { label: "Grid", onClick: () => this.repeat("grid") },
+        { label: "Radial", onClick: () => this.repeat("radial") },
+        { label: "Mirror", onClick: () => this.repeat("mirror") },
+      ];
+      items.push({ type: "sep" },
+        { type: "sub", label: "Reflect", items: reflectItems },
         { label: "Shear / skew…", onClick: () => this._promptShear() },
         { label: "Transform again", onClick: () => this.transformAgain() },
         { type: "sep" },
-        { label: "Repeat — grid", onClick: () => this.repeat("grid") },
-        { label: "Repeat — radial", onClick: () => this.repeat("radial") },
-        { label: "Repeat — mirror", onClick: () => this.repeat("mirror") });
+        { type: "sub", label: "Repeat", items: repeatItems });
     }
     // Collapse leading / trailing / doubled separators.
     const clean = [];
