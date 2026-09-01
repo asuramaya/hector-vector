@@ -1450,6 +1450,9 @@ input.insp-ab-name { background: var(--field-bg); color: inherit; border: 1px so
   opacity: 0.4;
   margin: 3px 2px;
 }
+/* flyout trigger row — a "›" instead of a checkmark gutter; the submenu itself just reuses
+   .context-menu.menu-list, portalled beside this item (see menus.js placeSubmenu). */
+.menu-sub-arrow { flex: 0 0 auto; margin-left: 6px; color: var(--muted); font-size: 13px; line-height: 1; }
 
 .status-bar {
   min-height: 48px;
