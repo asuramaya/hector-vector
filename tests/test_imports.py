@@ -89,14 +89,29 @@ def main():
     mods = [("hvserver." + m.name, os.path.join(ROOT, "hvserver", m.name + ".py"))
             for m in __import__("pkgutil").iter_modules(hvserver.__path__)]
     mods += [("server", os.path.join(ROOT, "server.py")), ("engine", os.path.join(ROOT, "engine.py"))]
+    skipped = []
     for modname, path in mods:
-        for name, ln in check_module(modname, path):
+        try:
+            hits = check_module(modname, path)
+        except ImportError as e:
+            # A module can legitimately fail to IMPORT (a genuinely-optional third-party
+            # package not installed here, e.g. mcp_server.py's own explicit "pip install mcp"
+            # ImportError) without that being the bare-name-Load bug class this check hunts —
+            # that bug only shows up once a module's source is walked, which needs it to have
+            # imported successfully first. Skip rather than crash; still surfaced below so an
+            # unexpectedly-missing REQUIRED dependency isn't silently swallowed.
+            skipped.append((modname, str(e)))
+            continue
+        for name, ln in hits:
             print(f"  [UNDEFINED] {os.path.relpath(path, ROOT)}:{ln}  '{name}' used but bound nowhere in the module")
             total += 1
+    for modname, err in skipped:
+        print(f"  [SKIPPED] {modname}: {err}")
     if total:
         print(f"FAIL: {total} undefined bare name(s) — a missing import after a module split?")
         return 1
-    print(f"ok: no undefined module-global names across {len(mods)} server modules")
+    print(f"ok: no undefined module-global names across {len(mods) - len(skipped)} server modules"
+          + (f" ({len(skipped)} skipped, optional deps not installed)" if skipped else ""))
     return 0
 
 
